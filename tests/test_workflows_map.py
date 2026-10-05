@@ -4,6 +4,8 @@ from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
@@ -12,9 +14,10 @@ from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql.events import ChangeRelatedRecord
 from angee.workflows import schema as workflow_schema
-from angee.workflows.maps import MapItem
 from angee.workflows.decision_steps import DecisionStep
+from angee.workflows.maps import MapItem
 from angee.workflows.runner import runner
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode
 from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
@@ -61,6 +64,48 @@ def start_map(actor, items, **kwargs):
 def body_rows(run):
     """Read body identities in the declared item order."""
     return system_queryset(StepRun).filter(run=run, node_key="items.body").order_by("map_index")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(execution, register_step):
+    """One item's publication retains sibling timelines and existing inherited views."""
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    actor, _sent = execution
+    with system_context(reason="tests.map.concerns"):
+        children = [MtiChild.objects.create(title=str(index)) for index in range(2)]
+
+    class RecordItem(MapEcho):
+        key = "map_record_concerns"
+
+        def run(self, ctx):
+            ctx.record(children[0])
+            ctx.record(children[ctx.input["index"]], operation="changed")
+            return ctx.done(ctx.input)
+
+    register_step(RecordItem)
+    run, _mapped = start_map(actor, [{"index": index} for index in range(2)], body=RecordItem.key)
+    run_until(run)
+    item = body_rows(run).first()
+    assert "run" not in item._state.fields_cache
+    with CaptureQueriesContext(connection) as captured:
+        concerns = item.change_related_records()
+    expected = {ChangeRelatedRecord(run._meta.label, run.sqid)} | {
+        ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(child.pk))
+        for model in (MtiParent, MtiChild) for child in children
+    }
+    assert set(concerns) == expected and len(concerns) == len(expected)
+    selects = [query["sql"] for query in captured if query["sql"].startswith("SELECT")]
+    assert len(selects) == 2, captured.captured_queries
+    assert any(sql.startswith("SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
+    assert not any(f'FROM "{run._meta.db_table}"' in sql for sql in selects)
+    assert "run" not in item._state.fields_cache
+    from angee.base.refs import record_ref_for
+
+    with CaptureQueriesContext(connection) as captured:
+        leaf_concerns = ChangeRelatedRecord.for_records(*(record_ref_for(child) for child in children))
+    assert len(captured) == 0
+    assert set(leaf_concerns) == {concern for concern in expected if concern.model == MtiChild._meta.label}
 
 
 def test_map_item_is_the_typed_exclusive_result_contract():

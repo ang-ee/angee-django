@@ -358,6 +358,13 @@ Their stale generated models and former addon capabilities remain disabled.
 Retaining a label does not itself authorize discarding its data; a declared owner
 cutover specifies that disposition.
 
+When Django generates a retirement for a migration-only label, the composer's
+[`DropGuardAutodetector`](../angee/compose/migrations.py) wraps its table operations
+behind `SeparateDatabaseAndState`. State advances normally; database operations
+run only when their historical table exists on the execution connection. Tables
+already removed or renamed by an earlier runtime are left alone. An existing
+retirement, including one recorded with `--fake`, produces no replacement name.
+
 ## Addon Declarations
 
 An Angee addon is a Django app marked by a co-located `addon.toml`. No Angee base

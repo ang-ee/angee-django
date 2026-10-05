@@ -32,6 +32,7 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
@@ -445,6 +446,15 @@ class WorkflowRunQuerySet(AngeeQuerySet):
 
 class StepRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Keep retained admission references immutable until their run is pruned."""
+
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """Publish distinct concern identities without loading retained evidence rows."""
+        with system_context(reason="workflows.change_concerns"):
+            identities = self.order_by().values_list("content_type_id", "object_id").distinct()
+            return ChangeRelatedRecord.for_records(*(
+                self.model(content_type_id=content_type_id, object_id=object_id).record_ref
+                for content_type_id, object_id in identities
+            ))
 
 
 StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)

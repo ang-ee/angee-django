@@ -12,23 +12,26 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.apps.registry import Apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
-from django.db.migrations.operations.fields import RemoveField
-from django.db.migrations.operations.models import DeleteModel
+from django.db.migrations.operations.base import Operation
+from django.db.migrations.operations.fields import FieldOperation, RemoveField
+from django.db.migrations.operations.models import DeleteModel, IndexOperation, ModelOperation
+from django.db.migrations.operations.special import SeparateDatabaseAndState
 from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config
-from angee.compose.history import historical_labels
+from angee.compose.history import HistoricalRuntimeConfig, historical_labels
 from angee.fs import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
@@ -566,6 +569,33 @@ class RuntimeMigrations:
         return "".join(lines)
 
 
+class RetiredTableOperation(SeparateDatabaseAndState):
+    """Advance retired state even when earlier runtimes removed its table.
+
+    Check the execution connection, so one generated migration works across
+    databases with different retained schemas. Django owns the wrapped operation
+    and its reversal, which restores the historical schema normally.
+    """
+
+    def __init__(self, table: str, operation: Operation) -> None:
+        self.table = table
+        self.operation = operation
+        super().__init__(database_operations=[operation], state_operations=[operation])
+
+    def deconstruct(self) -> tuple[str, list[Any], dict[str, Any]]:
+        return self.__class__.__qualname__, [], {"table": self.table, "operation": self.operation}
+
+    def database_forwards(
+        self, app_label: str, schema_editor: BaseDatabaseSchemaEditor,
+        from_state: ProjectState, to_state: ProjectState,
+    ) -> None:
+        if self.table in schema_editor.connection.introspection.table_names():
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+    def describe(self) -> str:
+        return f"{self.operation.describe()} if table {self.table} exists"
+
+
 class DropGuardAutodetector(MigrationAutodetector):
     """Django's autodetector, refusing to drop a column that still holds data.
 
@@ -584,6 +614,10 @@ class DropGuardAutodetector(MigrationAutodetector):
 
     A reviewed drop is an addon runtime migration: ``angee build`` materializes it
     into the history first, so its removal is never autodetected here.
+
+    For migration-only historical labels, generated table operations retain
+    Django's state transitions but skip database work when the table is absent.
+    Already-recorded retirements produce no new state diff or migration name.
     """
 
     def changes(
@@ -612,6 +646,26 @@ class DropGuardAutodetector(MigrationAutodetector):
                 "Declare a cutover migration that preserves or retires this data and removes the field "
                 "in an installed addon's addon.toml [[migrations]], then run `angee build` before makemigrations."
             )
+        retired_labels = {
+            config.label for config in apps.get_app_configs()
+            if isinstance(config, HistoricalRuntimeConfig)
+        }
+        for app_label in sorted(retired_labels & changes.keys()):
+            for migration in changes[app_label]:
+                for index, operation in enumerate(migration.operations):
+                    if isinstance(operation, ModelOperation):
+                        model_name = operation.name
+                    elif isinstance(operation, (FieldOperation, IndexOperation)):
+                        model_name = operation.model_name
+                    else:
+                        continue
+                    model = self.from_state.apps.get_model(app_label, model_name)
+                    table = model._meta.db_table
+                    if isinstance(operation, RemoveField):
+                        field = model._meta.get_field(operation.name)
+                        if field.many_to_many and field.remote_field.through._meta.auto_created:
+                            table = field.remote_field.through._meta.db_table
+                    migration.operations[index] = RetiredTableOperation(table, operation)
         return changes
 
     def _populated(self, app_label: str, operation: RemoveField) -> Iterator[str]:
