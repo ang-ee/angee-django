@@ -134,6 +134,12 @@ dependent reads. Bounded local collections use `ResourceQuery.forRows` with
 explicit field declarations and pass that query to `RowsListView` when the
 visible columns do not describe all queryable fields.
 
+`defaultGroup` and `defaultGroups` declare a list's starting group stack, one
+grouping or an ordered stack per view kind (`null` disables grouping for that
+view). The stack is part of the list's default state: it applies on first paint,
+is not written to the URL until changed, and is what reset returns to. Group by
+offers only granularities whose groups can be opened.
+
 Search shortcuts and curated choices have separate jobs. `groupOptions` curates
 the first group axes (an empty array omits curated axes); declared facets supply
 axes when no explicit list is given. The box's clause and group editors always
