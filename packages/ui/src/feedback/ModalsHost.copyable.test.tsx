@@ -86,6 +86,26 @@ describe("read-only prompt clipboard copying", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
+  test("offers one labelled control copying a value composed from the revealed fields", async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    clipboard(writeText);
+    function OpenComposed() {
+      const prompt = usePrompt();
+      return <button onClick={() => void prompt({
+        title: "Reveal result",
+        fields: [{ name: "value", label: "Returned value", defaultValue: secret, readOnly: true }],
+        copy: { label: "Copy both values", value: `name\n${secret}` },
+      })}>Reveal value</button>;
+    }
+    render(<ModalsHost><OpenComposed /></ModalsHost>);
+    fireEvent.click(screen.getByRole("button", { name: "Reveal value" }));
+    await screen.findByRole("textbox", { name: "Returned value" });
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy both values" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Copied"));
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(`name\n${secret}`);
+  });
+
   test.each([{ readOnly: false, copyable: true }, { readOnly: true, copyable: false }])(
     "offers copying only when both field flags allow it: %j", async (field) => {
       await reveal(field);

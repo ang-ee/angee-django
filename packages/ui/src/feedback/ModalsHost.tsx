@@ -43,8 +43,16 @@ export interface PromptOptions {
   title: ReactNode;
   body?: ReactNode;
   fields: readonly PromptField[];
+  /** One extra clipboard control for a value composed from revealed fields, e.g. sign-in details. */
+  copy?: PromptCopy;
   confirm?: ReactNode;
   cancel?: ReactNode;
+}
+
+/** A labelled clipboard control a prompt offers below its fields. */
+export interface PromptCopy {
+  label: ReactNode;
+  value: string;
 }
 
 interface NormalisedConfirmOptions {
@@ -314,6 +322,7 @@ function PromptDialogForm({
                   </div>
                 </FieldRoot>
               ))}
+              {options.copy ? <PromptCopyButton value={options.copy.value} label={options.copy.label} /> : null}
             </div>
           </AlertDialog.Body>
           <AlertDialog.Footer>
@@ -332,7 +341,7 @@ function PromptDialogForm({
   );
 }
 
-function PromptCopyButton({ value }: { value: string }): ReactElement {
+function PromptCopyButton({ value, label }: { value: string; label?: ReactNode }): ReactElement {
   const t = useUiT();
   const [state, setState] = useState<"ready" | "copying" | "copied" | "failed">("ready");
   const copy = async () => {
@@ -348,7 +357,7 @@ function PromptCopyButton({ value }: { value: string }): ReactElement {
     <div className="grid gap-2">
       <Button type="button" variant="secondary" disabled={state === "copying"} onClick={() => void copy()}>
         <Glyph name={state === "copied" ? "check" : "copy"} />
-        {t("modal.copy")}
+        {label ?? t("modal.copy")}
       </Button>
       <span role="status" className="text-xs text-fg-muted">{state === "copied" ? t("modal.copied") : null}</span>
       <ErrorBanner description={state === "failed" ? t("modal.copyFailed") : null} />
