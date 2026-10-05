@@ -268,9 +268,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Invalidate the records this execution has worked on."""
-        with system_context(reason="workflows.change_concerns"):
-            records = system_queryset(self.records.model).filter(run_id=self.pk).select_related("content_type")
-            return ChangeRelatedRecord.for_records(*(link.record_ref for link in records))
+        return self.records.all().change_related_records()
 
     def __str__(self) -> str:
         """Identify an execution by its workflow and start time."""
@@ -477,13 +475,14 @@ class StepRun(AngeeDataModel):
 
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """A step changes both its run graph and that run's record timelines."""
-        with system_context(reason="workflows.step_change_concerns"):
-            run = system_queryset(self._meta.get_field("run").related_model).get(pk=self.run_id)
-            records = [ChangeRelatedRecord(run._meta.label, str(run.sqid)), *run.change_related_records()]
-            if self.decision_id:
-                decision = self._meta.get_field("decision").related_model
-                records.append(ChangeRelatedRecord(decision._meta.label, decision.public_id_from_pk(self.decision_id)))
-            return tuple(records)
+        run = self._meta.get_field("run").related_model
+        evidence = self._meta.get_field("records").related_model
+        records = [ChangeRelatedRecord(run._meta.label, run.public_id_from_pk(self.run_id)),
+                   *evidence.objects.filter(run_id=self.run_id).change_related_records()]
+        if self.decision_id:
+            decision = self._meta.get_field("decision").related_model
+            records.append(ChangeRelatedRecord(decision._meta.label, decision.public_id_from_pk(self.decision_id)))
+        return tuple(records)
     hold_states = {
         (StepRunStatus.FAILED, None): "error",
         (StepRunStatus.WAITING, WaitingKind.ERROR): "error",
