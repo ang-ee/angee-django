@@ -61,12 +61,14 @@ under a source checkout. Both templates render the same root `AGENTS.md`
 contract so code agents retain that ownership rule while working below
 `sources/` or `workspaces/`.
 
-### Connect framework-dev stacks to a shared PostgreSQL server
+### Connect framework-dev stacks to shared PostgreSQL and Redis servers
 
-`stacks/dev` runs a pgvector container per stack by default. With
-`postgres_mode: external` it connects to a server it does not run and renders no
-Postgres service, port lease, or `pgdata` persistence; the inputs are declared in
-[`stacks/dev/copier.yml`](stacks/dev/copier.yml). Each stack keeps its own Redis.
+`stacks/dev` runs a pgvector container and a Redis container per stack by
+default. With `postgres_mode: external` it connects to a PostgreSQL server it
+does not run and renders no Postgres service, port lease, or `pgdata`
+persistence. With `redis_mode: external` it does the same for Redis and renders
+no Redis service or port lease. The inputs are declared in
+[`stacks/dev/copier.yml`](stacks/dev/copier.yml).
 
 To share one server across several stacks, give each stack its own login role
 and a database owned by that role. Stacks on one server share its
@@ -98,7 +100,16 @@ To convert an existing bundled stack:
 4. Remove the stack's old Postgres container. Delete `data/pgdata` once its
    data has moved.
 
-`postgres_host` is the server as the stack's runtime reaches it:
+To share one Redis server, give each stack its own `redis_db` (cache and the
+Channels layer) and `redis_broker_db` (Celery broker). Celery's queue keys are
+plain queue names, so two stacks on one broker database consume each other's
+tasks. The rendered URLs carry no password. A converted stack has the same merge
+caveat: after `angee stack update --template`, remove `services.redis` and
+`ports.redis` from `angee.yaml` by hand. Stop the stack's workers before the
+switch; its queued broker messages stay in the old server.
+
+`postgres_host` and `redis_host` are the servers as the stack's runtime reaches
+them:
 
 - **Process runtime:** the host as the stack's processes see it.
 - **Docker runtime:** an address containers can reach, such as

@@ -16,8 +16,8 @@
 {# Process mode reaches published ports; Docker mode uses Compose DNS and the host gateway. #}
 {# Guarded sets stay on one physical line for pongo2 and the contract-test mini-renderer. #}
 {% if postgres_mode == "external" %}{% set postgres_address = postgres_host|add:":"|add:postgres_port %}{% else %}{% if runtime_mode == "process" %}{% set postgres_address = "127.0.0.1:${ports.postgres}" %}{% endif %}{% if runtime_mode == "docker" %}{% set postgres_address = "postgres:5432" %}{% endif %}{% endif %}
-{% if runtime_mode == "process" %}{% set redis_url = "redis://127.0.0.1:${ports.redis}/0" %}{% endif %}{% if runtime_mode == "docker" %}{% set redis_url = "redis://redis:6379/0" %}{% endif %}
-{% if runtime_mode == "process" %}{% set celery_broker_url = "redis://127.0.0.1:${ports.redis}/1" %}{% endif %}{% if runtime_mode == "docker" %}{% set celery_broker_url = "redis://redis:6379/1" %}{% endif %}
+{% if redis_mode == "external" %}{% set redis_address = redis_host|add:":"|add:redis_port %}{% else %}{% if runtime_mode == "process" %}{% set redis_address = "127.0.0.1:${ports.redis}" %}{% endif %}{% if runtime_mode == "docker" %}{% set redis_address = "redis:6379" %}{% endif %}{% endif %}
+{# Redis databases are the redis_db (cache, Channels) and redis_broker_db (Celery broker) inputs. #}
 {% if runtime_mode == "process" %}{% set operator_url = "http://127.0.0.1:${ports.operator}" %}{% endif %}{% if runtime_mode == "docker" %}{% set operator_url = "http://operator:9000" %}{% endif %}
 {% if runtime_mode == "process" %}{% set mcp_url = "http://host.docker.internal:${ports.django}/mcp" %}{% endif %}
 {% if runtime_mode == "docker" %}{% set mcp_url = "http://django:8000/mcp" %}{% endif %}

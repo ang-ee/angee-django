@@ -12,9 +12,9 @@ _message_after_copy: |
   (ANGEE_ROOT=.). Runtime mode: "{{ runtime_mode }}".
 
   - process (default): Django, Celery, Vite, and Storybook run as local processes;
-    {% if postgres_mode == "external" %}Redis runs as a container with a published port; PostgreSQL is the external server {{ postgres_host }}:{{ postgres_port }}/{{ postgres_db }} (set db-password to the {{ postgres_user }} role's password before bring-up).{% else %}Postgres and Redis run as containers with published ports.{% endif %}
-  - docker: Django, Celery, Vite, Storybook, Playwright{% if postgres_mode == "external" %}{% else %}, Postgres{% endif %}, and Redis run as
-    containers; the operator daemon remains host-local and orchestrates Docker.
+    {% if postgres_mode == "external" or redis_mode == "external" %}bundled Postgres and Redis run as containers with published ports; external ones are servers this stack does not run.{% else %}Postgres and Redis run as containers with published ports.{% endif %}
+  - docker: Django, Celery, Vite, Storybook, Playwright{% if postgres_mode == "external" %}{% else %}, Postgres{% endif %}{% if redis_mode == "external" %}{% else %}, and Redis{% endif %} run as
+    containers; the operator daemon remains host-local and orchestrates Docker.{% if postgres_mode == "external" %} PostgreSQL: {{ postgres_host }}:{{ postgres_port }}/{{ postgres_db }} as {{ postgres_user }} (set db-password to that role's password).{% endif %}{% if redis_mode == "external" %} Redis: {{ redis_host }}:{{ redis_port }} (databases {{ redis_db }} and {{ redis_broker_db }}).{% endif %}
 
   1. Bring it up. `angee dev` materializes the declared source caches, cuts the
      `src` workspace (the consolidated framework plus optional external addon
@@ -55,8 +55,9 @@ _angee:
     optional external slots its `src` workspace materializes under
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
     workspace cut, dependency installation, provision/codegen, and boot.
-    PostgreSQL is bundled as a per-stack pgvector container by default;
-    `postgres_mode: external` points the stack at a server it does not run.
+    PostgreSQL and Redis are bundled as per-stack containers by default;
+    `postgres_mode: external` and `redis_mode: external` point the stack at
+    servers it does not run.
   inputs:
     operator_image:
       type: str
@@ -210,6 +211,32 @@ postgres_user:
   default: angee
   help: Role name; the db-password secret is this role's password.
 
+# Redis: `bundled` runs a Redis container per stack; `external` points the stack
+# at a server it does not run (no redis service or port lease). Stacks sharing one
+# server need their own redis_db / redis_broker_db pair, or Celery queues collide.
+# The rendered URLs carry no password.
+redis_mode:
+  type: str
+  default: bundled
+  choices: [bundled, external]
+  help: Bundled runs this stack's own Redis container; external connects to a server another owner runs.
+
+redis_host:
+  type: str
+  default: "127.0.0.1"
+  validator: '{% if redis_mode == "external" and runtime_mode == "docker" %}{% if redis_host == "127.0.0.1" or redis_host == "localhost" %}Containers cannot reach a loopback host; use an address they can reach, such as host.docker.internal.{% endif %}{% endif %}'
+  help: External only; the server host as this stack's processes or containers reach it (bracket IPv6 literals).
+
+redis_db:
+  type: int
+  default: 0
+  help: Redis database for the cache and the Channels layer.
+
+redis_broker_db:
+  type: int
+  default: 1
+  help: Redis database for the Celery broker; keep it distinct from redis_db.
+
 serve_mode:
   type: str
   default: development
@@ -360,6 +387,7 @@ postgres_port:
 redis_port:
   type: int
   default: 6379
+  help: Bundled mode leases this stack's published Redis port; external mode uses this server port literally.
 
 enable_ollama:
   type: bool
