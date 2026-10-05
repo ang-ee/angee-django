@@ -416,6 +416,7 @@ function LineRow({
                 />
               ) : column.relation ? (
                 <RelationFieldWidget
+                  controlRef={controller.ref}
                   value={relationValueId(controller.value) || null}
                   onChange={controller.onChange}
                   readOnly={readOnly}
@@ -429,6 +430,7 @@ function LineRow({
                 />
               ) : (
                 <FieldDescriptorControl
+                  controlRef={controller.ref}
                   field={column.descriptor}
                   row={row}
                   parentRow={parentRow}

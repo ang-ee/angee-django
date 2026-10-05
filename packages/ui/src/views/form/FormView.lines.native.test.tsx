@@ -63,6 +63,7 @@ async function fixture(options: {
   publicView?: boolean;
   save?: (variables: ResourceSaveVariables) => Promise<Row>;
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
+  formProps?: Pick<ComponentProps<typeof FormView>, "layout" | "bodyTabs" | "recordTabs" | "linesTabLabel">;
 } = {}) {
   const seedLines = options.lines ?? initialLines;
   const activeResource = options.resourceMetadata ?? (options.publicView ? renderedResource : resource);
@@ -122,6 +123,7 @@ async function fixture(options: {
         <OperationDocumentsProvider documents={{ [activeResource.schemaName]: { saves: { [activeResource.modelLabel]: saveDocument } } }}>
           <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
             <FormView
+              {...options.formProps}
               resource={activeResource.modelLabel}
               id={options.isCreate ? null : "doc-1"}
               fields={[{ name: "title", label: "Title", title: true }]}
@@ -153,6 +155,22 @@ async function fixture(options: {
 }
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("editable lines lead the single strip and field reveal returns from a record panel to their control", async () => {
+  await fixture({ publicView: true, formProps: {
+    layout: "tabs", linesTabLabel: "Lines",
+    bodyTabs: [{ id: "summary", label: "Summary", render: () => <p>Body summary</p> }],
+    recordTabs: [{ id: "evidence", label: "Evidence", render: ({ focusField }) =>
+      <button type="button" onClick={() => focusField("lines.0.label")}>Reveal first line</button> }],
+  } });
+  expect(screen.getAllByRole("tablist")).toHaveLength(1);
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Lines", "Summary", "Evidence"]);
+  expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Evidence" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Reveal first line" }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByDisplayValue("Alpha")));
+  expect(screen.getByRole("tab", { name: "Lines" }).getAttribute("aria-selected")).toBe("true");
+});
 
 test("new documents render Add line and create their draft lines in one native nested insert", async () => {
   const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };

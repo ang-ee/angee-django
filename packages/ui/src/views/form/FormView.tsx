@@ -92,17 +92,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   headerExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** One concise domain context line under the record title. */
   contextLine?: (context: RecordToolbarContext) => React.ReactNode;
-  /** Group presentation; ungrouped/title/body/status placement is unchanged. */
-  layout?: "stacked" | "tabs";
   /** Place the first two unlabeled groups side by side within one form overview. */
   groupLayout?: "stacked" | "paired";
-  /** Content tabs inside the one create/edit form, alongside its editable lines and groups. */
-  bodyTabs?: readonly {
-    id: string;
-    label: React.ReactNode;
-    render: (context: RecordToolbarContext) => React.ReactNode;
-  }[];
-  linesTabLabel?: React.ReactNode;
   /** Editable line fields shown before the user expands advanced line details. */
   linePrimaryFields?: readonly string[];
   /** Read-only domain projections rendered beside editable line fields. */
@@ -111,9 +102,7 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   lineRelationFilters?: EditableLinesProps["relationFilters"];
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
-  /** Initial saved-record tab; invalid or unavailable ids fall back to Overview. */
-  defaultRecordTab?: string;
-  /** Label and bounded placement of the built-in form tab. */
+  /** Overview visibility on forms without body tabs. */
   overviewTab?: OverviewTabOptions;
   className?: string;
 }
@@ -160,8 +149,6 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     contextLine,
     layout = "stacked",
     groupLayout = "stacked",
-    bodyTabs,
-    linesTabLabel,
     linePrimaryFields,
     lineSupplementalColumns,
     lineRelationFilters,
@@ -232,6 +219,23 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
+  const hasBodyTabs = surface.bodyTabSections.length > 0;
+  const overviewActive = !tabbed || (hasBodyTabs
+    ? surface.bodyTabSections.some((section) => section.key === activeRecordTab)
+    : activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID);
+  const orderedTabs = [
+    ...(hasBodyTabs ? surface.bodyTabSections.map((section) => ({ ...section, id: section.key }))
+      : overviewTab?.hidden && recordTabList.length > 0 ? []
+      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: t("form.tabOverview") }]),
+    ...recordTabList,
+  ];
+  const tabStrip = <Tabs.List>
+    {orderedTabs.map((tab) => <Tabs.Tab key={tab.id} value={tab.id}
+      icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}>
+      <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
+        count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
+    </Tabs.Tab>)}
+  </Tabs.List>;
   const overview = awaitingRecord ? (
     <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
       <Skeleton shape="text" className="h-6 w-2/3" />
@@ -239,17 +243,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     </SkeletonStatus>
   ) : (
     <FormViewOverview
-      surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
-      linesTabLabel={linesTabLabel} linePrimaryFields={linePrimaryFields}
+      surface={surface} layout={layout} groupLayout={groupLayout} tabStrip={tabStrip}
+      linePrimaryFields={linePrimaryFields}
       lineSupplementalColumns={lineSupplementalColumns}
-      lineRelationFilters={lineRelationFilters} context={recordToolbarContext}
+      lineRelationFilters={lineRelationFilters}
     />
   );
-  const overviewLabel = overviewTab?.label ?? t("form.tabOverview");
-  const orderedTabs = overviewTab?.hidden && recordTabList.length > 0 ? recordTabList
-    : overviewTab?.position === "last"
-      ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
-      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
   const recordExtrasPanel =
     !awaitingRecord && recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
@@ -270,7 +269,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const overviewContent = withRail(<>
     {overview}
     {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
-  </>, !tabbed || activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID);
+  </>, overviewActive);
   const overviewWithFormExtras = recordChromeContext
     ? <RecordChromeProvider value={recordChromeContext}>{overviewContent}</RecordChromeProvider>
     : overviewContent;
@@ -411,20 +410,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       >
         {recordHeader()}
         {errorBanners}
-        {tabbed ? (
+        {tabbed && !hasBodyTabs ? (
           <>
-            <Tabs.List>
-              {orderedTabs.map((tab) => (
-                <Tabs.Tab
-                  key={tab.id}
-                  value={tab.id}
-                  icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
-                >
-                  <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
-                    count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
-                </Tabs.Tab>
-              ))}
-            </Tabs.List>
+            {tabStrip}
             <Tabs.Panel
               value={FORM_VIEW_OVERVIEW_TAB_ID}
               keepMounted
@@ -488,26 +476,15 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           <div className={workspace ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
             {recordHeader(workspace)}
             {errorBanners}
-            <Tabs.List className={workspace ? "mt-2" : undefined}>
-              {orderedTabs.map((tab) => (
-                <Tabs.Tab
-                  key={tab.id}
-                  value={tab.id}
-                  icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
-                >
-                  <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
-                    count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
-                </Tabs.Tab>
-              ))}
-            </Tabs.List>
+            {hasBodyTabs ? overviewWithFormExtras : <div className={workspace ? "mt-2" : undefined}>{tabStrip}</div>}
           </div>
-          <Tabs.Panel
+          {!hasBodyTabs ? <Tabs.Panel
             value={FORM_VIEW_OVERVIEW_TAB_ID}
             keepMounted={recordPresentation !== "workspace"}
             className="min-h-0 flex-1 overflow-auto pt-0"
           >
             <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6", workspace ? "py-6" : "pb-12")}>{overviewWithFormExtras}</div>
-          </Tabs.Panel>
+          </Tabs.Panel> : null}
         </form>
         {recordTabList.map((tab) => (
           <Tabs.Panel
@@ -523,7 +500,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             </ControlBandProvider>
           </Tabs.Panel>
         ))}
-        {activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID
+        {overviewActive
           ? recordExtrasPanel
           : null}
       </Tabs>

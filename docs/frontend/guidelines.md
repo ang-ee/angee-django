@@ -522,6 +522,10 @@ shared UI copy through an addon bundle.
   ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
   are untouched — and reuses the same `<Group>` declarations, so no field metadata is
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+  Body tabs (lines, explicit body tabs, then labelled groups) and contributed record
+  tabs share one strip in that order; header fields and stacked groups stay visible.
+  Overview appears only on forms without body tabs. `defaultRecordTab` and controlled
+  `recordTab` address either kind; field reveal selects its owning body tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title and its lead body before the overview's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget

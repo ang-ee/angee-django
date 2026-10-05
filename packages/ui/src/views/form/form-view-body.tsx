@@ -14,7 +14,6 @@ import { FormGrid } from "../../ui/form-layout";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Tabs } from "../../ui/tabs";
 import { Collapsible } from "../../ui/collapsible";
-import { renderGlyph } from "../../chrome/Glyph";
 import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
@@ -40,11 +39,10 @@ import {
   recordRepresentationValue,
   resolveField,
   titleText,
-  visibleSections,
   type FormSectionModel,
   type FormValues,
 } from "./form-view-model";
-import type { FormViewSurface, RecordToolbarContext } from "./form-view-surface";
+import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { RecordFieldMarkButton } from "./record-field-marks";
@@ -328,28 +326,24 @@ export function FormViewOverview({
   surface,
   layout,
   groupLayout,
-  bodyTabs,
-  linesTabLabel,
+  tabStrip,
   linePrimaryFields,
   lineSupplementalColumns,
   lineRelationFilters,
-  context,
 }: {
   surface: FormViewSurface;
   layout: "stacked" | "tabs";
   groupLayout: "stacked" | "paired";
-  bodyTabs?: readonly { id: string; label: React.ReactNode; render: (context: RecordToolbarContext) => React.ReactNode }[];
-  linesTabLabel?: React.ReactNode;
+  tabStrip: React.ReactNode;
   linePrimaryFields?: readonly string[];
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   lineRelationFilters?: EditableLinesProps["relationFilters"];
-  context: RecordToolbarContext;
 }): React.ReactElement {
   const {
     t,
     form,
-    hasConditionalFields,
     sections,
+    bodyTabSections,
     linesActive,
     linesResource,
     linesField,
@@ -418,35 +412,6 @@ export function FormViewOverview({
       return <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />;
     });
   };
-  const renderSections = (list: readonly FormSectionModel[]): React.ReactNode => {
-    if (layout !== "tabs") {
-      return renderOverviewSections(list);
-    }
-    const stacked = list.filter((section) => section.label == null || section.collapsible);
-    const groupTabs = list.filter(
-      (section) =>
-        section.label != null
-        && !section.collapsible
-        && (section.fields.length > 0 || section.render !== undefined),
-    );
-    const tabbedSections: FormSectionModel[] = [
-      ...(editableLines ? [{ key: "editable-lines", label: linesTabLabel ?? t("lines.section"), fields: [], render: () => editableLines }] : []),
-      ...(bodyTabs ?? []).map((tab) => ({ key: tab.id, label: tab.label, fields: [], render: () => tab.render(context) })),
-      ...groupTabs,
-    ];
-    return (
-      <>
-        {renderOverviewSections(stacked)}
-        {tabbedSections.length > 0 ? (
-          <FormSectionTabs
-            sections={tabbedSections} renderField={renderField} control={form.control}
-            requestedFocusPath={requestedFocusPath} lineField={linesField}
-          />
-        ) : null}
-      </>
-    );
-  };
-
   return (
     <>
       {currentBodyField ? (
@@ -479,15 +444,11 @@ export function FormViewOverview({
         </section>
       ) : null}
       <div className="grid gap-6">
-        {hasConditionalFields ? (
-          <ConditionalSections
-            control={form.control}
-            sections={sections}
-            renderSections={renderSections}
-          />
-        ) : (
-          renderSections(sections)
-        )}
+        {renderOverviewSections(bodyTabSections.length > 0
+          ? sections.filter((section) => section.label == null || section.collapsible) : sections)}
+        {bodyTabSections.length > 0 ? <FormSectionTabs surface={surface} tabStrip={tabStrip}
+          sections={bodyTabSections.map((section) => section.key === "editable-lines"
+            ? { ...section, render: () => editableLines } : section)} renderField={renderField} /> : null}
       </div>
       {layout !== "tabs" && editableLines ? (
         <section className="grid gap-3">
@@ -660,60 +621,33 @@ function FormSection({
 }
 
 function FormSectionTabs({
+  surface,
   sections,
   renderField,
-  control,
-  requestedFocusPath,
-  lineField,
+  tabStrip,
 }: {
+  surface: FormViewSurface;
   sections: readonly FormSectionModel[];
   renderField: (field: FieldDescriptor) => React.ReactNode;
-  control: Control<FormValues>;
-  requestedFocusPath: string | null;
-  lineField: string | null;
+  tabStrip: React.ReactNode;
 }): React.ReactElement {
-  const [active, setActive] = React.useState(sections[0]?.key);
+  const { form: { control }, requestedFocusPath, linesField: lineField, setActiveRecordTab } = surface;
   const trackedFields = sections.flatMap((section) => section.fields.map((field) => field.name));
   if (lineField) trackedFields.push(lineField);
   const { errors, submitCount } = useFormState({ control, name: trackedFields });
   const handledSubmitCount = React.useRef(submitCount);
   React.useEffect(() => {
-    const focus = requestedFocusPath;
-    if (focus) {
-      const target = sections.find((section) =>
-        section.fields.some((field) => focus === field.name || focus.startsWith(`${field.name}.`))
-        || (section.key === "editable-lines" && lineField && (focus === lineField || focus.startsWith(`${lineField}.`))),
-      );
-      if (target) setActive(target.key);
-      return;
-    }
     if (handledSubmitCount.current === submitCount) return;
     handledSubmitCount.current = submitCount;
     const errored = sections.find((section) =>
       section.fields.some((field) => get(errors, field.name) !== undefined)
       || (section.key === "editable-lines" && lineField && get(errors, lineField) !== undefined),
     );
-    if (errored) setActive(errored.key);
-  }, [errors, lineField, requestedFocusPath, sections, submitCount]);
-  const value = sections.some((section) => section.key === active)
-    ? active
-    : sections[0]?.key;
+    if (errored) setActiveRecordTab(errored.key);
+  }, [errors, lineField, requestedFocusPath, sections, setActiveRecordTab, submitCount]);
   return (
-    <Tabs value={value} onValueChange={setActive} variant="card">
-      <Tabs.List>
-        {sections.map((section) => (
-          <Tabs.Tab
-            key={section.key}
-            value={section.key}
-            icon={renderGlyph(section.icon)}
-          >
-            {section.label}
-            {section.badge != null ? (
-              <Tabs.Count>{section.badge}</Tabs.Count>
-            ) : null}
-          </Tabs.Tab>
-        ))}
-      </Tabs.List>
+    <>
+      {tabStrip}
       {sections.map((section) => (
         <Tabs.Panel key={section.key} value={section.key}>
           <SectionHeading label={section.label} count={section.badge} className="mb-3" />
@@ -725,21 +659,8 @@ function FormSectionTabs({
           />
         </Tabs.Panel>
       ))}
-    </Tabs>
+    </>
   );
-}
-
-function ConditionalSections({
-  control,
-  sections,
-  renderSections,
-}: {
-  control: Control<FormValues>;
-  sections: readonly FormSectionModel[];
-  renderSections: (list: readonly FormSectionModel[]) => React.ReactNode;
-}): React.ReactNode {
-  const values = useWatch({ control }) as FormValues;
-  return renderSections(visibleSections(sections, values));
 }
 
 function BoundFieldRow({
