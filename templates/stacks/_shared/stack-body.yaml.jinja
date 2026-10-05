@@ -10,12 +10,12 @@
 {#   Both modes run directly against the framework workspace's source checkouts. #}
 {# instance = stacks/local — owns bootstrap-admin secrets and the static frontend. #}
 {#   Its docker runtime uses jobs over the compose network, with Caddy serving the SPA. #}
-{# Wrapper-provided variables: stack_flavor, runtime_mode, database_url, redis_url, #}
-{# celery_broker_url, operator_url, mcp_url, operator_bind, pgdata_mount, and #}
-{# (process only) app_source; framework_source — plus the dev copier inputs #}
-{# addons_profile and work_state_source, which gate sources/workspace blocks. #}
+{# Wrapper-provided variables: stack_flavor, runtime_mode, postgres_user/_db/_address and redis_address/_db/_broker_db #}
+{# (the body composes database_url, redis_url, and celery_broker_url from them), operator_url, #}
+{# mcp_url, operator_bind, pgdata_mount, (process only) app_source; framework_source — plus the dev #}
+{# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, and work_state_source. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
-{% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}
+{% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
 version: 1
 kind: stack
 {% if stack_flavor == "framework" %}
@@ -86,10 +86,12 @@ secrets:
   # IAM bootstrap reads the same declarative surface as any operator override.
   admin-password: { generated: true, length: 32 }
 {% endif %}
-  # The Postgres superuser password. Generated base64url (URL-safe, so it embeds in
+{% if postgres_mode == "external" %}  # Must equal the external server's password for the postgres_user role ({{ postgres_user }}).
+  db-password: { required: true }
+{% else %}  # The Postgres superuser password. Generated base64url (URL-safe, so it embeds in
   # the DATABASE_URL userinfo with no percent-encoding) and shared by the postgres
   # service and the django DATABASE_URL.
-  db-password: { generated: true, length: 32 }
+  db-password: { generated: true, length: 32 }{% endif %}
 
 ports:
   # The operator daemon's port — services reference it as ${ports.operator}.
@@ -101,9 +103,9 @@ ports:
   # The operator reads process_compose for the process-compose control port.
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
 {% if runtime_mode == "process" %}
-  postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
-  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
-{% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
+{% if postgres_mode == "external" %}{% else %}  postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
+{% endif %}{% if redis_mode == "external" %}{% else %}  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }{# Optional entries share the outer endif line so disabled output stays byte-identical. #}
+{% endif %}{% if enable_ollama %}  ollama: { value: {{ ollama_port }}, export_env: OLLAMA_PORT }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}
   ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
   storybook: { value: {{ storybook_port }}, export_env: STORYBOOK_PORT }
@@ -119,16 +121,16 @@ persist:
   app-data: { subpath: ./data, scope: stack }
   # Host coding agent's Playwright MCP user-data-dir (docs/stack.md).
   chrome-profile: { subpath: ./data/chrome, scope: stack }
-  pgdata: { subpath: ./data/pgdata, scope: stack }
-{% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
+{% if postgres_mode == "external" %}{% else %}  pgdata: { subpath: ./data/pgdata, scope: stack }
+{% endif %}{% if enable_ollama %}  ollama: { subpath: ./data/ollama, scope: stack }{% endif %}{% endif %}
 {% if runtime_mode == "docker" %}
   # App media/static (ANGEE_DATA_DIR -> /app/data via the django bind mount).
   app-data: { subpath: ./data, scope: stack }{% if stack_flavor == "framework" %}
   # Playwright MCP's persistent Chromium user-data directory.
   playwright-profile: { subpath: ./data/playwright, scope: stack }{% endif %}
-  # The Postgres data volume under ./data so one dir holds the instance's mutable state.
+{% if postgres_mode == "external" %}{% else %}  # The Postgres data volume under ./data so one dir holds the instance's mutable state.
   pgdata: { subpath: ./data/pgdata, scope: stack }
-{% endif %}
+{% endif %}{% endif %}
 
 sources:
   app:
@@ -262,7 +264,7 @@ jobs:
       - "-c"
       - >-
         {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--demo --force-rebac{% else %}--bootstrap-admin{% endif %}
-    depends_on: [postgres, operator{% if stack_flavor == "framework" %}, deps{% endif %}]
+    depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator{% if stack_flavor == "framework" %}, deps{% endif %}]
 {% endif %}
 
   # Codegen consumes both the provisioned Django SDL and this live daemon SDL.
@@ -344,14 +346,14 @@ services:
     env:
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
 {% endif %}
-  # pgvector/pgvector:pg17 = stock Postgres 17 + pgvector, so a retrieval backend has
+{% if postgres_mode == "external" %}{% else %}  # pgvector/pgvector:pg17 = stock Postgres 17 + pgvector, so a retrieval backend has
   # vector columns without a rebuild. The password comes from the db-password secret.
   postgres:
     runtime: container
     image: pgvector/pgvector:pg17
     env:
-      POSTGRES_USER: angee
-      POSTGRES_DB: angee
+      POSTGRES_USER: {{ postgres_user }}
+      POSTGRES_DB: {{ postgres_db }}
       POSTGRES_PASSWORD: "${secret.db-password}"
     mounts:
       # The generated compose file sits next to this bind's base, so the relative
@@ -362,7 +364,7 @@ services:
       - "${ports.postgres}:5432"
 {% endif %}
 
-  # Shared Redis for Channels fanout (DB 0) and Celery transport (DB 1).
+{% endif %}{% if redis_mode == "external" %}{% else %}  # Shared Redis for Channels fanout (DB {{ redis_db }}) and Celery transport (DB {{ redis_broker_db }}).
   redis:
     runtime: container
     image: redis:7-alpine
@@ -371,7 +373,7 @@ services:
       - "${ports.redis}:6379"
 {% endif %}
 
-{% if runtime_mode == "process" %}{% if enable_ollama %}  # Optional shared local inference server. Models live in the stack-owned bind
+{% endif %}{% if runtime_mode == "process" %}{% if enable_ollama %}  # Optional shared local inference server. Models live in the stack-owned bind
   # mount and are pulled manually; no agent owns or duplicates this singleton.
   ollama:
     runtime: container
@@ -424,7 +426,7 @@ services:
       - "-c"
       - >-
         {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
-    after: [provision, redis]
+    after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}
 

@@ -8,9 +8,9 @@
 {% set ingress_domain_value = "localhost" %}
 {% set runtime_mode = "docker" %}
 {# Address variables: containers reach services and the operator through Compose DNS. #}
-{% set database_url = "postgres://angee:${secret.db-password}@postgres:5432/angee" %}
-{% set redis_url = "redis://redis:6379/0" %}
-{% set celery_broker_url = "redis://redis:6379/1" %}
+{% set postgres_user = "angee" %}{% set postgres_db = "angee" %}{% set postgres_address = "postgres:5432" %}
+{% set redis_address = "redis:6379" %}{% set redis_db = "0" %}{% set redis_broker_db = "1" %}
+{# The shared body composes database_url, redis_url, and celery_broker_url from these. #}
 {% set operator_url = "http://operator:9000" %}
 {% set mcp_url = "http://django:8000/mcp" %}
 {% set operator_bind = "127.0.0.1" %}
