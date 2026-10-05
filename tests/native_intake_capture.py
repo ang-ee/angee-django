@@ -7,12 +7,13 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, models
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
-from graphql import parse, validate
+from graphql import GraphQLInputObjectType, get_named_type, parse, validate
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.roles import grant as grant_role
@@ -21,6 +22,23 @@ from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
+
+
+class HasuraFilterDeclarationTests(TransactionTestCase):
+    """Every current source-addon alias and filter provider builds in the composed graph."""
+
+    def test_existing_declarations_build(self):
+        schemas = GraphQLSchemas.from_discovery()
+        self.assertTrue(schemas.render_sdl())
+        resources = {resource.model_label: resource for resource in schemas.resources("console")}
+        for model, names in (
+            ("projects.Task", ("requester_name", "requested_by_viewer")),
+            ("intake.Need", ("filer_name",)),
+            ("decisions.Decision", ("workflow_name", "node_key")),
+        ):
+            for name in names:
+                with self.subTest(model=model, filter=name):
+                    self.assertIsNotNone(resources[model].query.fields[name].filter)
 
 
 class ChannelIntakeCaptureTests(TransactionTestCase):
@@ -510,6 +528,15 @@ class NeedAccessDecisionTests(IntakeAccessCase):
 
 
 class NeedAccessTests(IntakeAccessCase):
+    def assert_task_filter(self, where, expected, *, user, bucket):
+        """Pin both read roots to the same task set, including its aggregate count."""
+        data = self.graphql("""query($where: project_tasks_bool_exp!) {
+          project_tasks(where: $where) { id }
+          project_tasks_aggregate(where: $where) { aggregate { count } }
+        }""", {"where": where}, user=user, bucket=bucket)
+        self.assertCountEqual(data["project_tasks"], [{"id": task.sqid} for task in expected])
+        self.assertEqual(data["project_tasks_aggregate"]["aggregate"]["count"], len(expected))
+
     def test_task_requester_projects_name_and_writer_only_email_in_both_schemas(self):
         party = self.party(self.reader)
         need = self.need(email="contact@example.com", party=party)
@@ -524,31 +551,114 @@ class NeedAccessTests(IntakeAccessCase):
                 "display_name": party.display_name, "email": None,
             }}])
 
-    def test_task_requester_filters_read_the_shown_name_and_match_only_the_viewer(self):
-        mine = self.need(email="mine@example.com", party=self.party(self.reader))
-        robins = self.need(email="robin@example.com", name="Robin Anonymous")
-        with system_context(reason="test outsider account"):
-            outsider = self.User.objects.create_user(username="request-outsider", email="outsider@example.com")
-        by_name = '{ project_tasks(where: {requester_name: {_ilike: "%robin%"}}) { id } }'
-        filed_by_me = "{ project_tasks(where: {requested_by_viewer: {_eq: true}}) { id } }"
+    def test_task_requester_name_and_boolean_composition_stay_in_the_readable_set(self):
+        """A and hidden B share a requester name; every filter returns only readable tasks."""
+        visible = self.need(name="Robin Anonymous")
+        hidden = self.need(name="Robin Anonymous")
+        other = self.need(name="Other Requester")
+        with system_context(reason="test mixed task visibility"):
+            hidden.task.revoke_record_access("reader", self.reader)
+            other.task.title = "Another predicate"
+            other.task.save(update_fields=("title",))
+        self.assertTrue(visible.task.with_actor(self.reader).has_access("read"))
+        self.assertFalse(hidden.task.with_actor(self.reader).has_access("read"))
+        self.assertTrue(other.task.with_actor(self.reader).has_access("read"))
+        by_name = {"requester_name": {"_ilike": "%robin%"}}
         for bucket in ("public", "console"):
-            # The name a reader already sees on the task, the claimed one for an anonymous request.
-            self.assertEqual(self.graphql(by_name, {}, user=self.reader, bucket=bucket)["project_tasks"],
-                             [{"id": robins.task.sqid}])
-            # "Mine" compares the viewer with themself: the reader's request, nobody else's.
-            self.assertEqual(self.graphql(filed_by_me, {}, user=self.reader, bucket=bucket)["project_tasks"],
-                             [{"id": mine.task.sqid}])
-            self.assertEqual(self.graphql(filed_by_me, {}, user=self.writer, bucket=bucket)["project_tasks"], [])
-            # The filters narrow the readable tasks; a viewer who cannot read a task never matches it.
-            self.assertEqual(self.graphql(by_name, {}, user=outsider, bucket=bucket)["project_tasks"], [])
-        # The search catalog reads both from the resource metadata; the email is never a filter.
-        fields = next(
-            resource for resource in GraphQLSchemas.from_discovery().render_metadata()["console"]["angee"]["resources"]
-            if resource["modelLabel"] == "projects.Task"
-        )["query"]["fields"]
-        self.assertIn("iContains", fields["requester_name"]["filter"]["operators"])
-        self.assertIn("exact", fields["requested_by_viewer"]["filter"]["operators"])
-        self.assertFalse([name for name, field in fields.items() if "email" in name and field.get("filter")])
+            with self.subTest(bucket=bucket):
+                self.assert_task_filter(by_name, [visible.task], user=self.reader, bucket=bucket)
+                self.assert_task_filter(
+                    {"_or": [by_name, {"title": {"_eq": "Another predicate"}}]},
+                    [visible.task, other.task], user=self.reader, bucket=bucket,
+                )
+                self.assert_task_filter(
+                    {"_not": {"_and": [
+                        {"requester_name": {"_eq": "Other Requester"}},
+                        {"title": {"_eq": "Another predicate"}},
+                    ]}}, [visible.task], user=self.reader, bucket=bucket,
+                )
+
+    def test_requested_by_viewer_attributes_only_the_first_need_not_later_requesters(self):
+        """Later approved requesters can read the task but did not file its first Need."""
+        first = self.need(party=self.party(self.reader))
+        hidden = self.need(party=self.party(self.reader))
+        with system_context(reason="test later requester"):
+            later = self.Need.objects.create(task=first.task, party=self.party(self.writer), body="Later request")
+            first.task.assignee = None
+            first.task.save(update_fields=("assignee",))
+            first.task.revoke_record_access("reader", self.reader)
+            hidden.task.assignee = None
+            hidden.task.save(update_fields=("assignee",))
+            hidden.task.revoke_record_access("reader", self.reader)
+        self.as_user(first).decide_access("intake.approve")
+        self.as_user(later).decide_access("intake.approve")
+        self.assertLess((first.created_at, first.pk), (later.created_at, later.pk))
+        self.assertTrue(first.task.with_actor(self.writer).has_access("read"))
+        for bucket in ("public", "console"):
+            for user, own_first in ((self.reader, True), (self.writer, False)):
+                with self.subTest(bucket=bucket, viewer=user.username):
+                    self.assertFalse(hidden.task.with_actor(user).has_access("read"))
+                    self.assert_task_filter(
+                        {"requested_by_viewer": {"_eq": True}}, [first.task] if own_first else [],
+                        user=user, bucket=bucket,
+                    )
+                    self.assert_task_filter(
+                        {"requested_by_viewer": {"_eq": False}}, [] if own_first else [first.task],
+                        user=user, bucket=bucket,
+                    )
+                    self.assert_task_filter(
+                        {"_or": [{"requested_by_viewer": {"_eq": True}}, {"title": {"_eq": "Absent"}}]},
+                        [first.task] if own_first else [], user=user, bucket=bucket,
+                    )
+                    self.assert_task_filter(
+                        {"_not": {"_and": [
+                            {"requested_by_viewer": {"_eq": True}}, {"title": {"_eq": "Request"}},
+                        ]}}, [] if own_first else [first.task], user=user, bucket=bucket,
+                    )
+                    self.assert_task_filter(
+                        {"requester_name": {"_eq": first.party.display_name}}, [first.task], user=user, bucket=bucket,
+                    )
+                    self.assert_task_filter(
+                        {"requester_name": {"_eq": later.party.display_name}}, [], user=user, bucket=bucket,
+                    )
+
+    def test_anonymous_actor_matches_neither_task_requester_filter(self):
+        mine = self.need(party=self.party(self.reader))
+        anonymous_request = self.need(name="Robin Anonymous")
+        for bucket in ("public", "console"):
+            for where, expected in (
+                ({"requester_name": {"_ilike": "%robin%"}}, [anonymous_request.task]),
+                ({"requested_by_viewer": {"_eq": True}}, [mine.task]),
+            ):
+                self.assert_task_filter(where, expected, user=self.reader, bucket=bucket)
+                self.assert_task_filter(where, [], user=AnonymousUser(), bucket=bucket)
+
+    def test_email_cannot_be_searched_through_any_final_text_filter(self):
+        """Probe every text filter with email-only values, including aliases under unrelated names."""
+        need = self.need(email="contact-sentinel@example.com", party=self.party(self.reader))
+        schemas = GraphQLSchemas.from_discovery()
+        for bucket in ("public", "console"):
+            fields = next(
+                resource for resource in schemas.render_metadata()[bucket]["angee"]["resources"]
+                if resource["modelLabel"] == "projects.Task"
+            )["query"]["fields"]
+            self.assertIn("iContains", fields["requester_name"]["filter"]["operators"])
+            self.assertIn("exact", fields["requested_by_viewer"]["filter"]["operators"])
+            filters = schemas.graphql_schema(bucket).get_type("project_tasks_bool_exp")
+            self.assertFalse({"email", "claimed_email", "requester_email", "requester__email"} & filters.fields.keys())
+            text_filters = [
+                name for name, field in filters.fields.items()
+                if isinstance(comparison := get_named_type(field.type), GraphQLInputObjectType)
+                and "_ilike" in comparison.fields
+            ]
+            self.assertIn("requester_name", text_filters)
+            self.assert_task_filter({}, [need.task], user=self.reader, bucket=bucket)
+            for name in text_filters:
+                for email in ("contact-sentinel@example.com", self.reader.email):
+                    with self.subTest(bucket=bucket, filter=name, email=email):
+                        self.assert_task_filter(
+                            {name: {"_ilike": f"%{email}%"}}, [], user=self.reader, bucket=bucket,
+                        )
 
     def test_decision_inbox_tracks_current_sharers_without_assignment_snapshots(self):
         need = self.need()

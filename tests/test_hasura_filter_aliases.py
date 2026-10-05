@@ -8,9 +8,10 @@ from django.db import models
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models import AngeeDataModel
-from angee.graphql.data.hasura import _declared_aliases, hasura_model_resource
+from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from tests.composed_host import run_composed_tests
 from tests.conftest import create_user, execute_schema, make_addon, result_data
 from tests.scopedemo.models import Scope
 
@@ -31,10 +32,10 @@ class AliasScopeType(AngeeNode):
     name: strawberry.auto
 
 
-def build_resource(**kwargs):
+def build_resource(*, filterable=("id", "name"), **kwargs):
     """Compose each declaration afresh so monkeypatched model facts remain isolated."""
     return hasura_model_resource(
-        AliasScopeType, model=Scope, name="alias_scopes", filterable=("id", "name"),
+        AliasScopeType, model=Scope, name="alias_scopes", filterable=filterable,
         sortable=("name",), aggregatable=("id",), insert=False, update=False, delete=False, **kwargs,
     )
 
@@ -127,3 +128,110 @@ def test_contributors_cannot_claim_the_same_alias(monkeypatch):
     monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
     with pytest.raises(ImproperlyConfigured, match="duplicate sortable alias 'parent_name'"):
         build_resource()
+
+
+def constant_filter(queryset):
+    """A provider whose scalar type can be inspected without reading rows."""
+    return models.Value("computed", output_field=models.CharField())
+
+
+@pytest.mark.parametrize("declaration", ("hasura_filter_expressions", "hasura_aliases"))
+@pytest.mark.parametrize(("name", "filterable", "container_scopes", "reason"), [
+    ("name", ("id", "name"), (), "shadows a model field"),
+    ("parent", ("id", "name"), (), "shadows a model field"),
+    ("parent__name", ("id", "name", "parent__name"), (), "shadows a resource filter"),
+    ("caller_filter", ("id", "name", "caller_filter"), (), "shadows a resource filter"),
+    ("parent__name", ("id", "name"), ("parent__name",), "shadows a resource filter"),
+    ("_or", ("id", "name"), (), "is a reserved Hasura combinator"),
+    ("_and", ("id", "name"), (), "is a reserved Hasura combinator"),
+    ("_not", ("id", "name"), (), "is a reserved Hasura combinator"),
+])
+def test_model_filter_declarations_cannot_shadow_resource_filters(
+    monkeypatch, declaration, name, filterable, container_scopes, reason,
+):
+    """Both model seams reject occupied names before augmenting the resource's filters."""
+    value = constant_filter if declaration == "hasura_filter_expressions" else models.Value("alias")
+    monkeypatch.setattr(Scope, declaration, {name: value}, raising=False)
+    monkeypatch.setattr(Scope, "hasura_container_scope_fields", container_scopes, raising=False)
+    with pytest.raises(ImproperlyConfigured) as error:
+        build_resource(filterable=filterable)
+    assert str(error.value) == f"scopedemo.Scope filter expression {name!r} {reason}."
+
+
+@pytest.mark.parametrize("declaration", ({"computed": None}, {"computed": models.Value(True)}, ["computed"]))
+def test_filter_expression_providers_are_checked_at_composition(monkeypatch, declaration):
+    monkeypatch.setattr(Scope, "hasura_filter_expressions", declaration, raising=False)
+    diagnostic = (
+        "must be a provider taking the target queryset" if isinstance(declaration, dict) else "must be a mapping"
+    )
+    with pytest.raises(ImproperlyConfigured, match=diagnostic):
+        build_resource()
+
+
+@pytest.mark.parametrize("existing", ("caller", "alias"))
+def test_filter_expression_cannot_override_an_existing_computed_filter(monkeypatch, existing):
+    monkeypatch.setattr(Scope, "hasura_filter_expressions", {"computed": constant_filter}, raising=False)
+    kwargs = {}
+    if existing == "caller":
+        kwargs["filter_expressions"] = {"computed": models.Value(True)}
+    else:
+        monkeypatch.setattr(Scope, "hasura_aliases", {"computed": models.Value(True)}, raising=False)
+    with pytest.raises(
+        ImproperlyConfigured, match=r"scopedemo.Scope declares duplicate filter expressions: \['computed'\]",
+    ):
+        build_resource(**kwargs)
+
+
+@pytest.fixture
+def filter_extension_bases():
+    """Abstract contributors preserve the source seam without registering another table."""
+    class FirstExtension(models.Model):
+        class Meta:
+            abstract = True
+            app_label = "scopedemo"
+
+    class SecondExtension(models.Model):
+        class Meta:
+            abstract = True
+            app_label = "scopedemo"
+
+    class ExtendedScope(FirstExtension, SecondExtension, Scope):
+        class Meta:
+            abstract = True
+            app_label = "scopedemo"
+
+    return FirstExtension, SecondExtension, ExtendedScope
+
+
+def test_two_extension_bases_cannot_claim_the_same_filter(monkeypatch, filter_extension_bases):
+    first, second, model = filter_extension_bases
+    for base in (first, second):
+        monkeypatch.setattr(base, "hasura_filter_expressions", {"computed": constant_filter}, raising=False)
+    with pytest.raises(
+        ImproperlyConfigured, match="scopedemo.ExtendedScope declares duplicate filter expression 'computed'",
+    ):
+        hasura_model_resource(AliasScopeType, model=model, filterable=(), sortable=(), aggregatable=())
+
+
+def test_valid_filter_declarations_follow_deterministic_mro_and_mapping_order(monkeypatch, filter_extension_bases):
+    first, second, model = filter_extension_bases
+    monkeypatch.setattr(
+        first, "hasura_filter_expressions", {"first_z": constant_filter, "first_a": constant_filter}, raising=False,
+    )
+    monkeypatch.setattr(second, "hasura_filter_expressions", {"second": constant_filter}, raising=False)
+    assert list(_declared_filter_expressions(model)) == ["second", "first_z", "first_a"]
+    monkeypatch.setattr(Scope, "hasura_filter_expressions", {"computed": constant_filter}, raising=False)
+    resource = build_resource()
+    owner = GraphQLSchemas([make_addon(schemas={"console": {"query": [resource.query], "types": resource.types}})])
+    [metadata] = owner.resources("console")
+    assert metadata.query.fields["computed"].filter is not None
+    # An explicitly named caller-owned expression remains a valid declaration.
+    build_resource(filterable=("id", "name", "caller_filter"), filter_expressions={"caller_filter": models.Value(True)})
+
+
+def test_existing_addon_filter_declarations_still_compose(tmp_path):
+    """Build all current addon declarations together in the native isolated SQLite host."""
+    run_composed_tests(
+        tmp_path, "tests.native_intake_capture.HasuraFilterDeclarationTests",
+        app=("angee.intake", "angee.workflows"),
+    )
