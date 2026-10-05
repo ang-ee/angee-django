@@ -153,16 +153,11 @@ class DecisionProposal(BaseModel):
             public_id_for(canonical_record_model(type(record)), record.pk): record
             for record in info.context["records"]
         }
-        written: set[tuple[str, str]] = set()
         for alternative in self.alternatives:
             for identity, actions in alternative.actions.items():
                 if identity not in records:
                     raise ValueError(f"Unknown concerned record: {identity}.")
                 actions.resolve(records[identity], context=info.context)
-                for name in actions.fields:
-                    if self.multiple and (identity, name) in written:
-                        raise ValueError(f"Multiple alternatives overlap on {name} of {identity}.")
-                    written.add((identity, name))
         return self
 
     def choose(self, chosen: Sequence[str]) -> tuple[Alternative, ...]:
@@ -173,7 +168,15 @@ class DecisionProposal(BaseModel):
             raise ValueError("Choose distinct alternatives; this proposal permits one unless multiple is true.")
         if set(chosen) - {alternative.key for alternative in self.alternatives}:
             raise ValueError("The verdict contains an unknown alternative.")
-        return tuple(alternative for alternative in self.alternatives if alternative.key in chosen)
+        selected = tuple(alternative for alternative in self.alternatives if alternative.key in chosen)
+        written: set[tuple[str, str]] = set()
+        for alternative in selected:
+            for identity, actions in alternative.actions.items():
+                for name in actions.fields:
+                    if (identity, name) in written:
+                        raise ValueError(f"Choose only one value for {name.replace('_', ' ')}.")
+                    written.add((identity, name))
+        return selected
 
 
 class DecisionRequest(BaseModel):

@@ -85,7 +85,8 @@ test("a retry with possible duplicate effects uses the shared acknowledgement fo
 test("stop withdraws the card, removes future steps and refreshes the pane", async () => {
   const requests: TimelineRequest[] = [];
   render(<TimelineStory onRequest={(request) => requests.push(request)} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Stop and do it manually" }));
+  const card = await screen.findByRole("region", { name: "Confirm the name" });
+  fireEvent.click(within(card).getByRole("button", { name: "Stop and do it manually" }));
   await screen.findByText("Withdrawn: stopped by River");
   expect(requests.find(({ query }) => query.includes("cancel_workflow_run("))?.variables.id).toBe("wfr_review");
   expect(screen.queryByText("May also: Check a related record")).toBeNull();

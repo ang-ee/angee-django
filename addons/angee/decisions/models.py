@@ -75,6 +75,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     def decide(self, *, actor: Any, chosen: list[str], revision: int | None = None) -> Any:
         return type(self).objects.decide(self, actor=actor, chosen=chosen, revision=revision)
 
+    def validate_verdict(self, chosen: tuple[Any, ...], *, actor: Any) -> None:
+        """Allow composed policy to refuse an answer before its verdict is retained."""
+
 
 class DecisionRecord(DerivedFrom):
     """A concern link: decision, canonical content type and object id, with no payload."""

@@ -79,6 +79,31 @@ def test_multiple_verdict_has_authored_order_and_one_audit(people):
         Decision.objects.decide(question, actor=reviewer, chosen=["decline"], revision=question.revision)
 
 
+def test_composed_verdict_policy_refuses_without_retaining_an_answer(people, monkeypatch):
+    requester, reviewer, *_ = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+
+    def refuse(self, chosen, *, actor):
+        assert chosen[0].key == "complete" and actor.pk == reviewer.pk
+        raise ValidationError("Correct the record before answering.")
+
+    monkeypatch.setattr(Decision, "validate_verdict", refuse)
+    with pytest.raises(ValidationError, match="Correct the record"):
+        Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
+    question.refresh_from_db()
+    assert question.is_open and question.revision == 1 and question.answered_by is None
+
+
+def test_alternative_field_values_are_allowed_but_cannot_be_chosen_together():
+    proposal = DecisionProposal.model_validate({"multiple": True, "alternatives": [
+        {"key": key, "label": label, "outcome": "done", "actions": {"record": {"fields": {"name": {"set": label}}}}}
+        for key, label in (("first", "First reading"), ("second", "Second reading"))
+    ]})
+    assert proposal.choose(["second"])[0].actions["record"].fields["name"].set == "Second reading"
+    with pytest.raises(ValueError, match="Choose only one value"):
+        proposal.choose(["first", "second"])
+
+
 def test_readers_requesters_and_removed_assignees_cannot_answer(people):
     requester, reviewer, other, outsider, subject = people
     question = Decision.objects.ask(request_for(people), actor=requester)

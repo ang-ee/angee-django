@@ -58,10 +58,12 @@ export function RecordTimelineView({ data, openCount, set = false, recordState, 
   const retryActions = useStepRetryActions(true);
   const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label}
     onOpen={() => openRecord({ model, id, label })} /></Chip>;
-  const card = (decision: TimelineData[number]["decisions"][number], id: string, compact = false, records?: readonly string[]) =>
+  const card = (decision: TimelineData[number]["decisions"][number], id: string, compact = false, records?: readonly string[], runId?: string) =>
     <DecisionCard key={decision.id} decision={decision} selfId={id}
       compact={compact} inStep={records ? { records } : undefined}
-      onEditField={form?.id === id ? form.focusField : undefined} />;
+      onEditField={form?.id === id ? form.focusField : undefined}
+      actions={runId ? <Button size="sm" variant="ghost" disabled={busy}
+        onClick={() => void act(() => onStop?.([runId]))}>{t("timeline.stop")}</Button> : null} />;
   const runs = [...new Map(data.flatMap(({ runs }) => runs).map((run) => [run.id, run])).values()];
   const count = openCount;
   const active = runs.filter((run) => run.can_cancel);
@@ -132,7 +134,9 @@ export function RecordTimelineView({ data, openCount, set = false, recordState, 
       {!single ? <div className="grid gap-1 border-t border-border-subtle pt-3"><h3 className="text-13 font-semibold">{run.version?.workflow?.display_name}</h3>
         <RunStatus run={run} recordState={recordState} /><time dateTime={run.created_at}>{formatDateTime(new Date(run.created_at))}</time>
         {link("workflows.WorkflowRun", run.id, t("timeline.openRun"))}</div> : null}
-      <RunSteps run={run} recordId={entry?.record_id ?? ""} card={card} link={link} retry={retryStep} />
+      <RunSteps run={run} recordId={entry?.record_id ?? ""}
+        card={(decision, id, compact, records) => card(decision, id, compact, records, run.can_cancel ? run.id : undefined)}
+        link={link} retry={retryStep} />
     </section>)}
     {entry?.decisions.filter((decision) => !inRuns.has(decision.id)).map((decision) => card(decision, entry.record_id))}
     {!runs.length && !entry?.decisions.length ? <InlineEmpty label={t("timeline.empty")} /> : null}
@@ -167,7 +171,8 @@ function RunSteps({ run, recordId, card, link, retry }: {
   const routine = (node: typeof ordered[number]) => !node.step_run?.decision && !node.step_run?.notes.length
     && optionToken(node.step_run?.status) === "succeeded";
   const items: StepListItem[] = [{ id: "trigger", state: "trigger", title: run.trigger_event?.trigger?.display_name
-    ?? (optionToken(run.origin) === "manual" ? t(run.subject_model?.toLowerCase() === "storage.file" ? "timeline.uploadedBy" : "timeline.startedBy", { name: run.run_as?.display_name ?? t("timeline.user") }) : t("timeline.originStarted", { origin: titleCase(run.origin) })), timestamp: run.created_at,
+    ?? (run.parent_step ? t("timeline.continuedBy", { name: run.run_as?.display_name ?? t("timeline.user") })
+      : optionToken(run.origin) === "manual" ? t(run.subject_model?.toLowerCase() === "storage.file" ? "timeline.uploadedBy" : "timeline.startedBy", { name: run.run_as?.display_name ?? t("timeline.user") }) : t("timeline.originStarted", { origin: titleCase(run.origin) })), timestamp: run.created_at,
     children: run.trigger_event?.record_model && run.trigger_event.record_id ? link(run.trigger_event.record_model, run.trigger_event.record_id)
       : run.subject_model && run.subject_id ? link(run.subject_model, run.subject_id) : null }];
   const folded = !expanded && runSteps(run).some((step) => optionToken(step.status) === "waiting") && done.length > 6;
@@ -194,7 +199,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
     const step = node.step_run;
     const outcome = step?.outcome_label && step.outcome_label !== titleCase(step.outcome) ? step.outcome_label : null;
     const title = optionToken(step?.status) === "succeeded"
-      ? step?.notes.find((note) => ["info", "success"].includes(note.tone))?.message || outcome || node.label : node.label;
+      ? outcome || node.label : node.label;
     items.push({ id: node.key, state: optionToken(step?.status) === "canceled" ? "stopped" : node.plan === "current" ? "current" : "done", title,
       timestamp: step?.updated_at, tone: resolveTone(step?.hold === "error" ? "error" : "succeeded"),
       children: details(step, title) });

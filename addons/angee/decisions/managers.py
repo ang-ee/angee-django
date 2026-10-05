@@ -146,6 +146,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 selected = DecisionProposal.model_validate(row.proposal).choose(chosen)
             except ValueError as error:
                 raise ValidationError({"chosen": str(error)}) from error
+            row.validate_verdict(selected, actor=answering)
             if not self.filter(pk=pk, revision=row.revision).open().owner_update(
                 verdict=[alternative.key for alternative in selected], answered_by=answering, answered_at=Now(),
                 revision=F("revision") + 1, updated_at=Now(),

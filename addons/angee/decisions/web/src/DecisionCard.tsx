@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import * as v from "valibot";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "@angee/metadata";
 import {
   Button, Card, Checkbox, ErrorBanner, MetaGrid, RadioGroup, RecordReference,
-  RelativeTime, StatusIcon, TimelineEntry, cn, radioGroupVariants,
+  RelativeTime, StatusIcon, cn, radioGroupVariants,
   actionOutcomeSubmitResult, formSubmitError, titleCase, useActionOutcomeMutation, useRevealedRecordField, useActiveRecordForm, useRecordPeek,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
@@ -21,10 +21,11 @@ export interface DecisionCardProps {
   inStep?: { records: readonly string[] };
   onEditField?: (field: string) => void;
   onAnswered?: () => void | Promise<unknown>;
+  actions?: ReactNode;
 }
 
 /** One card in the inbox, a record timeline and a record selection. */
-export function DecisionCard({ decision, selfId, highlighted, compact, inStep, onEditField, onAnswered }: DecisionCardProps): ReactElement {
+export function DecisionCard({ decision, selfId, highlighted, compact, inStep, onEditField, onAnswered, actions }: DecisionCardProps): ReactElement {
   const t = useDecisionsT();
   const ref = useRef<HTMLElement>(null);
   const openRecord = useRecordPeek();
@@ -69,9 +70,10 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   };
   if (!open) {
     const withdrawn = verdict.success && verdict.output.length === 0;
-    return <TimelineEntry as="div" title={withdrawn ? t("decision.withdrawn", { name: decision.answered_by?.display_name ?? t("decision.operator") })
-      : decision.answered_by?.display_name ?? t("inbox.answered")} timestamp={decision.answered_at}
-      body={withdrawn ? decision.kind_label : t("decision.chose", { labels: decision.verdict_label })} className={withdrawn ? "bg-sheet-2" : "bg-sheet"} />;
+    return <p className="text-xs text-fg-muted">{decision.kind_label}{" · "}
+      {!withdrawn && decision.answered_by ? <><span>{decision.answered_by.display_name}</span>{" · "}</> : null}<span>{withdrawn
+      ? t("decision.withdrawn", { name: decision.answered_by?.display_name ?? t("decision.operator") })
+      : t("decision.chose", { labels: decision.verdict_label })}</span></p>;
   }
   const changes = (alternative: v.InferOutput<typeof ProposalSchema>["alternatives"][number]) =>
     <span className="mt-1 grid gap-1.5">{Object.entries(alternative.actions).map(([id, actions]) =>
@@ -84,6 +86,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
           value: (() => {
             const facts = modelMetadataForLabel(metadata, actions.model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
             return <FactValue value={operation.set} relationModel={facts?.relationModelLabel} options={facts?.values}
+              widget={facts?.widget} row={context.success ? context.output.facts.find((fact) => Object.keys(fact.row).length)?.row : undefined}
               emptyLabel={t("decision.none")} json />;
           })(),
         }))} />
@@ -120,6 +123,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
       <div className="mt-2 flex flex-wrap gap-1.5">
         {canAnswer && proposal.success ? <Button size="sm" variant="primary" disabled={busy || !chosen.length} onClick={() => void submit()}>{t("decision.submit")}</Button> : null}
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
+        {actions}
       </div>
       <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p>
       {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
