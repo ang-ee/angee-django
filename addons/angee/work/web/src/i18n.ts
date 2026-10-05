@@ -88,6 +88,7 @@ export const enWorkMessages: Record<string, string> = {
   "cycle.board.description": "Tasks assigned to this cycle, grouped by queue stage.",
   "cycle.action.close": "Close and roll over",
   "cycle.action.failed": "The cycle close action returned no result.",
+  "removed.loadFailed": "Removed tasks could not be loaded.",
 };
 
 export const useWorkT = createNamespaceT("work", enWorkMessages);
