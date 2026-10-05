@@ -342,7 +342,9 @@ def _eval_operand(operand: str, variables: dict[str, str]) -> str:
 
 
 def _eval_expr(expr: str, variables: dict[str, str]) -> str:
-    return "".join(_eval_atom(atom, variables) for atom in expr.split("+"))
+    """Evaluate a ``{% set %}`` value: a literal, a variable, or pongo2 ``|add:`` concatenation."""
+
+    return "".join(_eval_atom(atom, variables) for atom in expr.split("|add:"))
 
 
 def _eval_atom(atom: str, variables: dict[str, str]) -> str:
@@ -404,6 +406,11 @@ def _render_dev_stack(
     ollama_port: str = "11434",
     ingress_domain: str = "localhost",
     _runtime_mode: str = "process",
+    postgres_mode: str = "bundled",
+    postgres_host: str = "127.0.0.1",
+    postgres_db: str = "angee",
+    postgres_user: str = "angee",
+    postgres_port: int = 5433,
     serve_mode: str = "development",
     serve_workers: int = 0,
     db_pool_max_size: int = 2,
@@ -436,7 +443,11 @@ def _render_dev_stack(
         "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
         "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
         "playwright_mcp_image": "mcr.microsoft.com/playwright/mcp:v0.0.76",
-        "postgres_port": "5433",
+        "postgres_mode": postgres_mode,
+        "postgres_host": postgres_host,
+        "postgres_db": postgres_db,
+        "postgres_user": postgres_user,
+        "postgres_port": str(postgres_port),
         "process_compose_port": "8080",
         "project_name": "app",
         "project_path": project_path,
@@ -927,6 +938,79 @@ def test_dev_stack_mounts_postgres_data_from_stack_root() -> None:
     assert stack["persist"]["app-data"]["subpath"] == "./data"
     assert stack["services"]["postgres"]["mounts"] == ["bind://./data/pgdata:/var/lib/postgresql/data"]
     assert stack["services"]["postgres"]["ports"] == ["${ports.postgres}:5432"]
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "host", "port"),
+    [("process", "127.0.0.1", 5433), ("docker", "host.docker.internal", 5544)],
+)
+def test_dev_stack_external_postgres_uses_server_without_stack_resources(
+    runtime_mode: str, host: str, port: int
+) -> None:
+    stack = _render_dev_stack(
+        _runtime_mode=runtime_mode,
+        postgres_mode="external",
+        postgres_host=host,
+        postgres_port=port,
+        postgres_user="app_role",
+        postgres_db="app_db",
+        celery_queues="reports,imports",
+    )
+    bundled = _render_dev_stack(_runtime_mode=runtime_mode, celery_queues="reports,imports")
+
+    assert "postgres" not in stack["services"]
+    assert "postgres" not in stack["ports"]
+    assert "pgdata" not in stack["persist"]
+    assert stack["secrets"]["db-password"] == {"required": True}
+    assert "${ports.postgres}" not in json.dumps(stack)
+    assert stack["jobs"]["provision"]["depends_on"] == (
+        ["deps", "operator"] if runtime_mode == "process" else ["operator", "deps"]
+    )
+    assert stack["services"]["redis"] == bundled["services"]["redis"]
+    assert stack["ports"].get("redis") == bundled["ports"].get("redis")
+
+    database_nodes = {
+        (section, name): node["env"]
+        for section in ("services", "jobs")
+        for name, node in stack[section].items()
+        if "DATABASE_URL" in (node.get("env") or {})
+    }
+    bundled_nodes = {
+        (section, name)
+        for section in ("services", "jobs")
+        for name, node in bundled[section].items()
+        if "DATABASE_URL" in (node.get("env") or {})
+    }
+    assert set(database_nodes) == bundled_nodes
+    for (section, name), env in database_nodes.items():
+        assert env["DATABASE_URL"] == f"postgres://app_role:${{secret.db-password}}@{host}:{port}/app_db"
+        for key in ("REDIS_URL", "CACHE_URL", "CELERY_BROKER_URL"):
+            assert env[key] == bundled[section][name]["env"][key]
+
+
+@pytest.mark.parametrize("runtime_mode", ["process", "docker"])
+def test_dev_stack_bundled_postgres_custom_role_and_database_agree(runtime_mode: str) -> None:
+    stack = _render_dev_stack(
+        _runtime_mode=runtime_mode,
+        postgres_user="app_role",
+        postgres_db="app_db",
+        postgres_host="db.example.test",
+        postgres_port=5544,
+    )
+
+    assert stack["services"]["postgres"]["env"] == {
+        "POSTGRES_USER": "app_role",
+        "POSTGRES_DB": "app_db",
+        "POSTGRES_PASSWORD": "${secret.db-password}",
+    }
+    address = "127.0.0.1:${ports.postgres}" if runtime_mode == "process" else "postgres:5432"
+    assert stack["services"]["django"]["env"]["DATABASE_URL"] == (
+        f"postgres://app_role:${{secret.db-password}}@{address}/app_db"
+    )
+    assert stack["secrets"]["db-password"] == {"generated": True, "length": 32}
+    assert "pgdata" in stack["persist"]
+    if runtime_mode == "process":
+        assert stack["ports"]["postgres"]["value"] == 5544
 
 
 def test_dev_stack_runs_redis_and_celery_services() -> None:

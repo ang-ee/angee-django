@@ -12,8 +12,8 @@ _message_after_copy: |
   (ANGEE_ROOT=.). Runtime mode: "{{ runtime_mode }}".
 
   - process (default): Django, Celery, Vite, and Storybook run as local processes;
-    Postgres and Redis run as containers with published ports.
-  - docker: Django, Celery, Vite, Storybook, Playwright, Postgres, and Redis run as
+    {% if postgres_mode == "external" %}Redis runs as a container with a published port; PostgreSQL is the external server {{ postgres_host }}:{{ postgres_port }}/{{ postgres_db }} (set db-password to the {{ postgres_user }} role's password before bring-up).{% else %}Postgres and Redis run as containers with published ports.{% endif %}
+  - docker: Django, Celery, Vite, Storybook, Playwright{% if postgres_mode == "external" %}{% else %}, Postgres{% endif %}, and Redis run as
     containers; the operator daemon remains host-local and orchestrates Docker.
 
   1. Bring it up. `angee dev` materializes the declared source caches, cuts the
@@ -55,6 +55,8 @@ _angee:
     optional external slots its `src` workspace materializes under
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
     workspace cut, dependency installation, provision/codegen, and boot.
+    PostgreSQL is bundled as a per-stack pgvector container by default;
+    `postgres_mode: external` points the stack at a server it does not run.
   inputs:
     operator_image:
       type: str
@@ -180,6 +182,33 @@ runtime_mode:
   default: process
   choices: [process, docker]
   help: Run framework application services as local processes or Docker containers.
+
+# PostgreSQL: `bundled` runs a pgvector container per stack; `external` points
+# the stack at a server it does not run (no postgres service, port lease, or
+# pgdata), and `db-password` becomes a required secret holding postgres_user's
+# server password. templates/README.md has the shared-server procedure.
+postgres_mode:
+  type: str
+  default: bundled
+  choices: [bundled, external]
+  help: Bundled runs this stack's own pgvector container; external connects to a server another owner runs.
+
+# Copier validators are advisory in operator renders; the docker-mode host is guidance.
+postgres_host:
+  type: str
+  default: "127.0.0.1"
+  validator: '{% if postgres_mode == "external" and runtime_mode == "docker" %}{% if postgres_host == "127.0.0.1" or postgres_host == "localhost" %}Containers cannot reach a loopback host; use an address they can reach, such as host.docker.internal.{% endif %}{% endif %}'
+  help: External only; the server host as this stack's processes or containers reach it (bracket IPv6 literals).
+
+postgres_db:
+  type: str
+  default: angee
+  help: Database name.
+
+postgres_user:
+  type: str
+  default: angee
+  help: Role name; the db-password secret is this role's password.
 
 serve_mode:
   type: str
@@ -326,6 +355,7 @@ operator_port:
 postgres_port:
   type: int
   default: 5433
+  help: Bundled mode leases this stack's published PostgreSQL port; external mode uses this server port literally.
 
 redis_port:
   type: int
