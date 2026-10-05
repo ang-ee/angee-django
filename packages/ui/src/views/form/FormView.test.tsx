@@ -535,9 +535,11 @@ describe("FormView", () => {
 
   test("a default-tab rule chooses from the loaded record once; the viewer's choice and a routed tab win", async () => {
     const rule = vi.fn((record: Row) => record.wordCount === 3 ? "activity" : undefined);
+    // Counted in a component body, which runs only when the panel actually mounts.
     let fallbackRenders = 0;
+    function NotesPane(): ReactElement { fallbackRenders += 1; return <p>Notes pane</p>; }
     const tabs = [
-      { id: "notes", label: "Notes", render: () => { fallbackRenders += 1; return <p>Notes pane</p>; } },
+      { id: "notes", label: "Notes", render: () => <NotesPane /> },
       { id: "activity", label: "Activity", render: () => <p>Activity pane</p> },
     ];
     renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
