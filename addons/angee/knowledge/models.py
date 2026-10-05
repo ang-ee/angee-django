@@ -22,7 +22,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.signals import post_save
 from markdown_it import MarkdownIt
 from rebac import (
@@ -41,7 +41,16 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, CreationKeyQuerySet, HistoryMixin, OwnerMixin, RevisionMixin
+from angee.base.mixins import (
+    AuditMixin,
+    CreationKeyMixin,
+    CreationKeyQuerySet,
+    HistoryMixin,
+    OwnerMixin,
+    RevisionMixin,
+    TrashMixin,
+    TrashQuerySet,
+)
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import (
     RecordRef,
@@ -153,7 +162,9 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
             pages = {
                 page.pk: page
                 for page in (
-                    page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk").prefetch_related(
+                    page_model._default_manager.with_actor(actor).filter(vault=source).untrashed().order_by(
+                        "pk"
+                    ).prefetch_related(
                         *(
                             models.Prefetch(
                                 concrete_child_accessor(page_model, child_model),
@@ -284,7 +295,11 @@ class Vault(OwnerMixin, CreationKeyMixin, AngeeDataModel, HistoryMixin):
         return backend_class(self)
 
 
-class PageManager(AngeeManager):
+class PageQuerySet(TrashQuerySet[Any], AngeeQuerySet[Any]):
+    """Actor-scoped page reads; ``untrashed()`` is every page's default surface."""
+
+
+class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[misc]
     """Factories for actor-scoped page writes."""
 
     def create_in(self, vault: Any, **fields: Any) -> Any:
@@ -372,11 +387,14 @@ class PageManager(AngeeManager):
         return copies
 
 
-class Page(AuditMixin, AngeeDataModel, HistoryMixin):
+class Page(TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
-    a parent row without a child is a folder.
+    a parent row without a child is a folder. Trashing a page trashes every
+    page below it with the same stamp, so each stored flag is exact; restoring
+    it brings back the pages trashed with it. Trashed pages are withheld from
+    readers who cannot delete them and leave their titles free meanwhile.
     """
 
     runtime = True
@@ -417,7 +435,13 @@ class Page(AuditMixin, AngeeDataModel, HistoryMixin):
         abstract = True
         ordering = ("title", "sqid")
         rebac_resource_type = "knowledge/page"
-        constraints = (models.UniqueConstraint(fields=("vault", "title"), name="uniq_knowledge_page_vault_title"),)
+        constraints = (
+            models.UniqueConstraint(
+                fields=("vault", "title"),
+                condition=models.Q(is_trashed=False),
+                name="uniq_knowledge_page_vault_title",
+            ),
+        )
 
     def __str__(self) -> str:
         """Return the page title for Django displays."""
@@ -435,6 +459,59 @@ class Page(AuditMixin, AngeeDataModel, HistoryMixin):
                     return str(child.kind)
                 return child._meta.model_name
         return str(self.PageKind.FOLDER)
+
+    def clean(self) -> None:
+        """Keep live pages out of trashed folders."""
+
+        super().clean()
+        if self.parent_id is not None and not self.is_trashed and type(self)._base_manager.filter(
+            pk=self.parent_id, is_trashed=True,
+        ).exists():
+            raise ValidationError({"parent": "Page parent is in the trash."})
+
+    def trash(self, *, reason: str = "", using: str | None = None) -> None:
+        """Trash this page and, with the same stamp, every untrashed page below it."""
+
+        db = using or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=db):
+            super().trash(reason=reason, using=db)
+            below = self._subtree_pks(db)
+            if below:
+                type(self).system_queryset().using(db).filter(pk__in=below).trash(
+                    reason=self.trash_reason, at=self.trashed_at,
+                )
+
+    def restore(self, *, using: str | None = None) -> None:
+        """Restore this page and the pages below it that were trashed with it.
+
+        Refuses while the containing folder is trashed, and when an untrashed
+        page took a restored title meanwhile.
+        """
+
+        db = using or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=db):
+            pages = type(self).system_queryset(lock=("self",)).using(db)
+            if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
+                raise ValidationError({"parent": "Restore the folder that contains this page first."})
+            together = pages.filter(pk__in=self._subtree_pks(db, trashed_at=self.trashed_at)).trashed()
+            titles = [self.title, *together.values_list("title", flat=True)]
+            if pages.filter(vault_id=self.vault_id, title__in=titles).untrashed().exists():
+                raise ValidationError({"title": "Another page in this vault already uses a restored title."})
+            super().restore(using=db)
+            together.restore()
+
+    def _subtree_pks(self, using: str, *, trashed_at: Any = None) -> set[Any]:
+        """Return the primary keys below this page, optionally only those trashed together with it."""
+
+        pages = type(self)._base_manager.using(using)
+        if trashed_at is not None:
+            pages = pages.filter(is_trashed=True, trashed_at=trashed_at)
+        found: set[Any] = set()
+        frontier = {self.pk}
+        while frontier:
+            frontier = set(pages.filter(parent_id__in=frontier).values_list("pk", flat=True)) - found
+            found |= frontier
+        return found
 
 
 class RecordBindingManager(AngeeManager):

@@ -40,7 +40,7 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
-from angee.iam.audit import AuthoredRefMixin, user_label_prefetch
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
 from angee.knowledge.models import (
@@ -149,7 +149,7 @@ class BacklinkType:
 
 
 @strawberry_django.type(Page)
-class PageType(AuthoredRefMixin, AngeeNode):
+class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a page."""
 
     display_name: str = strawberry_django.field(
@@ -157,9 +157,10 @@ class PageType(AuthoredRefMixin, AngeeNode):
     )
     title: auto
     icon: auto
+    is_trashed: auto
     created_at: auto
     updated_at: auto
-    permissions = permissions_field(("write",))
+    permissions = permissions_field(("write", "delete"))
 
     @strawberry_django.field(only=["id", "markdown__kind"])
     def kind(self) -> str:
@@ -221,6 +222,7 @@ class PageType(AuthoredRefMixin, AngeeNode):
             Link._default_manager.filter(
                 target_page_id=cast(Any, self).pk,
                 is_resolved=True,
+                source_page__is_trashed=False,
             )
             .scoped()
             .annotate(source_title=F("source_page__title"))
@@ -399,8 +401,8 @@ _PAGE_RESOURCE = hasura_model_resource(
     PageType,
     model=Page,
     name="pages",
-    filterable=["id", "vault", "title", "updated_at"],
-    sortable=["title", "created_at", "updated_at"],
+    filterable=["id", "vault", "title", "is_trashed", "updated_at"],
+    sortable=["title", "created_at", "updated_at", "trashed_at"],
     aggregatable=["id"],
     groupable=["vault", "vault__name", "updated_at"],
     updatable=["title", "icon", "parent"],

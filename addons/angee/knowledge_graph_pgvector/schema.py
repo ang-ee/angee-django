@@ -52,6 +52,7 @@ class PageGraphPgvectorExtension:
 
         rows = (
             Page._default_manager.filter(vault_id=cast(Any, self).vault_id)
+            .untrashed()
             .exclude(pk=cast(Any, self).pk)
             .order_by("title", "sqid")
             .scoped()

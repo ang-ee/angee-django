@@ -50,8 +50,14 @@ def test_large_permission_reads_keep_one_application_statement(
     assert sum(item["sql"].startswith(f"SELECT {table}.") for item in queries) == 1
 
 
-@pytest.mark.parametrize("resource_type", ("storage/folder", "knowledge/page"))
-def test_recursive_reads_stay_bounded_across_fifty_levels(composed_tables: None, resource_type: str) -> None:
+@pytest.mark.parametrize(
+    ("resource_type", "statement_bound"),
+    # A page also seeds its trash manager arm (vault delete) beside its grants.
+    (("storage/folder", 8), ("knowledge/page", 9)),
+)
+def test_recursive_reads_stay_bounded_across_fifty_levels(
+    composed_tables: None, resource_type: str, statement_bound: int,
+) -> None:
     """Hierarchy reads stay correct and bounded as predecided row keys grow."""
 
     del composed_tables
@@ -68,7 +74,7 @@ def test_recursive_reads_stay_bounded_across_fifty_levels(composed_tables: None,
             pks = set(rows.with_actor(viewer).with_action("read").scoped().values_list("pk", flat=True))
         # Include the compiler's policy/seed reads as well as the final query.
         # Bound statements independently of the fifty application rows.
-        assert len(queries) <= 8, queries.captured_queries
+        assert len(queries) <= statement_bound, queries.captured_queries
         assert max(len(query["sql"]) for query in queries) <= 32_768, queries.captured_queries
         return pks
 

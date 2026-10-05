@@ -31,6 +31,13 @@ inline composer only when the record can be bound and that vault projects `write
 It creates a note page, writes its markdown body, then binds it under `role`.
 The existing Pages tab keeps its binding and inline reader behavior.
 
+Pages are trashable through the shared `trash_record` / `restore_record` verbs,
+authorized by page `delete`. Trashing a page trashes the untrashed pages below it
+with the same stamp; Zed withholds trashed pages from everyone who cannot delete
+them, so they leave lists, counts, search, backlinks and wikilinks. The navigator
+lists each trashed subtree once under "Removed (n)"; restoring it brings back the
+pages trashed with it, never a page trashed on its own.
+
 Page access follows the current schema. The former one-shot author-attribution
 transition and its management command were removed before any deployment used
 them; schema sync is the only policy transition for this addon.
