@@ -12,6 +12,7 @@ interface CurrentUserFields {
   isStaff: boolean;
   isActive: boolean;
   roleRefs: string[];
+  capabilities: string[];
 }
 
 interface LoginUserFields {
@@ -36,6 +37,10 @@ interface AngeeLoginResult {
   };
 }
 
+interface AngeeDeclaredCapabilitiesResult {
+  declared_capabilities: string[];
+}
+
 interface AngeeLogoutResult {
   logout: boolean;
 }
@@ -52,7 +57,7 @@ function authDocument<TResult, TVariables extends object>(
 
 export const currentUserSelection = `
   id username firstName: first_name lastName: last_name email
-  isStaff: is_staff isActive: is_active preferences roleRefs: role_refs
+  isStaff: is_staff isActive: is_active preferences roleRefs: role_refs capabilities
 `;
 
 export const AngeeCurrentUserDocument = authDocument<
@@ -84,6 +89,16 @@ export const AngeeLoginDocument = authDocument<
         preferences
       }
     }
+  }
+`);
+
+/** Every capability name the installation declares; read in development to check `requires` names. */
+export const AngeeDeclaredCapabilitiesDocument = authDocument<
+  AngeeDeclaredCapabilitiesResult,
+  Record<string, never>
+>(`
+  query AngeeDeclaredCapabilities {
+    declared_capabilities
   }
 `);
 

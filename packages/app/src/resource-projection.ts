@@ -159,32 +159,66 @@ export function resourceRouteIndex(
   return byResource;
 }
 
+/** A menu node that left: composition removed it, or the actor lacks a capability it needs. */
+export interface MenuNodeLeft {
+  id: string;
+  route?: string;
+  /** Why, as the predicate of "menu item … "; defaults to "was removed". */
+  reason?: string;
+}
+
+/** What an `AppRouteProjection` projects beyond its routes, logical tree and confinement. */
+export interface AppRouteProjectionOptions {
+  /** What the chrome shows; defaults to the logical tree. */
+  navigation?: MenuTree;
+  /** The menu nodes composition removed, which decides route availability. */
+  removed?: readonly MenuNodeLeft[];
+  /**
+   * The actor's capabilities: menu nodes and routes requiring another one leave.
+   * Omitted, the composition is projected as declared and nothing is gated.
+   */
+  capabilities?: ReadonlySet<string>;
+}
+
+/** A capability name as IAM declares one: a permission identifier on `iam/capability`. */
+const CAPABILITY_NAME = /^[a-z][a-z0-9_]*$/;
+
 /** One projection for app resource claims, navigation membership and admission. */
 export class AppRouteProjection {
+  /** The logical tree (route ownership, trails) less the nodes the actor lacks a capability for. */
+  readonly menuTree: MenuTree;
   readonly navigationTree: MenuTree;
   readonly canonical: Readonly<Record<string, RuntimeResourceRoutes>>;
+  /** Capability names the menu nodes and routes require, each with the declarations requiring it. */
+  readonly requirements: ReadonlyMap<string, readonly string[]>;
   private readonly roots = new Map<string, string | undefined>();
   private readonly claims = new Map<string, Map<string, RuntimeResourceRoutes[]>>();
   private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  private readonly byCapabilities = new Map<string, AppRouteProjection>();
 
-  /** Console routes removed menu nodes made unavailable, with the reason; they redirect home. */
+  /** Routes removed menu nodes, or capabilities the actor lacks, made unavailable, with the reason; they redirect home. */
   readonly unavailable: ReadonlyMap<string, string>;
 
-  /**
-   * `menuTree` is the logical tree (route ownership, trails); `navigation` is what
-   * the chrome shows (defaults to the logical tree); `removed` lists the menu
-   * nodes composition removed, which decides route availability.
-   */
   constructor(
     readonly routes: readonly BaseAddonRoute[],
-    readonly menuTree: MenuTree,
+    private readonly declaredMenuTree: MenuTree,
     readonly confineTo?: string,
-    options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
+    private readonly options: AppRouteProjectionOptions = {},
   ) {
-    const navigation = options.navigation ?? menuTree;
+    this.requirements = capabilityRequirements(routes, declaredMenuTree);
+    const denied = options.capabilities
+      ? deniedMenuNodes(declaredMenuTree, options.capabilities, gatedRoutes(routes, options.capabilities))
+      : [];
+    const deniedIds = new Set(denied.map((node) => node.id));
+    if (confineTo !== undefined && deniedIds.has(confineTo)) {
+      throw new Error(`Menu root "${confineTo}" confines the console, so it cannot require a capability.`);
+    }
+    this.menuTree = declaredMenuTree.without(deniedIds);
+    const menuTree = this.menuTree;
+    const navigation = (options.navigation ?? declaredMenuTree).without(deniedIds);
     this.navigationTree = confineTo === undefined ? navigation.withSettingsPlace() : navigation.confineTo(confineTo);
-    this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
+    this.unavailable = unavailableRoutes(routes, menuTree, [...(options.removed ?? []), ...denied], options.capabilities);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
     const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
     const canonical: BaseAddonRoute[] = [];
@@ -229,6 +263,22 @@ export class AppRouteProjection {
       this.claims.set(root, resources);
     }
     this.canonical = resourceRouteIndex(canonical);
+  }
+
+  /**
+   * This composition as an actor holding `capabilities` sees it: one projection
+   * per capability set, built once. Without requirements it is this projection.
+   */
+  forCapabilities(capabilities: Iterable<string>): AppRouteProjection {
+    if (!this.requirements.size) return this;
+    const held = new Set(capabilities);
+    const key = [...held].sort().join("\n");
+    let projection = this.byCapabilities.get(key);
+    if (!projection) {
+      projection = new AppRouteProjection(this.routes, this.declaredMenuTree, this.confineTo, { ...this.options, capabilities: held });
+      this.byCapabilities.set(key, projection);
+    }
+    return projection;
   }
 
   rootFor(route: BaseAddonRoute, visited = new Set<string>()): string | undefined {
@@ -367,19 +417,101 @@ function addMenuRouteResource(
 }
 
 /**
- * Console routes made unavailable by removed menu nodes, each with its reason. A
- * route is unavailable when every menu reference to it was removed: its targets
- * and its `route.menu` anchor. A surviving reference keeps it available; route
- * descendants (`route.parent`) follow; routes no menu ever referenced, and
- * routes outside the console layout, stay available. An anchor naming no menu
- * item at all is a wiring error.
+ * The capability names a composition requires, each with the menu items and
+ * routes requiring it. A name that is not a capability identifier is a wiring error.
+ */
+function capabilityRequirements(
+  routes: readonly BaseAddonRoute[],
+  menuTree: MenuTree,
+): ReadonlyMap<string, readonly string[]> {
+  const requirements = new Map<string, string[]>();
+  const add = (name: string | undefined, where: string): void => {
+    if (name === undefined) return;
+    if (!CAPABILITY_NAME.test(name)) throw new Error(`${where} requires "${name}", which is not a capability name.`);
+    requirements.set(name, [...(requirements.get(name) ?? []), where]);
+  };
+  for (const item of menuTree.byId.values()) add(item.requires, `Menu item "${item.id}"`);
+  for (const route of routes) add(route.requires, `Route "${route.name}"`);
+  return requirements;
+}
+
+/**
+ * Development findings for capabilities the composition requires but the
+ * installation does not declare: nobody can hold them, so their pages never show.
+ */
+export function undeclaredCapabilityFindings(
+  requirements: ReadonlyMap<string, readonly string[]>,
+  declared: readonly string[],
+): string[] {
+  const known = new Set(declared);
+  return [...requirements.keys()].filter((name) => !known.has(name)).sort().map((name) =>
+    `${requirements.get(name)!.join(", ")} require capability "${name}", which the installation does not declare.`);
+}
+
+/** The capability a gated route lacks, and the route requiring it: itself or a route it nests under. */
+interface RouteGate {
+  capability: string;
+  route: string;
+}
+
+/** Routes requiring a capability outside `capabilities`, with their route descendants in every layout. */
+function gatedRoutes(routes: readonly BaseAddonRoute[], capabilities: ReadonlySet<string>): Map<string, RouteGate> {
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const gated = new Map<string, RouteGate>();
+  for (const route of routes) {
+    const gate = inheritedRouteFact(route, routesByName, (item) =>
+      item.requires !== undefined && !capabilities.has(item.requires) ? { capability: item.requires, route: item.name } : undefined);
+    if (gate) gated.set(route.name, gate);
+  }
+  return gated;
+}
+
+/**
+ * The menu nodes an actor holding `capabilities` lacks, outermost first: a node
+ * requiring another capability or targeting a gated page, with its subtree, and
+ * a routeless node whose every destination left with them.
+ */
+function deniedMenuNodes(
+  menuTree: MenuTree,
+  capabilities: ReadonlySet<string>,
+  gated: ReadonlyMap<string, RouteGate>,
+): MenuNodeLeft[] {
+  const denied: MenuNodeLeft[] = [];
+  const visit = (item: ChromeMenuNode, under: string | undefined): { left: boolean; target: boolean } => {
+    const gate = item.route !== undefined ? gated.get(item.route) : undefined;
+    const reason = under !== undefined ? `sits under menu item "${under}"`
+      : item.requires !== undefined && !capabilities.has(item.requires) ? `requires capability "${item.requires}"`
+        : gate ? `targets a page that requires capability "${gate.capability}"` : undefined;
+    const at = denied.length;
+    const children = (item.children ?? []).map((child) => visit(child, reason !== undefined ? under ?? item.id : undefined));
+    const target = Boolean(item.to) || children.some((child) => child.target);
+    // A node that reached somewhere only through items that left has nowhere to go.
+    const emptied = reason === undefined && !target && children.some((child) => child.left);
+    if (reason === undefined && !emptied) return { left: false, target };
+    denied.splice(at, 0, { id: item.id, ...(item.route ? { route: item.route } : {}), reason: reason ?? "has no item left" });
+    return { left: true, target: false };
+  };
+  for (const root of menuTree.roots) visit(root, undefined);
+  return denied;
+}
+
+/**
+ * Routes made unavailable, each with its reason. A console route is unavailable
+ * when every menu reference to it left: its targets and its `route.menu`
+ * anchor, by composition removal or a capability the actor lacks. A surviving
+ * reference keeps it available; routes no menu ever referenced, and routes
+ * outside the console layout, stay available. Given the actor's `capabilities`,
+ * a route requiring another one is unavailable in any layout. Route descendants
+ * (`route.parent`) follow. An anchor naming no menu item at all is a wiring error.
  */
 export function unavailableRoutes(
   routes: readonly BaseAddonRoute[],
   menuTree: MenuTree,
-  removed: readonly { id: string; route?: string }[],
+  removed: readonly MenuNodeLeft[],
+  capabilities?: ReadonlySet<string>,
 ): Map<string, string> {
   const removedIds = new Set(removed.map((node) => node.id));
+  const reasons = new Map(removed.map((node) => [node.id, node.reason ?? "was removed"]));
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const layoutOf = (route: BaseAddonRoute): string => {
     for (let current: BaseAddonRoute | undefined = route; current; current = current.parent ? routesByName.get(current.parent) : undefined) {
@@ -397,12 +529,18 @@ export function unavailableRoutes(
       throw new Error(`Route "${route.name}" references unknown menu item "${route.menu}".`);
     }
   }
+  const gates = capabilities ? gatedRoutes(routes, capabilities) : new Map<string, RouteGate>();
+  for (const [name, gate] of gates) {
+    unavailable.set(name, gate.route === name
+      ? `it requires capability "${gate.capability}"`
+      : `it nests under route "${gate.route}", which requires capability "${gate.capability}"`);
+  }
   for (const node of removed) {
     const route = node.route ? routesByName.get(node.route) : undefined;
-    if (route) consider(route, `menu item "${node.id}" was removed`);
+    if (route) consider(route, `menu item "${node.id}" ${reasons.get(node.id)}`);
   }
   for (const route of routes) {
-    if (route.menu && removedIds.has(route.menu)) consider(route, `its menu anchor "${route.menu}" was removed`);
+    if (route.menu && removedIds.has(route.menu)) consider(route, `its menu anchor "${route.menu}" ${reasons.get(route.menu)}`);
   }
   for (let grew = true; grew;) {
     grew = false;

@@ -63,6 +63,8 @@ export interface AuthUser {
   isActive?: boolean;
   preferences?: UserPreferences;
   roles?: readonly string[];
+  /** Named capabilities the identity holds through every grant path; menus and routes `requires` them. */
+  capabilities?: readonly string[];
 }
 
 export interface AuthState {
@@ -531,6 +533,7 @@ function loginUserPayload(
     ...value,
     preferences: preferencesValue(value.preferences),
     roleRefs: [],
+    capabilities: [],
   };
 }
 
@@ -550,6 +553,7 @@ export function currentUserToAuthState(
     isActive: payload.isActive,
     preferences: payload.preferences,
     roles: payload.roleRefs,
+    capabilities: payload.capabilities,
   };
   return authStateFromUser(user);
 }

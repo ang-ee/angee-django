@@ -70,7 +70,7 @@ export interface CompiledMenus {
 }
 
 const DECLARATION_FIELDS = [
-  "label", "route", "params", "defaultResourceView", "to", "icon",
+  "label", "route", "params", "defaultResourceView", "to", "icon", "requires",
   "appRoot", "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after",
 ] as const satisfies readonly (keyof MenuEntry)[];
 const OPERATION_FIELDS = ["include", "remove", "hide", "only", "force"] as const satisfies readonly (keyof MenuEntry)[];
@@ -193,7 +193,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   for (const key of ["sequence"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "number") throw new Error(`${where}: ${key} must be a number.`);
   }
-  for (const key of ["label", "route", "to", "icon", "before", "after"] as const) {
+  for (const key of ["label", "route", "to", "icon", "requires", "before", "after"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "string") throw new Error(`${where}: ${key} must be a string.`);
   }
   if (value.parent !== undefined && value.parent !== null && typeof value.parent !== "string") {

@@ -151,6 +151,8 @@ export interface RuntimeAuthUser {
   username?: string;
   email?: string;
   roles?: readonly string[];
+  /** Named capabilities the identity holds, through every grant path; see `MenuItem.requires`. */
+  capabilities?: readonly string[];
 }
 
 export interface RuntimeAuthState {

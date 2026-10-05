@@ -243,4 +243,26 @@ describe("compileMenus", () => {
     expect(() => compileMenus([projects, work, pm, deployment({ pm: { only: "pm.inbox" } })])).toThrow(/only must be a list/);
     expect(() => compileMenus([projects, work, pm, deployment([{ id: "x" }])])).toThrow(/must be a mapping/);
   });
+
+  test("a capability requirement is a declaration field: authored, altered by dependents and the deployment, emitted on both trees", () => {
+    const people: MenuLayer = { id: "people", menus: {
+      people: { label: "People" },
+      "people.manage": { parent: "people", route: "people.manage", requires: "manage_people" },
+      "people.directory": { parent: "people", route: "people.directory" },
+    } };
+    const compiled = compileMenus([people]);
+    for (const items of [compiled.logical, compiled.navigation]) {
+      expect(items[0]?.children?.map((item) => [item.id, item.requires])).toEqual([
+        ["people.manage", "manage_people"], ["people.directory", undefined],
+      ]);
+    }
+    const product: MenuLayer = { id: "product", dependsOn: ["people"], menus: { "people.directory": { requires: "read_people" } } };
+    const deployment: MenuLayer = { id: DEPLOYMENT_LAYER_ID, dependsOn: ["people", "product"], menus: { people: { requires: "staff_tools" } } };
+    const altered = compileMenus([people, product, deployment]);
+    expect(altered.logical[0]?.requires).toBe("staff_tools");
+    expect(altered.logical[0]?.children?.find((item) => item.id === "people.directory")?.requires).toBe("read_people");
+    expect(altered.provenance.people).toMatchObject({ requires: DEPLOYMENT_LAYER_ID });
+    expect(() => compileMenus([{ id: "people", menus: { people: { requires: ["manage_people"] } } } as unknown as MenuLayer]))
+      .toThrow(/requires must be a string/);
+  });
 });

@@ -104,6 +104,12 @@ export interface MenuItem {
   /** External URL. Internal app destinations use `route` and optional `params`. */
   to?: string;
   icon?: string;
+  /**
+   * A capability (`current_user.capabilities`) the actor must hold. Without it the
+   * item and its subtree are absent from the rail, menus and palette, and pages
+   * only they reach are unavailable, as an unknown page is.
+   */
+  requires?: string;
 }
 
 /** A composed navigation entry with defaults and its runtime target applied. */

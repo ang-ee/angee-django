@@ -91,6 +91,12 @@ export interface AddonRoute {
   defaultResourceView?: string;
   /** This collection's record route owns records with the declared field value. */
   recordMatch?: { field: string; equals: string };
+  /**
+   * A capability (`current_user.capabilities`) the actor must hold. Without it this
+   * route and its route descendants are unavailable: navigating there lands home,
+   * as an unknown page does.
+   */
+  requires?: string;
 }
 
 /** A provider mounted once around one layout's chrome and routed content. */

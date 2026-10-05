@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { MenuTree, resolveMenuRouteTargets, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { createRouteHref } from "@angee/ui/runtime";
 import { resourcePageRoutes, type BaseAddonRoute } from "./define-base-addon";
-import { AppRouteProjection, menuNodeForRoute, refineRouteResourceProjection, resourceRouteIndex, unavailableRoutes } from "./resource-projection";
+import { AppRouteProjection, menuNodeForRoute, refineRouteResourceProjection, resourceRouteIndex, undeclaredCapabilityFindings, unavailableRoutes } from "./resource-projection";
 import { chromeMenuItemsFromRefine } from "@angee/ui/chrome/refine-menu";
 import type { TreeMenuItem } from "@refinedev/core";
 import { compileMenus, type MenuLayer } from "./menus";
@@ -325,5 +325,104 @@ describe("availability edge cases", () => {
     expect(unavailableRoutes(anchored.slice(1), tree, [{ id: "x", route: "pageant" }]).size).toBe(0);
     expect(() => unavailableRoutes([{ name: "lost", path: "/lost", menu: "typo" }], tree, []))
       .toThrow(/references unknown menu item "typo"/);
+  });
+});
+
+describe("capability gating", () => {
+  const peopleRoutes: readonly BaseAddonRoute[] = [
+    { name: "people.directory", path: "/people" },
+    { name: "people.manage", path: "/people/manage" },
+    { name: "people.manage.record", path: "$id", parent: "people.manage" },
+    { name: "people.audit", path: "/people/audit", requires: "audit_people" },
+    { name: "people.audit.record", path: "$id", parent: "people.audit" },
+    { name: "people.review", path: "/people/review" },
+    { name: "people.kiosk", path: "/kiosk", layout: "fullscreen", requires: "manage_people" },
+    { name: "people.kiosk.screen", path: "$screen", parent: "people.kiosk" },
+    { name: "audit.log", path: "/audit/log" },
+  ];
+  const compiled = compileMenus([
+    { id: "people", menus: {
+      people: { label: "People" },
+      "people.directory": { parent: "people", route: "people.directory" },
+      "people.manage": { parent: "people", route: "people.manage", requires: "manage_people" },
+      "people.audit": { parent: "people", route: "people.audit" },
+      "people.reviews": { parent: "people", requires: "manage_people" },
+      "people.review": { parent: "people.reviews", route: "people.review" },
+    } },
+    { id: "audit", menus: {
+      audit: { label: "Audit" },
+      "audit.log": { parent: "audit", route: "audit.log", requires: "audit_people" },
+    } },
+  ]);
+  const href = createRouteHref(peopleRoutes);
+  const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
+  const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href) as readonly ChromeMenuItem[]);
+  const projection = new AppRouteProjection(peopleRoutes, logical, undefined, { navigation, removed: compiled.removed });
+  const route = (name: string) => peopleRoutes.find((candidate) => candidate.name === name)!;
+  const palette = (scope: AppRouteProjection) => scope.navigationTree.navigableItems().map(({ item }) => item.id);
+  const menuResources = (scope: AppRouteProjection) =>
+    refineRouteResourceProjection(peopleRoutes, scope.menuTree, scope.navigationTree).resources.map((resource) => resource.meta?.menuId);
+
+  test("the composition lists what it requires and, as declared, gates nothing", () => {
+    expect(projection.requirements).toEqual(new Map([
+      ["manage_people", ['Menu item "people.manage"', 'Menu item "people.reviews"', 'Route "people.kiosk"']],
+      ["audit_people", ['Menu item "audit.log"', 'Route "people.audit"']],
+    ]));
+    expect(projection.unavailable.size).toBe(0);
+    expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["people", "audit"]);
+    expect(palette(projection)).toEqual(["people.directory", "people.manage", "people.audit", "people.review", "audit.log"]);
+  });
+
+  test("without a capability, its nodes and their subtrees leave the rail, palette and refine menu, and their pages land home", () => {
+    const scope = projection.forCapabilities([]);
+    expect(scope.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["people"]);
+    expect(palette(scope)).toEqual(["people.directory"]);
+    expect(menuResources(scope)).toEqual(["people", "people.directory"]);
+    for (const id of ["people.manage", "people.audit", "people.reviews", "people.review", "audit", "audit.log"]) {
+      expect(scope.menuTree.byId.has(id)).toBe(false);
+    }
+    expect(Object.fromEntries(scope.unavailable)).toEqual({
+      "people.manage": 'menu item "people.manage" requires capability "manage_people"',
+      "people.manage.record": 'its parent route "people.manage" is unavailable',
+      "people.audit": 'it requires capability "audit_people"',
+      "people.audit.record": 'it nests under route "people.audit", which requires capability "audit_people"',
+      "people.review": 'menu item "people.review" sits under menu item "people.reviews"',
+      "people.kiosk": 'it requires capability "manage_people"',
+      "people.kiosk.screen": 'it nests under route "people.kiosk", which requires capability "manage_people"',
+      "audit.log": 'menu item "audit.log" requires capability "audit_people"',
+    });
+    expect(scope.allows(route("people.manage"), "/people/manage")).toBe(false);
+    expect(scope.allows(route("people.kiosk.screen"), "/kiosk/front")).toBe(false);
+    expect(scope.allows(route("people.directory"), "/people")).toBe(true);
+  });
+
+  test("each capability held brings back exactly what it gates", () => {
+    const managing = projection.forCapabilities(["manage_people"]);
+    expect(palette(managing)).toEqual(["people.directory", "people.manage", "people.review"]);
+    expect([...managing.unavailable.keys()].sort()).toEqual(["audit.log", "people.audit", "people.audit.record"]);
+    const both = projection.forCapabilities(["audit_people", "manage_people"]);
+    expect(palette(both)).toEqual(palette(projection));
+    expect(both.unavailable.size).toBe(0);
+  });
+
+  test("one projection serves each capability set; a composition requiring none is its own", () => {
+    expect(projection.forCapabilities(["manage_people", "audit_people"])).toBe(projection.forCapabilities(["audit_people", "manage_people"]));
+    expect(projection.forCapabilities(["manage_people"])).not.toBe(projection.forCapabilities([]));
+    const plain = new AppRouteProjection(routes, menuTree);
+    expect(plain.forCapabilities([])).toBe(plain);
+  });
+
+  test("a malformed requirement and a capability on the confining root fail loudly", () => {
+    expect(() => new AppRouteProjection([{ name: "x", path: "/x", requires: "Manage People" }], MenuTree.from([])))
+      .toThrow('Route "x" requires "Manage People", which is not a capability name.');
+    const confined = new AppRouteProjection(peopleRoutes, logical, "audit", { navigation });
+    expect(() => confined.forCapabilities([])).toThrow('Menu root "audit" confines the console, so it cannot require a capability.');
+  });
+
+  test("development reports requirements the installation does not declare", () => {
+    expect(undeclaredCapabilityFindings(projection.requirements, ["manage_people"])).toEqual([
+      'Menu item "audit.log", Route "people.audit" require capability "audit_people", which the installation does not declare.',
+    ]);
+    expect(undeclaredCapabilityFindings(projection.requirements, ["audit_people", "manage_people"])).toEqual([]);
   });
 });

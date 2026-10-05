@@ -153,6 +153,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   badge?: number;
   hidden?: boolean;
   personal?: boolean;
+  requires?: string;
   /** An included app shown without an entry of its own (logical tree only); still an app for words and rules (G-8). */
   flatten?: boolean;
 
@@ -274,6 +275,15 @@ export class MenuTree {
       const app = project(root);
       return [app, ...settings];
     }));
+  }
+
+  /** This tree without the nodes in `ids`, each leaving with its subtree. */
+  without(ids: ReadonlySet<string>): MenuTree {
+    if (!ids.size) return this;
+    const keep = (items: readonly ChromeMenuNode[]): ChromeMenuItem[] => items
+      .filter((item) => !ids.has(item.id))
+      .map((item) => ({ ...item, children: item.children && keep(item.children) }));
+    return MenuTree.from(keep(this.roots));
   }
 
   /** Project one host-selected root, retaining contributed descendants and the personal Settings roots. */

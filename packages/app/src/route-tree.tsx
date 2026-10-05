@@ -81,16 +81,23 @@ export function createLayoutRoutes({
   return layoutRoutes;
 }
 
+/** Admits a page or sends the visit home, as for an unknown page. */
+export interface RouteAdmission {
+  allows: (route: BaseAddonRoute, pathname: string) => boolean | Promise<boolean>;
+  home: string;
+}
+
 export function createAddonRouteNodes({
   routes,
   routesByName,
   layoutRoutes,
-  consoleConfinement,
+  admission,
 }: {
   routes: readonly BaseAddonRoute[];
   routesByName: ReadonlyMap<string, BaseAddonRoute>;
   layoutRoutes: ReadonlyMap<string, AnyRoute>;
-  consoleConfinement?: { allows: (route: BaseAddonRoute, pathname: string) => boolean; home: string };
+  /** Guards console pages, and pages a capability gates in any layout. */
+  admission?: RouteAdmission;
 }): void {
   const routeNodes = new Map<string, AnyRoute>();
   const childrenByParent = new Map<AnyRoute, Array<NamedRouteNode>>();
@@ -110,17 +117,19 @@ export function createAddonRouteNodes({
       ? buildRoute(parentManifestRoute)
       : layoutRouteFor(route, layoutRoutes);
     let ancestor = route;
+    let gated = route.requires !== undefined;
     while (ancestor.parent) {
       const parent = routesByName.get(ancestor.parent);
       if (!parent) break;
       ancestor = parent;
+      gated ||= parent.requires !== undefined;
     }
-    const confined = consoleConfinement && (ancestor.layout ?? "console") === "console";
+    const guarded = admission && (gated || (ancestor.layout ?? "console") === "console");
     const node = createAddonRouteNode(
       route,
       parentNode,
       parentManifestRoute,
-      confined ? consoleConfinement : undefined,
+      guarded ? admission : undefined,
     );
     routeNodes.set(route.name, node);
     if (route.indexComponent) {
@@ -303,14 +312,14 @@ function createAddonRouteNode(
   route: BaseAddonRoute,
   parentNode: AnyRoute,
   parentManifestRoute: BaseAddonRoute | undefined,
-  confinement?: { allows: (route: BaseAddonRoute, pathname: string) => boolean; home: string },
+  admission?: RouteAdmission,
 ): AnyRoute {
   return createRoute({
     getParentRoute: () => parentNode,
     path: routePathUnderParent(route, parentManifestRoute),
-    ...(confinement ? { beforeLoad: ({ location }) => {
-      if (!confinement.allows(route, location.pathname)) {
-        throw redirect({ to: confinement.home, replace: true });
+    ...(admission ? { beforeLoad: async ({ location }) => {
+      if (!(await admission.allows(route, location.pathname))) {
+        throw redirect({ to: admission.home, replace: true });
       }
     } } : {}),
     ...(route.component ? { component: route.component } : {}),

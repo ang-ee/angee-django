@@ -26,6 +26,7 @@ import {
   parseFlatSearch,
   stringifyFlatSearch,
   type BaseAddon,
+  type BaseAddonRoute,
   type CreateAppInput,
   type RefineLayoutChromeProps,
 } from "./create-app";
@@ -289,6 +290,99 @@ describe("createApp confinement", () => {
     } finally {
       root.unmount();
       host.remove();
+    }
+  });
+});
+
+describe("createApp capability gating", () => {
+  const page = (name: string, path: string, requires?: string): BaseAddonRoute => ({
+    name, path, requires, component: () => createElement("p", null, `${name} page`),
+  });
+  const people = (manageRequires = "manage_people"): readonly BaseAddon[] => [{
+    id: "people",
+    routes: [
+      page("people.directory", "/people"),
+      page("people.manage", "/people/manage"),
+      page("people.audit", "/people/audit", "audit_people"),
+    ],
+    menus: [{ id: "people", label: "People", children: [
+      { id: "people.directory", route: "people.directory" },
+      { id: "people.manage", route: "people.manage", requires: manageRequires },
+      { id: "people.audit", route: "people.audit" },
+    ] }],
+  }];
+
+  /** Mount at `path` for a session holding `capabilities`; the installation declares both names. */
+  function mountFor(path: string, capabilities: readonly string[], addons: readonly BaseAddon[] = people()) {
+    let tree: MenuTree | undefined;
+    function CaptureRail({ children }: RefineLayoutChromeProps): ReactNode {
+      const menu = useChromeMenuTree();
+      useEffect(() => { tree = menu; }, [menu]);
+      return children;
+    }
+    const fetch: typeof globalThis.fetch = async () => Response.json({ data: {
+      current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [], capabilities, preferences: {} },
+      real_user: null, viewable_people: [], declared_capabilities: ["audit_people", "manage_people"],
+    } });
+    history.replaceState(null, "", path);
+    const app = createApp({
+      ...testAppInput(addons, { console: { chrome: CaptureRail, requireAuth: true } }),
+      schemas: { public: { ...TEST_SCHEMAS.public, fetch }, console: { ...TEST_SCHEMAS.console, fetch } },
+      home: "people.directory",
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    const palette = () => tree?.navigableItems().map(({ item }) => item.id);
+    return { app, host, palette, cleanup: () => { root.unmount(); host.remove(); } };
+  }
+
+  test("without the capability, the entry is absent and its page lands home as an unknown one does", async () => {
+    const mounted = mountFor("/people/manage", []);
+    try {
+      await waitFor(() => expect(mounted.app.router.state.location.pathname).toBe("/people"));
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.directory page"));
+      expect(mounted.host.textContent).not.toContain("people.manage page");
+      // The entry requiring it, and the entry targeting a page that requires one, are both absent.
+      await waitFor(() => expect(mounted.palette()).toEqual(["people.directory"]));
+      await mounted.app.router.navigate({ to: "/people/audit" });
+      await waitFor(() => expect(mounted.app.router.state.location.pathname).toBe("/people"));
+      expect(mounted.host.textContent).not.toContain("people.audit page");
+    } finally {
+      mounted.cleanup();
+    }
+  });
+
+  test("holding the capabilities, the entries are in the rail and the pages open", async () => {
+    const mounted = mountFor("/people/manage", ["audit_people", "manage_people"]);
+    try {
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.manage page"));
+      expect(mounted.app.router.state.location.pathname).toBe("/people/manage");
+      await waitFor(() => expect(mounted.palette()).toEqual(["people.directory", "people.manage", "people.audit"]));
+      await mounted.app.router.navigate({ to: "/people/audit" });
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.audit page"));
+    } finally {
+      mounted.cleanup();
+    }
+  });
+
+  test("a gated home or a malformed requirement fails at boot", () => {
+    expect(() => createApp({ ...testAppInput(people()), home: "people.audit" }))
+      .toThrow('Home "/people/audit" is unavailable: it requires capability "audit_people".');
+    expect(() => createApp(testAppInput(people("Manage people"))))
+      .toThrow('Menu item "people.manage" requires "Manage people", which is not a capability name.');
+  });
+
+  test("in development, a requirement the installation does not declare is reported", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const mounted = mountFor("/people", ["manage_people"], people("manage_peple"));
+    try {
+      await waitFor(() => expect(warn).toHaveBeenCalledWith(
+        '[angee] Menu item "people.manage" require capability "manage_peple", which the installation does not declare.',
+      ));
+    } finally {
+      mounted.cleanup();
+      warn.mockRestore();
     }
   });
 });

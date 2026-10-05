@@ -1261,6 +1261,14 @@ Hard-won traps — the wise learn from others' mistakes
   flatten, remove, hide, only, position), along their dependencies; see
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
   another addon's items.
+  A page only some actors have is **absent, not disabled**: a menu entry or route
+  names an [IAM capability](../../addons/angee/iam/README.md#capabilities) in
+  `requires`. For a session lacking it, the entry, its subtree and every entry
+  targeting the route leave the rail, menus and palette, and the route and its
+  route descendants land home as an unknown page does.
+  [`AppRouteProjection.forCapabilities`](../../packages/app/src/resource-projection.ts)
+  owns that per-session projection; never hide a page behind `hasRole` or a
+  refusal screen. The home and a perspective root cannot require a capability.
   `route.menu` identifies a route's owning item when references are ambiguous.
   Multiple references within one root do not throw; without an anchor they
   provide no menu-derived trail or metadata. References from different roots

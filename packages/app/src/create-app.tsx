@@ -17,6 +17,7 @@ import {
   createTanStackRouterProvider,
   retryableQueryError,
   viewAsAuth,
+  useAuthoredQuery,
   type AngeeHasuraSchemaConfig,
   type SchemaOperationDocuments,
   type ResourceMutationOperations,
@@ -32,6 +33,7 @@ import {
 import {
   QueryClient,
   keepPreviousData,
+  useQuery,
   type QueryClientConfig,
 } from "@tanstack/react-query";
 import {
@@ -68,6 +70,7 @@ import {
   createRouteHref,
   type AppRuntime,
   type ComposedContainers,
+  type RouteHref,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
@@ -114,6 +117,7 @@ import {
   useLogoutAction,
   useRuntimeAuthState,
   useUserPreferences,
+  type AuthIdentity,
   type AuthState,
   type UserPreferences,
 } from "./providers/auth";
@@ -128,7 +132,9 @@ import {
   AppRouteProjection,
   menuRouteResourceIdentifier,
   resourceMutationsForSchema,
+  undeclaredCapabilityFindings,
 } from "./resource-projection";
+import { AngeeDeclaredCapabilitiesDocument } from "./providers/documents.public";
 import { chatterRouteIndex } from "./chatter-routes";
 import { explainComposition, type CompositionExplanation } from "./explain";
 import { developmentMode } from "@angee/ui/lib/development-mode";
@@ -315,11 +321,22 @@ export function createApp(input: CreateAppInput): AngeeApp {
     removed: composed.menuComposition.removed,
   });
   const unavailable = projection.unavailable;
-  // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
-  const runtimeRouteHref = unavailable.size
-    ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
-    : routeHref;
-  const navigationTree = projection.navigationTree;
+  // What an actor holding no capability sees: home and the boot checks hold for everyone.
+  const baseline = projection.forCapabilities([]);
+  const projectionFor = (identity: AuthIdentity | null | undefined): AppRouteProjection =>
+    projection.forCapabilities(identity?.capabilities ?? []);
+  // Optional links (`maybe`, record destinations) skip a projection's unavailable pages; authored links still build.
+  const routeHrefs = new WeakMap<AppRouteProjection, RouteHref>();
+  const routeHrefFor = (scope: AppRouteProjection): RouteHref => {
+    let href = routeHrefs.get(scope);
+    if (!href) {
+      href = scope.unavailable.size
+        ? createRouteHref(routeDescriptors, { unavailable: new Set(scope.unavailable.keys()) })
+        : routeHref;
+      routeHrefs.set(scope, href);
+    }
+    return href;
+  };
   validateContainerConditions(composed.containers, {
     routes: routesByName,
     // The ids a page's app trail can hold: roots and included apps, flattened ones too.
@@ -387,7 +404,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     admitted.push(item.defaultResourceView);
     menuPresetIdsByRoute.set(route.name, admitted);
   }
-  const routesByResource = projection.resourceRoutes(confineTo);
+  const routesByResource = baseline.resourceRoutes(confineTo);
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
@@ -417,7 +434,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     previews: composed.previews,
     dashboards: composed.dashboards,
     routesByResource,
-    routeHref: runtimeRouteHref,
+    routeHref: routeHrefFor(baseline),
     loginPath,
     themes: composed.themes as readonly ThemeContribution[],
     containers: composed.containers,
@@ -431,11 +448,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
   };
   const operationDocuments = operationDocumentsForSchemas(schemas);
   function resourceRegistryFor(
+    scope: AppRouteProjection,
     selected: Readonly<Record<string, RuntimeResourceRoutes>>,
     vocabulary: RuntimeVocabulary,
   ) {
     const paths = Object.fromEntries(Object.entries(selected).map(([resource, names]) => [resource, routeHref(names.collection)]));
-    const projected = refineRouteResourceProjection(routes, menuTree, navigationTree, selected);
+    const projected = refineRouteResourceProjection(routes, scope.menuTree, scope.navigationTree, selected);
     return [...projected.resources, ...refineResourcesForSchemas(schemas, paths, projected.metadataByResource)]
       .map((resource) => {
         const model = resource.meta?.modelLabel;
@@ -445,7 +463,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         return label === undefined ? resource : { ...resource, meta: { ...resource.meta, label } };
       });
   }
-  const refineResourceRegistry = resourceRegistryFor(routesByResource, runtime.vocabulary);
+  const refineResourceRegistry = resourceRegistryFor(baseline, routesByResource, runtime.vocabulary);
   const refineDataProviders = mergeAddonDataProviders(
     createAngeeHasuraDataProviders(schemas, defaultSchema),
     composed.dataProviders as Readonly<
@@ -476,14 +494,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const declaredHome = homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined;
   // Where a person without preferences lands; also where an unavailable page sends them. A host with
   // routes but no rail (a minimal test host) still lands on its first page.
-  const home = landingTarget(navigationTree, {}, declaredHome)
-    ?? routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path
+  const home = landingTarget(baseline.navigationTree, {}, declaredHome)
+    ?? routes.find((route) => route.layout !== "public" && !baseline.unavailable.has(route.name))?.path
     ?? "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
   const homeRoute = homeInput && !homeInput.startsWith("/")
     ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
-  if (homeRoute && unavailable.has(homeRoute.name)) {
-    throw new Error(`Home "${home}" is unavailable: ${unavailable.get(homeRoute.name)}.`);
+  if (homeRoute && baseline.unavailable.has(homeRoute.name)) {
+    throw new Error(`Home "${home}" is unavailable: ${baseline.unavailable.get(homeRoute.name)}.`);
   }
   if (confineTo !== undefined && (homePath === "/"
     || !(homeRoute ? projection.rootFor(homeRoute) === confineTo : menuTree.activeAppRoot(homePath)?.id === confineTo))) {
@@ -501,16 +519,19 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const pathname = useRouterState({ select: (state) => state.location.pathname });
     const searchStr = useRouterState({ select: (state) => state.location.searchStr });
     const activeRoute = useActiveRoute(routes);
-    const match = projection.activeMenu(pathname, activeRoute?.name, searchStr);
+    // The session's projection: read from the shared identity entry, which Refine fetches.
+    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider), enabled: false }, queryClient);
+    const scope = projectionFor(identity.data);
+    const match = scope.activeMenu(pathname, activeRoute?.name, searchStr);
     const activeMenuId = match?.item.id ?? null;
-    const app = projection.activeApp(pathname, activeRoute?.name, searchStr);
+    const app = scope.activeApp(pathname, activeRoute?.name, searchStr);
     const words = vocabularyForRoute(app, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
     // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
-    const appTrail = publicRoute ? "" : projection.appTrail(pathname, activeRoute?.name, searchStr).join("\0");
+    const appTrail = publicRoute ? "" : scope.appTrail(pathname, activeRoute?.name, searchStr).join("\0");
     const scopedRuntime = useMemo(() => {
-      const selected = projection.resourceRoutes(app, activeRoute?.name);
+      const selected = scope.resourceRoutes(app, activeRoute?.name);
       const menuResourceViewIds = new Set<string>();
       let route = activeRoute;
       while (route) {
@@ -521,10 +542,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
         ...runtime,
         i18n: words.i18n.instance,
         vocabulary: words.vocabulary,
-        defaultResourceView: projection.defaultResourceView(activeRoute?.name),
+        defaultResourceView: scope.defaultResourceView(activeRoute?.name),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref: runtimeRouteHref,
+        routeHref: routeHrefFor(scope),
         composition: explain,
         containerScope: {
           apps: appTrail ? appTrail.split("\0") : [],
@@ -535,7 +556,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         activeMenuId,
         activeApp: app ?? null,
       };
-    }, [app, appTrail, activeRoute, activeMenuId, words]);
+    }, [scope, app, appTrail, activeRoute, activeMenuId, words]);
     return (
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
@@ -543,7 +564,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
             <InAppLinkProvider navigate={navigateInApp} preload={preloadInApp}>
               <ModalsHost>
                 <ToastProvider>
-                  <RefineRoot i18nProvider={words.i18n.provider} />
+                  <RefineRoot i18nProvider={words.i18n.provider} scope={scope} />
                 </ToastProvider>
               </ModalsHost>
             </InAppLinkProvider>
@@ -553,9 +574,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  function RefineRoot({ i18nProvider }: { i18nProvider: I18nProvider }): ReactNode {
+  function RefineRoot({ i18nProvider, scope }: { i18nProvider: I18nProvider; scope: AppRouteProjection }): ReactNode {
     const { vocabulary, routesByResource: selected, activeMenuId } = useAppRuntime();
-    const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary), [selected, vocabulary]);
+    // Refine resources feed the rail, menus and palette: nodes the session lacks a capability for are absent.
+    const labeledResources = useMemo(() => resourceRegistryFor(scope, selected, vocabulary), [scope, selected, vocabulary]);
     const refineNotificationProvider = useRefineNotificationProvider();
     const routerProvider = useMemo(() => createTanStackRouterProvider(activeMenuId ? menuRouteResourceIdentifier(activeMenuId) : undefined), [activeMenuId]);
     return (
@@ -579,6 +601,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
           authSchema={authSchema}
           loginPath={loginPath}
           appearance={input.appearance}
+          capabilityRequirements={projection.requirements}
         >
           <Outlet />
         </AppFrame>
@@ -601,7 +624,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       // Location options rather than `href`: older routers preload a redirect's
       // target only from them, and would preload `/` again (see `hrefLocation`).
       throw redirect({
-        ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}, declaredHome)),
+        ...hrefLocation(router, homeTarget(home, confineTo !== undefined, projectionFor(identity).navigationTree, identity?.preferences ?? {}, declaredHome)),
         replace: true,
       });
     },
@@ -623,8 +646,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
-    ...(confineTo !== undefined || unavailable.size
-      ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } }
+    ...(confineTo !== undefined || unavailable.size || projection.requirements.size
+      ? { admission: {
+          // A page the session lacks a capability for lands home, as an unknown page does.
+          allows: projection.requirements.size
+            ? async (route, pathname) => projectionFor(await loadRouteIdentity(refineAuthProvider, queryClient)).allows(route, pathname)
+            : (route, pathname) => projection.allows(route, pathname),
+          home,
+        } }
       : {}),
   });
 
@@ -815,12 +844,14 @@ function AppFrame({
   authSchema,
   loginPath,
   appearance,
+  capabilityRequirements,
   children,
 }: {
   viewAs: ViewAsProvider;
   authSchema: string;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
+  capabilityRequirements: ReadonlyMap<string, readonly string[]>;
   children: ReactNode;
 }): ReactNode {
   const { auth: identityAuth, identity } = useRuntimeAuthState();
@@ -861,6 +892,9 @@ function AppFrame({
   const logoutAction = useMemo(() => ({ ...sourceLogoutAction, logout }), [logout, sourceLogoutAction]);
   return (
     <AuthStateProvider auth={auth}>
+      {capabilityRequirements.size > 0 && developmentMode() && auth.status === "authenticated" ? (
+        <DeclaredCapabilitiesCheck requirements={capabilityRequirements} dataProviderName={authSchema} />
+      ) : null}
       <UserPreferencesProvider dataProviderName={authSchema}>
         <RuntimeSessionProvider
           auth={auth}
@@ -898,6 +932,20 @@ function RuntimeSessionProvider({
       <AppearanceProvider host={appearance}>{children}</AppearanceProvider>
     </AppRuntimeProvider>
   );
+}
+
+/** Development only: warn about `requires` names the installation does not declare, which nobody can hold. */
+function DeclaredCapabilitiesCheck({ requirements, dataProviderName }: {
+  requirements: ReadonlyMap<string, readonly string[]>;
+  dataProviderName: string;
+}): null {
+  const declared = useAuthoredQuery(AngeeDeclaredCapabilitiesDocument, undefined, { dataProviderName });
+  const names = declared.data?.declared_capabilities;
+  useEffect(() => {
+    if (!names) return;
+    for (const finding of undeclaredCapabilityFindings(requirements, names)) console.warn(`[angee] ${finding}`);
+  }, [names, requirements]);
+  return null;
 }
 
 /** Public and other layouts retain an exit path when leaving console chrome. */

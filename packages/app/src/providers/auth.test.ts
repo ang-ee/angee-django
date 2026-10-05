@@ -23,19 +23,21 @@ const currentUser = {
   isActive: true,
   preferences: { chrome: "compact" },
   roleRefs: ["angee/role:admin"],
+  capabilities: ["manage_people"],
 };
 
 describe("Angee app auth provider", () => {
   test("console IAM supplies the viewed identity, real identity and permitted people", async () => {
-    const viewed = { ...currentUser, id: "person-2", username: "grace", firstName: "Grace", lastName: "Hopper", roleRefs: [] };
+    const viewed = { ...currentUser, id: "person-2", username: "grace", firstName: "Grace", lastName: "Hopper", roleRefs: [], capabilities: [] };
     const identityRequest = vi.fn(async (document) => {
       expect(document).toBe(AngeeViewAsIdentityDocument);
       return { current_user: viewed, real_user: currentUser, viewable_people: [{ id: viewed.id, name: "Grace Hopper" }] } as never;
     });
     const provider = createAngeeAuthProviderFromRequest(async () => ({ current_user: viewed }) as never, { identityRequest });
+    // The viewed identity's capabilities gate the preview, never the real actor's.
     await expect(provider.getIdentity?.()).resolves.toMatchObject({
-      id: viewed.id, name: "Grace Hopper", roles: [],
-      realUser: { id: currentUser.id }, viewablePeople: [{ id: viewed.id, name: "Grace Hopper" }],
+      id: viewed.id, name: "Grace Hopper", roles: [], capabilities: [],
+      realUser: { id: currentUser.id, capabilities: ["manage_people"] }, viewablePeople: [{ id: viewed.id, name: "Grace Hopper" }],
     });
     const anonymous = createAngeeAuthProviderFromRequest(async () => ({ current_user: null }) as never, { identityRequest });
     await expect(anonymous.getIdentity?.()).resolves.toBeNull();
@@ -268,6 +270,20 @@ describe("Angee app auth provider", () => {
     expect(auth.status).toBe("authenticated");
     expect(auth.hasRole("angee/role:admin")).toBe(true);
     expect(auth.hasRole("angee/role:viewer")).toBe(false);
+  });
+
+  test("the identity carries the session's capabilities; sign-in and anonymous carry none", async () => {
+    expect(currentUserToAuthState(currentUser).user?.capabilities).toEqual(["manage_people"]);
+    expect(currentUserToAuthState(null).user).toBeNull();
+    const provider = createAngeeAuthProviderFromRequest(async (document) => {
+      expect(document).toBe(AngeeLoginDocument);
+      const { roleRefs: _roleRefs, capabilities: _capabilities, ...user } = currentUser;
+      return { login: { ok: true, user } } as never;
+    });
+    // The login payload carries none; the identity refetch after sign-in brings them.
+    await expect(provider.login({ username: "ada", password: "secret" })).resolves.toMatchObject({
+      user: { roleRefs: [], capabilities: [] },
+    });
   });
 
 });

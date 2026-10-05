@@ -94,6 +94,7 @@ const USER = {
   isStaff: false,
   isActive: true,
   roleRefs: [],
+  capabilities: [],
 };
 
 describe("live user preferences", () => {
