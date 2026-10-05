@@ -49,7 +49,7 @@ export function RecordTimelineView({ data, openCount, set = false }: {
   const form = useActiveRecordForm();
   const openRecord = useRecordPeek();
   const retryActions = useStepRetryActions(true);
-  const cancelActions = useRunCancelActions();
+  const cancelActions = useRunCancelActions(data.map((entry) => entry.record_model));
   const cancelRun = (run: TimelineRun) => <RecordActionBar record={run} actions={cancelActions} />;
   const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label}
     onOpen={() => openRecord({ model, id, label })} /></Chip>;
