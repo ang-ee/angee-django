@@ -109,7 +109,11 @@ def test_field_gates_keep_identity_and_authority_columns_with_administrators(spa
 def test_writers_never_touch_preferences_or_audit_dates(spaces_tables):
     manager = _manager("audit-manager")
     target = User.objects.create_user("audited", "audited@example.com", "a-password")
-    changes = ({"preferences": {"homePath": "/elsewhere"}}, {"date_joined": timezone.now()}, {"last_login": timezone.now()})
+    changes = (
+        {"preferences": {"homePath": "/elsewhere"}},
+        {"date_joined": timezone.now()},
+        {"last_login": timezone.now()},
+    )
     for change in changes:
         field = next(iter(change))
         with actor_context(manager), pytest.raises(PermissionDenied, match=f"write__{field}"):
