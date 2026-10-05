@@ -102,6 +102,11 @@ export {
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
 export { RecordActionBar } from "./form/RecordActionBar";
+export {
+  SaveDiscardActions,
+  dirtyControlBandClassName,
+  type SaveDiscardActionsProps,
+} from "./form/SaveDiscardActions";
 export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
 export {
   useActionForm,
