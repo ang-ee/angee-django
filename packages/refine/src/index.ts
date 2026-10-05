@@ -37,6 +37,7 @@ export {
   publicGraphQLError,
   publicGraphQLErrorsFromUnknown,
   resolveGraphQLWebSocketEndpoint,
+  retryableQueryError,
   type AngeeHasuraClientOptions,
   type AngeeChangeLiveProvider,
   type AngeeHasuraDataProviderOptions,

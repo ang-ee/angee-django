@@ -15,6 +15,7 @@ import {
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
   createTanStackRouterProvider,
+  retryableQueryError,
   viewAsAuth,
   type AngeeHasuraSchemaConfig,
   type SchemaOperationDocuments,
@@ -228,6 +229,8 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
+      // TanStack's three retries, for failures a retry can fix.
+      retry: (failureCount, error) => failureCount < 3 && retryableQueryError(error),
       placeholderData: keepPreviousData,
       staleTime: 30_000,
       gcTime: 600_000,
