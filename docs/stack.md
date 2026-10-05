@@ -268,7 +268,7 @@ resource transport/auth/live integration. The active frontend owners are
 
 | Pick | Owns | Angee adds |
 |---|---|---|
-| @base-ui/react | Headless primitives: dialog, popover, menu, tabs, tooltip, field, toolbar, scroll area, and related UI | Styled binding and composition rules; controlled `open`/`onOpenChange` owns popover/dialog transition timing |
+| @base-ui/react | Headless primitives: dialog, popover, menu, tabs, tooltip, field, toolbar, combobox, select, scroll area, and related UI | Styled binding and composition rules; controlled `open`/`onOpenChange` owns popover/dialog transition timing |
 | @floating-ui/react-dom | Floating-element positioning and virtual anchors | Popover and menu anchoring |
 | @angee/logo-react | Angee brand logo and cube marks | Brand lockup in the public layout |
 | react-markdown + remark-gfm | Markdown rendering (GitHub-flavored) | Markdown widget preview |
