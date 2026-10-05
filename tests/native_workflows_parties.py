@@ -94,6 +94,10 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(decision.kind, "review-party-identity")
         self.assertIsNone(decision.requester_id)
         self.assertEqual(decision.context["facts"][0]["value"]["name"], "Original name")
+        for alternative in decision.proposal["alternatives"]:
+            for actions in alternative["actions"].values():
+                self.assertNotIn("record", actions)
+                self.assertTrue(all(operation == {} for operation in actions["fields"].values()))
         self.answer(run, ["name", "address", "handle"])
         party = system_queryset(Party).get(pk=party.pk)
         self.assertEqual(

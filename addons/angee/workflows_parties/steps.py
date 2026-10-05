@@ -1,6 +1,6 @@
 """Typed human reviews that delegate identity and duplicate writes to parties."""
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 from typing import Any
 
 from django.apps import apps
@@ -94,19 +94,14 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         alternatives = []
         if proposed.name and proposed.name != identity.current["name"]:
             alternatives.append({"key": "name", "label": "Use the proposed name", "outcome": "applied",
-                "actions": {party_id: {"fields": {"display_name": {"set": proposed.name}}}}})
+                "actions": {party_id: {"fields": {"display_name": {}}}}})
         if any(getattr(proposed.address, name) for name in apps.get_model("parties", "Address").objects.components):
-            alternatives.append({"key": "address", "label": "Add the proposed address", "outcome": "applied",
-                "actions": {party_id: {"record": {"call": "apply_identity", "arguments": {
-                    "expected_facts_hash": identity.facts_hash,
-                    "proposed": {"address": asdict(proposed.address)},
-                    "choices": {"name_action": "keep", "address_action": "add", "handle_action": "keep"},
-                }}}}})
+            alternatives.append({"key": "address", "label": "Add the proposed address", "outcome": "applied"})
         if proposed.handle.party_handle_id:
             link = ctx.load(apps.get_model("parties", "PartyHandle"), proposed.handle.party_handle_id)
             records.append(link)
             alternatives.append({"key": "handle", "label": "Confirm the proposed handle", "outcome": "applied",
-                "actions": {public_id_of(link): {"fields": {"is_confirmed": {"set": True}}}}})
+                "actions": {public_id_of(link): {"fields": {"is_confirmed": {}}}}})
         alternatives.extend([
             {"key": "keep", "label": "Keep what is on the record", "outcome": "unchanged"},
             {"key": "reject", "label": "Reject the proposal", "outcome": "rejected"},
