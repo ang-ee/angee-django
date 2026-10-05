@@ -1149,6 +1149,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     A ``filter_expressions`` provider receives the target queryset so actor-aware
     expressions work for requests and stored filters alike. Its output field is
     inspected on an empty queryset at composition; it must perform no row reads.
+    That field's ``null`` states whether the filter can match NULL: a total
+    predicate such as ``BooleanField()`` advertises neither nullability nor
+    ``isNull``, while a subquery that can find no row declares ``null=True``.
     Model ``hasura_filter_expressions`` mappings contribute the same filter-only
     predicates from extension bases, so an addon composing onto another addon's
     model adds a filter its owner's resource never names. Both model declaration
@@ -1349,6 +1352,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             if field.python_name in wire_names:
                 field.graphql_name = wire_names[field.python_name]
     adapter = None
+    non_null_filter_fields: tuple[str, ...] = ()
     if expressions:
         assert resource.filter_type is not None
         filter_name = get_object_definition(resource.filter_type, strict=True).name
@@ -1357,6 +1361,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             key: (expression(empty) if callable(expression) else expression).output_field
             for key, expression in expressions.items()
         }
+        # Aliases and record references redact to NULL, so only declared expressions can be non-null.
+        non_null_filter_fields = tuple(
+            key for key in (*(filter_expressions or {}), *declared_expressions) if not output_fields[key].null
+        )
         donor = type(f"{filter_name}Expressions", (), {
             "__annotations__": {
                 key: comparison_for_python_type(
@@ -1404,6 +1412,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         groupable=active_groupable,
         json_paths=active_json_paths,
         filter_operators=tuple(filter_lookups),
+        non_null_filter_fields=non_null_filter_fields,
         lines=lines,
         model_label=model_label,
         public_id_field=public_id_field,
@@ -1573,6 +1582,7 @@ def attach_hasura_resource_metadata(
     groupable: tuple[str, ...] = (),
     json_paths: Mapping[str, str] | None = None,
     filter_operators: tuple[str, ...] = (),
+    non_null_filter_fields: tuple[str, ...] = (),
     lines: HasuraLines | None = None,
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
@@ -1601,6 +1611,7 @@ def attach_hasura_resource_metadata(
         policy=DataResourcePolicy(
             filter_fields=filterable,
             filter_operators=filter_operators,
+            non_null_filter_fields=non_null_filter_fields,
             order_fields=sortable,
             aggregate_fields=aggregatable,
             group_by_fields=groupable,

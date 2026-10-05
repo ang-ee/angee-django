@@ -229,6 +229,23 @@ def test_valid_filter_declarations_follow_deterministic_mro_and_mapping_order(mo
     build_resource(filterable=("id", "name", "caller_filter"), filter_expressions={"caller_filter": models.Value(True)})
 
 
+def test_declared_expression_output_field_states_its_nullability(monkeypatch):
+    """A total predicate advertises neither NULL nor isNull; nullable expressions and aliases keep both."""
+    monkeypatch.setattr(Scope, "hasura_aliases", {"parent_name": "parent__name"}, raising=False)
+    monkeypatch.setattr(Scope, "hasura_filter_expressions", {
+        "total": lambda queryset: models.Value(True, output_field=models.BooleanField()),
+        "partial": lambda queryset: models.Value(None, output_field=models.BooleanField(null=True)),
+    }, raising=False)
+    resource = build_resource(
+        filterable=("id", "name", "caller_total"), filter_expressions={"caller_total": models.Value(True)},
+    )
+    owner = GraphQLSchemas([make_addon(schemas={"console": {"query": [resource.query], "types": resource.types}})])
+    [metadata] = owner.resources("console")
+    for name, nullable in (("total", False), ("caller_total", False), ("partial", True), ("parent_name", True)):
+        field = metadata.query.fields[name]
+        assert (field.nullable, "isNull" in field.filter.operators) == (nullable, nullable), name
+
+
 def test_existing_addon_filter_declarations_still_compose(tmp_path):
     """Build all current addon declarations together in the native isolated SQLite host."""
     run_composed_tests(
