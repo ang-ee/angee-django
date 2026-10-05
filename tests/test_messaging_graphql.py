@@ -857,6 +857,50 @@ def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
     assert payload[0]["fragment"]["message_count"] == 2
 
 
+def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables: None) -> None:
+    """The message Parts tab's group counts read one message's parts by key index.
+
+    Its ``message`` filter compares a permission-redacted alias; it must also
+    reach SQL as an indexable key predicate, or every count evaluates that alias
+    for each part row of every message.
+    """
+
+    admin = _platform_admin("parts-groups-admin")
+    _thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.parts.groups"):
+        other = messaging_models.Message.objects.create(
+            thread=message.thread, preview="Other", created_by_id=admin.pk,
+        )
+        for target, role in ((message, "body"), (message, "quoted"), (other, "body")):
+            messaging_models.Part.objects.create(message=target, role=role, created_by_id=admin.pk)
+    document = """
+        query PartGroups($where: parts_bool_exp) {
+          parts_groups(group_by: [{field: ROLE}], where: $where, limit: 200) { key { role } aggregate { count } }
+          totalCount: parts_groups_count(group_by: [{field: ROLE}], where: $where)
+        }
+    """
+    with CaptureQueriesContext(connection) as queries:
+        data = _data(execute_schema(
+            _schema(), document, {"where": {"message": {"_eq": message.sqid}}}, request=_request(admin),
+        ))
+    assert {row["key"]["role"]: row["aggregate"]["count"] for row in data["parts_groups"]} == {"BODY": 1, "QUOTED": 1}
+    assert data["totalCount"] == 2
+    table = messaging_models.Part._meta.db_table
+    reads = [query["sql"] for query in queries if f'FROM "{table}"' in query["sql"]]
+    assert len(reads) == 2  # the grouped page and its exact group count
+    for sql in reads:
+        assert f'"{table}"."message_id" = {message.pk}' in sql
+        if connection.vendor != "sqlite":
+            continue  # PostgreSQL plans depend on table statistics; SQLite's do not.
+        with connection.cursor() as cursor:
+            cursor.execute(f"EXPLAIN QUERY PLAN {sql}")
+            plan = [str(row[-1]) for row in cursor.fetchall()]
+        # The outer part access is an index search on the message key, never a scan.
+        outer = [step for step in plan if step.split()[1:2] == [table]]
+        assert outer, plan
+        assert all(step.startswith(f"SEARCH {table} USING ") and "(message_id=?)" in step for step in outer), plan
+
+
 def test_messaging_schema_does_not_expose_optional_imap_connect() -> None:
     """Base messaging stays transport-neutral; IMAP contributes its own mutation."""
 

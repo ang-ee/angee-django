@@ -576,7 +576,17 @@ class _RelationIDDecoder:
 
 
 class _RelationFilterExtension(FieldExtension):
-    """Batch identity operands; leave bool-expression traversal to Hasura."""
+    """Batch identity operands; leave bool-expression traversal to Hasura.
+
+    Relation comparisons run against the redacted key alias, which is the raw
+    key or NULL. Outside ``_not``, an ``_eq``/``_in`` on it implies the same
+    match on the raw key column, which the database seeks by index instead of
+    evaluating the guarded alias for every row; that match is added. A direct
+    relation's operands resolve through its target's read scope, the alias's
+    only guard, so there the raw-key match replaces the alias. Under ``_not``
+    the alias's UNKNOWN must not become FALSE, so negated comparisons keep only
+    the alias.
+    """
 
     def __init__(
         self, decoders: Mapping[str, Callable[[Any], Any]], source: Callable[..., Any],
@@ -586,10 +596,20 @@ class _RelationFilterExtension(FieldExtension):
         self.source = source
         self.filter_type = filter_type
         self.aliases = aliases
-        # An internal dataclass adapts field names only. The public input and
-        # native Hasura's boolean/operator translation remain unchanged.
+        self.keys = {alias: path for path, alias in aliases.items()}
+        self.resolved = {alias for alias, path in self.keys.items() if alias in self.decoders and "__" not in path}
+        self.negation = next(
+            field.python_name for field in get_object_definition(filter_type, strict=True).fields
+            if field.graphql_name == "_not"
+        )
+        # An internal dataclass adapts field names only, plus each relation's raw
+        # key path. The public input and native Hasura's boolean/operator
+        # translation remain unchanged.
         self.aliased_type = dataclasses.make_dataclass(
-            "RelationFilter", [(aliases.get(field.name, field.name), Any) for field in dataclasses.fields(filter_type)],
+            "RelationFilter", [
+                *((aliases.get(field.name, field.name), Any) for field in dataclasses.fields(filter_type)),
+                *((path, Any, dataclasses.field(default=strawberry.UNSET)) for path in aliases),
+            ],
             kw_only=True,
         )
 
@@ -605,20 +625,32 @@ class _RelationFilterExtension(FieldExtension):
 
     def prepare(self, info: strawberry.Info, where: Any) -> Any:
         comparisons: dict[str, list[Any]] = {}
+        positive: list[tuple[Any, str, Any]] = []
 
-        def adapt(value: Any) -> Any:
+        def adapt(value: Any, negated: bool = False) -> Any:
             if isinstance(value, list):
-                return [adapt(item) for item in value]
+                return [adapt(item, negated) for item in value]
             if not dataclasses.is_dataclass(value) or isinstance(value, type):
                 return value
-            fields = {field.name: adapt(getattr(value, field.name)) for field in dataclasses.fields(value)}
             if not isinstance(value, self.filter_type):
-                return dataclasses.replace(value, **fields)
-            fields = {self.aliases.get(name, name): item for name, item in fields.items()}
+                return dataclasses.replace(value, **{
+                    field.name: adapt(getattr(value, field.name), negated) for field in dataclasses.fields(value)
+                })
+            fields = {
+                self.aliases.get(field.name, field.name): adapt(
+                    getattr(value, field.name), negated or field.name == self.negation,
+                )
+                for field in dataclasses.fields(value)
+            }
+            adapted = self.aliased_type(**fields)
             for name, item in fields.items():
-                if name in self.decoders and item is not None and item is not strawberry.UNSET:
+                if item is None or item is strawberry.UNSET:
+                    continue
+                if name in self.decoders:
                     comparisons.setdefault(name, []).append(item)
-            return self.aliased_type(**fields)
+                if name in self.keys and not negated:
+                    positive.append((adapted, name, item))
+            return adapted
 
         prepared = adapt(where)
         if comparisons:
@@ -640,7 +672,40 @@ class _RelationFilterExtension(FieldExtension):
                         [resolved.get(str(value), missing) for value in operand]
                         if isinstance(operand, list) else resolved.get(str(operand), missing)
                     ))
+        for adapted, alias, item in positive:
+            match, whole = _key_match(item)
+            setattr(adapted, self.keys[alias], match)
+            if whole and alias in self.resolved:
+                setattr(adapted, alias, strawberry.UNSET)
         return prepared
+
+
+def _key_match(comparison: Any) -> tuple[Any, bool]:
+    """Return the raw-key ``_eq``/``_in`` a redacted relation comparison implies.
+
+    The flag says whether that match states the whole comparison. An operand
+    that resolved to no readable row matches nothing, so it becomes an empty
+    membership; ``UNSET`` means the comparison implies no key match.
+    """
+
+    def unresolved(operand: Any) -> bool:
+        return isinstance(operand, _DecodedRelationID) and isinstance(operand.value, _UnresolvedRelationID)
+
+    operators = {field.name: getattr(comparison, field.name) for field in dataclasses.fields(comparison)}
+    identity = {
+        name for name in ("eq", "in_")
+        if name in operators and operators[name] is not None and operators[name] is not strawberry.UNSET
+    }
+    if not identity:
+        return strawberry.UNSET, False
+    whole = all(name in identity or value is strawberry.UNSET for name, value in operators.items())
+    if unresolved(operators.get("eq")):
+        match: dict[str, Any] = {"in_": []}
+    else:
+        match = {name: operators[name] for name in identity}
+        if "in_" in match:
+            match["in_"] = [operand for operand in match["in_"] if not unresolved(operand)]
+    return dataclasses.replace(comparison, **{name: match.get(name, strawberry.UNSET) for name in operators}), whole
 
 
 def _relation_filter_decoders(

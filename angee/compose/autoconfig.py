@@ -140,5 +140,8 @@ class AutoConfig:
 
 SETTINGS = {
     "MIDDLEWARE:append": ["django.middleware.common.CommonMiddleware"],
+    # Seconds one PostgreSQL statement may run in a web process; 0 disables the
+    # bound. ``angee.asgi`` applies it; workers and commands keep the server's.
+    "ANGEE_WEB_STATEMENT_TIMEOUT": 60,
 }
 """Django settings contributed when the composer is installed."""

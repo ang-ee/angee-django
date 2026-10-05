@@ -236,8 +236,8 @@ shared UI copy through an addon bundle.
   preload the route under the router's `defaultPreload: "intent"`, and
   provider-less links stay native. Never pass `onNavigate` merely to call the
   router, or put a query-bearing href in TanStack `to`; use `navigate({ href })`,
-  the owner's `hrefLocation` (also for a redirect, which a preload can follow only
-  as location options), or the
+  the owner's `hrefLocation` (also for a redirect, which older routers preload
+  only from location options), or the
   [chrome href conversion](../../packages/ui/src/chrome/href-link-options.ts).
   Use `rel="external"` for server-served root-relative paths such as admin,
   media and logout so they load as documents.
@@ -1223,7 +1223,11 @@ Hard-won traps — the wise learn from others' mistakes
   when no entries fit, More holds them all and is marked current when it holds
   the current page. A route-less menu with one child is the same link in the row
   and in More. Icon-only rail links show supplementary name tooltips; developer
-  descriptions follow the name.
+  descriptions follow the name. Both rail modes compose
+  [`RailSortable`](../../packages/ui/src/chrome/RailSortable.tsx) for the app
+  roots: dragging a root's link or Alt+Arrow reorders the one persisted rail
+  order, a long press makes it the default app, and the root's tooltip gives
+  that hint. The Settings, single-app and drawer trees stay plain.
   [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
   `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
   contributes to the shared **Settings place** in every console: the rail and
@@ -1231,7 +1235,8 @@ Hard-won traps — the wise learn from others' mistakes
   the platform tree with a back header. Settings and the expansion toggle sit
   below the scrolling list, and the rail is viewport-sticky so both remain
   reachable. The expanded desktop
-  header also composes the same expansion toggle. At desktop widths, a
+  header also composes the same expansion toggle, and opening the rail's app
+  chooser expands a collapsed desktop rail. At desktop widths, a
   plain second activation of a nav link that already points at the current
   page toggles expansion. When the viewport fits only the icon rail, activating
   a root with visible included apps opens those sub-apps temporarily in the

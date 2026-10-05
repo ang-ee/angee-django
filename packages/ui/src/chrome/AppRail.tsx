@@ -1,35 +1,17 @@
 import {
   useCallback,
-  useEffect,
   useId,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent,
-  type MouseEvent,
-  type PointerEvent,
   type ReactElement,
   type Ref,
 } from "react";
 import { Link, useLinkProps } from "@tanstack/react-router";
-import {
-  DndContext,
-  closestCenter,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
 
 import { useHrefLinkOptions } from "./href-link-options";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
-import { useDndKitSensors } from "../lib/dnd";
 import { toneGlyph } from "../lib/tones";
 import { LARGE_VIEWPORT_QUERY, useMediaQuery } from "../lib/use-media-query";
 import { Button } from "../ui/button";
@@ -44,14 +26,12 @@ import type { ChromeMenuItem, ChromeMenuNode } from "./menu-tree";
 import { ChromePlaceProvider, useChromePlace } from "./refine-menu";
 import {
   railLinkToggleProps,
-  moveRailItem,
   orderedRailItems,
-  railSortableMove,
+  railTooltip,
   resolvedRailExpanded,
-  sameRailOrder,
-  type RailDropPlacement,
 } from "./app-rail-model";
 import { useAppRailPreferences } from "./app-rail-preferences";
+import { RailDefaultMark, RailSortable, useRailSortableItem, type RailSorting } from "./RailSortable";
 import { readRuntimeRouteShortcuts, useAppRuntime, useRuntimeBrand, useRuntimeUserPreferences } from "../runtime";
 
 export interface AppRailProps {
@@ -76,17 +56,14 @@ const RAIL_BUTTON =
 const RAIL_BUTTON_ACTIVE =
   "bg-rail-hi text-on-rail-hi before:absolute before:-left-[7px] before:top-1/2 before:h-[18px] before:w-[3px] before:-translate-y-1/2 before:rounded-r-2 before:bg-brand before:content-['']";
 
-/** Icon names supplement accessible labels; developer descriptions follow them in either mode. */
-function railTooltip(expanded: boolean, label: string, description?: string): string | undefined {
-  return [!expanded ? label : undefined, description].filter(Boolean).join(" · ") || undefined;
-}
-
 /**
  * The global app rail: compact icons or one in-place accordion navigation
  * tree. Clicking the active app (or Settings) a second time toggles the
- * desktop expansion. At intermediate widths, roots with included apps request
- * the shell's temporary navigation drawer. Desktop expansion toggles sit at
- * the expanded header's edge and the rail's foot, outside the scrolling list.
+ * desktop expansion, and opening the app chooser expands it. At intermediate
+ * widths, roots with included apps request the shell's temporary navigation
+ * drawer. Desktop expansion toggles sit at the expanded header's edge and the
+ * rail's foot, outside the scrolling list. Both rail modes reorder the app
+ * roots and set the default app through one `RailSortable`.
  */
 export function AppRail({ menuItems, ...props }: AppRailProps): ReactElement {
   return <ChromePlaceProvider menuItems={menuItems}><AppRailBody {...props} /></ChromePlaceProvider>;
@@ -129,7 +106,8 @@ function AppRailBody({
     () => orderedRailItems(tree.railMenuItems(), railPreferences.order),
     [railPreferences.order, tree],
   );
-  // Developer mode lists hidden apps in the expanded tree; the icon rail keeps its order and default.
+  // Developer mode lists hidden apps in the expanded tree, placed and reordered by the
+  // same order; only the icon rail's apps can be the default.
   const treeItems = useMemo(
     () => rail.enabled ? orderedRailItems(tree.railMenuItems(true), railPreferences.order) : items,
     [items, rail.enabled, railPreferences.order, tree],
@@ -147,27 +125,27 @@ function AppRailBody({
   const openNavigation = !largeViewport && !drawerMode
     ? onOpenNavigation
     : undefined;
+  // Only the desktop rail expands; temporary navigation never changes the preference.
+  const expandable = largeViewport && !drawerMode;
   const itemIds = useMemo(() => items.map((item) => item.id), [items]);
   const defaultItemId = itemIds.includes(railPreferences.defaultItemId ?? "")
     ? railPreferences.defaultItemId
     : null;
-  const handleOrderChange = useCallback(
-    (order: readonly string[]) => {
-      setRailPreferences({ ...railPreferences, order });
-    },
-    [railPreferences, setRailPreferences],
-  );
-  const handleItemLongPress = useCallback(
-    (item: ChromeMenuNode) => {
-      if (!item.target || item.id === defaultItemId) return;
+  const sorting = useMemo<RailSorting>(() => ({
+    defaultItemId,
+    onOrderChange: (order) => setRailPreferences({ ...railPreferences, order }),
+    // Home resolves the default among the icon rail's apps only.
+    onItemLongPress: (item) => {
+      if (item.id === defaultItemId || !itemIds.includes(item.id)) return;
       setRailPreferences({ ...railPreferences, defaultItemId: item.id });
     },
-    [defaultItemId, railPreferences, setRailPreferences],
-  );
+  }), [defaultItemId, itemIds, railPreferences, setRailPreferences]);
   const toggleExpanded = useCallback(() => {
     setRailPreferences({ ...railPreferences, expanded: !expanded });
   }, [expanded, railPreferences, setRailPreferences]);
   const footerToggleRef = useRef<HTMLButtonElement | null>(null);
+  // The chooser opens beside the rail, so expanding the rail never puts it under the popup.
+  const railRef = useRef<HTMLElement | null>(null);
   const focusFooterToggle = useRef(false);
   // Collapsing can unmount the activated link or header toggle; focus the
   // footer control shared by both modes.
@@ -175,9 +153,7 @@ function AppRailBody({
     focusFooterToggle.current = true;
     toggleExpanded();
   }, [toggleExpanded]);
-  const onActiveToggle = largeViewport && !drawerMode
-    ? toggleAndFocusFooter
-    : undefined;
+  const onActiveToggle = expandable ? toggleAndFocusFooter : undefined;
   const width = drawerMode
     ? "100%"
     : expanded ? APP_RAIL_EXPANDED_WIDTH : APP_RAIL_COLLAPSED_WIDTH;
@@ -202,6 +178,7 @@ function AppRailBody({
 
   return (
     <aside
+      ref={railRef}
       style={{ width }}
       className={cn(
         // Sticky + h-dvh pin the rail (and its footer toggle) to the viewport
@@ -221,13 +198,14 @@ function AppRailBody({
             <AppBrand name={singleApp.brand.name} mark={<Glyph name={singleApp.brand.mark} size={16} />}
               to={singleApp.root.target} compact={!expanded} />
           </Tooltip>
-        ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi" />}
+        ) : <AppChooser menuItems={tree} className="shrink-0 text-on-rail-hi" anchor={railRef}
+          onOpen={expandable && !expanded ? toggleExpanded : undefined} />}
         {expanded && !singleApp ? (
           <span className="min-w-0 flex-1 truncate text-13 font-semibold text-on-rail-hi">
             {t("chrome.apps")}
           </span>
         ) : null}
-        {expanded && largeViewport && !drawerMode ? (
+        {expanded && expandable ? (
           <RailExpansionToggle controls={navId} expanded={expanded} onToggle={toggleAndFocusFooter} className="ml-auto" />
         ) : null}
       </div>
@@ -253,6 +231,7 @@ function AppRailBody({
               pageId={pageId}
               defaultOpenRootId={place.activeRootId}
               onActiveToggle={onActiveToggle}
+              sorting={drawerMode ? undefined : sorting}
             />
           ) : singleApp ? (
             <div className="flex flex-col gap-1">
@@ -264,19 +243,22 @@ function AppRailBody({
               ) : null)}
             </div>
           ) : (
-            <SortableRail
-              rail={rail}
-              items={items}
-              activeRootId={settingsActive ? undefined : activeRootId ?? undefined}
-              pageId={pageId}
-              defaultItemId={defaultItemId}
-              expanded={expanded}
-              pathname={pathname}
-              onActiveToggle={onActiveToggle}
-              onItemLongPress={handleItemLongPress}
-              onOpenNavigation={openNavigation}
-              onOrderChange={handleOrderChange}
-            />
+            <RailSortable items={items} {...sorting}>
+              <div className="flex flex-col items-center gap-1">
+                {items.map((item) => (
+                  <RailItem
+                    key={item.id}
+                    rail={rail}
+                    item={item}
+                    active={activeRootId === item.id}
+                    currentPage={pageId === item.id}
+                    pathname={pathname}
+                    onActiveToggle={onActiveToggle}
+                    onOpenNavigation={item.appChildren().length ? openNavigation : undefined}
+                  />
+                ))}
+              </div>
+            </RailSortable>
           )}
           {!settingsActive && shortcuts.length ? (
             <>
@@ -311,7 +293,7 @@ function AppRailBody({
           />
         </div>
       ) : null}
-      {largeViewport && !drawerMode ? (
+      {expandable ? (
         <div
           className={cn(
             "flex shrink-0 border-t border-border-on-rail pt-2",
@@ -443,378 +425,48 @@ function RailSettingsItem({
   );
 }
 
-function SortableRail({
-  rail,
-  activeRootId,
-  pageId,
-  defaultItemId,
-  expanded,
-  items,
-  pathname,
-  onActiveToggle,
-  onOpenNavigation,
-  onItemLongPress,
-  onOrderChange,
-}: {
-  rail: DeveloperRail;
-  activeRootId: string | undefined;
-  pageId?: string;
-  defaultItemId: string | null;
-  expanded: boolean;
-  items: readonly ChromeMenuNode[];
-  pathname: string;
-  onActiveToggle?: (() => void) | undefined;
-  onOpenNavigation?: ((target: string) => void) | undefined;
-  onItemLongPress: (item: ChromeMenuNode) => void;
-  onOrderChange: (order: readonly string[]) => void;
-}): ReactElement {
-  const [draftOrder, setDraftOrder] = useState<readonly string[] | null>(null);
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
-  const longPressRef = useRef<{
-    id: string;
-    pointerId: number;
-    longPressed: boolean;
-    longPressTimer?: ReturnType<typeof globalThis.setTimeout>;
-  } | null>(null);
-  const blockedDragRef = useRef<string | null>(null);
-  const suppressClickRef = useRef(false);
-  const sensors = useDndKitSensors(6);
-  const railItems = useMemo(
-    () => orderedRailItems(items, draftOrder),
-    [draftOrder, items],
-  );
-  const railOrder = useMemo(
-    () => railItems.map((item) => item.id),
-    [railItems],
-  );
-
-  useEffect(() => {
-    if (activeDragId) return;
-    setDraftOrder(null);
-  }, [activeDragId, items]);
-
-  const commitOrder = useCallback(
-    (next: readonly string[]) => {
-      setDraftOrder(next);
-      onOrderChange(next);
-    },
-    [onOrderChange],
-  );
-  const commitMove = useCallback(
-    (draggedId: string, targetId: string, placement: RailDropPlacement) => {
-      const next = moveRailItem(railOrder, draggedId, targetId, placement);
-      if (next === railOrder || sameRailOrder(next, railOrder)) return;
-      commitOrder(next);
-    },
-    [commitOrder, railOrder],
-  );
-  const clearLongPressTimer = useCallback(() => {
-    const timer = longPressRef.current?.longPressTimer;
-    if (!timer) return;
-    globalThis.clearTimeout(timer);
-    longPressRef.current!.longPressTimer = undefined;
-  }, []);
-
-  useEffect(() => () => clearLongPressTimer(), [clearLongPressTimer]);
-
-  const suppressNextClick = useCallback(() => {
-    suppressClickRef.current = true;
-    globalThis.setTimeout(() => {
-      suppressClickRef.current = false;
-    }, 0);
-  }, []);
-  const beginLongPress = useCallback(
-    (item: ChromeMenuNode, event: PointerEvent<HTMLElement>) => {
-      if (event.button !== 0) return;
-      const pointerId = event.pointerId;
-      clearLongPressTimer();
-      const longPressTimer = globalThis.setTimeout(() => {
-        const current = longPressRef.current;
-        if (
-          !current
-          || current.id !== item.id
-          || current.pointerId !== pointerId
-        ) return;
-        current.longPressed = true;
-        suppressNextClick();
-        onItemLongPress(item);
-      }, 650);
-      longPressRef.current = {
-        id: item.id,
-        pointerId,
-        longPressed: false,
-        longPressTimer,
-      };
-    },
-    [clearLongPressTimer, onItemLongPress, suppressNextClick],
-  );
-  const endLongPress = useCallback(
-    (item: ChromeMenuNode, event: PointerEvent<HTMLElement>) => {
-      const current = longPressRef.current;
-      if (
-        !current
-        || current.id !== item.id
-        || current.pointerId !== event.pointerId
-      ) return;
-      clearLongPressTimer();
-      if (current.longPressed) {
-        event.preventDefault();
-        suppressNextClick();
-      }
-      longPressRef.current = null;
-    },
-    [clearLongPressTimer, suppressNextClick],
-  );
-  const cancelLongPress = useCallback(
-    (item: ChromeMenuNode, event: PointerEvent<HTMLElement>) => {
-      const current = longPressRef.current;
-      if (
-        !current
-        || current.id !== item.id
-        || current.pointerId !== event.pointerId
-      ) return;
-      clearLongPressTimer();
-      longPressRef.current = null;
-    },
-    [clearLongPressTimer],
-  );
-  const handleDragStart = useCallback(
-    ({ active }: DragStartEvent) => {
-      const activeId = String(active.id);
-      const current = longPressRef.current;
-      if (current?.id === activeId && current.longPressed) {
-        blockedDragRef.current = activeId;
-      }
-      clearLongPressTimer();
-      longPressRef.current = null;
-      setActiveDragId(activeId);
-    },
-    [clearLongPressTimer],
-  );
-  const handleDragEnd = useCallback(
-    ({ active, over }: DragEndEvent) => {
-      setActiveDragId(null);
-      clearLongPressTimer();
-      longPressRef.current = null;
-      const draggedId = String(active.id);
-      const blockedDrag = blockedDragRef.current === draggedId;
-      blockedDragRef.current = null;
-      if (blockedDrag) {
-        suppressNextClick();
-        return;
-      }
-      const overId = over ? String(over.id) : null;
-      if (!overId || draggedId === overId) {
-        // A lifted-then-returned drag still emits a trailing click — swallow
-        // it so it neither navigates nor toggles.
-        suppressNextClick();
-        return;
-      }
-      const next = railSortableMove(railOrder, draggedId, overId);
-      if (next !== railOrder && !sameRailOrder(next, railOrder)) {
-        commitOrder(next);
-      }
-      suppressNextClick();
-    },
-    [clearLongPressTimer, commitOrder, railOrder, suppressNextClick],
-  );
-  const handleDragCancel = useCallback(() => {
-    setActiveDragId(null);
-    blockedDragRef.current = null;
-    clearLongPressTimer();
-    longPressRef.current = null;
-    suppressNextClick();
-  }, [clearLongPressTimer, suppressNextClick]);
-
-  return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      <SortableContext items={railOrder} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-col items-center gap-1">
-          {railItems.map((item) => {
-            const toggleProps = railLinkToggleProps(
-              item.target,
-              pathname,
-              onActiveToggle,
-              expanded,
-              item.appChildren().length ? onOpenNavigation : undefined,
-            );
-            return (
-            <RailItem
-              rail={rail}
-              key={item.id}
-              item={item}
-              active={activeRootId === item.id}
-              currentPage={pageId === item.id}
-              ariaExpanded={toggleProps["aria-expanded"]}
-              ariaHasPopup={toggleProps["aria-haspopup"]}
-              defaultApp={defaultItemId === item.id}
-              dragging={activeDragId === item.id}
-              onLongPressStart={beginLongPress}
-              onLongPressEnd={endLongPress}
-              onLongPressCancel={cancelLongPress}
-              onKeyboardMove={(event) => {
-                if (!event.altKey) return;
-                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
-                  return;
-                }
-                const index = railOrder.indexOf(item.id);
-                const targetId = event.key === "ArrowUp"
-                  ? railOrder[index - 1]
-                  : railOrder[index + 1];
-                if (!targetId) return;
-                event.preventDefault();
-                commitMove(
-                  item.id,
-                  targetId,
-                  event.key === "ArrowUp" ? "before" : "after",
-                );
-              }}
-              onClick={(event) => {
-                if (suppressClickRef.current) {
-                  event.preventDefault();
-                  return;
-                }
-                toggleProps.onClick?.(event);
-              }}
-            />
-            );
-          })}
-        </div>
-      </SortableContext>
-    </DndContext>
-  );
-}
-
+/** One icon of the collapsed rail's `RailSortable`. */
 function RailItem({
   rail,
   active,
   currentPage,
-  ariaExpanded,
-  ariaHasPopup,
-  defaultApp,
-  dragging,
   item,
-  onClick,
-  onKeyboardMove,
-  onLongPressCancel,
-  onLongPressEnd,
-  onLongPressStart,
+  pathname,
+  onActiveToggle,
+  onOpenNavigation,
 }: {
   rail: DeveloperRail;
   active: boolean;
   currentPage: boolean;
-  ariaExpanded?: boolean | undefined;
-  ariaHasPopup?: "dialog" | undefined;
-  defaultApp: boolean;
-  dragging: boolean;
   item: ChromeMenuNode;
-  onClick: (event: MouseEvent<HTMLElement>) => void;
-  onKeyboardMove: (event: KeyboardEvent<HTMLElement>) => void;
-  onLongPressCancel: (
-    item: ChromeMenuNode,
-    event: PointerEvent<HTMLElement>,
-  ) => void;
-  onLongPressEnd: (
-    item: ChromeMenuNode,
-    event: PointerEvent<HTMLElement>,
-  ) => void;
-  onLongPressStart: (
-    item: ChromeMenuNode,
-    event: PointerEvent<HTMLElement>,
-  ) => void;
-}): ReactElement | null {
-  const t = useUiT();
-  const sortable = useSortable({
-    id: item.id,
-    data: { type: "app-rail-item", itemId: item.id },
-  });
-  const target = item.target;
-  const hrefOptions = useHrefLinkOptions(target);
-  const linkProps = useLinkProps({
-    ...hrefOptions, onClick, onKeyDown: onKeyboardMove,
-    onPointerDown: (event) => {
-      sortable.listeners?.onPointerDown?.(event);
-      onLongPressStart(item, event);
-    },
-    onPointerUp: (event) => onLongPressEnd(item, event),
-    onPointerCancel: (event) => onLongPressCancel(item, event),
-  });
-  if (!target) return null;
-  // Strip dnd-kit's screen-reader affordances: the role/instructions describe
-  // a keyboard drag path this rail replaces with Alt+Arrow, and the transient
-  // pressed state would misread on a link.
-  const {
-    role: _dragRole,
-    "aria-describedby": _dragDescription,
-    "aria-roledescription": _dragRoleDescription,
-    "aria-pressed": _dragPressed,
-    ...dragAttributes
-  } = sortable.attributes;
+  pathname: string;
+  onActiveToggle?: (() => void) | undefined;
+  onOpenNavigation?: ((target: string) => void) | undefined;
+}): ReactElement {
   const label = rail.label(item);
-  const title = defaultApp
-    ? t("chrome.defaultRailItemHint", { label })
-    : t("chrome.railItemHint", { label });
+  const sortable = useRailSortableItem(item, label, rail.describe(item));
+  const hrefOptions = useHrefLinkOptions(item.target);
+  const linkProps = useLinkProps({ ...hrefOptions,
+    ...railLinkToggleProps(item.target, pathname, onActiveToggle, false, onOpenNavigation),
+  });
   return (
-    <div
-      ref={sortable.setNodeRef}
-      style={sortableRailTransformStyle(sortable.transform, sortable.transition)}
-      className={cn(
-        "w-9 shrink-0 will-change-transform",
-        (dragging || sortable.isDragging)
-          && "z-10 scale-[1.02] opacity-95 shadow-lg ring-1 ring-brand/50",
-      )}
-    >
-      <Tooltip label={railTooltip(false, title, rail.describe(item))} side="right">
+    <div {...sortable.node} className={cn("w-9 shrink-0", sortable.node.className)}>
+      <Tooltip label={sortable.tooltip} side="right">
         <a
           {...linkProps}
+          {...sortable.link}
           aria-label={label}
           aria-current={active ? (currentPage ? "page" : "true") : undefined}
           data-current={active}
           data-status={undefined}
-          aria-expanded={ariaExpanded}
-          aria-haspopup={ariaHasPopup}
-          draggable={false}
-          className={cn(
-            RAIL_BUTTON,
-            active && RAIL_BUTTON_ACTIVE,
-            "cursor-grab select-none touch-none active:cursor-grabbing",
-          )}
-          {...dragAttributes}
+          className={cn(RAIL_BUTTON, active && RAIL_BUTTON_ACTIVE, sortable.link.className)}
         >
           <span className={item.tone ? toneGlyph(item.tone) : undefined}>
             <Glyph name={item.iconName} fallbackName="help" size={16} />
           </span>
-          {defaultApp ? (
-            <span
-              aria-hidden="true"
-              className="absolute bottom-1 right-1 size-1.5 rounded-full border border-rail bg-success"
-            />
-          ) : null}
+          {sortable.defaultApp ? <RailDefaultMark className="bottom-1 right-1" /> : null}
         </a>
       </Tooltip>
     </div>
   );
-}
-
-function sortableRailTransformStyle(
-  transform: {
-    x: number;
-    y: number;
-    scaleX: number;
-    scaleY: number;
-  } | null,
-  transition: string | undefined,
-): CSSProperties {
-  return {
-    transform: transform
-      ? `translate3d(${Math.round(transform.x)}px, ${Math.round(transform.y)}px, 0) scaleX(${transform.scaleX}) scaleY(${transform.scaleY})`
-      : undefined,
-    transition,
-  };
 }

@@ -3,7 +3,10 @@ import { LayoutList } from "lucide-react";
 
 /**
  * The project-management suite: the PM apps arranged as one Linear-like rail.
- * A product layered on the suite overrides its shell and narrows its rail.
+ * Installing it only rearranges the rail; the rest of the console is unchanged.
+ * It declares the `pm` perspective but does not select it: a product built on
+ * the suite selects it (with its own home and brand) in its `shell`, or a
+ * deployment selects it through `ANGEE_UI`.
  */
 export default defineBaseAddon({
   id: "pm",
@@ -42,5 +45,4 @@ export default defineBaseAddon({
     menus: { "work.queues": "Teams", "proposals.rounds": "Proposals" },
   }],
   perspectives: { pm: { root: "pm", home: "projects.my-work" } },
-  shell: { home: "projects.my-work", brand: { name: "Angee PM", mark: "pm" }, perspective: "pm" },
 });

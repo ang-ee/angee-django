@@ -127,6 +127,13 @@ export function resolveShell(
   };
 }
 
+/** Who set a resolved shell field, named the way a person fixing it finds the layer. */
+export function shellFieldSource(shell: ResolvedShell, field: keyof ShellDeclaration): string | undefined {
+  const layer = shell.provenance[field];
+  if (layer === undefined) return undefined;
+  return layer === DEPLOYMENT_LAYER_ID ? "ANGEE_UI.shell" : `addon "${layer}"`;
+}
+
 function assign<K extends keyof ShellDeclaration>(
   target: { [F in keyof ShellDeclaration]?: ShellDeclaration[F] },
   field: K,

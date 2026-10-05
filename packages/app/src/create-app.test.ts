@@ -185,8 +185,24 @@ describe("createApp confinement", () => {
       public: { requireAuth: false },
     });
     expect(() => createApp({ ...input, confineTo: "unknown" })).toThrow(/Unknown menu root/);
-    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(/must belong/);
-    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/must belong/);
+    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(
+      'Home "/files" (createApp home) is outside menu root "requests", to which createApp confineTo confines the console.',
+    );
+    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/outside menu root "requests"/);
+  });
+
+  test("a shell home outside its perspective names the layers that set them and the fix", () => {
+    const [requests] = addons;
+    const input = testAppInput([{
+      ...requests!,
+      perspectives: { focus: { root: "requests", home: "requests.all" } },
+      shell: { perspective: "focus", home: "files.all" },
+    }], { console: { requireAuth: false }, public: { requireAuth: false } });
+    expect(() => createApp(input)).toThrow(
+      'Home "/files" (addon "requests") is outside menu root "requests", to which perspective "focus" (addon "requests") '
+      + 'confines the console. Set shell.home to a page under "requests" or stop selecting the perspective; '
+      + 'ANGEE_UI.shell can pin either.',
+    );
   });
 
   test("accepts a root and first child sharing the resource route", () => {
@@ -1598,14 +1614,9 @@ describe("createApp route tree", () => {
       expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");
       // The user menu switched developer mode off; the URL still says ?debug=1.
       window.sessionStorage.setItem("angee:developer-mode", "0");
-      const preload = app.router.preloadRoute;
-      const preloaded: unknown[] = [];
-      vi.spyOn(app.router, "preloadRoute").mockImplementation(((options: { to?: unknown }) => {
-        preloaded.push(options.to);
-        return preloaded.length > 4 ? Promise.resolve(undefined) : preload(options as never);
-      }) as typeof preload);
-      await app.router.preloadRoute({ to: "/" });
-      expect(preloaded).toEqual(["/", "/home"]);
+      // The router follows the redirect inside one preload, which resolves to the landing page's matches.
+      const matches = await app.router.preloadRoute({ to: "/" });
+      expect(matches?.at(-1)?.pathname).toBe("/home");
       expect(loadHome).toHaveBeenCalledOnce();
       expect(app.router.state.location.href).toBe("/first?debug=1");
       expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("0");

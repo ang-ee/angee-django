@@ -6,6 +6,14 @@ import type { MenuTree } from "./menu-tree";
 
 export type RailDropPlacement = "before" | "after";
 
+/**
+ * A rail link's tooltip: its lead (an icon's name, a gesture hint) unless the
+ * link already shows it, then the developer description in either case.
+ */
+export function railTooltip(leadShown: boolean, lead: string, description?: string): string | undefined {
+  return [!leadShown ? lead : undefined, description].filter(Boolean).join(" · ") || undefined;
+}
+
 export interface RailLinkToggleProps {
   "aria-expanded"?: boolean;
   "aria-haspopup"?: "dialog";

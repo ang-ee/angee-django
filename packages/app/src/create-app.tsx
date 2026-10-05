@@ -140,6 +140,7 @@ import {
   layoutAuthGuard,
   loadRouteIdentity,
 } from "./route-tree";
+import { shellFieldSource } from "./shell";
 
 export {
   dashboardPageRoute,
@@ -481,7 +482,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
   }
   if (confineTo !== undefined && (homePath === "/"
     || !(homeRoute ? projection.rootFor(homeRoute) === confineTo : menuTree.activeAppRoot(homePath)?.id === confineTo))) {
-    throw new Error(`Home "${home}" must belong to confined menu root "${confineTo}".`);
+    const homeFrom = input.home !== undefined ? "createApp home" : shellFieldSource(composed.shell, "home") ?? "default";
+    const confinedBy = input.confineTo !== undefined
+      ? "createApp confineTo"
+      : `perspective "${composed.shell.perspective!.id}" (${shellFieldSource(composed.shell, "perspective")})`;
+    throw new Error(
+      `Home "${home}" (${homeFrom}) is outside menu root "${confineTo}", to which ${confinedBy} confines the console. `
+      + `Set shell.home to a page under "${confineTo}" or stop selecting the perspective; ANGEE_UI.shell can pin either.`,
+    );
   }
 
   function RootOutlet(): ReactNode {
@@ -585,8 +593,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
       // Signed out: sign in and come back here, so the landing rule runs with this person's preferences.
       // A preload only resolves the landing target; it never sends anyone to sign in.
       if (identity === null && homeRequiresSignIn && !preload) throw redirect({ to: loginPath, search: { next: "/" } });
-      // Location options rather than `href`: a preload follows a redirect only
-      // through them, and would otherwise preload `/` again without end.
+      // Location options rather than `href`: older routers preload a redirect's
+      // target only from them, and would preload `/` again (see `hrefLocation`).
       throw redirect({
         ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}, declaredHome)),
         replace: true,

@@ -426,6 +426,28 @@ def test_autoconfig_environment_precedence_is_shared_by_declared_and_derived_set
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment" if environment else "project"}
 
 
+@pytest.mark.parametrize(
+    ("project", "environment", "expected"),
+    [(None, None, 60), (30, None, 30), (30, "15", 15)],
+)
+def test_web_statement_timeout_is_declared_with_project_and_environment_overrides(
+    monkeypatch: pytest.MonkeyPatch, project: int | None, environment: str | None, expected: int,
+) -> None:
+    """The composer declares the web statement bound; a project or deployment changes it."""
+
+    if environment is None:
+        monkeypatch.delenv("ANGEE_WEB_STATEMENT_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("ANGEE_WEB_STATEMENT_TIMEOUT", environment)
+    namespace: dict[str, Any] = {"INSTALLED_APPS": ["angee.compose"]}
+    if project is not None:
+        namespace["ANGEE_WEB_STATEMENT_TIMEOUT"] = project
+
+    AutoConfig.apply_installed(namespace)
+
+    assert float(namespace["ANGEE_WEB_STATEMENT_TIMEOUT"]) == expected
+
+
 def test_data_dir_is_host_owned_not_composed(tmp_path: Path) -> None:
     """Runtime.settings no longer couriers ANGEE_DATA_DIR; the host owns it."""
 

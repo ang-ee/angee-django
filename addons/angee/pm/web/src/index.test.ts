@@ -20,8 +20,8 @@ describe("angee.pm", () => {
     expect(pm.menus?.["projects.board"]).toEqual({ remove: true });
   });
 
-  it("declares its own perspective, home and brand as the suite's defaults", () => {
-    expect(pm.shell).toEqual({ home: "projects.my-work", brand: { name: "Angee PM", mark: "pm" }, perspective: "pm" });
+  it("declares the pm perspective without selecting it, so installing the suite leaves the console's shell alone", () => {
     expect(pm.perspectives).toEqual({ pm: { root: "pm", home: "projects.my-work" } });
+    expect(pm.shell).toBeUndefined();
   });
 });
