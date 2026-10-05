@@ -554,7 +554,8 @@ function GroupedHeaderRow<TRow extends Row>({
               className="size-3.5 shrink-0 text-fg-muted"
             />
           </button>
-          {selection ? <SelectionToggle {...selection} className="min-h-9 w-6 shrink-0" /> : null}
+          {/* Sits flush against the chevron (cancelling the row gap) so it lines up with the header's and the rows' checkboxes. */}
+          {selection ? <SelectionToggle {...selection} className="-ml-2 min-h-9 w-6 shrink-0" /> : null}
           {!labelColumn ? labelContent : null}
           {!trailingColumn && !pagerColumn ? pager : null}
         </div>

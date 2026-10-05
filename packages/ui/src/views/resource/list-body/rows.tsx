@@ -417,10 +417,12 @@ export function LeadingSelectionCell({
   chevron,
   ...toggle
 }: SelectionToggleProps & { head?: boolean; grouped?: boolean; chevron?: React.ReactNode }): React.ReactElement {
+  // Without a chevron (a grouped record row) the whole cell is the toggle; the
+  // padding keeps its checkbox in line with the header's and the groups'.
   const content = (
     <div className="absolute inset-0 flex">
-      {grouped ? <div className="flex w-8 shrink-0 items-center justify-center">{chevron}</div> : null}
-      <SelectionToggle {...toggle} className="flex-1" />
+      {grouped && chevron ? <div className="flex w-8 shrink-0 items-center justify-center">{chevron}</div> : null}
+      <SelectionToggle {...toggle} className={cn("flex-1", grouped && !chevron && "pl-8")} />
     </div>
   );
   const width = grouped ? "w-14" : "w-8";
