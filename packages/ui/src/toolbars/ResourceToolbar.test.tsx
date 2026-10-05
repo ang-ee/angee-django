@@ -3,6 +3,10 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 import { ResourceToolbar, type ResourceToolbarProps } from "./ResourceToolbar";
 import { searchFixture } from "../views/resource/search/search-fixture.test-support";
+import { activeItems } from "../views/resource/search/active";
+import { createResourceViewState } from "../views/resource/resource-view-model";
+import { ResourceViewProvider, useResourceView } from "../views/resource/resource-view-context";
+import { useResourceSearch } from "../views/resource/search/use-resource-search";
 
 const PAGER = { total: 0, page: 1, pageSize: 20 };
 const status = { id: "status", label: "Status", group: { field: "status" } };
@@ -10,6 +14,11 @@ function toolbar(props: Partial<ResourceToolbarProps> = {}) {
   return render(<ResourceToolbar pager={PAGER} search={searchFixture()} onViewChange={vi.fn()} {...props} />);
 }
 afterEach(cleanup);
+
+function groupSearch(options: Parameters<typeof searchFixture>[0]) {
+  const search = searchFixture(options);
+  return { ...search, active: activeItems(createResourceViewState({ groupStack: search.groupStack }), search.catalog) };
+}
 
 test("calendar keeps period controls and hides filter, grouping and pager", () => {
   const onModeChange = vi.fn(), onPrev = vi.fn();
@@ -36,45 +45,48 @@ test("reduced chrome keeps filtering and a single kind omits its switcher", () =
 });
 
 test("grouping stays beside today's picker and curated labels win", () => {
-  toolbar({ search: searchFixture({ groupingEnabled: true, groupStack: [status.group],
+  toolbar({ search: groupSearch({ groupingEnabled: true, groupStack: [status.group],
     catalog: { curatedGroups: [status], groups: [{ ...status, label: "Raw status" }] } }) });
   const filter = screen.getByRole("button", { name: "Filter" });
   const group = screen.getByLabelText("Group by");
   expect(filter.closest(".resource-toolbar-query")).toBe(group.closest(".resource-toolbar-query"));
   expect(group.textContent).toContain("Group by: Status");
-  expect(screen.queryByRole("button", { name: /Remove.*group/i })).toBeNull();
+  expect(screen.getByRole("button", { name: "Remove Status" })).toBeTruthy();
+  fireEvent.click(group);
+  expect(screen.getByRole("listitem", { name: "Status" })).toBeTruthy();
 });
 
-test("custom-only groups and date granularities still use the existing editor", () => {
-  const setGroupStack = vi.fn();
-  toolbar({ search: searchFixture({ groupingEnabled: true, setGroupStack,
+test("custom-only groups offer granularities and prevent adding a duplicate level", () => {
+  const addGroup = vi.fn();
+  toolbar({ search: groupSearch({ groupingEnabled: true, addGroup,
     groupStack: [{ field: "created", granularity: "month" }],
     catalog: { curatedGroups: [], groups: [{ id: "created", label: "Created", group: { field: "created" },
       type: "date", granularities: ["month", "year"] }] } }) });
-  expect(screen.getByText(/Created · Month/)).toBeTruthy();
+  expect(screen.getByLabelText("Group by").textContent).toContain("Created · Month");
   fireEvent.click(screen.getByLabelText("Group by"));
   expect(screen.queryByRole("button", { name: "Created" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
+  fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
   expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  expect(setGroupStack).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Add level" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Add level" }));
+  expect(addGroup).not.toHaveBeenCalled();
 });
 
 test("a changed catalog replaces stale custom field and granularity drafts", () => {
-  const setGroupStack = vi.fn();
-  const first = searchFixture({ groupingEnabled: true, setGroupStack, catalog: { groups: [
+  const addGroup = vi.fn();
+  const first = searchFixture({ groupingEnabled: true, addGroup, catalog: { groups: [
     { id: "created", label: "Created", group: { field: "created" }, type: "date", granularities: ["day"] },
   ] } });
   const result = toolbar({ search: first });
   fireEvent.click(screen.getByLabelText("Group by"));
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-  result.rerender(<ResourceToolbar pager={PAGER} search={searchFixture({ groupingEnabled: true, setGroupStack,
+  fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
+  result.rerender(<ResourceToolbar pager={PAGER} search={searchFixture({ groupingEnabled: true, addGroup,
     catalog: { groups: [{ id: "date", label: "Document date", group: { field: "date" },
       type: "date", granularities: ["month"] }] } })} />);
-  expect(screen.getByLabelText("Group field").textContent).toContain("Document date");
+  expect(screen.getByLabelText("Group axis").textContent).toContain("Document date");
   expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  expect(setGroupStack).toHaveBeenCalledWith([{ field: "date", granularity: "month" }]);
+  fireEvent.click(screen.getByRole("button", { name: "Add level" }));
+  expect(addGroup).toHaveBeenCalledWith({ field: "date", granularity: "month" });
 });
 
 test("the compact row dispatches named filters and facets by catalog identity", async () => {
@@ -121,6 +133,29 @@ test("chips use the active projection and dispatch to model commands", () => {
   toolbar({ search });
   fireEvent.click(screen.getByRole("button", { name: "Remove Open" }));
   expect(search.toggleFilter).toHaveBeenCalledWith("open");
+});
+
+test.each([false, true])("one chip per group level removes only that level (compact %s)", (compact) => {
+  const created = { id: "created", label: "Created", group: { field: "created" },
+    type: "date" as const, granularities: ["month", "year"] };
+  const catalog = searchFixture({ catalog: { groups: [status, created], curatedGroups: [status] } }).catalog;
+  function Content() {
+    const resourceView = useResourceView();
+    const search = useResourceSearch({ resourceView, catalog, groupingEnabled: true });
+    return <ResourceToolbar pager={PAGER} search={search} filterRow={compact ? {} : undefined} />;
+  }
+  render(<ResourceViewProvider scope="local" initialState={{ groupStack: [
+    { field: "created", granularity: "month" }, status.group, { field: "created", granularity: "year" },
+  ] }}><Content /></ResourceViewProvider>);
+  if (compact) fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  expect(screen.getByRole("button", { name: "Remove Created · Month" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Remove Status" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Remove Created · Year" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Remove Created · Month" }));
+  expect(screen.queryByRole("button", { name: "Remove Created · Month" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Remove Status" }).parentElement?.textContent).toContain("Group by:");
+  expect(screen.getByRole("button", { name: "Remove Created · Year" }).parentElement?.textContent).toContain("then:");
+  expect(screen.getByLabelText("Group by").textContent).toContain("Status › Created · Year");
 });
 
 test("shared utilities stay between query controls and pager; wrapping is opt-in", () => {
@@ -170,9 +205,9 @@ test("writable preferences expose saving, and an empty curated catalog still all
     catalog: { groups: [status], curatedGroups: [] } });
   toolbar({ search });
   fireEvent.click(screen.getByLabelText("Group by"));
-  fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  expect(search.setGroupStack).toHaveBeenCalledWith([{ field: "status" }]);
+  fireEvent.click(screen.getByRole("button", { name: "More axes…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add level" }));
+  expect(search.addGroup).toHaveBeenCalledWith({ field: "status" });
   fireEvent.click(screen.getByLabelText("Group by"));
   fireEvent.click(screen.getByLabelText("Filter and favorites"));
   expect(screen.getByRole("button", { name: "Save current search" })).toBeTruthy();
