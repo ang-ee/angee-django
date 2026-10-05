@@ -211,6 +211,15 @@ export function publicGraphQLErrorsFromUnknown(value: unknown): readonly PublicG
     .filter((error): error is PublicGraphQLError => error !== null);
 }
 
+/**
+ * Whether a failed query is worth retrying: a transport or server failure is,
+ * a public GraphQL answer (validation, permission, conflict, sign-in) is not,
+ * because a retry repeats the same answer.
+ */
+export function retryableQueryError(error: unknown): boolean {
+  return publicGraphQLErrorsFromUnknown(error).length === 0;
+}
+
 export function createAngeeHasuraDataProviders(
   schemas: Readonly<Record<string, AngeeHasuraSchemaConfig>>,
   defaultSchema?: string,

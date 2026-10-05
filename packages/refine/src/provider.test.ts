@@ -11,6 +11,7 @@ import {
   createAngeeHasuraDataProvider,
   createAngeeChangeLiveProvider,
   resolveGraphQLWebSocketEndpoint,
+  retryableQueryError,
 } from "./provider";
 
 function jsonResponse(data: unknown): Response {
@@ -1004,4 +1005,22 @@ test("stale revision transport retains only a valid current revision for explici
     .toEqual({ message: "Stale", extensions: { code: "STALE_REVISION", current_revision: 0 } });
   expect(publicGraphQLError({ message: "Stale", extensions: { code: "STALE_REVISION", current_revision: "unsafe" } })?.extensions)
     .toEqual({ code: "STALE_REVISION" });
+});
+
+describe("retryableQueryError", () => {
+  const answer = (code: string) => ({ message: "The requested record was not found.", extensions: { code } });
+
+  test.each(["VALIDATION", "PERMISSION_DENIED", "UNAUTHENTICATED", "STALE_REVISION"])(
+    "a %s answer is not retried, from graphql-request or urql",
+    (code) => {
+      expect(retryableQueryError({ response: { status: 200, errors: [answer(code)] } })).toBe(false);
+      expect(retryableQueryError({ graphQLErrors: [answer(code)] })).toBe(false);
+    },
+  );
+
+  test("transport failures and masked server errors are retried", () => {
+    expect(retryableQueryError(new TypeError("Failed to fetch"))).toBe(true);
+    expect(retryableQueryError({ response: { status: 502, errors: [] } })).toBe(true);
+    expect(retryableQueryError({ graphQLErrors: [answer("INTERNAL_SERVER_ERROR")] })).toBe(true);
+  });
 });
