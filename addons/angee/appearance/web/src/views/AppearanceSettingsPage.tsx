@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { Alert, Button, RadioGroupItem, RadioGroupRoot, SettingsSection, SettingsShell, ContainerOutlet, useAppRuntime, useAppearance, ThemePreviewFrame, useContainer, useT } from "@angee/ui";
+import { useEffect, useMemo, type ReactElement } from "react";
+import { Alert, Button, ControlBand, RadioGroupItem, RadioGroupRoot, SaveDiscardActions, SettingsSection, SettingsShell, ContainerOutlet, dirtyControlBandClassName, useAppRuntime, useAppearance, ThemePreviewFrame, useContainer, useLatestRef, useT, useUnsavedChangesNavigationGuard } from "@angee/ui";
 import { parseThemeCustomization, resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeCustomizationLogo, type ThemeOptionsEnvelope } from "@angee/ui/theme";
 import { useAppearanceT } from "../i18n";
 
@@ -11,42 +11,53 @@ export function AppearanceSettingsPage(): ReactElement {
   const runtime = useAppRuntime();
   const appearance = useAppearance();
   const tools = useContainer("appearance.settings#tools");
-  const selectedTheme = appearance.preferences.themeId ?? HOST_VALUE;
-  const selectedScheme = appearance.preferences.colorScheme ?? HOST_VALUE;
+  const selectedTheme = appearance.currentPreferences.themeId ?? HOST_VALUE;
+  const selectedScheme = appearance.currentPreferences.colorScheme ?? HOST_VALUE;
   const OptionsEditor = appearance.theme?.optionsEditor;
   const readOnly = !appearance.editable;
-  const [draft, setDraft] = useState<ThemeOptionsEnvelope | undefined>(appearance.preferences.options);
-  useEffect(() => setDraft(appearance.preferences.options), [appearance.preferences.options, appearance.preferences.themeId]);
+  const { openDraft, discard, saving } = appearance;
+  const dirty = useLatestRef(appearance.dirty);
+  useUnsavedChangesNavigationGuard({ isDirty: appearance.dirty, isDirtyNow: () => dirty.current, readOnly });
+  // Opening is idempotent; commands that close the draft leave the page ready
+  // for another edit. Cleanup is separate so command changes never discard it.
+  useEffect(() => {
+    if (!readOnly && !saving) openDraft();
+  }, [openDraft, readOnly, saving]);
+  useEffect(() => discard, [discard]);
 
-  return <SettingsShell maxWidth="1100" gap="8">
+  return <>
+    {!readOnly ? <ControlBand className={appearance.dirty ? dirtyControlBandClassName : undefined}>
+      <SaveDiscardActions isDirty={appearance.dirty} pending={saving} onSave={() => { void appearance.save().catch(() => undefined); }} onDiscard={discard} />
+    </ControlBand> : null}
+    <SettingsShell maxWidth="1100" gap="8">
     <header className="grid gap-1"><h1 className="text-22 font-semibold text-fg">{t("title")}</h1><p className="text-13 text-fg-muted">{t("description")}</p></header>
     {appearance.notice ? <Alert tone={appearance.notice === "theme-unavailable" ? "warning" : "danger"} title={appearance.notice === "theme-unavailable" ? t("unavailable") : appearance.notice === "options-invalid" ? t("invalidOptions") : t("unsupported")} /> : null}
     {appearance.error ? <Alert tone="danger" title={t("saveFailed")}>{appearance.error.message}</Alert> : null}
     <SettingsSection title={t("theme.title")} description={t("theme.description")}>
       <RadioGroupRoot value={selectedTheme} onValueChange={(value) => void appearance.setTheme(value === HOST_VALUE ? undefined : value)} className="grid gap-3 md:grid-cols-2">
-        <RadioGroupItem disabled={readOnly} variant="card" value={HOST_VALUE} label={t("theme.followHost")} description={t("theme.followHostDescription")}>
+        <RadioGroupItem disabled={readOnly || saving} variant="card" value={HOST_VALUE} label={t("theme.followHost")} description={t("theme.followHostDescription")}>
           <ThemeSpecimen theme={appearance.hostTheme} options={appearance.hostOptions} />
         </RadioGroupItem>
-        {runtime.themes.map((theme) => <RadioGroupItem disabled={readOnly} key={theme.definition.id} variant="card" value={theme.definition.id} label={themeT(theme.definition.labelKey)} description={themeT(theme.definition.descriptionKey)}>
+        {runtime.themes.map((theme) => <RadioGroupItem disabled={readOnly || saving} key={theme.definition.id} variant="card" value={theme.definition.id} label={themeT(theme.definition.labelKey)} description={themeT(theme.definition.descriptionKey)}>
           <ThemeSpecimen theme={theme} />
         </RadioGroupItem>)}
       </RadioGroupRoot>
     </SettingsSection>
     <SettingsSection title={t("scheme.title")} description={t("scheme.description")}>
       <RadioGroupRoot orientation="horizontal" value={selectedScheme} onValueChange={(value) => void appearance.setColorScheme(value === HOST_VALUE ? undefined : value as "light" | "dark" | "system")}>
-        {[HOST_VALUE, "system", "light", "dark"].map((value) => <RadioGroupItem disabled={readOnly} key={value} value={value} label={value === HOST_VALUE ? t("scheme.host") : t(`scheme.${value}`)} />)}
+        {[HOST_VALUE, "system", "light", "dark"].map((value) => <RadioGroupItem disabled={readOnly || saving} key={value} value={value} label={value === HOST_VALUE ? t("scheme.host") : t(`scheme.${value}`)} />)}
       </RadioGroupRoot>
     </SettingsSection>
     {OptionsEditor ? <SettingsSection title={t("options.title")} description={t("options.description")}>
-      <OptionsEditor definition={appearance.theme!.definition} value={draft} disabled={appearance.saving || readOnly} onChange={setDraft} />
-      <div className="flex gap-2"><Button disabled={!draft || readOnly} loading={appearance.saving} onClick={() => draft && void appearance.setOptions(draft)}>{appearance.saving ? t("saving") : t("options.apply")}</Button><Button variant="ghost" disabled={readOnly} onClick={() => setDraft(appearance.preferences.options)}>{t("options.cancel")}</Button></div>
+      <OptionsEditor definition={appearance.theme!.definition} value={appearance.currentPreferences.options} disabled={saving || readOnly} onChange={(options) => { void appearance.setOptions(options); }} />
     </SettingsSection> : null}
     {appearance.theme ? <SettingsSection title={t("preview.title")} description={t("preview.description")}>
-      <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={draft ?? appearance.preferences.options} />)}</div>
+      <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={appearance.currentPreferences.options} />)}</div>
     </SettingsSection> : null}
     {tools.length && !readOnly ? <SettingsSection title={t("tools.title")}><ContainerOutlet entries={tools} /></SettingsSection> : null}
     <div><Button variant="secondary" loading={appearance.saving} onClick={() => void appearance.reset()}>{t("reset")}</Button></div>
-  </SettingsShell>;
+    </SettingsShell>
+  </>;
 }
 
 function FullThemePreview({ theme, scheme, options }: { theme: ThemeContribution; scheme: ColorScheme; options?: ThemeOptionsEnvelope }): ReactElement {

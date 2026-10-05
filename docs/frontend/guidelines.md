@@ -971,6 +971,11 @@ facts are on `createApp(...).explain.containers`; see the
 
 ## Form save contracts
 
+`FormView` composes `SaveDiscardActions` in `ControlBand` with
+`dirtyControlBandClassName`; non-record edit surfaces compose the same owners
+over their own draft and persistence callbacks, with the page band outside
+`SettingsShell` so it reaches the layout host.
+
 View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
 real identity and permitted people. Compose `useRuntimeViewAs` at shared write
 owners so permitted actions remain visible but disabled, including keyboard,

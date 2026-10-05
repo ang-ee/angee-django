@@ -79,6 +79,26 @@ The DOM uses `data-theme-id` for implementation identity and
 `data-color-scheme="light|dark"` for the resolved scheme. `data-theme` mirrors
 the scheme for one compatibility cycle.
 
+The editable Appearance page keeps a provider draft open for its mounted
+lifetime. Theme, color scheme, customization and contributed tools read and
+edit `currentPreferences`, immediately re-theming the whole app and both preview
+documents. Nothing persists until **Save** in the standard control band; Save
+and **Discard** appear with the shared dirty tint while the draft differs from
+the saved preference. Both leave the page ready for the next edit. Leaving with
+unsaved changes uses the standard navigation guard; confirmed departure discards
+the draft, and unmounting always restores the saved appearance. Read-only
+appearance opens no draft and offers neither action. The boot cache contains
+only saved values, so reloading restores the saved appearance.
+
+The three recovery verbs have distinct scopes: **Discard** restores the last
+saved appearance; **Restore theme defaults** edits the draft inside the
+customization editor; **Reset appearance** directly deletes the saved preference
+and closes the draft, including when an unsupported preference prevents editing.
+The user-menu scheme toggle edits the same draft while the page is open and
+saves immediately when no draft is open. See the
+[appearance provider](../../packages/ui/src/theme/appearance.tsx) for the command
+contract.
+
 ## Customizing a base theme
 
 Selecting a theme chooses the authored base design. A customizable theme then

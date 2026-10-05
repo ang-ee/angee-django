@@ -17,6 +17,7 @@ import {
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
+import { SaveDiscardActions, dirtyControlBandClassName } from "./SaveDiscardActions";
 import { ActionFormProvider } from "./ActionFormProvider";
 import type {
   FieldDescriptor,
@@ -301,36 +302,19 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     void submitForm();
   };
   const controlBand = readOnly && props.hideRecordChrome && !toolbarStartNode && !toolbar ? null : (
-    <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? "bg-brand-soft" : undefined)}>
+    <ControlBand className={cn("overflow-x-auto overflow-y-hidden", formIsDirty ? dirtyControlBandClassName : undefined)}>
       <div className="flex min-w-max shrink-0 items-center gap-2">
         {toolbarStartNode}
-        {isCreate || formIsDirty ? (
-          <div className="flex items-center gap-2">
-            {formIsDirty ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={pending}
-                onClick={discardChanges}
-              >
-                {t("form.discard")}
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              loading={pending}
-              disabled={formReadOnly || previewBlocked}
-              onClick={() => {
-                void submitForm();
-              }}
-            >
-              {submitLabel ?? (isCreate ? t("form.create") : t("form.save"))}
-            </Button>
-          </div>
-        ) : null}
+        <SaveDiscardActions
+          isDirty={formIsDirty}
+          alwaysShowSave={isCreate}
+          saveIntent={isCreate ? "create" : "save"}
+          saveLabel={submitLabel}
+          pending={pending}
+          saveDisabled={formReadOnly || previewBlocked}
+          onDiscard={discardChanges}
+          onSave={() => { void submitForm(); }}
+        />
         <span ref={setToolbarHost} className="contents" />
         {!awaitingRecord && (
           availableDeclaredActions.length > 0 ||

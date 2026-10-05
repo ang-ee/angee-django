@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { RecordIssues, baseIcons } from "@angee/ui";
+import { RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
 import { FILTER_OPERATORS } from "@angee/metadata";
 
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -102,6 +102,8 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("ActionMenu", "@angee/ui", "src/toolbars/ActionMenu.tsx"),
   frameworkCriticalExport("ActionTrigger", "@angee/ui", "src/toolbars/ActionMenu.tsx"),
   frameworkCriticalExport("RecordActionBar", "@angee/ui", "src/views/form/RecordActionBar.tsx"),
+  frameworkCriticalExport("SaveDiscardActions", "@angee/ui", "src/views/form/SaveDiscardActions.tsx"),
+  frameworkCriticalExport("dirtyControlBandClassName", "@angee/ui", "src/views/form/SaveDiscardActions.tsx"),
   frameworkCriticalExport("VisibilityControl", "@angee/ui", "src/widgets/visibility.tsx"),
   frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),
   frameworkCriticalExport("DocumentTitle", "@angee/ui", "src/chrome/DocumentTitle.tsx"),
@@ -417,6 +419,11 @@ describe("React architecture guardrails", () => {
 
   test("RecordIssues is available through the public UI entry", () => {
     expect(RecordIssues).toBeTypeOf("function");
+  });
+
+  test("Save/Discard actions and dirty band styling are available through the public UI entry", () => {
+    expect(SaveDiscardActions).toBeTypeOf("function");
+    expect(dirtyControlBandClassName).toBeTypeOf("string");
   });
 
   test(
