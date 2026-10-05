@@ -4,8 +4,8 @@ from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db.models.functions import Now
 from django.db import connection
+from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
@@ -82,8 +82,10 @@ def test_timeline_bounds_inputs_and_calls_the_set_owner_once(schema, review, mon
     result = timeline(schema, actor, [record])["records"][0]["runs"]
     assert len(result) == 20 and result[-1]["id"] == latest[-1].sqid
     assert run.sqid not in {item["id"] for item in result}
-    result = execute_schema(schema, "query($records:[TimelineRecordInput!]!) { record_timeline(records:$records) { open_decision_count } }",
-                            {"records": [{"model": record._meta.label, "id": record.sqid}] * 101}, user=actor)
+    result = execute_schema(
+        schema, "query($records:[TimelineRecordInput!]!) { record_timeline(records:$records) { open_decision_count } }",
+        {"records": [{"model": record._meta.label, "id": record.sqid}] * 101}, user=actor,
+    )
     assert result.errors and "at most 100" in result.errors[0].message
 
 
@@ -103,6 +105,23 @@ def test_attention_read_does_not_load_the_run_graph(schema, review, monkeypatch)
     }""", {"records": [{"model": record._meta.label, "id": record.sqid}]}, user=actor))["record_timeline"]
     assert result["has_runs"] and result["open_decision_count"] == 1
     assert result["records"][0]["runs"] == []
+
+
+@pytest.mark.parametrize("include_runs", [True, False])
+def test_timeline_open_decision_records_are_readable(schema, review, include_runs):
+    _actor, people, _, question = review
+    _, step = start_review(review)
+    record = question.review_subject
+    data = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!, $include_runs:Boolean!) {
+      record_timeline(records:$records, include_runs:$include_runs) { records {
+        decisions { id is_open records { record_model record_id } }
+      } }
+    }""", {"records": [{"model": record._meta.label, "id": record.sqid}], "include_runs": include_runs},
+        user=people[0]))["record_timeline"]["records"][0]
+    assert data["decisions"] == [{
+        "id": questions(step)[0].sqid, "is_open": True,
+        "records": [{"record_model": record._meta.label, "record_id": record.sqid}],
+    }]
 
 
 def test_about_uses_separate_indexed_identity_queries(review):
@@ -149,7 +168,9 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     ]}, user=actor))["record_timeline"]["records"][0]
     result = data["runs"][0]
     assert (result["subject_model"], result["subject_id"]) == (record._meta.label, record.sqid)
-    assert result["trigger_event"]["record_id"] == record.sqid
+    assert (result["trigger_event"]["record_model"], result["trigger_event"]["record_id"]) == (
+        record._meta.label, record.sqid,
+    )
     step = result["graph"]["nodes"][0]["step_run"]
     assert step["hold"] == "decision" and step["decision"]["is_open"]
     assert step["records"][0]["record_id"] == record.sqid

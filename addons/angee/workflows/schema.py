@@ -62,6 +62,7 @@ StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 Decision = apps.get_model("decisions", "Decision")
+DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 _RUN_POLICY_VERSION = Prefetch(
     "version",
     queryset=system_queryset(WorkflowVersion).only("document"),
@@ -874,9 +875,13 @@ class RecordTimelineQuery:
         runs = list(run_type_get_queryset(
             run_query.order_by("-created_at", "-pk"),
             WorkflowRunType, info,
-        ).select_related("parent_step").prefetch_related("records")) if include_runs else []
+        ).select_related("parent_step").prefetch_related("records", Prefetch(
+            "trigger_event", queryset=with_record_reference_access(read_scoped_queryset(TriggerEvent, actor)),
+        ))) if include_runs else []
         has_runs = bool(runs) if include_runs else run_query.exists()
-        decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related("records"))
+        decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related(Prefetch(
+            "records", queryset=with_record_reference_access(read_scoped_queryset(DecisionRecord, actor)),
+        )))
         by_run = {run.pk: run for run in runs}
         result = []
         for target, record in targets.items():
