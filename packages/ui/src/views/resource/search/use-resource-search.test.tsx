@@ -186,3 +186,33 @@ test("favorite application, toggle, save, rename and pin retain provider persist
   act(() => result.current.search.toggleFavorite("favorite:open"));
   expect(result.current.view.state.filter).toEqual({ status: { exact: "open" } });
 });
+
+test("per-kind default stacks apply synchronously, follow view changes, and preserve user grouping", () => {
+  const list = [{ field: "owner" }, { field: "status" }];
+  const board = [{ field: "status" }];
+  const { result } = fixture(undefined, { groupStacks: { list, board } });
+  expect(result.current.search.groupStack).toEqual(list);
+  expect(result.current.view.defaultState.groupStack).toEqual(list);
+  expect(result.current.search.queryDirty).toBe(false);
+  act(() => result.current.view.setView("board"));
+  expect(result.current.search.groupStack).toEqual(board);
+  expect(result.current.view.defaultState.groupStack).toEqual(board);
+  expect(result.current.search.queryDirty).toBe(false);
+  act(() => result.current.search.removeGroup(0));
+  act(() => result.current.search.clearQuery());
+  expect(result.current.search.groupStack).toEqual(board);
+  act(() => result.current.view.setView("list"));
+  expect(result.current.search.groupStack).toEqual(list);
+  act(() => result.current.search.removeGroup(1));
+  act(() => result.current.view.setView("board"));
+  act(() => result.current.view.setView("list"));
+  expect(result.current.search.groupStack).toEqual([{ field: "owner" }]);
+  act(() => result.current.search.resetQuery());
+  expect(result.current.search.groupStack).toEqual([]);
+  act(() => result.current.view.setView("board"));
+  expect(result.current.search.groupStack).toEqual(board);
+  act(() => result.current.view.applyFavorite({ id: "empty", label: "Ungrouped", view: "board", groupStack: [] }));
+  expect(result.current.search.groupStack).toEqual([]);
+  act(() => result.current.search.clearQuery());
+  expect(result.current.search.groupStack).toEqual(board);
+});

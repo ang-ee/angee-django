@@ -319,11 +319,13 @@ describe("Gantt collection over native list data", () => {
 
   test("pins the lane group even when another valid group is selected", async () => {
     const f = renderCollection();
-    await waitFor(() => expect(f.state().state.groupStack).toEqual([{ field: "lane" }]));
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    expect(f.state().state.groupStack).toEqual([]);
     act(() => f.state().setPage(2));
     expect(f.state().state.pagination.pageIndex).toBe(1);
-    act(() => f.state().setGroup({ field: "status" }));
-    await waitFor(() => expect(f.state().state.groupStack).toEqual([{ field: "lane" }]));
+    act(() => f.state().setGroupStack([{ field: "status" }]));
+    expect(f.state().state.groupStack).toEqual([{ field: "status" }]);
+    expect(drawing.props?.resources.map((lane) => lane.id)).toEqual(ganttLanes.map((lane) => lane.id));
     expect(f.state().state.pagination.pageIndex).toBe(0);
     expect(screen.queryByRole("button", { name: /group by/i })).toBeNull();
   });
@@ -336,8 +338,10 @@ describe("Gantt collection over native list data", () => {
       total: resource === "lanes" ? 2 : 1,
     }) });
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
-    const search = screen.getByRole("searchbox", { name: "Filter records" });
-    fireEvent.change(search, { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+    const search = await screen.findByRole("combobox", { name: "Filter records" });
+    fireEvent.input(search, { target: { value: "First" }, inputType: "insertText" });
+    await screen.findByRole("option", { name: "Search Name for: First" });
     fireEvent.keyDown(search, { key: "Enter" });
     await waitFor(() => expect(JSON.stringify(f.barRequests().at(-1)?.[0].meta?.gqlVariables)).toContain("First"));
     const filtered = JSON.stringify(f.barRequests().at(-1)?.[0].meta?.gqlVariables);
@@ -352,7 +356,7 @@ describe("Gantt collection over native list data", () => {
     await waitFor(() => expect(JSON.stringify(f.barRequests().at(-1)?.[0].meta?.gqlVariables)).toContain("Second"));
     expect(JSON.stringify(f.barRequests().at(-1)?.[0].meta?.gqlVariables)).not.toContain("First");
     expect(f.state().state.sorting).toEqual([{ id: "name", desc: true }]);
-    expect(f.state().state.groupStack).toEqual([{ field: "lane" }]);
+    expect(f.state().state.groupStack).toEqual([{ field: "status" }]);
     expect(f.state().state.view).toBe("gantt");
     await waitFor(() => expect(drawing.props?.events.map((event) => event.title)).toEqual(["Second interval"]));
   });

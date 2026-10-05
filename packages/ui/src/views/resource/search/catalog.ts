@@ -8,7 +8,7 @@ import { queryForColumns } from "../resource-query";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewDefaultGroups, ResourceViewGroup } from "../resource-view-model";
 import { buildFilterFields, buildFilterOptions, buildGroupOptions, mergeFilterFields, mergeFilterOptions } from "../resource-view-utils";
-import { defaultGroupsForToolbar } from "./group-defaults";
+import { declaredGroupDefaults } from "./group-defaults";
 import { useSearchShortcuts, validateSearchShortcut, validateSearchShortcutCatalog, type ListSearchDeclaration } from "./shortcuts";
 import type { SearchCatalog, SearchFacet } from "./types";
 
@@ -22,7 +22,7 @@ export interface UseSearchCatalogInput<TRow extends Row> {
   rows: readonly TRow[];
   modelMetadata: ModelMetadata | null;
   resourceView: ResourceViewContextValue;
-  defaultGroup?: ResourceViewGroup | null;
+  defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   defaultGroups?: ResourceViewDefaultGroups;
   groupOptions?: readonly ResourceToolbarGroupOption[];
   contributedGroupOptions?: readonly ResourceToolbarGroupOption[];
@@ -41,7 +41,7 @@ const EMPTY = [] as const;
 export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<TRow>): SearchCatalog {
   const schema = useSchemaFieldMetadata();
   const { columns, rows, modelMetadata, resourceView, inferOptions = true } = input;
-  const defaults = React.useMemo(() => defaultGroupsForToolbar(input.defaultGroup, input.defaultGroups), [input.defaultGroup, input.defaultGroups]);
+  const defaults = React.useMemo(() => declaredGroupDefaults(input.defaultGroup, input.defaultGroups).groups, [input.defaultGroup, input.defaultGroups]);
   const query = React.useMemo(() => input.query ?? queryForColumns(columns, modelMetadata, defaults), [input.query, columns, modelMetadata, defaults]);
   const shortcuts = useSearchShortcuts(input.search, modelMetadata);
   for (const child of shortcuts) validateSearchShortcut(child.content, child.id, query);

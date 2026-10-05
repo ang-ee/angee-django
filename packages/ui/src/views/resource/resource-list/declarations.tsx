@@ -4,7 +4,6 @@ import { type ListColumn, type ListViewProps } from "../ListView";
 import { type FormViewProps } from "../../form/FormView";
 import type { ListProps } from "../List";
 import type { FormProps } from "../../form/Form";
-import { type ResourceViewDefaultGroups, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import { parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups, mergePageFacets, pageChildren, pageElementProps, requirePageColumns } from "../../page";
 import { formDeclarationCache, listDeclarationCache, unrecognizedResourceListChildMessage } from "./child-dsl";
 import type { ResourceFormDeclaration, ResourceListDeclaration, ResourceListDeclarations, ResourceListProps } from "./public";
@@ -179,11 +178,7 @@ export function requiredColumns<TRow extends Row>(
 
 export function listElementRenderProps<TRow extends Row>(
   props: ListProps<TRow>,
-): Partial<ListViewProps<TRow> & {
-  defaultView?: ResourceViewKind;
-  defaultGroup?: ResourceViewGroup | null;
-  defaultGroups?: ResourceViewDefaultGroups;
-}> {
+): Partial<ListViewProps<TRow>> {
   const {
     children: _children,
     facets: _facets,

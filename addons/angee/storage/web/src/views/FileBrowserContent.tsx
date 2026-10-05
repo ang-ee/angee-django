@@ -24,7 +24,6 @@ import { StorageUploadTasks } from "./StorageUploadTasks";
 
 export interface FileBrowserContentProps {
   baseFilter: ResourceFilter<"storage.File">;
-  defaultGroup: ListProps<StorageFileRow>["defaultGroup"];
   /** Detail route for a clicked row — the list renders each row as a link. */
   rowHref: ListProps<StorageFileRow>["rowHref"];
   /** Bulk actions rendered in the selection bar when files are selected. */
@@ -53,7 +52,6 @@ const FILE_LIST_FIELDS = [
  */
 export function FileBrowserContent({
   baseFilter,
-  defaultGroup,
   rowHref,
   bulkActions,
   onListStateChange,
@@ -76,7 +74,6 @@ export function FileBrowserContent({
     <List<StorageFileRow>
       resource="storage.File"
       baseFilter={baseFilter}
-      defaultGroup={defaultGroup}
       fields={FILE_LIST_FIELDS}
       rowHref={rowHref}
       bulkActions={bulkActions}

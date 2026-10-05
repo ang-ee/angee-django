@@ -4,9 +4,9 @@ import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
-import type { Row } from "@angee/metadata";
+import { ResourceQuery, type Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
-import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
+import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import { composeAddons, parseFlatSearch, stringifyFlatSearch } from "@angee/app";
 import { installTestLocalStorage } from "@angee/app/testing";
 import { AppRuntimeProvider, ConsoleLayout, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets, recordNavigationSearch } from "@angee/ui";
@@ -169,4 +169,60 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     expect(update).not.toHaveBeenCalled();
     expect(provider.deleteOne).not.toHaveBeenCalled();
   }
+});
+
+test("All files starts with server folder grouping and a clean URL; changing the folder scope changes its default", async () => {
+  installTestLocalStorage();
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1024, 768));
+  Element.prototype.getAnimations ??= () => [];
+  const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, filename: { scalar: "String" },
+    created_by_label: { scalar: "String" }, upload_state: { scalar: "String" }, visibility: { scalar: "String" },
+    updated_at: { scalar: "DateTime" }, size_bytes: { scalar: "Int" }, is_trashed: { scalar: "Boolean" },
+    drive: { scalar: "ID" }, folder: { scalar: "ID" }, "mime_type.label": { scalar: "String" },
+  };
+  const query = ResourceQuery.forRows({ fields }).contract;
+  query.axes.folder = testQueryAxis("folder", { identityPath: "folder", paths: ["folder"],
+    server: { input: "FOLDER", key: "folder" },
+    drill: { kind: "value", field: "folder", valueKey: "folder", nullMode: "isNull", valueMap: [] },
+  });
+  const groupedResource = testDataResource("storage.File", { query,
+    roots: { groups: "files_groups", aggregate: "files_aggregate", delete: undefined },
+    typeNames: { filter: "files_bool_exp", order: "files_order_by" },
+    fields: Object.entries(fields).filter(([name]) => !name.includes(".")).map(([name, value]) => ({
+      name, kind: "scalar", scalar: value.scalar, readable: true, nullable: name === "folder",
+      aggregatable: name === "id", creatable: false, updatable: false, requiredOnCreate: false,
+    })),
+  });
+  const record = { ...file("file-a", "Alpha"), folder: "folder-a" };
+  const groupRequests = vi.fn();
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    if (meta?.gqlQuery === StorageDrives) return { data: { drives: [drive] } };
+    if (meta?.gqlQuery === StorageBackends) return { data: { backends: [] } };
+    if (meta?.gqlQuery === StorageFolderRoots) return { data: { folders: [] } };
+    groupRequests(meta?.gqlVariables);
+    return { data: { files_groups: [{ key: { folder: "folder-a" }, aggregate: { count: 1 } }], totalCount: 1 } };
+  });
+  const root = createRootRoute();
+  const route = createRoute({ getParentRoute: () => root, path: "/storage", component: StoragePage });
+  const router = createRouter({ routeTree: root.addChildren([route]),
+    history: createMemoryHistory({ initialEntries: ["/storage"] }),
+    parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch,
+  });
+  render(<Provider resources={[groupedResource, ...resources.slice(1)]} dataProvider={{ custom,
+    getList: vi.fn(async () => ({ data: [record], total: 1 })),
+  }}><OperationDocumentsProvider documents={{ console: { groups: {
+    "storage.File": "query Groups { files_groups { key } totalCount }",
+  } } }}><AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets,
+    routeHref: createRouteHref(storage.routes ?? []), containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers,
+  }}><ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost></AppRuntimeProvider></OperationDocumentsProvider></Provider>);
+  expect(await screen.findByRole("button", { name: "folder-a" })).toBeTruthy();
+  expect(groupRequests.mock.calls[0]?.[0]).toMatchObject({ group_by: [{ field: "FOLDER" }],
+    where: ResourceQuery.from(groupedResource).toWhere({ drive: { exact: drive.id }, is_trashed: { exact: false } }),
+  });
+  expect(router.state.location.search).toEqual({});
+  const reads = groupRequests.mock.calls.length;
+  await act(async () => router.navigate({ to: "/storage", search: { folder: "trash" } }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "folder-a" })).toBeNull());
+  expect(groupRequests).toHaveBeenCalledTimes(reads);
+  expect(router.state.location.search).toEqual({ folder: "trash" });
 });

@@ -18,7 +18,7 @@ export interface ResourceViewSort {
   dir: ResourceViewSortDirection;
 }
 
-export type ResourceViewDefaultGroups = Partial<Record<ResourceViewKind, GroupSpec | null>>;
+export type ResourceViewDefaultGroups = Partial<Record<ResourceViewKind, GroupSpec | readonly GroupSpec[] | null>>;
 
 export interface ResourceViewInitialState {
   preset?: string;
@@ -31,6 +31,8 @@ export interface ResourceViewInitialState {
   filter?: QueryFilter;
   group?: GroupSpec | null;
   groupStack?: readonly GroupSpec[];
+  /** View-specific defaults; an empty stack or null explicitly disables grouping. */
+  groupStacks?: Partial<Record<ResourceViewKind, readonly GroupSpec[] | null>>;
   selectedIds?: Iterable<string>;
   view?: ResourceViewKind;
   mode?: CalendarViewMode;

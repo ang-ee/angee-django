@@ -228,16 +228,17 @@ vi.mock("../data/use-upload", () => ({
 
 vi.mock("./FileBrowserContent", async () => {
   const React = await import("react");
+  const { useResourceView } = await import("@angee/ui");
   return {
   FileBrowserContent: ({
-    baseFilter, defaultGroup, onListStateChange, rowHref, uploadTarget, canUpload, }: {
+    baseFilter, onListStateChange, rowHref, uploadTarget, canUpload, }: {
     baseFilter: Record<string, { exact: string | boolean }>;
-    defaultGroup: { field: string } | null;
     onListStateChange: (state: Record<string, unknown>) => void;
     rowHref?: (row: { id: string }, scope?: ListViewNavigationScope) => string;
     uploadTarget: { driveId: string; folderId: string | null };
     canUpload: boolean;
   }) => {
+    const resourceView = useResourceView();
     const rows = storageData.files
       .filter((row) => row.drive === baseFilter.drive?.exact)
       .filter((row) => row.is_trashed === baseFilter.is_trashed?.exact)
@@ -270,7 +271,7 @@ vi.mock("./FileBrowserContent", async () => {
       data-testid="file-list"
       data-row-ids={rows.map((row) => row.id).join(", ")}
       data-row-hrefs={rows.map((row) => rowHref?.(row, { filter: baseFilter, order: { updated_at: "DESC" }, page: 1, pageSize: 50 }) ?? "").join(", ")}
-      data-group={defaultGroup?.field ?? ""}
+      data-group={resourceView.state.groupStack[0]?.field ?? ""}
       data-filter={JSON.stringify(baseFilter)}
       data-upload-drive={uploadTarget.driveId}
       data-upload-folder={uploadTarget.folderId ?? ""}

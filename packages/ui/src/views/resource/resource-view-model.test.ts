@@ -69,7 +69,7 @@ describe("resource-view model", () => {
     expect(roundTrip.pagination.pageSize).toBe(20);
     expect(roundTrip.sorting).toEqual([{ id: "updatedAt", desc: true }]);
     expect(roundTrip.filter).toEqual({ title: { iContains: "alpha" } });
-    expect(roundTrip.group).toEqual({
+    expect(roundTrip.groupStack[0]).toEqual({
       field: "status",
       granularity: "year",
     });
@@ -149,7 +149,6 @@ describe("resource-view model", () => {
     });
     const roundTrip = resourceViewSearchToState(search, initial);
     expect(roundTrip.filter).toEqual({});
-    expect(roundTrip.group).toBeNull();
     expect(roundTrip.groupStack).toEqual([]);
     expect(roundTrip.sorting).toEqual([]);
   });
@@ -167,7 +166,7 @@ describe("resource-view model", () => {
 
     expect((state.pagination.pageIndex + 1)).toBe(2);
     expect(state.pagination.pageSize).toBe(80);
-    expect(state.group).toEqual({ field: "status", granularity: "year" });
+    expect(state.groupStack[0]).toEqual({ field: "status", granularity: "year" });
     expect(state.groupStack).toEqual([
       { field: "status", granularity: "year" },
       { field: "updatedAt", granularity: "month" },
@@ -215,7 +214,7 @@ describe("resource-view model", () => {
     const state = createResourceViewState({ groupStack: [{ field: "reviewer" }] });
     const search = resourceViewStateToSearch(state);
     expect(search.group).toBe("reviewer");
-    expect(resourceViewSearchToState(search).group).toEqual({ field: "reviewer" });
+    expect(resourceViewSearchToState(search).groupStack).toEqual([{ field: "reviewer" }]);
     expect(resourceViewSearchToState({ group: "reviewer.displayName~reviewer~reviewerId" }).queryError?.message).toMatch(/group/);
   });
 
@@ -420,3 +419,26 @@ function viewWrapper(initialState: ResourceViewInitialState = {}) {
 function viewHook(initialState: ResourceViewInitialState = {}) {
   return renderHook(useResourceView, { wrapper: viewWrapper(initialState) });
 }
+
+test("the URL base follows the selected view; default stacks omit keys and cleared stacks survive reload", () => {
+  const list = [{ field: "project" }, { field: "status" }];
+  const board = [{ field: "status" }];
+  const initial: ResourceViewInitialState = { groupStack: [{ field: "folder" }], groupStacks: { list, board, gantt: null } };
+  expect(resourceViewSearchToState({}, initial).groupStack).toEqual(list);
+  expect(resourceViewStateToSearch(createResourceViewState(initial), initial)).toEqual({});
+  const boardState = resourceViewSearchToState({ view: "board" }, initial);
+  expect(boardState.groupStack).toEqual(board);
+  expect(resourceViewStateToSearch(boardState, initial)).toEqual({ view: "board" });
+  expect(resourceViewSearchToState({ view: "gantt" }, initial).groupStack).toEqual([]);
+  expect(resourceViewSearchToState({ view: "calendar" }, initial).groupStack).toEqual([{ field: "folder" }]);
+  const removed = { ...createResourceViewState(initial), groupStack: list.slice(0, 1) };
+  const encoded = resourceViewStateToSearch(removed, initial);
+  expect(encoded).toEqual({ group: "project" });
+  expect(resourceViewSearchToState(encoded, initial).groupStack).toEqual(list.slice(0, 1));
+  const cleared = resourceViewStateToSearch({ ...removed, groupStack: [] }, initial);
+  expect(cleared).toEqual({ group: "", then: "" });
+  expect(resourceViewSearchToState(cleared, initial).groupStack).toEqual([]);
+  const boardClear = resourceViewStateToSearch({ ...boardState, groupStack: [] }, initial);
+  expect(boardClear).toEqual({ group: "", view: "board" });
+  expect(resourceViewSearchToState(boardClear, initial).groupStack).toEqual([]);
+});

@@ -216,8 +216,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   laneSource?: BoardLaneSource;
   /** Card content without replacing the board's shared frame and actions. */
   boardCard?: BoardCardSpec;
-  /** Group seeded by the resource list. */
-  defaultGroup?: ResourceViewGroup | null;
+  /** Default grouping stack; a single group declares one level. */
+  defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   /** Per-view group defaults seeded by the resource list. */
   defaultGroups?: ResourceViewDefaultGroups;
   /** Initial expansion policy for server-grouped list roots. Defaults to all. */

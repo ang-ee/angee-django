@@ -269,6 +269,7 @@ export const enUiMessages: Record<string, string> = {
   "search.operator.gte": ">=",
   "search.operator.lt": "<",
   "search.operator.lte": "<=",
+  "list.defaultGroupingMismatch": "{name} declares a default grouping {declared} but its ambient ResourceViewProvider defaults to {ambient}; declare it on the provider's initialState",
   "search.levels": "Levels",
   "search.addLevel": "Add level",
   "search.moreAxes": "More axes…",

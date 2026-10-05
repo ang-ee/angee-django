@@ -3,6 +3,7 @@ import type { ResourceQuery } from "@angee/metadata";
 
 import type { DndPayload } from "../../lib/dnd";
 import { useUiT } from "../../i18n";
+import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { GalleryView } from "../GalleryView";
 import {
   ResourceViewSwitcher,
@@ -39,7 +40,7 @@ import type {
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import type { ResourceToolbarProps } from "../../toolbars";
-import { useResourceViewGroupState } from "./resource-view-group-state";
+import { declaredGroupDefaults, validateDeclaredGroupDefaults } from "./search/group-defaults";
 import {
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -55,7 +56,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   filterOptions?: readonly ResourceToolbarFilterOption[];
   customFilterFields?: readonly FilterClauseField[];
   groupOptions?: readonly ResourceToolbarGroupOption[];
-  defaultGroup?: ResourceViewGroup | null;
+  defaultGroup?: ResourceViewGroup | readonly ResourceViewGroup[] | null;
   pageSize?: number;
   fetching?: boolean;
   error?: Error | null;
@@ -108,8 +109,9 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   const initialState = React.useMemo(
     () => ({
       pageSize: props.pageSize,
+      ...declaredGroupDefaults(props.defaultGroup),
     }),
-    [props.pageSize],
+    [props.pageSize, props.defaultGroup],
   );
   return withResourceViewScope({
     ambient: resourceView,
@@ -125,13 +127,20 @@ export function RowsListView<TRow extends StringIdRow = StringIdRow>(
 function ValidatedRowsListView<TRow extends StringIdRow>(
   props: RowsListViewProps<TRow> & { resourceView: ResourceViewContextValue },
 ): React.ReactElement {
+  const t = useUiT();
+  const defaults = React.useMemo(() => declaredGroupDefaults(props.defaultGroup), [props.defaultGroup]);
   const query = React.useMemo(
-    () => props.query ?? queryForColumns(props.columns, null, props.defaultGroup ? [props.defaultGroup] : []),
-    [props.query, props.columns, props.defaultGroup],
+    () => props.query ?? queryForColumns(props.columns, null, defaults.groups),
+    [props.query, props.columns, defaults],
   );
   let state = props.resourceView.state;
   try {
-    if (props.defaultGroup) query.group(props.defaultGroup);
+    validateDeclaredGroupDefaults("RowsListView", props.defaultGroup, undefined, props.resourceView.defaultState, t);
+  } catch (error) {
+    return <ErrorBanner description={error instanceof Error ? error.message : String(error)} />;
+  }
+  try {
+    query.groupsFrom(defaults.groupStack);
     state = validateResourceViewState({
       ...state,
       filter: filterForTextSearch(query, state.filter, "title", props.columns.map(({ field }) => field)),
@@ -177,12 +186,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   const t = useUiT();
   const rowActionSurface = useRowActionsSurface(rowActions);
   const [layout, setLayout] = React.useState<RowLayout>("list");
-  const effectiveGroupStack = useResourceViewGroupState({
-    resourceView,
-    defaultGroup,
-    modelMetadata: null,
-    clearRemovedDefault: false,
-  });
+  const effectiveGroupStack = resourceView.state.groupStack;
 
   const surface = useRowsResourceViewSurface({
     rows,
