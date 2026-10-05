@@ -539,7 +539,7 @@ describe("FormView", () => {
       { id: "notes", label: "Notes", render: () => <p>Notes pane</p> },
       { id: "activity", label: "Activity", render: () => <p>Activity pane</p> },
     ];
-    const first = renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
       defaultRecordTab={rule} recordTabs={tabs}>
       <Field name="title" title />
     </FormView>);
@@ -548,7 +548,7 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
     expect(await screen.findByText("Notes pane")).toBeTruthy();
     expect(rule).toHaveBeenCalledTimes(1);
-    first.unmount();
+    cleanup();
 
     renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
       defaultRecordTab={rule} recordTab="notes" recordTabs={tabs}>
