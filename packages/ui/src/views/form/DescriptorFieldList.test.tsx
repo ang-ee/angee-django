@@ -50,7 +50,7 @@ describe("DescriptorFieldList", () => {
     const onChange = vi.fn();
     render(<AppRuntimeProvider runtime={{ widgets: { custom: { read: edit, edit } } }}>
       <LabeledDescriptorField field={{ name: "target", label: "Target", widget: "custom",
-        relation: { resource: "notes.Note", canCreate: false, labelField: "display_name" } }}
+        relation: { resource: "notes.Note", labelField: "display_name" } }}
         value={null} onChange={onChange} />
     </AppRuntimeProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Custom choice" }));
