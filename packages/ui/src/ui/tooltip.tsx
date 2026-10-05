@@ -16,7 +16,9 @@ import { tv, type VariantProps } from "../lib/variants";
 export const tooltipVariants = tv({
   slots: {
     content:
-      "max-w-xs rounded-6 bg-tooltip px-2 py-1.5 text-2xs font-medium text-on-tooltip shadow-md outline-none transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
+      // transition-opacity with duration from --dur-fast; fallback 150ms matches
+      // the Tailwind default so the tooltip feel is unchanged when tokens are absent.
+      "max-w-xs rounded-6 bg-tooltip px-2 py-1.5 text-2xs font-medium text-on-tooltip shadow-md outline-none [transition:opacity_var(--dur-fast,150ms)_var(--ease,ease)] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
     arrow: "text-tooltip data-[uncentered]:hidden",
   },
   variants: {

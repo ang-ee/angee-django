@@ -320,6 +320,15 @@
   --shadow-md:      var(--elevation-md);
   --shadow-lg:      var(--elevation-lg);
   --shadow-popover: var(--elevation-popover);
+
+  /* ----------------------------------------------------------------
+   *  MOTION — Tailwind v4.3.2 bridge vars so transition-* utilities
+   *  pick up the --dur-base / --ease design tokens. The correct keys
+   *  in v4 are --default-transition-duration and
+   *  --default-transition-timing-function (not the v3 names).
+   * ---------------------------------------------------------------- */
+  --default-transition-duration:        var(--dur-base);
+  --default-transition-timing-function: var(--ease);
 }
 
 /* ============================================================================

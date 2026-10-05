@@ -30,7 +30,9 @@ import {
 export const drawerVariants = tv({
   slots: {
     content:
-      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none transition-transform duration-200 ease-out",
+      // transition-transform with duration from --dur-base; fallback 200ms matches
+      // the original hardcoded value so drawer feel is unchanged when tokens are absent.
+      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none transition-transform [transition-duration:var(--dur-base,200ms)] [transition-timing-function:var(--ease,ease)]",
     header: "space-y-1.5 border-b border-border-subtle px-5 py-4",
     body: cn(textRoleVariants({ role: "description" }), "min-h-0 flex-1 overflow-y-auto px-5 py-4"),
     footer:

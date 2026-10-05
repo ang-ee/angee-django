@@ -21,7 +21,15 @@ export const collapsibleVariants = tv({
     )}`,
     icon:
       "flex size-4 shrink-0 -rotate-90 items-center justify-center text-fg-muted transition-transform group-data-[panel-open]:rotate-0 [&_.glyph]:size-3.5",
-    panel: cn(textRoleVariants({ role: "description" }), "overflow-hidden leading-relaxed"),
+    // Base UI sets --collapsible-panel-height on the panel element at runtime.
+    // Same pattern as accordion: animate height via that var + opacity fade.
+    panel: cn(
+      textRoleVariants({ role: "description" }),
+      "overflow-hidden leading-relaxed",
+      "h-[var(--collapsible-panel-height)] [transition:height_var(--dur-base,180ms)_var(--ease,ease),opacity_var(--dur-base,180ms)_var(--ease,ease)]",
+      "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
+      "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
+    ),
   },
   variants: {
     variant: {

@@ -23,7 +23,16 @@ export const accordionVariants = tv({
       "group flex w-full cursor-pointer items-center gap-2 text-left text-13 font-medium text-fg outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
     icon:
       "flex size-4 shrink-0 -rotate-90 items-center justify-center text-fg-muted transition-transform group-data-[panel-open]:rotate-0 [&_.glyph]:size-3.5",
-    panel: cn(textRoleVariants({ role: "description" }), "overflow-hidden leading-relaxed"),
+    // Base UI sets --accordion-panel-height on the panel element at runtime.
+    // Animating to/from h-0 via that var gives a smooth slide without knowing
+    // the content height in advance. Opacity fades in sync with the slide.
+    panel: cn(
+      textRoleVariants({ role: "description" }),
+      "overflow-hidden leading-relaxed",
+      "h-[var(--accordion-panel-height)] [transition:height_var(--dur-base,180ms)_var(--ease,ease),opacity_var(--dur-base,180ms)_var(--ease,ease)]",
+      "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
+      "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
+    ),
   },
   variants: {
     variant: {
