@@ -1722,7 +1722,7 @@ def attach_hasura_resource_metadata(
             order_fields=sortable,
             aggregate_fields=aggregatable,
             group_by_fields=groupable,
-            query_axes=_hasura_query_axes(model, groupable, filterable, json_paths=active_json_paths),
+            query_axes=hasura_query_axes(model, groupable, filterable, json_paths=active_json_paths),
             aggregate_measures=_hasura_aggregate_measures(model, aggregatable),
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
             public_id_field=public_id_field,
@@ -1837,14 +1837,18 @@ def _has_model_field(model: type[models.Model], name: str) -> bool:
     return True
 
 
-def _hasura_query_axes(
+def hasura_query_axes(
     model: type[models.Model],
     groupable: tuple[str, ...],
     filterable: tuple[str, ...],
     *,
     json_paths: Mapping[str, str] | None = None,
 ) -> tuple[DataQueryAxis, ...]:
-    """Return typed-key group metadata using the aggregate builder's public contract."""
+    """Return typed-key group metadata using the aggregate builder's public contract.
+
+    ``model`` is the Django model the aggregate builder groups: a resource's
+    own model, or a run-query resource's upstream ``HasuraResource.row_model``.
+    """
 
     active_json_paths = dict(json_paths or {})
     return tuple(_hasura_query_axis(model, path, filterable, json_paths=active_json_paths) for path in groupable)

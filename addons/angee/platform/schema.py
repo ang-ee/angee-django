@@ -407,6 +407,7 @@ _FIELD_RESOURCE = hasura_pydantic_resource(
         "model",
         "addon",
     ],
+    groupable=["model", "addon", "kind", "is_relation", "relation_target"],
     rows=_field_rows_for,
     frontend_row_model="server",
 )

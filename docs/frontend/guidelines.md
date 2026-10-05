@@ -440,8 +440,10 @@ shared UI copy through an addon bundle.
   client-side row model by default (it needs the whole set); the server
   `_groups` surface is the escalation only when the data is too large to hold in
   memory. A computed/non-model source is exposed **once** as a Hasura resource
-  (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface,
-  and its admin list processes client-side over the fetched set. Do not
+  (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface.
+  A small one processes client-side over the fetched set; a large one keeps the
+  server row model and declares `groupable` columns for the same `_groups`
+  surface (Platform Fields is the example). Do not
   hand-roll a new client filter/sort/paginate engine — compose TanStack Table's
   row models through `useClientResourceViewSurface` over the fetched set for a
   `rowModel:"client"` resource; `RowsListView` remains the

@@ -32,10 +32,10 @@ from angee.data.metadata import (
 from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import (
-    _hasura_query_axes,
     _measure_ops_for_field,
     _relation_filter_decoders,
     _relation_group_key_encoders,
+    hasura_query_axes,
 )
 from angee.graphql.data.metadata import (
     _finalize_data_resource as _project_final_data_resource,
@@ -1069,7 +1069,7 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
 def test_hasura_relation_axis_has_one_server_identity_and_drill() -> None:
     """One axis carries the aggregate alias and public-ID drill intent."""
 
-    axis = _hasura_query_axes(ResourceChild, ("parent",), ("parent",))[0]
+    axis = hasura_query_axes(ResourceChild, ("parent",), ("parent",))[0]
     assert axis.server == DataQueryServerAxis(input="PARENT", key="parent_id")
     assert axis.drill == DataQueryDrill(kind="identity", field="parent", value_key="parent_id")
 

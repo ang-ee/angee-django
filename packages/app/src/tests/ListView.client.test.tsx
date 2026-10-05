@@ -4,8 +4,8 @@ import { ResourceQuery } from "@angee/metadata";
 // Stage F1: a client row-model resource (rowModel:"client") fetches once and
 // filters/sorts/paginates/groups in the browser. This proves ListView renders a
 // computed `platform.Addon` resource over `useList`, groups it by namespace via
-// TanStack row models, and never issues a server `_groups` query (the computed
-// resource exposes no group aggregate).
+// TanStack row models, and never issues a server `_groups` query (a client row
+// model groups the fetched set; server grouping follows `rowModel`, not origin).
 
 import {
   act,
@@ -80,7 +80,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-// The computed resource has no group aggregate; record any server group query so
+// The client row model groups in the browser; record any server group query so
 // the test can assert none is issued.
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
@@ -185,7 +185,7 @@ describe("ListView client row model", () => {
     expect(addonCalls.length).toBeGreaterThan(0);
     expect(addonCalls.every((call) => (call.pageSize ?? 0) >= 1000)).toBe(true);
 
-    // No server _groups query is ever issued for the computed resource.
+    // No server _groups query is ever issued for the client row model.
     expect(groupByCalls.value.length).toBe(0);
   });
 });
