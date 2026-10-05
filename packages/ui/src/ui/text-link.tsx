@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useInAppLinkClick } from "../lib/in-app-link";
+import { useInAppLink } from "../lib/in-app-link";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 
@@ -67,14 +67,14 @@ export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(
       : undefined;
     const external = target === "_blank";
 
-    const followLink = useInAppLinkClick(href, onClick);
+    const link = useInAppLink(href, { ...props, onClick });
 
     function handleClick(event: React.MouseEvent<HTMLElement>): void {
       if (disabled) {
         event.preventDefault();
         return;
       }
-      followLink(event);
+      link.onClick(event);
     }
 
     return useRender<TextLinkState, HTMLElement>({
@@ -87,6 +87,7 @@ export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(
       },
       props: {
         ...props,
+        ...link,
         "aria-disabled": disabled ? true : props["aria-disabled"],
         children: asChild ? undefined : children,
         className: textLinkVariants({ className, disabled, variant }),

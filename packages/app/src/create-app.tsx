@@ -78,7 +78,7 @@ import {
   ToastProvider,
   useRefineNotificationProvider,
 } from "@angee/ui/feedback/index";
-import { InAppLinkProvider, routerNavigator } from "@angee/ui/lib";
+import { InAppLinkProvider, hrefLocation, routerNavigator, routerPreloader } from "@angee/ui/lib";
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
@@ -527,7 +527,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
           <AppRuntimeProvider runtime={scopedRuntime}>
-            <InAppLinkProvider navigate={navigateInApp}>
+            <InAppLinkProvider navigate={navigateInApp} preload={preloadInApp}>
               <ModalsHost>
                 <ToastProvider>
                   <RefineRoot i18nProvider={words.i18n.provider} />
@@ -573,19 +573,17 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  const rootRoute = createRootRoute({
-    component: RootOutlet,
-    // `?debug=1|0` sets developer mode for the session on any navigation, `/` included.
-    beforeLoad: ({ search }) => applyDeveloperModeSearch((search as Record<string, unknown>).debug),
-  });
+  const rootRoute = createRootRoute({ component: RootOutlet });
 
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
     beforeLoad: async () => {
       const identity = await loadRouteIdentity(refineAuthProvider, queryClient);
+      // Location options rather than `href`: a preload follows a redirect only
+      // through them, and would otherwise preload `/` again without end.
       throw redirect({
-        href: homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}),
+        ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {})),
         replace: true,
       });
     },
@@ -622,14 +620,23 @@ export function createApp(input: CreateAppInput): AngeeApp {
     history: typeof window === "undefined" ? createMemoryHistory() : undefined,
     parseSearch: parseFlatSearch,
     stringifySearch: stringifyFlatSearch,
-    defaultPreload: false,
+    // Hovering, focusing or touching an in-app link starts loading its route
+    // (beforeLoad gates and code-split components; no route declares a loader).
+    defaultPreload: "intent",
     // The router owns the route-loading fallback once: every code-split match
     // (and any future loader-bearing route, after `defaultPendingMs`) renders
     // this inside its parent layout's <Outlet/>, so the chrome stays mounted.
-    defaultPendingComponent: () => <LoadingPanel />,
+    defaultPendingComponent: () => <LoadingPanel shape="page" />,
   });
-  // Bound after the router exists; RootOutlet only reads it at render time.
+  // `?debug=1|0` sets developer mode for the session on every load, `/` included.
+  // A router event, not a root `beforeLoad`: preloads run the active root's
+  // beforeLoad with the current search and must not write session state.
+  router.subscribe("onBeforeLoad", ({ toLocation }) => {
+    applyDeveloperModeSearch((toLocation.search as Record<string, unknown>).debug);
+  });
+  // Bound after the router exists; RootOutlet only reads them at render time.
   const navigateInApp = routerNavigator(router);
+  const preloadInApp = routerPreloader(router);
   const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
     home,
     confineTo: confineTo ?? null,

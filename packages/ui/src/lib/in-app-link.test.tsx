@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // @vitest-environment-options {"settings":{"navigation":{"disableMainFrameNavigation":true,"disableChildPageNavigation":true}}}
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, lazyRouteComponent } from "@tanstack/react-router";
 import type { AnchorHTMLAttributes, ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -9,13 +10,13 @@ import { MetricTile } from "../fragments/MetricStrip";
 import { NavLink } from "../ui/nav-link";
 import { TextLink } from "../ui/text-link";
 import { GalleryView } from "../views/GalleryView";
-import { InAppLinkProvider, useInAppLinkClick } from "./in-app-link";
+import { InAppLinkProvider, routerNavigator, routerPreloader, useInAppLink } from "./in-app-link";
 
 afterEach(cleanup);
 
 function Anchor({ href = "/records/7?view=all#details", onClick, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>): ReactElement {
-  const click = useInAppLinkClick(href, onClick);
-  return <a {...props} href={href} onClick={click}>Follow</a>;
+  const link = useInAppLink(href, { onClick });
+  return <a {...props} href={href} {...link}>Follow</a>;
 }
 
 test("the owner calls the user handler before following an internal href", () => {
@@ -106,4 +107,63 @@ test("slotted anchor hrefs use the owner and metric native attributes remain nat
   expect(fireEvent.click(screen.getByRole("link", { name: /Download/ }))).toBe(true);
   expect(fireEvent.click(screen.getByRole("link", { name: /New tab/ }))).toBe(true);
   expect(navigate).toHaveBeenCalledOnce();
+});
+
+test("intent preloads an in-app link after the delay; a pass-over, native destinations and disabled links do not", () => {
+  vi.useFakeTimers();
+  try {
+    const preload = vi.fn();
+    render(<InAppLinkProvider navigate={vi.fn()} preload={{ preload, delay: 50 }}>
+      <TextLink href="/records/7?view=all">Hover</TextLink>
+      <NavLink href="/records/8">Focus</NavLink>
+      <MetricTile href="/records/9" label="Touch" value={9} />
+      <TextLink href="/admin/" rel="external">External</TextLink>
+      <TextLink href="/records/10" target="_blank">New tab</TextLink>
+      <TextLink href="/records/11" disabled>Disabled</TextLink>
+    </InAppLinkProvider>);
+    const hover = screen.getByRole("link", { name: "Hover" });
+    fireEvent.mouseEnter(hover);
+    vi.advanceTimersByTime(20);
+    fireEvent.mouseLeave(hover);
+    vi.advanceTimersByTime(100);
+    expect(preload).not.toHaveBeenCalled();
+    fireEvent.mouseEnter(hover);
+    vi.advanceTimersByTime(50);
+    expect(preload).toHaveBeenLastCalledWith("/records/7?view=all");
+    fireEvent.focus(screen.getByRole("link", { name: "Focus" }));
+    vi.advanceTimersByTime(50);
+    expect(preload).toHaveBeenLastCalledWith("/records/8");
+    fireEvent.touchStart(screen.getByRole("link", { name: /Touch/ }));
+    expect(preload).toHaveBeenLastCalledWith("/records/9");
+    for (const name of ["External", "New tab", "Disabled"]) {
+      const link = screen.getByText(name);
+      fireEvent.mouseEnter(link);
+      fireEvent.touchStart(link);
+    }
+    vi.advanceTimersByTime(100);
+    expect(preload).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the host router preloads a hovered link's code-split route without navigating", async () => {
+  const loadNote = vi.fn(async () => ({ NotePage: () => <p>Note</p> }));
+  const root = createRootRoute({ component: () => <InAppLinkProvider navigate={routerNavigator(router)} preload={routerPreloader(router)}>
+    <TextLink href="/notes/7?view=all">Note 7</TextLink>
+  </InAppLinkProvider> });
+  const router = createRouter({
+    routeTree: root.addChildren([
+      createRoute({ getParentRoute: () => root, path: "/home" }),
+      createRoute({ getParentRoute: () => root, path: "/notes/$id", component: lazyRouteComponent(loadNote, "NotePage") }),
+    ]),
+    history: createMemoryHistory({ initialEntries: ["/home"] }),
+    defaultPreload: "intent",
+  });
+  const preloadRoute = vi.spyOn(router, "preloadRoute");
+  render(<RouterProvider router={router} />);
+  fireEvent.mouseEnter(await screen.findByRole("link", { name: "Note 7" }));
+  await waitFor(() => expect(loadNote).toHaveBeenCalledOnce());
+  expect(preloadRoute).toHaveBeenCalledWith({ to: "/notes/7", search: { view: "all" }, hash: "" });
+  expect(router.state.location.pathname).toBe("/home");
 });

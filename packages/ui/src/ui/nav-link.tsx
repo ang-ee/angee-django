@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useInAppLinkClick } from "../lib/in-app-link";
+import { useInAppLink } from "../lib/in-app-link";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 
@@ -77,18 +77,19 @@ export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
       : undefined;
     const external = target === "_blank";
 
-    const followLink = useInAppLinkClick(href, onClick);
+    const link = useInAppLink(href, { ...props, onClick });
 
     function handleClick(event: React.MouseEvent<HTMLElement>): void {
       if (disabled) {
         event.preventDefault();
         return;
       }
-      followLink(event);
+      link.onClick(event);
     }
 
     const renderProps: Record<string, unknown> = {
       ...props,
+      ...link,
       "aria-current": props["aria-current"] ?? (active ? "page" : undefined),
       "aria-disabled": disabled ? true : props["aria-disabled"],
       children: asChild ? undefined : children,

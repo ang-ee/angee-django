@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useInAppLinkClick } from "../../../lib/in-app-link";
+import { useInAppLink } from "../../../lib/in-app-link";
 import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
@@ -122,7 +122,7 @@ function LinkedRecordRow<TRow extends Row>({
   const ownsControls =
     firstCell && columnHasInteractiveContent(firstCell.column.columnDef);
   const link = React.useRef<HTMLAnchorElement>(null);
-  const openLink = useInAppLinkClick(href, undefined, { onFollow: () => onRecordOpen?.(row.original) });
+  const openLink = useInAppLink(href, undefined, { onFollow: () => onRecordOpen?.(row.original) });
   const openRow = (event: React.MouseEvent<HTMLTableRowElement>) => {
     if (event.defaultPrevented || isInteractiveTarget(event.target)) return;
     // A table row has no native new-tab behavior; its actual anchor does.
@@ -183,13 +183,13 @@ function LinkedRecordRow<TRow extends Row>({
                   t,
                 ),
               })}
-              onClick={openLink}
+              {...openLink}
             >
               {renderCell(cell)}
             </a>
           ) : (
             <>
-              {index === 0 ? <a ref={link} href={href} hidden tabIndex={-1} onClick={openLink} /> : null}
+              {index === 0 ? <a ref={link} href={href} hidden tabIndex={-1} onClick={openLink.onClick} /> : null}
               {renderCell(cell)}
             </>
           )}
