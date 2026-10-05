@@ -1,5 +1,5 @@
 import { testDataResource, testResourceQuery } from "./testing";
-import { resourceOrderFieldForPath } from "./fields";
+import { resourceOrderFieldForPath, trashFlagField } from "./fields";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -139,4 +139,17 @@ test("server order fields map display paths only to declared wire keys", () => {
   expect(resourceOrderFieldForPath("thread.title.unknown", resource)).toBeNull();
   expect(resourceOrderFieldForPath("title", { ...resource, rowModel: "client" })).toBeNull();
   expect(resourceOrderFieldForPath("title", undefined)).toBe("title");
+});
+
+test("the trashable facet names a resource's trash flag field", () => {
+  const trashable = testDataResource("knowledge.Page", { fields: [
+    resourceField({ name: "title", kind: "scalar", scalar: "String" }),
+    resourceField({ name: "is_trashed", kind: "scalar", scalar: "Boolean", trashable: true }),
+  ] });
+  const archivable = testDataResource("tags.Tag", { fields: [
+    resourceField({ name: "is_archived", kind: "scalar", scalar: "Boolean" }),
+  ] });
+  expect(trashFlagField(trashable)).toBe("is_trashed");
+  expect(trashFlagField(archivable)).toBeNull();
+  expect(trashFlagField(null)).toBeNull();
 });
