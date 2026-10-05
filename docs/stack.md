@@ -257,6 +257,12 @@ for model resources with Django-owned computed predicates. Until that API exists
 input extensions into the dependency's dataclass filter visitor and scalar
 comparison types. That bridge relies on upstream internals; move it upstream
 and delete the local adapter when the dependency owns computed model filters.
+An addon composing onto another addon's model contributes such a filter through
+the same bridge by declaring `hasura_filter_expressions` (name → provider taking
+the target queryset) on its extension base, so the owner's resource never names
+it; intake's `requester_name` and `requested_by_viewer` on `projects.Task` are
+the example. A provider owns its access rule: filter only on what every reader
+of the row already sees, or on the actor alone.
 
 ## Rendered Binding
 

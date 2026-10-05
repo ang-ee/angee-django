@@ -9,7 +9,6 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
-from django.db.models.functions import Coalesce, NullIf
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -24,7 +23,7 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
-from angee.intake.models import NeedAccessAction
+from angee.intake.models import NeedAccessAction, task_requester_name, task_requester_rows
 from angee.messaging.schema import ChannelType, MessageType
 from angee.parties.schema import PartyType
 from angee.projects.schema import ProjectType, TaskType
@@ -116,12 +115,6 @@ class TaskRequester:
     email: str | None
 
 
-def _task_requester_rows() -> Any:
-    """Use the same first request as the intake record's attribution."""
-
-    return Need._base_manager.filter(task_id=models.OuterRef("pk")).order_by("created_at", "pk")
-
-
 def _task_requester(root: Any) -> TaskRequester | None:
     name = cast(str | None, root._intake_requester_name)
     if not name:
@@ -140,16 +133,10 @@ class TaskIntakeFields:
     requester: TaskRequester | None = strawberry_django.field(
         resolver=_task_requester,
         annotate={
-            "_intake_requester_name": lambda info: models.Subquery(
-                _task_requester_rows().annotate(name=Coalesce(
-                    NullIf(models.F("party__display_name"), models.Value("", output_field=models.TextField())),
-                    NullIf(models.F("claimed_name"), models.Value("", output_field=models.TextField())),
-                    output_field=models.TextField(),
-                )).values("name")[:1],
-                output_field=models.TextField(),
-            ),
+            # The same first request the task's requester filters read (intake.models).
+            "_intake_requester_name": lambda info: task_requester_name(),
             "_intake_requester_email": lambda info: models.Subquery(
-                _task_requester_rows().values("claimed_email")[:1],
+                task_requester_rows().values("claimed_email")[:1],
                 output_field=models.TextField(),
             ),
             "_angee_permission_actor": lambda info: permission_annotations(Task, ())["_angee_permission_actor"],
