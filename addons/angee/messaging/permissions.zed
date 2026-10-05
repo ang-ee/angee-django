@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 14
+// @rebac_schema_revision: 15
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -34,15 +34,23 @@ definition messaging/thread {
     permission write__owner = transfer
 }
 
+// A trashed message is withheld from every reader but its channel's managers
+// and admins. Record chatter moderators reach trashed comments through the
+// record-gated removed list instead, so its parts, files and reactions follow.
 definition messaging/message {
     relation thread: messaging/thread // rebac:field=thread
     relation channel: messaging/channel // rebac:field=channel
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation trashed: messaging/message // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     relation admin: angee/role // rebac:const=admin
 
+    // The trashed sentinel needs no target row because this permission is
+    // authenticated. Arrow-only through `trashed`; never check it directly.
+    permission conceal = authenticated
+    permission withheld = trashed->conceal
     permission create = authenticated
-    permission read   = thread->read + channel->read + editor + reader + admin->member
+    permission read   = ((thread->read + channel->read + editor + reader) - withheld) + channel->write + admin->member
     permission write  = thread->write + channel->write + editor + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member
 }

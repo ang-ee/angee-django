@@ -16,12 +16,14 @@ from tests.queries import is_rebac_revision_read
 @pytest.mark.parametrize(
     ("resource_type", "permission", "expected_queries"),
     (
-        ("messaging/message_edge", "read", 8),
+        # Message read adds the trash manager arm's channel seed read.
+        ("messaging/message_edge", "read", 9),
         ("projects/task_relation", "read", 6),
         ("knowledge/record_binding", "read", 3),
         ("projects/task", "comment", 5),
         ("decisions/decision", "act", 5),
-        ("extraction/extraction", "read", 12),
+        # Its message arm adds the same trash manager seed read.
+        ("extraction/extraction", "read", 13),
         ("storage/file", "read", 7),
         ("storage/file_attachment", "read", 8),
         ("projects/link", "read", 6),
