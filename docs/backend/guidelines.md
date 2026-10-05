@@ -567,9 +567,18 @@ data through REBAC, never a queryset bypass.
   permission owns admission; ingress without an actor uses
   `create_person_as_system` with a named reason, once its channel owner has
   required channel `write` and account `create` to enable that ingress.
-  `User.issue_password` issues a credential once, only to
-  an active, non-staff person without a usable password. `create_user` stays the
-  trusted bootstrap and OIDC path.
+  `create_user` stays the trusted bootstrap and OIDC path.
+- **Managed accounts change through IAM's account verbs.** `User.set_active`,
+  `rename`, `issue_password` and `reset_password` lock the row, check their own
+  Zed permission, the expected revision and the shared
+  `User.account_action_blockers`, then write elevated; the `account_actions`
+  projection batches the same conditions. Every verb refuses a protected
+  account: staff, superusers, the actor's own and effective members of
+  `iam/protected:main#member`. A consumer marks an elevated role by unioning it
+  into that permission from its fragment, never by mirroring holders; see
+  [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
+  updates pass `write` and `write__<field>` gates on changed fields only;
+  protected accounts additionally need `administer`.
 - **Read derived facts from their owner.** Native live ORM backing exposes
   user kind/activity, roster roles and selected tools without tuple mirrors.
   Platform administration is an ordinary `angee/role:admin#member` grant to a
@@ -1660,6 +1669,9 @@ Their docstrings own the exact behavior.
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.
+  Where `revision` is taken (django-reversion's reverse query name on the user
+  model), the model renames the counter through `REVISION_FIELD` and its
+  GraphQL type still exposes it as `revision`.
 - **Creation keys:** `CreationKeyMixin` stores a scoped client creation key and
   content fingerprint. Replays go through `CreationKeyQuerySet.for_creation_key`;
   `angee.E023` requires the declared uniqueness constraint.

@@ -1,6 +1,6 @@
 // Additive REBAC extension — contributes to a definition owned by another addon.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 // `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
 // `reviewer` relation and unions it into the `read` arm without editing the
@@ -21,9 +21,25 @@ definition messaging/thread {
 
 // Account actions follow the bound team's live roster. Preview authority stays
 // with the target's seat paths; this constant deliberately contributes no arm.
+// `write` reaches only the name fields: IAM's field gates keep identity,
+// credential and authority columns with administrators.
 definition auth/user {
     relation manager: extcontrib/role // rebac:const=manager
 
     permission create = manager->effective_member
+    permission read = manager->effective_member
+    permission write = manager->effective_member
+    permission read__last_login = manager->effective_member
     permission issue_password = manager->effective_member
+    permission reset_password = manager->effective_member
+    permission set_active = manager->effective_member
+    permission rename = manager->effective_member
+}
+
+// The role is elevated: its holders' accounts are protected from account verbs,
+// including other managers'.
+definition iam/protected {
+    relation manager: extcontrib/role // rebac:const=manager
+
+    permission member = manager->effective_member
 }
