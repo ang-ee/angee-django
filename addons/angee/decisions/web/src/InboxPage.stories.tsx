@@ -41,7 +41,7 @@ function DecisionStory({ multiple = false, closed = false, inbox = false, confli
     let rejectAttempt = invalidAttempt;
     let current = decisionFixture({ permissions: readOnly ? [] : ["act"], context: { facts: [{ pointer: "/reference", label: "Reference", value: "R-7", authority: "source" }], references: [] } });
     if (multiple) current = { ...current, proposal: { ...v.parse(ProposalSchema, current.proposal), multiple: true } };
-    if (closed) current = { ...current, is_open: false, permissions: [], verdict: ["accept"], verdict_label: "Accept",
+    if (closed) current = { ...current, is_open: false, permissions: [], verdict: ["accept"], verdict_label: "Accept and archive",
       answered_by: { display_name: "Reviewer" }, answered_at: "2026-09-29T09:30:00Z" };
     if (emptyFacts) current = { ...current, answered_by: null, answered_at: null };
     if (pendingEmpty) current = { ...current, requester: null };
@@ -60,7 +60,7 @@ function DecisionStory({ multiple = false, closed = false, inbox = false, confli
         const chosen = v.parse(v.array(v.string()), variables.chosen);
         if (!chosen.length || chosen.some((key) => key !== "accept" && key !== "reject")) throw new Error("Unexpected choice.");
         current = { ...current, is_open: false, permissions: [], revision: current.revision + 1,
-          verdict: chosen, verdict_label: chosen.map((key) => key === "accept" ? "Accept" : "Keep what is on the record").join("; "),
+          verdict: chosen, verdict_label: chosen.map((key) => key === "accept" ? "Accept and archive" : "Keep what is on the record").join("; "),
           answered_by: { display_name: "Reviewer" }, answered_at: "2026-09-29T09:30:00Z" };
         return jsonResponse({ data: { decide: { ok: true, message: "Decision recorded.", id: current.id } } });
       }

@@ -11,8 +11,8 @@ test("the inbox card links concerned records and lists proposed field and record
   expect(await screen.findByRole("button", { name: /Review notes/ })).toBeTruthy();
   expect(screen.getByText("Display Name")).toBeTruthy();
   expect(screen.getByText("Proposed name")).toBeTruthy();
-  expect(screen.getByText("archive")).toBeTruthy();
-  expect(await screen.findByRole("radio", { name: /Accept/ })).toBeTruthy();
+  expect(screen.queryByText("archive")).toBeNull();
+  expect(await screen.findByRole("radio", { name: /Accept and archive/ })).toBeTruthy();
 });
 
 test("records an answer using the shared generated mutation and renders its retained values", async () => {
@@ -21,13 +21,13 @@ test("records an answer using the shared generated mutation and renders its reta
   fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull());
-  expect(screen.getByText("Chose: Accept")).toBeTruthy();
+  expect(screen.getByText("Chose: Accept and archive")).toBeTruthy();
   expect(screen.queryByRole("radio")).toBeNull();
 });
 
 test("a closed card shows its chosen answer without an editing path", async () => {
   render(Closed.render());
-  expect(await screen.findByText("Chose: Accept")).toBeTruthy();
+  expect(await screen.findByText("Chose: Accept and archive")).toBeTruthy();
   expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
   expect(screen.queryByRole("radio")).toBeNull();
   expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
@@ -36,7 +36,7 @@ test("a closed card shows its chosen answer without an editing path", async () =
 
 test("a reader sees alternatives with no submitting path", async () => {
   render(ReadOnly.render());
-  expect(await screen.findByText("Accept")).toBeTruthy();
+  expect(await screen.findByText("Accept and archive")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
 });
 
@@ -64,6 +64,6 @@ test("multiple alternatives use checkboxes and retain both chosen keys", async (
   expect(screen.getByRole("checkbox", { name: "Keep what is on the record" }).getAttribute("aria-checked")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull());
-  expect(screen.getByText("Chose: Accept; Keep what is on the record")).toBeTruthy();
+  expect(screen.getByText("Chose: Accept and archive; Keep what is on the record")).toBeTruthy();
   expect(screen.queryByRole("checkbox")).toBeNull();
 });

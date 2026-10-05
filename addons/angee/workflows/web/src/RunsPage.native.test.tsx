@@ -181,10 +181,15 @@ test("reprocess confirms then navigates to the returned replacement through the 
 });
 
 test("cancel reports the backend outcome through the shared action lifecycle", async () => {
-  render(Waiting.render());
-  const dialog = await action("Cancel run");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel run" }));
+  const requests: RunRequest[] = [];
+  render(<RunStory waiting onRequest={(request) => requests.push(request)} />);
+  const label = "Stop and do it manually";
+  const dialog = await action(label);
+  expect(within(dialog).getByText("Request cancellation of this run.")).toBeTruthy();
+  expect(requests.some(({ query }) => query.includes("cancel_workflow_run("))).toBe(false);
+  fireEvent.click(within(dialog).getByRole("button", { name: label }));
   expect(await screen.findByText("Open work canceled; the retained run is unchanged.")).toBeTruthy();
+  expect(requests.filter(({ query }) => query.includes("cancel_workflow_run(")).map(({ variables }) => variables.id)).toEqual(["wfr_review"]);
 });
 
 test("step rows are paged in execution order without per-row detail queries", async () => {

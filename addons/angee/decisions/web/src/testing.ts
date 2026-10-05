@@ -33,7 +33,7 @@ export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
     context: { facts: [], references: [] }, verdict: null, verdict_values: null, verdict_label: "", answered_at: null,
     records: [{ id: "dcr_7", record_model: "notes.Note", record_id: "nte_7" }],
     proposal: { multiple: false, alternatives: [
-      { key: "accept", label: "Accept", outcome: "accepted", actions: {
+      { key: "accept", label: "Accept and archive", outcome: "accepted", actions: {
         nte_7: { fields: { display_name: { set: "Proposed name" } }, record: { call: "archive" } },
       } },
       { key: "reject", label: "Keep what is on the record", outcome: "rejected" },
