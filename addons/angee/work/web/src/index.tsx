@@ -161,7 +161,8 @@ const work = defineBaseAddon({
     [`${TASK_MODEL}#sections`]: {
       "work.task-fields": { sequence: 40, content: taskWorkFormSection },
     },
-    [`${TASK_MODEL}#actions`]: {
+    // Every triage verb is a menu verb: it joins the form's one Actions menu.
+    [`${TASK_MODEL}#actions-menu`]: {
       "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
     },
   },
