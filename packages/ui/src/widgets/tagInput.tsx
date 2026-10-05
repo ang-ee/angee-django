@@ -6,7 +6,7 @@ import { textRoleVariants } from "../ui/text";
 import { inputVariants } from "../ui/input";
 import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
-import type { WidgetDefinition, WidgetRenderProps } from "./types";
+import type { WidgetControlProps, WidgetDefinition, WidgetRenderProps } from "./types";
 
 const tagInputVariants = tv({
   extend: inputVariants,
@@ -28,7 +28,7 @@ function TagInputEdit({
   controlRef,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
   const tags = normaliseTags(value);
-  const { presentation, ...controlProps } = field?.controlProps ?? {};
+  const { presentation, ...controlProps } = field?.controlProps ?? ({} as Partial<WidgetControlProps>);
   const [draft, setDraft] = useState("");
 
   function commit(input = draft): void {

@@ -15,6 +15,7 @@ import {
   optionTextLabel,
   type WidgetDefinition,
   type WidgetOption,
+  type WidgetControlProps,
   type WidgetRenderProps,
 } from "./types";
 
@@ -35,7 +36,7 @@ function ComboboxEdit({
   );
   const values = useMemo(() => options.map((option) => option.value), [options]);
   const selected = canonicalOptionValue(options, value) ?? null;
-  const { presentation, ...controlProps } = field?.controlProps ?? {};
+  const { presentation, ...controlProps } = field?.controlProps ?? ({} as Partial<WidgetControlProps>);
   const cellProps = widgetControlPresentationProps(presentation);
   const styles = selectVariants(cellProps);
 

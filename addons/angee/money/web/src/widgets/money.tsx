@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import {
-  TextInput,
+  Input,
   rowValueAtPath,
   widgetLabel,
   type WidgetDefinition,
@@ -104,7 +104,7 @@ function MoneyEdit({
     ? `${integer}${currencyDigits ? `.${fraction.slice(0, currencyDigits)}` : ""}`
     : value == null ? "" : String(value);
   return (
-    <TextInput
+    <Input
       {...field?.controlProps}
       ref={controlRef}
       value={displayValue}
