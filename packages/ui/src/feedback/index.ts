@@ -3,6 +3,7 @@ export {
   useConfirm,
   usePrompt,
   type ConfirmOptions,
+  type PromptCopy,
   type PromptField,
   type PromptOptions,
 } from "./ModalsHost";

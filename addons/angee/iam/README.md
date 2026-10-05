@@ -21,9 +21,45 @@ registers one through a `<model>#access-visibility` child and
 `useAccessVisibility`; proposals uses it for the round's opening policy and its
 confirmed opening verb.
 
-Saved User records inherit IAM's issue-password action. `useIssuePasswordAction`
-is exported for other IAM-owned presentations. Eligibility comes from
-`can_issue_password`; the mutation is transient and the returned secret lives
-only in a read-only, copyable `usePrompt` reveal. No credential is added to a
-record or query cache. The existing manually entered reset action and its policy
-remain unchanged.
+## Managed people
+
+Saved User records inherit IAM's account verbs as `iam.User#actions-menu`
+children: deactivate/reactivate (`set_user_active`), rename (`rename_user`,
+name fields only), give access (`issue_user_password`) and reset access
+(`reset_user_password`). Each takes a confirmation and the revision the client
+read (issue excepted), checks its own Zed permission on `auth/user`
+(`set_active`, `rename`, `issue_password`, `reset_password`; admin by default)
+and refuses protected accounts: the actor's own, staff, superusers and effective
+members of `iam/protected:main#member`. Issue and reset return the username with
+a one-time secret, shown only in a read-only `usePrompt` reveal with a copy
+control; nothing reaches a record or query cache. Controls read the row's
+`account_actions` projection, which batches the verbs' own conditions.
+
+The generic update runs through `write` plus `write__<field>` gates: identity,
+credential and authority columns, a person's UI preferences and the account's
+audit dates (`date_joined`, `last_login`) stay with administrators, and a
+protected account also needs `administer`. People save their own preferences
+through the self-service mutation, and IAM stamps `last_login` on sign-in in
+place of Django's receiver. `last_login` reads through `read__last_login`.
+The users list renders `iam.users#columns` (username, email, staff, active,
+last sign-in) and ships the `iam.users.active` and `iam.users.deactivated`
+presets. A consumer grants its manager role these powers and marks the role as
+elevated from its own fragment, as
+[`tests/extcontrib`](../../../tests/extcontrib/permissions.extends.zed) does:
+
+```zed
+definition auth/user {
+    relation manager: consumer/role // rebac:const=manager
+    permission read = manager->effective_member
+    permission write = manager->effective_member
+    permission set_active = manager->effective_member
+    permission rename = manager->effective_member
+    permission issue_password = manager->effective_member
+    permission reset_password = manager->effective_member
+    permission read__last_login = manager->effective_member
+}
+definition iam/protected {
+    relation manager: consumer/role // rebac:const=manager
+    permission member = manager->effective_member
+}
+```

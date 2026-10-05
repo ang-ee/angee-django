@@ -45,6 +45,18 @@ class RevisionChild(RevisionRow):
         app_label = "scopedemo"
 
 
+class RenamedRevisionRow(OptimisticLockMixin):
+    """A row whose ``revision`` name is taken counts its saves under another field."""
+
+    revision = None
+    save_count = models.PositiveIntegerField(default=1, editable=False)
+    REVISION_FIELD = "save_count"
+    title = models.CharField(max_length=40, default="original")
+
+    class Meta:
+        app_label = "scopedemo"
+
+
 class OwnershipContainer(ItemOwnershipMixin):
     class Meta:
         app_label = "scopedemo"

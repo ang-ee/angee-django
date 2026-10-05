@@ -17,6 +17,7 @@ from copy import copy
 from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
@@ -33,7 +34,6 @@ from rebac import (
 )
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
-from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
@@ -41,10 +41,11 @@ from rebac.roles import ROLE_RELATION
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
+from angee.base.mixins import OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
-from angee.iam.roles import platform_admin_role
+from angee.iam.roles import protected_account_holders
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -56,6 +57,12 @@ VIEWABLE_PEOPLE_MAX_LIMIT = 25
 """Maximum preview results after SQL admission."""
 
 IAMKind = role_anchor("iam/kind", name="IAMKind")
+IAMProtected = role_anchor("iam/protected", name="IAMProtected")
+
+PROTECTED_ACCOUNT_MESSAGE = (
+    "This account is protected: it is your own, staff, a superuser, or holds an elevated role."
+)
+"""Refusal shared by every account verb and by generic updates of protected accounts."""
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +71,13 @@ def bounded_limit(limit: int, *, maximum: int = VISIBLE_PEOPLE_MAX_LIMIT) -> int
     """Clamp a people-picker limit to IAM's supported range."""
 
     return max(1, min(int(limit), maximum))
+
+
+def _require_confirmed(confirmed: bool, message: str) -> None:
+    """Refuse an account verb its caller did not explicitly confirm."""
+
+    if confirmed is not True:
+        raise ValidationError({"confirmed": message})
 
 
 class Group(AngeeDataModel):
@@ -140,6 +154,15 @@ class UserKind(models.TextChoices):
     SERVICE = "service", "Service"
 
 
+class UserAccountAction(models.TextChoices):
+    """Account verbs run on another person's account, each named by its Zed permission."""
+
+    SET_ACTIVE = "set_active", "Set active"
+    RENAME = "rename", "Rename"
+    RESET_PASSWORD = "reset_password", "Reset password"
+    ISSUE_PASSWORD = "issue_password", "Issue password"
+
+
 class AccountExists(DomainError):
     """A person email is already claimed; never carries an account's details."""
 
@@ -199,30 +222,41 @@ class UserQuerySet(AngeeQuerySet[Any]):
 
         return self.active_people().search_users(search).ordered_users()
 
-    def preview_candidates(self) -> Self:
-        """Exclude non-human, inactive, staff and platform-admin targets in SQL.
+    def protection_condition(self, actor: Any = None) -> Q:
+        """Match accounts whose authority others must not act on or assume.
 
-        IAM's platform role admits users and IAM group member sets. Membership
-        exclusions use those declared tuple shapes, including group-held admin.
-        Caveated grants are excluded conservatively: a preview must never gain
-        authority when its context changes.
+        Staff, superusers and effective members of IAM's ``iam/protected`` Zed
+        set — platform admins plus every elevated role a consumer unions into
+        its ``member`` permission — are protected from every actor; an actor's
+        own account is protected from that actor. Account verbs, generic
+        updates by non-administrators and view-as share this one rule.
         """
 
-        people = self.active_people().filter(is_staff=False, is_superuser=False)
-        role = platform_admin_role()
-        if role is None:
-            return people
-        memberships = active_relationship_model().objects.filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()), relation=ROLE_RELATION,
-        )
-        admins = memberships.filter(resource_type=role.resource_type, resource_id=role.resource_id)
-        groups = admins.filter(subject_type="auth/group", optional_subject_relation="member").values("subject_id")
-        grants = memberships.filter(subject_type=model_resource_type(self.model), optional_subject_relation="").filter(
-            Q(resource_type=role.resource_type, resource_id=role.resource_id)
-            | Q(resource_type="auth/group", resource_id__in=groups)
-        )
-        people = people.alias(_iam_preview_subject=Cast("pk", output_field=TextField()))
-        return people.filter(~Exists(grants.filter(subject_id=OuterRef("_iam_preview_subject"))))
+        condition = Q(is_staff=True) | Q(is_superuser=True)
+        holders = protected_account_holders()
+        if holders is None:
+            condition |= Q(pk__isnull=False)
+        elif holders:
+            condition |= Q(pk__in=sorted(holders))
+        subject = to_subject_ref(actor) if actor is not None else None
+        if (
+            subject is not None
+            and subject.subject_type == model_resource_type(self.model)
+            and not subject.optional_relation
+            and subject.subject_id not in {"", "*"}
+        ):
+            condition |= Q(pk=subject.subject_id)
+        return condition
+
+    def unprotected(self, actor: Any = None) -> Self:
+        """Exclude the accounts :meth:`protection_condition` protects from ``actor``."""
+
+        return cast(Self, self.exclude(self.protection_condition(actor)))
+
+    def preview_candidates(self, actor: Any) -> Self:
+        """Return the active, unprotected people ``actor`` may assume in a preview."""
+
+        return self.active_people().unprotected(actor)
 
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
         """Return users without direct role memberships in the installed schema."""
@@ -484,7 +518,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         """The single admission scope used by the picker and header lookup."""
 
         subject = to_subject_ref(actor)
-        return self.with_actor(subject).with_action("view_as").preview_candidates().exclude(pk=subject.subject_id)
+        return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
 
     def admit_view_as(self, actor: Any, public_id: str) -> Any | None:
         """Admit a preview identity for both the picker and GraphQL header.
@@ -518,12 +552,14 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             return None
 
 
-class User(AbstractBaseUser, RebacPermissionsMixin, AngeeDataModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
     the same row owns authorization, audit stamps, and revision authorship
-    without widening password/OIDC login surfaces.
+    without widening password/OIDC login surfaces. Every instance save counts
+    a revision, so account verbs and administrative updates refuse a stale
+    expected revision.
     """
 
     runtime = True
@@ -545,6 +581,11 @@ class User(AbstractBaseUser, RebacPermissionsMixin, AngeeDataModel):
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(default=timezone.now)
     preferences = models.JSONField(default=dict, blank=True)
+    # django-reversion's ``Revision.user`` reverse query name is ``revision``, so
+    # the inherited save counter lives under another name; GraphQL still calls it ``revision``.
+    revision = None
+    account_revision = models.PositiveIntegerField(default=1, editable=False)
+    REVISION_FIELD = "account_revision"
 
     objects = UserManager()
 
@@ -600,40 +641,200 @@ class User(AbstractBaseUser, RebacPermissionsMixin, AngeeDataModel):
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
 
-    def password_issue_error(self) -> str | None:
-        """Return the password-issuance eligibility failure, or None."""
+    @staticmethod
+    def account_action_blockers(action: str, protection: Q) -> tuple[tuple[Q, str], ...]:
+        """Return the target conditions refusing ``action``, each with its refusal.
 
-        if not self.is_person or not self.is_active or self.is_staff or self.is_superuser:
-            return "Only active, non-staff person accounts can receive a password."
-        if self.has_usable_password():
-            return "This account already has a usable password."
+        ``protection`` is the acting subject's ``protection_condition``. The
+        locked verbs and the batched ``account_actions`` projection share these
+        conditions, so a control is offered exactly when its verb admits it.
+        """
+
+        usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
+        blockers = [
+            (~Q(kind=UserKind.PERSON), "Only person accounts can be managed."),
+            (protection, PROTECTED_ACCOUNT_MESSAGE),
+        ]
+        if action in {UserAccountAction.RESET_PASSWORD, UserAccountAction.ISSUE_PASSWORD}:
+            blockers.append((Q(is_active=False), "Only active accounts can receive a password."))
+        if action == UserAccountAction.RESET_PASSWORD:
+            blockers.append((~usable_password, "This account has no password to reset; give it access instead."))
+        if action == UserAccountAction.ISSUE_PASSWORD:
+            blockers.append((usable_password, "This account already has a usable password."))
+        return tuple(blockers)
+
+    @classmethod
+    def account_action_annotations(cls, actor: Any) -> dict[str, models.Expression]:
+        """Batch every account verb's permission and eligibility for one actor's rows.
+
+        Keys are ``UserAccountAction`` values. Without an actor nothing is allowed.
+        """
+
+        if actor is None:
+            return {action: models.Value(False) for action in UserAccountAction.values}
+        protection = cls.objects.protection_condition(actor)
+        annotations: dict[str, models.Expression] = {}
+        for action in UserAccountAction.values:
+            rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
+            for condition, _error in cls.account_action_blockers(action, protection):
+                rows = rows.exclude(condition)
+            annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
+        return annotations
+
+    def account_actions_for(self, actor: Any) -> list[str]:
+        """Return the account verbs ``actor`` may run on this row, in declaration order."""
+
+        if actor is None:
+            return []
+        annotations = type(self).account_action_annotations(actor)
+        allowed = (
+            type(self).objects.system_context(reason="iam.account.actions").filter(pk=self.pk)
+            .annotate(**{f"_iam_{name}": expression for name, expression in annotations.items()})
+            .values(*(f"_iam_{name}" for name in annotations)).first()
+        ) or {}
+        return [action for action in UserAccountAction.values if allowed.get(f"_iam_{action}")]
+
+    def protected_against(self, actor: Any) -> bool:
+        """Whether account verbs refuse this account for ``actor``; see ``protection_condition``."""
+
+        users = type(self).objects
+        return bool(
+            users.system_context(reason="iam.account.protection").filter(pk=self.pk)
+            .filter(users.protection_condition(actor)).exists()
+        )
+
+    def account_action_error(self, action: str, actor: Any) -> str | None:
+        """Return the first refusal of ``action`` on this stored row for ``actor``, or None."""
+
+        users = type(self).objects
+        rows = users.system_context(reason="iam.account.eligibility").filter(pk=self.pk)
+        for condition, error in type(self).account_action_blockers(action, users.protection_condition(actor)):
+            if rows.filter(condition).exists():
+                return error
         return None
 
-    def issue_password(self) -> str:
-        """Set and return one random credential for a passwordless active person.
+    def _lock_for_account_action(self, action: str, *, expected_revision: int | None) -> Self:
+        """Lock this account and admit ``action`` for the instance's actor under the lock.
 
-        Actor presence is required before locking; permission is checked on the
-        locked row. System callers bypass both checks by the REBAC library's
-        contract. Only the hash is stored; later calls refuse, including calls
-        through a stale instance.
+        Actor presence is required before locking. System callers bypass the
+        permission by the REBAC library's contract but still meet eligibility;
+        protection then excludes staff, superusers and elevated accounts only.
         """
 
         actor, bypass = self.effective_actor(strict=True)
-        with transaction.atomic():
-            user = type(self).objects.system_context(reason="iam.password.target").lock_if_supported().get(pk=self.pk)
-            if actor is not None:
-                user.with_actor(actor)
-            elif bypass:
-                user.sudo(reason="iam.password.issue")
-            if not user.has_access("issue_password"):
-                raise PermissionDenied("Password issue permission is required.")
-            if error := user.password_issue_error():
-                raise ValidationError(error)
-            password = secrets.token_urlsafe(24)
-            user.set_password(password)
-            user.sudo(reason="iam.password.issue").save(update_fields=["password"])
-            self.password = user.password
+        user = type(self).objects.system_context(reason=f"iam.account.{action}").lock_if_supported().get(pk=self.pk)
+        if actor is not None:
+            user.with_actor(actor)
+        elif bypass:
+            user.sudo(reason=f"iam.account.{action}")
+        if not user.has_access(action):
+            raise PermissionDenied(f"The {action} permission on this account is required.")
+        if expected_revision is not None:
+            user.require_revision(expected_revision)
+        if error := user.account_action_error(action, actor):
+            raise ValidationError(error)
+        return cast(Self, user)
+
+    def _store_new_password(self, user: Any, *, reason: str, expected_revision: int | None) -> str:
+        """Hash a fresh random secret onto the locked ``user`` and return it once."""
+
+        password = secrets.token_urlsafe(24)
+        user.set_password(password)
+        user.sudo(reason=reason).save(update_fields=["password", "updated_at"], expected_revision=expected_revision)
+        self.password = user.password
+        self.account_revision = user.account_revision
         return password
+
+    def issue_password(self) -> str:
+        """Set and return one random credential for a passwordless, unprotected active person.
+
+        Permission and eligibility are checked on the locked row. Only the hash
+        is stored; later calls refuse, including calls through a stale instance.
+        """
+
+        with transaction.atomic():
+            user = self._lock_for_account_action(str(UserAccountAction.ISSUE_PASSWORD), expected_revision=None)
+            return self._store_new_password(user, reason="iam.password.issue", expected_revision=None)
+
+    def reset_password(self, *, confirmed: bool, expected_revision: int) -> str:
+        """Replace an active, unprotected person's usable password and return the new secret once.
+
+        The previous password stops working and existing sessions lose their
+        authentication hash. Only the new hash is stored.
+        """
+
+        _require_confirmed(confirmed, "Confirm resetting this account's password.")
+        with transaction.atomic():
+            action = str(UserAccountAction.RESET_PASSWORD)
+            user = self._lock_for_account_action(action, expected_revision=expected_revision)
+            return self._store_new_password(user, reason="iam.password.reset", expected_revision=expected_revision)
+
+    def set_active(self, active: bool, *, confirmed: bool, expected_revision: int) -> None:
+        """Deactivate or reactivate an unprotected person account.
+
+        A deactivated account can no longer sign in, its sessions stop loading
+        and it leaves the active-people pickers. Setting the current state is a
+        no-op that still checks the expected revision.
+        """
+
+        _require_confirmed(confirmed, "Confirm changing this account's access.")
+        with transaction.atomic():
+            user = self._lock_for_account_action(str(UserAccountAction.SET_ACTIVE), expected_revision=expected_revision)
+            if user.is_active != active:
+                user.is_active = active
+                user.sudo(reason="iam.account.set_active").save(
+                    update_fields=["is_active", "updated_at"], expected_revision=expected_revision,
+                )
+            self.is_active, self.account_revision = user.is_active, user.account_revision
+
+    def rename(self, *, first_name: str, last_name: str, confirmed: bool, expected_revision: int) -> None:
+        """Change only an unprotected person's name fields; username and email never change here."""
+
+        _require_confirmed(confirmed, "Confirm renaming this account.")
+        first_name, last_name = " ".join(first_name.split()), " ".join(last_name.split())
+        if not (first_name or last_name):
+            raise ValidationError({"first_name": "Enter a first or last name."})
+        with transaction.atomic():
+            user = self._lock_for_account_action(str(UserAccountAction.RENAME), expected_revision=expected_revision)
+            user.first_name, user.last_name = first_name, last_name
+            user.clean_fields(exclude=[
+                field.name for field in user._meta.fields if field.name not in {"first_name", "last_name"}
+            ])
+            user.sudo(reason="iam.account.rename").save(
+                update_fields=["first_name", "last_name", "updated_at"], expected_revision=expected_revision,
+            )
+            self.first_name, self.last_name = user.first_name, user.last_name
+            self.account_revision = user.account_revision
+
+    def update_account(
+        self,
+        changes: Mapping[str, Any],
+        *,
+        password: str | None = None,
+        expected_revision: int | None = None,
+    ) -> None:
+        """Apply an administrative patch through the instance actor's ``write`` and field gates.
+
+        Only changed fields are saved, so each ``write__<field>`` gate guards a
+        real change. A protected account accepts the patch only from an actor
+        holding ``administer`` on it: a consumer's ``write`` grant never edits
+        an elevated account, the actor's own included.
+        """
+
+        actor, _bypass = self.effective_actor(strict=True)
+        if expected_revision is not None:
+            self.require_revision(expected_revision)
+        if actor is not None and self.protected_against(actor) and not self.has_access("administer"):
+            raise ValidationError(PROTECTED_ACCOUNT_MESSAGE)
+        update_fields = {field for field, value in changes.items() if getattr(self, field) != value}
+        for field in update_fields:
+            setattr(self, field, changes[field])
+        if password:
+            self.set_password(password)
+            update_fields.add("password")
+        self.full_clean()
+        if update_fields:
+            self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)
 
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""

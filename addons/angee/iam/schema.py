@@ -8,6 +8,7 @@ credentials, connect/disconnect) lives in ``integrate``; OIDC *login* lives in
 
 from __future__ import annotations
 
+from functools import partial
 from itertools import islice
 from typing import Any, cast
 
@@ -20,7 +21,7 @@ from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from django.db.models import QuerySet
-from rebac import RebacQuerySet, resolve_subjects, system_context, to_object_ref, to_subject_ref
+from rebac import RebacQuerySet, current_actor, resolve_subjects, system_context, to_object_ref, to_subject_ref
 from rebac import backend as rebac_backend
 from rebac.models import active_relationship_model
 from rebac.resources import model_for_resource_type
@@ -33,8 +34,9 @@ from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id, public_subject_ref
 from angee.base.models import AngeeModel
+from angee.base.scoping import lock_if_supported
 from angee.graphql.access import ActorSelfChangeReadGate
-from angee.graphql.actions import authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
@@ -44,7 +46,7 @@ from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
 from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_label
-from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT
+from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin, require_platform_admin, session_user
 from angee.iam.permissions import request_from_info as _request
@@ -91,12 +93,25 @@ from angee.iam.roles import (
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
+strawberry.enum(cast(Any, UserAccountAction))
 
 
 def _view_as(info: strawberry.Info) -> ViewAs | None:
     """Read the optional view-as carrier owned by the GraphQL transport."""
 
     return cast(ViewAs | None, getattr(_request(info), "view_as", None))
+
+
+def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
+    """Return one verb's batched eligibility, computing every verb's once per request actor."""
+
+    actor = current_actor()
+    request = _request(info)
+    memo = getattr(request, "_iam_account_action_annotations", None)
+    if memo is None or memo[0] != actor:
+        memo = (actor, User.account_action_annotations(actor))
+        setattr(request, "_iam_account_action_annotations", memo)
+    return memo[1][action]
 
 
 def _preference_object(user: Any) -> JSON:
@@ -117,13 +132,22 @@ class UserType(AngeeNode):
     kind: auto
     is_staff: auto
     is_active: auto
+    # Behind the read__last_login gate; null when never signed in or withheld.
+    last_login: auto
+    revision: int = strawberry_django.field(field_name="account_revision")
 
-    @strawberry_django.field(only=["kind", "is_active", "is_staff", "is_superuser", "password"])
-    def can_issue_password(self) -> bool:
-        """Whether the viewer may issue this account's first password."""
+    @strawberry_django.field(annotate={
+        f"_iam_{action}": partial(_account_action_allowed, action) for action in UserAccountAction.values
+    })
+    def account_actions(self) -> list[UserAccountAction]:
+        """Account verbs the viewer may run on this row, from the verbs' own owner."""
 
         user = cast(Any, self)
-        return bool(user.has_access("issue_password") and user.password_issue_error() is None)
+        if all(hasattr(user, f"_iam_{action}") for action in UserAccountAction.values):
+            allowed = [action for action in UserAccountAction.values if getattr(user, f"_iam_{action}")]
+        else:
+            allowed = user.account_actions_for(current_actor())
+        return [UserAccountAction(action) for action in allowed]
 
     @strawberry_django.field
     def assignment_subject(self) -> str:
@@ -503,8 +527,9 @@ class LoginPayload:
 
 @strawberry.type
 class IssuedUserPassword:
-    """A newly issued credential returned only by the issue mutation."""
+    """Sign-in details returned once by the issue and reset mutations; never stored in clear."""
 
+    username: str
     password: str
 
 
@@ -593,32 +618,19 @@ class IAMUserWriteBackend:
         return User.objects.create_person(**data)
 
     def update(
-        self, info: strawberry.Info, pk: str, data: dict[str, Any],
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None,
     ) -> Any:
-        """Patch one user, hashing ``password`` when supplied."""
+        """Patch one user through its ``write`` and field gates, hashing ``password`` when supplied."""
 
-        require_platform_admin(info)
         payload = dict(data)
         password = payload.pop("password", None)
-
         with transaction.atomic():
-            user = _user_for_resource_id(pk, write_queryset(User))
-            for field, value in payload.items():
-                setattr(user, field, value)
-            update_fields = set(payload)
-            if password:
-                user.set_password(password)
-                update_fields.add("password")
-            user.full_clean()
-            if not update_fields:
-                return user
-            user.save(update_fields=update_fields)
+            user = _user_for_resource_id(pk, lock_if_supported(write_queryset(User)))
+            user.update_account(payload, password=password, expected_revision=expected_revision)
             return user
 
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
-        """Delete one user by public id and return the deleted row."""
-
-        require_platform_admin(info)
+        """Delete one user by public id through its ``delete`` permission and return the deleted row."""
 
         preview = delete_by_public_id(User, str(pk), confirm=True, queryset=write_queryset(User))
         preview.require_no_blockers()
@@ -986,15 +998,55 @@ class IAMMutation:
 
 
 @strawberry.type
-class IAMUserPasswordMutation:
-    """Account access actions gated by the target user's zed permissions."""
+class IAMUserAccountMutation:
+    """Account verbs gated by the target user's zed permissions and protection."""
 
     @strawberry.mutation
     def issue_user_password(self, info: strawberry.Info, id: PublicID) -> IssuedUserPassword:
-        """Return a credential once after the account owner's checks succeed."""
+        """Return a first credential and the sign-in username once, after the account owner's checks."""
 
-        user = authorized_permission_target(info, User, id, "issue_password")
-        return IssuedUserPassword(password=user.issue_password())
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.ISSUE_PASSWORD))
+        return IssuedUserPassword(username=user.username, password=user.issue_password())
+
+    @strawberry.mutation
+    def reset_user_password(
+        self, info: strawberry.Info, id: PublicID, confirmed: bool, expected_revision: int,
+    ) -> IssuedUserPassword:
+        """Replace a usable password and return the new credential and sign-in username once."""
+
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.RESET_PASSWORD))
+        password = user.reset_password(confirmed=confirmed, expected_revision=expected_revision)
+        return IssuedUserPassword(username=user.username, password=password)
+
+    @strawberry.mutation
+    @action_guard("Changing account access failed.")
+    def set_user_active(
+        self, info: strawberry.Info, id: PublicID, active: bool, confirmed: bool, expected_revision: int,
+    ) -> ActionResult:
+        """Deactivate or reactivate one person account."""
+
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.SET_ACTIVE))
+        user.set_active(active, confirmed=confirmed, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Account reactivated." if active else "Account deactivated.")
+
+    @strawberry.mutation
+    @action_guard("Renaming the account failed.")
+    def rename_user(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        first_name: str,
+        last_name: str,
+        confirmed: bool,
+        expected_revision: int,
+    ) -> ActionResult:
+        """Change one person's name fields; username and email are unchanged."""
+
+        user = authorized_permission_target(info, User, id, str(UserAccountAction.RENAME))
+        user.rename(
+            first_name=first_name, last_name=last_name, confirmed=confirmed, expected_revision=expected_revision,
+        )
+        return ActionResult(ok=True, message="Account renamed.")
 
 
 @strawberry.type
@@ -1003,9 +1055,8 @@ class IAMUserDeletePreviewMutation:
 
     @strawberry.mutation(name="delete_user")
     def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Preview or confirm deletion of one user by public id."""
+        """Preview or confirm deletion of one user by public id through its ``delete`` permission."""
 
-        require_platform_admin(info)
         return delete_by_public_id(User, str(id), confirm=confirm, queryset=write_queryset(User))
 
 
@@ -1119,7 +1170,7 @@ schemas = {
             _USER_RESOURCE.mutation,
             _GROUP_RESOURCE.mutation,
             IAMUserDeletePreviewMutation,
-            IAMUserPasswordMutation,
+            IAMUserAccountMutation,
             IAMPermissionHubMutation,
             IAMGroupMembershipMutation,
         ],

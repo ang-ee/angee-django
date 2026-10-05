@@ -10,3 +10,11 @@ class IAMConfig(AppConfig):
 
     default = True
     name = "angee.iam"
+
+    def ready(self) -> None:
+        """Connect IAM's receivers once Django's auth app has connected its own."""
+
+        # Deferred to ready(): signal wiring after app population.
+        from angee.iam import signals
+
+        signals.connect()

@@ -25,7 +25,7 @@ from rebac import backend as rebac_backend
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
 from rebac.models import active_relationship_model
-from rebac.resources import model_for_resource_type
+from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION
 from rebac.schema import (
     Definition,
@@ -46,6 +46,8 @@ IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
 PERMISSION_HUB_LIST_CAP = 1000
 PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
 ROLE_SUFFIX = "/role"
+PROTECTED_ACCOUNTS = ObjectRef("iam/protected", "main")
+"""IAM's Zed set of elevated accounts; consumers union their elevated roles into its ``member``."""
 
 
 def platform_admin_role() -> ObjectRef | None:
@@ -53,6 +55,24 @@ def platform_admin_role() -> ObjectRef | None:
 
     role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
     return ObjectRef.parse(role) if role else None
+
+
+def protected_account_holders() -> frozenset[str] | None:
+    """Return the user ids reaching ``iam/protected:main#member``; ``None`` when every user does.
+
+    REBAC's subject lookup follows every declared path — direct and group-held
+    grants, role hierarchies and live roster relations — so an elevated role is
+    declared once in Zed and its holders are never mirrored or re-derived here.
+    """
+
+    holders: set[str] = set()
+    for subject in rebac_backend().lookup_subjects(
+        resource=PROTECTED_ACCOUNTS, action="member", subject_type=cast(str, model_resource_type(get_user_model())),
+    ):
+        if subject.subject_id == "*":
+            return None
+        holders.add(subject.subject_id)
+    return frozenset(holders)
 
 
 def subject_has_role(subject: SubjectRef | None, role: ObjectRef) -> bool:

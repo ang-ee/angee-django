@@ -1,79 +1,42 @@
 import * as React from "react";
-import { Action, Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
+import { ResourceList, Field, Form, Group, List, containerContents, useContainer } from "@angee/ui";
 
 import { useIamT } from "../i18n";
 import { usePrincipalAccessRecordTab } from "../PrincipalAccess";
+import { USER_LIST_PRESET_IDS, USER_MODEL } from "../users-list";
 
-const MODEL = "iam.User";
-
-const userList = (
-  <List resource={MODEL}>
-    <Column field="username" />
-    <Column field="email" />
-    <Column field="is_staff" />
-    <Column field="is_active" />
-  </List>
-);
-
-/** Users (full CRUD; password is write-only and hashed server-side). */
+/**
+ * The managed people list. Columns come from `iam.users#columns`; account verbs
+ * (deactivate, rename, give or reset access) are the `iam.User#actions-menu`
+ * children, each offered by the row's server-projected `account_actions`.
+ * Administrators also edit identity fields here; password is write-only.
+ */
 export function UsersPage(): React.ReactElement {
   const t = useIamT();
   const accessTab = usePrincipalAccessRecordTab();
-  const userForm = (
-    <Form resource={MODEL}>
-      <Field name="username" title />
-      <Group label={t("users.group.profile")} columns={2}>
-        <Field name="email" />
-        <Field name="first_name" />
-        <Field name="last_name" />
-      </Group>
-      <Group label={t("users.group.access")} columns={2}>
-        <Field name="is_staff" editOnly />
-        <Field name="is_active" editOnly />
-      </Group>
-      {/* Write-only: set on create, hashed server-side; password reset is separate. */}
-      <Field name="password" widget="text" kind="string" createOnly />
-      {/* Reset password collects a value and patches it through update (hashed server-side). */}
-      <Action
-        id="reset-password"
-        label={t("users.resetPassword")}
-        prompt={{
-          title: t("users.resetPassword.title"),
-          body: t("users.resetPassword.body"),
-          fields: [
-            {
-              name: "password",
-              label: t("users.resetPassword.fieldLabel"),
-              type: "password",
-            },
-          ],
-        }}
-      />
-      <Action
-        id="deactivate"
-        label={t("users.deactivate")}
-        danger
-        set={{ is_active: false }}
-        visibleWhen={(record) => record.is_active === true}
-      />
-      <Action
-        id="activate"
-        label={t("users.activate")}
-        set={{ is_active: true }}
-        visibleWhen={(record) => record.is_active === false}
-      />
-    </Form>
-  );
+  const columns = useContainer("iam.users#columns");
   return (
-    <ResourceList
-      resource={MODEL}
-      placement="inline"
-      routed
-      returning={["can_issue_password"]}
-      recordTabs={[accessTab]}
-    >
-      {userList}
-      {userForm}
+    <ResourceList resource={USER_MODEL} placement="inline" routed recordTabs={[accessTab]}>
+      <List resource={USER_MODEL} presetIds={USER_LIST_PRESET_IDS}>
+        {containerContents(columns)}
+      </List>
+      <Form resource={USER_MODEL}>
+        <Field name="username" title />
+        {/* The update sends the revision it read, so a stale edit is refused. */}
+        <Field name="revision" readOnly hidden />
+        <Group label={t("users.group.profile")} columns={2}>
+          <Field name="email" />
+          <Field name="first_name" />
+          <Field name="last_name" />
+        </Group>
+        <Group label={t("users.group.access")} columns={2}>
+          <Field name="is_staff" editOnly />
+          <Field name="is_active" editOnly />
+          <Field name="last_login" editOnly readOnly />
+        </Group>
+        {/* Write-only: set on create, hashed server-side; resets go through the reset-access verb. */}
+        <Field name="password" widget="text" kind="string" createOnly />
+      </Form>
     </ResourceList>
   );
 }

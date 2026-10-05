@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from angee.iam.models import Group as AbstractGroup
 from angee.iam.models import IAMKind as AbstractIAMKind
+from angee.iam.models import IAMProtected as AbstractIAMProtected
 from angee.iam.models import User as AbstractUser
 
 
@@ -15,6 +16,16 @@ class IAMKind(AbstractIAMKind):
         app_label = "iam"
         managed = False
         rebac_resource_type = "iam/kind"
+
+
+class IAMProtected(AbstractIAMProtected):
+    """Table-less anchor of the protected-account set in the bare harness."""
+
+    class Meta(AbstractIAMProtected.Meta):
+        abstract = False
+        app_label = "iam"
+        managed = False
+        rebac_resource_type = "iam/protected"
 
 
 class Group(AbstractGroup):
