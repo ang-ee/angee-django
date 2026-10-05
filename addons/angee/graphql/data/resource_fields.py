@@ -25,6 +25,7 @@ from angee.data.field_classification import (
 from angee.data.field_classification import (
     is_archive_field,
     is_resource_field_widget,
+    is_trash_field,
     money_currency_field,
     resource_field_kind,
     resource_field_widget,
@@ -204,6 +205,7 @@ def final_resource_fields(
                     or (model_field is not None and model_field_name in required_on_create)
                 ),
                 archivable=is_archive_field(model_field),
+                trashable=is_trash_field(model_field),
                 currency_field=money_currency_field(model_field, source_metadata),
                 relation_model_label=relation_model_label,
                 relation_object=kind == "relation" and is_object,
@@ -279,6 +281,7 @@ def final_input_only_resource_fields(
                 updatable=name in update,
                 required_on_create=name in required,
                 archivable=is_archive_field(model_field),
+                trashable=is_trash_field(model_field),
                 currency_field=money_currency_field(model_field, source_metadata),
                 relation_model_label=_relation_model_label(model_field),
                 relation_object=False,
