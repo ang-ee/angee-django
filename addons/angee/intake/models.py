@@ -669,11 +669,12 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
         if action not in NeedAccessAction.values:
             raise ValidationError({"action": "Choose approve or deny."})
-        if self.access_decision_id is None:
-            raise ValidationError({"action": "This need has no access question; create a new access request."})
         actor = instance_actor(self)
         if not self.with_actor(actor).has_access("write") or not self.target.with_actor(actor).has_access("share"):
             raise PermissionDenied("Deciding request access requires need write and target share.")
+        # The question FK is redacted for actors without share permission.
+        if self.access_decision_id is None:
+            raise ValidationError({"action": "This need has no access question; create a new access request."})
         # Both entrypoints lock the decision first, then its asking owner.
         with actor_context(actor), transaction.atomic():
             decision = apps.get_model("decisions", "Decision").objects.sudo(

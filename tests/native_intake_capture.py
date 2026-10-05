@@ -251,7 +251,9 @@ class IntakeAccessCase(TransactionTestCase):
             task.assignee = self.writer
             task.save()
             task.grant_record_access("reader", self.reader)
-            return self.Need.objects.create(task=task, party=party, claimed_email=email, claimed_name=name, body="Request")
+            return self.Need.objects.create(
+                task=task, party=party, claimed_email=email, claimed_name=name, body="Request",
+            )
 
     def as_user(self, need, user=None):
         return self.Need.objects.as_user(user or self.admin).get(pk=need.pk)
@@ -760,13 +762,19 @@ class NeedAccessTests(IntakeAccessCase):
         self.assertIsNone(stored.party_id)
 
     def test_field_redaction_does_not_erase_decisions_on_writer_save(self):
-        need = self.as_user(self.need(), self.owner)
+        need = self.need()
+        decision_id = need.access_decision_id
+        self.assertIsNotNone(decision_id)
+        self.assertEqual(self.Need._base_manager.get(pk=need.pk).access_decision_id, decision_id)
+        need = self.as_user(need, self.owner)
+        self.assertEqual(need.access_decision_id, decision_id)
         need.decide_access("intake.deny")
         reader = self.as_user(need, self.reader)
         self.assertIsNone(reader.claimed_email)
         writer = self.as_user(need, self.writer)
         self.assertEqual(writer.claimed_email, "new@example.com")
         for candidate in (reader, writer):
+            self.assertIsNone(candidate.access_decision_id)
             self.assertIsNone(candidate.access_verdict)
             self.assertIsNone(candidate.access_answered_by_id)
             self.assertIsNone(candidate.access_answered_at)
@@ -794,6 +802,7 @@ class NeedAccessTests(IntakeAccessCase):
         writer.body = "Writer update"
         writer.save()
         need = self.Need._base_manager.get(pk=need.pk)
+        self.assertEqual(need.access_decision_id, decision_id)
         self.assertEqual(need.access_verdict, ["intake.deny"])
         self.assertEqual(need.access_answered_by_id, self.owner.pk)
 
