@@ -171,6 +171,52 @@ def test_arm_without_base_permission_fails_fast(tmp_path: Path) -> None:
         merged_schemas([base, contrib])
 
 
+_OPEN_BASE = """
+// @rebac_package: base
+// @rebac_schema_revision: 1
+// @rebac_open_definitions: demo/capability
+definition demo/capability {
+    relation owner: auth/user
+}
+"""
+
+
+def test_open_definition_accepts_new_permissions_and_unions_later_arms(tmp_path: Path) -> None:
+    """A definition its owner opens takes new permissions; another contributor unions into them."""
+
+    base = _base_addon(tmp_path, _OPEN_BASE)
+    first = _contrib_addon(
+        tmp_path,
+        "definition demo/capability {\n    relation steward: auth/user\n    permission curate = steward\n}\n",
+        name="contrib_a",
+    )
+    second = _contrib_addon(
+        tmp_path,
+        "definition demo/capability {\n    relation keeper: auth/user\n    permission curate = keeper\n"
+        "    permission audit = owner\n}\n",
+        name="contrib_b",
+    )
+    definition = merged_schemas([base, second, first])["base"].get_definition("demo/capability")
+    assert [permission.name for permission in definition.permissions] == ["audit", "curate"]
+    curate = next(permission for permission in definition.permissions if permission.name == "curate")
+    assert _render_expr_names(curate) == {"steward", "keeper"}
+    assert not validate_schema(merged_schemas([base, first, second])["base"])
+
+
+def test_open_definitions_name_their_own_definitions_and_never_shadow_relations(tmp_path: Path) -> None:
+    """The header lists the file's own definitions; a declared permission cannot reuse a relation name."""
+
+    stray = _base_addon(tmp_path, _OPEN_BASE.replace("definitions: demo/capability", "definitions: demo/other"))
+    contrib = _contrib_addon(tmp_path, "definition demo/capability {\n    permission audit = owner\n}\n")
+    with pytest.raises(SchemaExtensionError, match="demo/other"):
+        merged_schemas([stray, contrib])
+
+    base = _base_addon(tmp_path, _OPEN_BASE)
+    shadow = _contrib_addon(tmp_path, "definition demo/capability {\n    permission owner = owner\n}\n")
+    with pytest.raises(SchemaExtensionError, match="owner"):
+        merged_schemas([base, shadow])
+
+
 def test_merge_is_deterministic(tmp_path: Path) -> None:
     """Two contributors merge in sorted composition order, byte-stable."""
 

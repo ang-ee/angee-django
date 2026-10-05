@@ -33,6 +33,11 @@ package name):
   only canonical Django field names, never attnames or many-to-many fields.
   A second package cannot extend a contributed gate; base-declared gates keep
   the ordinary union-arm behavior. Missing field ownership fails closed.
+- A base file may list definitions in its ``@rebac_open_definitions`` header
+  (comma-separated). A fragment may declare new permissions on those; a later
+  contributor naming the same permission unions its arm in. IAM's named
+  capabilities on ``iam/capability`` are the reference. Listing a definition the
+  file does not declare fails fast.
 - Extending a definition no installed package declares is a hard error.
 
 The merged definition's identity changes whenever any contribution changes: the
@@ -66,6 +71,7 @@ from angee.fs import GENERATED_SENTINEL
 
 __all__ = [
     "EXTENSION_FILENAME",
+    "OPEN_DEFINITIONS_HEADER",
     "SchemaExtensionError",
     "extension_source_map",
     "apply_schema_paths",
@@ -77,6 +83,10 @@ __all__ = [
 # sibling of the library-owned ``permissions.zed``. Its presence is the marker;
 # the library never reads it.
 EXTENSION_FILENAME = "permissions.extends.zed"
+
+# A base file header listing the definitions a fragment may declare new
+# permissions on, beyond arms of the base's own.
+OPEN_DEFINITIONS_HEADER = "rebac_open_definitions"
 
 # Merged effective zed lives under this runtime subtree, one file per owning
 # package: ``runtime/permissions/<package>.zed``.
@@ -211,6 +221,9 @@ def merged_schemas(
         return {}
 
     bases, owner_of = _base_index(app_configs)
+    open_types = {
+        resource_type for package, schema in bases.items() for resource_type in _open_definitions(package, schema)
+    }
 
     # target resource_type -> ordered list of (contributor package, extension def)
     contributions: dict[str, list[tuple[str, Definition]]] = {}
@@ -232,7 +245,9 @@ def merged_schemas(
         base_schema = bases[owner]
         base_def = base_schema.get_definition(resource_type)
         assert base_def is not None  # owner_of guarantees it
-        merged_def = _merge_definition(base_def, contributed, field_owners=field_owners)
+        merged_def = _merge_definition(
+            base_def, contributed, field_owners=field_owners, open_permissions=resource_type in open_types,
+        )
 
         owner_schema = merged.get(owner)
         if owner_schema is None:
@@ -252,13 +267,28 @@ def merged_schemas(
     return merged
 
 
+def _open_definitions(package: str, schema: Schema) -> frozenset[str]:
+    """Return the definitions ``schema`` opens to contributed permissions; each must be its own."""
+
+    listed = {item.strip() for item in schema.headers.get(OPEN_DEFINITIONS_HEADER, "").split(",") if item.strip()}
+    undeclared = sorted(listed - {definition.resource_type for definition in schema.definitions})
+    if undeclared:
+        raise SchemaExtensionError(f"{package}: @{OPEN_DEFINITIONS_HEADER} names undeclared definitions {undeclared}")
+    return frozenset(listed)
+
+
 def _merge_definition(
     base: Definition,
     contributed: list[tuple[str, Definition]],
     *,
     field_owners: Mapping[str, Mapping[str, str]] | None,
+    open_permissions: bool = False,
 ) -> Definition:
-    """Merge ordinary arms, then add gates belonging to each contributor's columns."""
+    """Merge ordinary arms, then add gates belonging to each contributor's columns.
+
+    On an open definition a contributed permission the merge does not know yet
+    is declared rather than refused; later contributors union arms into it.
+    """
 
     merged = base
     base_permissions = {permission.name for permission in base.permissions}
@@ -290,13 +320,22 @@ def _merge_definition(
                     f"{package}: field gate {base.resource_type}#{permission.name} already declared"
                 )
             gates[permission.name] = permission
+        known = {permission.name for permission in merged.permissions}
+        declared = [arm for arm in arms if open_permissions and arm.name not in known]
+        new_names = {permission.name for permission in declared}
         try:
             merged = merged.extend(
                 relations=extension.relations,
-                permission_arms=arms,
+                permission_arms=[arm for arm in arms if arm.name not in new_names],
             )
         except ValueError as error:
             raise SchemaExtensionError(f"{package}: {error}") from error
+        if clashes := sorted(new_names & {relation.name for relation in merged.relations}):
+            raise SchemaExtensionError(f"{package}: {base.resource_type} permissions collide with relations: {clashes}")
+        if declared:
+            merged = replace(merged, permissions=tuple(
+                sorted((*merged.permissions, *declared), key=lambda permission: permission.name),
+            ))
     collisions = gates.keys() & {relation.name for relation in merged.relations}
     if collisions:
         raise SchemaExtensionError(f"{base.resource_type}: field gates collide with relations: {sorted(collisions)}")
