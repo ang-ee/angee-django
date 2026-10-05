@@ -67,14 +67,19 @@ interface AngeePackageSets {
   built: string[];
   source: string[];
   entries: string[];
+  codemirror: string[];
 }
 
 // CodeMirror extensions are branded by the @codemirror/state instance that
-// created them. Prebundling a language package while @angee/ui remains linked
-// source creates a second state instance, and EditorState then rejects those
-// extensions. The scoped prefix excludes the complete CodeMirror package graph
-// from optimization without duplicating its transitive package list here.
-const CODEMIRROR_OPTIMIZER_EXCLUDES = ["@codemirror", "codemirror"];
+// created them, as Lezer node props and highlight tags are by their module, so
+// the CodeMirror graph must load as one unoptimized copy from node_modules.
+// Vite's request-time discovery matches `optimizeDeps.exclude` by exact package
+// name; a scope prefix reaches only its scanner and bundler, so "@codemirror"
+// let a first JSON or markdown editor optimize its language package (with
+// private Lezer copies) and reload the page. Every CodeMirror package an
+// `@angee/*` package declares is therefore excluded by name; their own imports
+// come from node_modules, which Vite never optimizes on request.
+const CODEMIRROR_PACKAGE = /^(?:codemirror$|@codemirror\/|@lezer\/)/;
 
 function packageImportEntry(manifest: Record<string, unknown>): string | undefined {
   const exports = manifest.exports;
@@ -101,12 +106,19 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
   const built: string[] = [];
   const source: string[] = [];
   const entries: string[] = [];
+  const codemirror = new Set<string>();
   for (const name of all) {
     try {
       const packageRoot = realpathSync(join(cwd, "node_modules", name));
       const packageManifest = JSON.parse(
         readFileSync(join(packageRoot, "package.json"), "utf8"),
-      ) as Record<string, unknown>;
+      ) as Record<string, unknown> & {
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+      };
+      for (const dependency of Object.keys({ ...packageManifest.dependencies, ...packageManifest.peerDependencies })) {
+        if (CODEMIRROR_PACKAGE.test(dependency)) codemirror.add(dependency);
+      }
       const entry = packageImportEntry(packageManifest);
       if (entry && existsSync(join(packageRoot, entry))) {
         entries.push(join(packageRoot, entry));
@@ -119,7 +131,7 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
       source.push(name);
     }
   }
-  return { all, built, source, entries };
+  return { all, built, source, entries, codemirror: [...codemirror].sort() };
 }
 
 // Generated/vendored trees that never feed the prebundle — skipped so an
@@ -324,7 +336,7 @@ export async function defineAngeeWebViteConfig({
     optimizeDeps: {
       entries: angeePackages.entries.length > 0 ? ["**/*.html", ...angeePackages.entries] : undefined,
       include: prebundleAngeePackages ? angeePackages.built : undefined,
-      exclude: [...(prebundleAngeePackages ? angeePackages.source : angeePackages.all), ...CODEMIRROR_OPTIMIZER_EXCLUDES],
+      exclude: [...(prebundleAngeePackages ? angeePackages.source : angeePackages.all), ...angeePackages.codemirror],
     },
     server: {
       host: true,
