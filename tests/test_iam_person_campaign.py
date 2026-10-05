@@ -150,12 +150,18 @@ def test_issue_password_requires_permission_and_an_actor(iam_admin):
 
 
 @pytest.mark.parametrize(
-    "attrs", [{"is_active": False}, {"is_staff": True}, {"is_superuser": True}, {"kind": "service"}]
+    "attrs,refusal",
+    [
+        ({"is_active": False}, "Only active accounts"),
+        ({"is_staff": True}, "protected"),
+        ({"is_superuser": True}, "protected"),
+        ({"kind": "service"}, "Only person accounts"),
+    ],
 )
-def test_issue_password_refuses_ineligible_accounts(iam_admin, attrs):
+def test_issue_password_refuses_ineligible_accounts(iam_admin, attrs, refusal):
     target = User.objects.create_user("ineligible", **attrs)
     before = target.password
-    with actor_context(iam_admin), pytest.raises(ValidationError, match="active, non-staff person"):
+    with actor_context(iam_admin), pytest.raises(ValidationError, match=refusal):
         target.with_actor(iam_admin).issue_password()
     assert User._base_manager.get(pk=target.pk).password == before
 

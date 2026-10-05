@@ -283,7 +283,7 @@ class AngeeHasuraWriteBackend:
                 )
             elif line_rows is not None and isinstance(instance, OptimisticLockMixin):
                 # A document's revision covers its child set as well as its columns.
-                instance.save(update_fields={"revision"})
+                instance.save(update_fields={instance.REVISION_FIELD})
             if line_rows is not None:
                 self._apply_line_diff(info, instance, line_rows)
             return instance

@@ -851,9 +851,17 @@ class OptimisticLockMixin(models.Model):
     only the revision-owning table before Django saves the instance in the same
     transaction, even for multi-table children. New instances require an INSERT;
     loaded rows are never resurrected by ``save()``. On unguarded updates,
-    ``pre_save`` receivers see an ``F()`` expression in ``instance.revision``;
+    ``pre_save`` receivers see an ``F()`` expression in the counter;
     ``post_save`` receivers and callers see the resulting integer.
+
+    ``REVISION_FIELD`` names the counter. A model whose ``revision`` name is
+    taken removes the inherited field with ``revision = None``, declares the
+    same counter under another name and sets ``REVISION_FIELD`` to it; its
+    GraphQL projection still exposes the counter as ``revision``.
     """
+
+    REVISION_FIELD = "revision"
+    """Name of the model field holding the save counter."""
 
     revision = models.PositiveIntegerField(default=1, editable=False)
 
@@ -863,7 +871,7 @@ class OptimisticLockMixin(models.Model):
     def require_revision(self, expected: Any) -> None:
         """Check a row already locked by an owning verb."""
 
-        require_revision(expected=expected, current=self.revision)
+        require_revision(expected=expected, current=getattr(self, self.REVISION_FIELD))
 
     def save(self, *, expected_revision: int | None = None, **kwargs: Any) -> None:
         """Save atomically, rejecting a competing update when an expectation is supplied."""
@@ -872,8 +880,9 @@ class OptimisticLockMixin(models.Model):
             validate_revision(expected_revision)
             if self._state.adding:
                 raise ValidationError({"expected_revision": "An expected revision requires an existing row."})
+        counter = self.REVISION_FIELD
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        owner = self._meta.get_field("revision").model
+        owner = self._meta.get_field(counter).model
         rows = system_queryset(owner).using(using).filter(pk=self._get_pk_val(owner._meta))
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
@@ -881,34 +890,34 @@ class OptimisticLockMixin(models.Model):
             kwargs["update_fields"] = update_fields
             if not update_fields:
                 if expected_revision is not None:
-                    current = rows.values_list("revision", flat=True).first()
+                    current = rows.values_list(counter, flat=True).first()
                     require_revision(expected=expected_revision, current=current)
                 return
-        previous = self.__dict__.get("revision", models.DEFERRED)
+        previous = self.__dict__.get(counter, models.DEFERRED)
         existing = not self._state.adding
         kwargs["using"] = using
         if existing:
             if update_fields is not None:
-                kwargs["update_fields"] = update_fields | {"revision"}
+                kwargs["update_fields"] = update_fields | {counter}
             kwargs["force_update"] = True
         else:
             kwargs["force_insert"] = True
         try:
             with transaction.atomic(using=using):
                 if expected_revision is not None:
-                    updated = rows.filter(revision=expected_revision).update(revision=F("revision") + 1)
+                    updated = rows.filter(**{counter: expected_revision}).update(**{counter: F(counter) + 1})
                     if not updated:
-                        current = rows.values_list("revision", flat=True).first()
+                        current = rows.values_list(counter, flat=True).first()
                         raise StaleRevisionError(expected_revision, current)
-                    self.revision = expected_revision + 1
+                    setattr(self, counter, expected_revision + 1)
                 elif existing:
-                    self.revision = F("revision") + 1
+                    setattr(self, counter, F(counter) + 1)
                 super().save(**kwargs)
         except Exception as error:
             if previous is models.DEFERRED:
-                self.__dict__.pop("revision", None)
+                self.__dict__.pop(counter, None)
             else:
-                self.revision = previous
+                setattr(self, counter, previous)
             # Django doesn't pass force_update to MTI parents; a missing parent's
             # F-expression INSERT raises ValueError before that INSERT can execute.
             if (
