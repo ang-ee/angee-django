@@ -61,6 +61,52 @@ under a source checkout. Both templates render the same root `AGENTS.md`
 contract so code agents retain that ownership rule while working below
 `sources/` or `workspaces/`.
 
+### Connect framework-dev stacks to a shared PostgreSQL server
+
+`stacks/dev` runs a pgvector container per stack by default. With
+`postgres_mode: external` it connects to a server it does not run and renders no
+Postgres service, port lease, or `pgdata` persistence; the inputs are declared in
+[`stacks/dev/copier.yml`](stacks/dev/copier.yml). Each stack keeps its own Redis.
+
+To share one server across several stacks, give each stack its own login role
+and a database owned by that role. Stacks on one server share its
+`max_connections`; size it with the connection budget in
+[the stack guide](../docs/stack.md#stack-serve-mode) summed over every stack.
+
+For a new stack, render it with the external inputs, store the role's password
+as the `db-password` secret, then bring it up:
+
+```sh
+angee stack init <template> <root> --input postgres_mode=external \
+  --input postgres_host=127.0.0.1 --input postgres_port=5433 \
+  --input postgres_db=app_db --input postgres_user=app_role
+angee --root <root> secret set db-password --stdin
+```
+
+`db-password: { required: true }` fails only when the secret is absent.
+
+To convert an existing bundled stack:
+
+1. Stop it with `angee down`.
+2. Create the role with the stack's current `db-password`, or overwrite that
+   secret with the role's password. The stack still holds the generated value,
+   so nothing else catches a mismatch.
+3. Run `angee stack update --template` with the external inputs. The update
+   merges into the existing manifest and keeps keys the template no longer
+   emits, so remove `services.postgres`, `ports.postgres`, and `persist.pgdata`
+   from `angee.yaml` by hand.
+4. Remove the stack's old Postgres container. Delete `data/pgdata` once its
+   data has moved.
+
+`postgres_host` is the server as the stack's runtime reaches it:
+
+- **Process runtime:** the host as the stack's processes see it.
+- **Docker runtime:** an address containers can reach, such as
+  `host.docker.internal` on Docker Desktop or OrbStack. On a Linux engine, the
+  operator does not add the host-gateway mapping to container jobs, so use a
+  routable address there.
+- **IPv6:** write literals in brackets.
+
 ### The `local` root is a git-controlled project
 
 Commit what you author; ignore what a tool regenerates:
