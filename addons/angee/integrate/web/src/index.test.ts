@@ -27,13 +27,14 @@ describe("integrate addon manifest", () => {
       (route) => route.name === "integrate.integrations",
     );
     expect(integrations?.path).toBe("/integrate");
-    expect(integrations?.component).toBeTypeOf("function");
+    expect(integrations?.indexComponent).toBeTypeOf("function");
+    expect(integrations?.component).toBeUndefined();
     // No `menu:` — the route-less root no longer references this route, so a
     // `menu` would mismatch (createApp throws "item does not reference the route").
     expect(integrations?.menu).toBeUndefined();
   });
 
-  test("nests each record route under its list, no component", () => {
+  test("nests each record route under its list, resolving the integration parent separately", () => {
     for (const [name, parent] of [
       ["integrate.integration", "integrate.integrations"],
       ["integrate.vendor", "integrate.vendors"],
@@ -42,7 +43,8 @@ describe("integrate addon manifest", () => {
       const record = (integrate.routes ?? []).find((route) => route.name === name);
       expect(record?.path).toContain("/$id");
       expect(record?.parent).toBe(parent);
-      expect(record?.component).toBeUndefined();
+      if (name === "integrate.integration") expect(record?.component).toBeTypeOf("function");
+      else expect(record?.component).toBeUndefined();
     }
   });
 

@@ -1,8 +1,10 @@
 import { type Row } from "@angee/metadata";
+import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Column, List, ResourceList, useResourceRecordHrefLookup, useRouteHref } from "@angee/ui";
+import { Button, Column, EmptyState, ErrorBanner, List, LoadingPanel, ResourceList, errorMessage, useResourceRecordHrefLookup, useRouteHref, useRouteRecordId } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
+import { IntegrationRecordRedirectDocument } from "../documents";
 import { useIntegrateT } from "../i18n";
 
 const MODEL = "integrate.Integration";
@@ -19,6 +21,31 @@ export function concreteIntegrationHref(
   const target = concreteTarget(row);
   if (target?.state !== "AVAILABLE" || !target.resource || !target.id) return "";
   return lookup(target.resource, target.id) ?? "";
+}
+
+/** Resolve a generic parent record link through its authorized concrete target. */
+export function IntegrationRecordRedirect(): React.ReactElement {
+  const t = useIntegrateT();
+  const id = useRouteRecordId() ?? "";
+  const navigate = useNavigate();
+  const recordHref = useResourceRecordHrefLookup();
+  const query = useAuthoredQuery(IntegrationRecordRedirectDocument, { id }, {
+    models: [MODEL], enabled: Boolean(id),
+  });
+  const record = query.data?.integrations_by_pk;
+  const href = record && !query.error ? concreteIntegrationHref(record, recordHref) : "";
+
+  React.useEffect(() => {
+    if (!href) return;
+    void navigate({
+      to: href, replace: true, state: true,
+      search: (current: Record<string, unknown>) => current,
+    });
+  }, [href, navigate]);
+
+  if (query.error) return <ErrorBanner description={errorMessage(query.error, t("integrations.record.unavailable"))} />;
+  if (query.isFetching || href) return <LoadingPanel message={t("integrations.record.loading")} />;
+  return <EmptyState icon="integration" title={t("integrations.record.unavailable")} />;
 }
 
 export function IntegrationsPage(): React.ReactElement {
