@@ -228,14 +228,14 @@ class IntakeAccessCase(TransactionTestCase):
             grant_role(actor=self.admin, role="angee/role:admin")
             self.queue = apps.get_model("work", "Queue").objects.personal_for(self.owner, provision=True)
 
-    def need(self, *, email="new@example.com", party=None):
+    def need(self, *, email="new@example.com", party=None, name=""):
         with system_context(reason="test request setup"):
             task = self.Need.objects._create_triage_task(queue=self.queue, title="Request", note="")
             task.owner = self.owner
             task.assignee = self.writer
             task.save()
             task.grant_record_access("reader", self.reader)
-            return self.Need.objects.create(task=task, party=party, claimed_email=email, body="Request")
+            return self.Need.objects.create(task=task, party=party, claimed_email=email, claimed_name=name, body="Request")
 
     def as_user(self, need, user=None):
         return self.Need.objects.as_user(user or self.admin).get(pk=need.pk)
@@ -523,6 +523,32 @@ class NeedAccessTests(IntakeAccessCase):
             self.assertEqual(reader, [{"id": need.task.sqid, "requester": {
                 "display_name": party.display_name, "email": None,
             }}])
+
+    def test_task_requester_filters_read_the_shown_name_and_match_only_the_viewer(self):
+        mine = self.need(email="mine@example.com", party=self.party(self.reader))
+        robins = self.need(email="robin@example.com", name="Robin Anonymous")
+        with system_context(reason="test outsider account"):
+            outsider = self.User.objects.create_user(username="request-outsider", email="outsider@example.com")
+        by_name = '{ project_tasks(where: {requester_name: {_ilike: "%robin%"}}) { id } }'
+        filed_by_me = "{ project_tasks(where: {requested_by_viewer: {_eq: true}}) { id } }"
+        for bucket in ("public", "console"):
+            # The name a reader already sees on the task, the claimed one for an anonymous request.
+            self.assertEqual(self.graphql(by_name, {}, user=self.reader, bucket=bucket)["project_tasks"],
+                             [{"id": robins.task.sqid}])
+            # "Mine" compares the viewer with themself: the reader's request, nobody else's.
+            self.assertEqual(self.graphql(filed_by_me, {}, user=self.reader, bucket=bucket)["project_tasks"],
+                             [{"id": mine.task.sqid}])
+            self.assertEqual(self.graphql(filed_by_me, {}, user=self.writer, bucket=bucket)["project_tasks"], [])
+            # The filters narrow the readable tasks; a viewer who cannot read a task never matches it.
+            self.assertEqual(self.graphql(by_name, {}, user=outsider, bucket=bucket)["project_tasks"], [])
+        # The search catalog reads both from the resource metadata; the email is never a filter.
+        fields = next(
+            resource for resource in GraphQLSchemas.from_discovery().render_metadata()["console"]["angee"]["resources"]
+            if resource["modelLabel"] == "projects.Task"
+        )["query"]["fields"]
+        self.assertIn("iContains", fields["requester_name"]["filter"]["operators"])
+        self.assertIn("exact", fields["requested_by_viewer"]["filter"]["operators"])
+        self.assertFalse([name for name, field in fields.items() if "email" in name and field.get("filter")])
 
     def test_decision_inbox_tracks_current_sharers_without_assignment_snapshots(self):
         need = self.need()

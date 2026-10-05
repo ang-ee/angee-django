@@ -913,6 +913,36 @@ def _declared_aliases(
     return aliases, filters
 
 
+def _declared_filter_expressions(
+    model: type[models.Model],
+) -> dict[str, Callable[[models.QuerySet[Any]], Any]]:
+    """Collect model-owned ``hasura_filter_expressions`` from the model and its extension bases.
+
+    Each mapping names filter-only predicates as providers taking the target
+    queryset, exactly as ``filter_expressions`` takes them, e.g.
+    ``{"requested_by_viewer": requested_by_viewer}`` on an intake base composed
+    onto ``projects.Task``. A provider may read the queryset's actor; it owns its
+    access rule, because unlike ``hasura_aliases`` its subqueries are not path-
+    checked. Duplicate MRO declarations fail rather than letting one extension
+    replace another's predicate.
+    """
+
+    expressions: dict[str, Callable[[models.QuerySet[Any]], Any]] = {}
+    for cls in reversed(model.__mro__):
+        declaration = cls.__dict__.get("hasura_filter_expressions", {})
+        if not isinstance(declaration, Mapping):
+            raise ImproperlyConfigured(f"{cls.__name__}.hasura_filter_expressions must be a mapping.")
+        for name, provider in declaration.items():
+            if name in expressions:
+                raise ImproperlyConfigured(f"{model._meta.label} declares duplicate filter expression {name!r}.")
+            if not callable(provider):
+                raise ImproperlyConfigured(
+                    f"{model._meta.label} filter expression {name!r} must be a provider taking the target queryset."
+                )
+            expressions[name] = provider
+    return expressions
+
+
 def _sortable_alias_expression(
     expression: Combinable,
     paths: tuple[str, ...],
@@ -1103,6 +1133,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     A ``filter_expressions`` provider receives the target queryset so actor-aware
     expressions work for requests and stored filters alike. Its output field is
     inspected on an empty queryset at composition; it must perform no row reads.
+    Model ``hasura_filter_expressions`` mappings contribute the same filter-only
+    predicates from extension bases, so an addon composing onto another addon's
+    model adds a filter its owner's resource never names.
     """
 
     model_aliases, model_filter_aliases = _declared_aliases(model)
@@ -1110,6 +1143,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if collisions := expressions.keys() & model_filter_aliases.keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate filter aliases: {sorted(collisions)}.")
     expressions.update({name: expression for name, (expression, _) in model_filter_aliases.items()})
+    declared_expressions = _declared_filter_expressions(model)
+    if collisions := expressions.keys() & declared_expressions.keys():
+        raise ImproperlyConfigured(f"{model._meta.label} declares duplicate filter expressions: {sorted(collisions)}.")
+    expressions.update(declared_expressions)
     if record_ref_requires_read and record_ref_filters is None:
         raise ImproperlyConfigured("A record-reference read guard requires record-reference filters.")
     if record_ref_filters is not None:
@@ -1132,7 +1169,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         }
     container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
     filterable = tuple(dict.fromkeys((*filterable, *sorted(container_scopes), *model_filter_aliases,
-                                      *(record_ref_filters or ()))))
+                                      *declared_expressions, *(record_ref_filters or ()))))
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
     sortable = tuple(dict.fromkeys((*sortable, *model_aliases)))
