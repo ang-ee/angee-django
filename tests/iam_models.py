@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from angee.iam.models import Group as AbstractGroup
+from angee.iam.models import IAMCapabilitySet as AbstractIAMCapabilitySet
 from angee.iam.models import IAMKind as AbstractIAMKind
 from angee.iam.models import IAMProtected as AbstractIAMProtected
 from angee.iam.models import User as AbstractUser
@@ -26,6 +27,16 @@ class IAMProtected(AbstractIAMProtected):
         app_label = "iam"
         managed = False
         rebac_resource_type = "iam/protected"
+
+
+class IAMCapabilitySet(AbstractIAMCapabilitySet):
+    """Table-less anchor of the named-capability set in the bare harness."""
+
+    class Meta(AbstractIAMCapabilitySet.Meta):
+        abstract = False
+        app_label = "iam"
+        managed = False
+        rebac_resource_type = "iam/capability"
 
 
 class Group(AbstractGroup):

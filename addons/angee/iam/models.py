@@ -58,6 +58,7 @@ VIEWABLE_PEOPLE_MAX_LIMIT = 25
 
 IAMKind = role_anchor("iam/kind", name="IAMKind")
 IAMProtected = role_anchor("iam/protected", name="IAMProtected")
+IAMCapabilitySet = role_anchor("iam/capability", name="IAMCapabilitySet")
 
 PROTECTED_ACCOUNT_MESSAGE = (
     "This account is protected: it is your own, staff, a superuser, or holds an elevated role."

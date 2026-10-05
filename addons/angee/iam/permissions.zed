@@ -1,7 +1,8 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 21
+// @rebac_schema_revision: 22
+// @rebac_open_definitions: iam/capability
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -51,6 +52,18 @@ definition iam/protected {
     relation admin: angee/role // rebac:const=admin
 
     permission member = admin->effective_member
+}
+
+// Named capabilities: each permission on `iam/capability:main` is one, and an
+// actor has it exactly when the engine admits it, through every grant, group,
+// role hierarchy and roster path. The session's `current_user.capabilities`
+// lists the ones it holds; menu entries and routes name one in `requires`. The
+// definition is open (see the header): a consumer declares its own capability
+// from its permissions.extends.zed with a const-backed relation and a new
+// permission, and another contributor naming it unions an arm in. IAM declares
+// none.
+definition iam/capability {
+    relation admin: angee/role // rebac:const=admin
 }
 
 // Kind and activity are live user facts, including bulk-created/updated rows.

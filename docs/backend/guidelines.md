@@ -621,8 +621,8 @@ data through REBAC, never a queryset bypass.
   [`ThreadedModelMixin`](../../addons/angee/messaging/models.py) and
   [`ThreadNotificationManager`](../../addons/angee/messaging/managers.py).
 - **Posture is data, not schema.** `permissions.extends.zed` fragments union
-  permission arms and add no permission other than an owned field gate, so
-  narrowable defaults ship as seeded tuples. Platform-wide tuple-driven visibility
+  permission arms and add no permission other than an owned field gate or one
+  on a definition its owner opens, so narrowable defaults ship as seeded tuples. Platform-wide tuple-driven visibility
   uses a const-backed singleton relation on each row (for example,
   `auth/user#directory` → `iam/directory:main`) plus a seed on that singleton
   (`iam/directory:main#reader`), never base schema arms or per-row fan-out a
@@ -699,7 +699,12 @@ data through REBAC, never a queryset bypass.
   `read__<field>` or `write__<field>`, on a concrete column that the same
   package's donor contributes to the target model; no other package may extend
   that gate. `ModelComposition.field_gate_owners` supplies the ownership map to
-  [`angee.compose.permissions`](../../angee/compose/permissions.py).
+  [`angee.compose.permissions`](../../angee/compose/permissions.py). The
+  exception is a definition whose owner lists it in its file's
+  `@rebac_open_definitions` header: fragments declare new permissions there and
+  a later contributor naming one unions its arm in. IAM's named capabilities on
+  [`iam/capability`](../../addons/angee/iam/README.md#capabilities) are the
+  reference; open a definition only when its permission names are the vocabulary.
   Functional drift is caught by `rebac sync` (content hash) and `angee build
   --check` (the emitted file); the contribution is revisioned by the contributing
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's

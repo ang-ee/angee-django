@@ -60,3 +60,37 @@ definition iam/protected {
     permission member = manager->effective_member
 }
 ```
+
+## Capabilities
+
+A capability names what some actors have and everyone else lacks, such as a
+page that is absent for them: no rail or menu entry, no route, no data. Each is
+a permission on the singleton
+`iam/capability:main`; the definition is open (`@rebac_open_definitions`), so a
+consumer declares its own from its `permissions.extends.zed`, and a later
+contributor naming the same capability unions an arm in. Admin reach is the
+`admin` relation; union it in when administrators should hold the capability:
+
+```zed
+definition iam/capability {
+    relation manager: consumer/role // rebac:const=manager
+    permission manage_people = manager->effective_member
+}
+```
+
+`current_user.capabilities` lists the ones the session's identity (the viewed
+one in a preview) holds, from one bulk engine check, so group-held grants, role
+hierarchies and live rosters count, unlike `role_refs`. Anonymous sessions hold
+none. The web identity carries them as `AuthUser.capabilities`, refreshed with
+every identity load: sign-in, sign-out, preview changes. A menu entry or route
+names one in `requires`:
+
+```ts
+routes: [{ name: "people.manage", path: "/people/manage", requires: "manage_people", component: ManagePeople }],
+menus: { "people.manage": { parent: "people", route: "people.manage", requires: "manage_people" } },
+```
+
+The data stays guarded by the resources' own permissions; `requires` only
+decides presence. `declared_capabilities` names every declared capability for a
+signed-in session; in development the shell warns about a `requires` naming
+none of them.

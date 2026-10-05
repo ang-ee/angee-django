@@ -13,6 +13,7 @@ from django.db import transaction
 from django.db.models import QuerySet, Subquery
 from pydantic import BaseModel
 from rebac import (
+    CheckItem,
     ObjectRef,
     SubjectRef,
     app_settings,
@@ -48,6 +49,8 @@ PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
 ROLE_SUFFIX = "/role"
 PROTECTED_ACCOUNTS = ObjectRef("iam/protected", "main")
 """IAM's Zed set of elevated accounts; consumers union their elevated roles into its ``member``."""
+CAPABILITIES = ObjectRef("iam/capability", "main")
+"""IAM's Zed set of named capabilities; consumers declare each as a permission on its definition."""
 
 
 def platform_admin_role() -> ObjectRef | None:
@@ -73,6 +76,28 @@ def protected_account_holders() -> frozenset[str] | None:
             return None
         holders.add(subject.subject_id)
     return frozenset(holders)
+
+
+def declared_capabilities() -> list[str]:
+    """Return the capability names the installed schema declares on ``iam/capability``, sorted."""
+
+    definition = rebac_backend().schema().get_definition(CAPABILITIES.resource_type)
+    return sorted(permission.name for permission in definition.permissions) if definition else []
+
+
+def subject_capabilities(subject: SubjectRef | None) -> list[str]:
+    """Return the declared capabilities ``subject`` holds on ``iam/capability:main``, sorted.
+
+    One bulk engine check covers every name, so direct and group-held grants,
+    role hierarchies and live roster relations all count; nothing is re-derived
+    from the subject's direct role grants. Without a subject nothing is held.
+    """
+
+    names = declared_capabilities()
+    if subject is None or not names:
+        return []
+    results = rebac_backend().check_bulk_permissions(CheckItem(subject, name, CAPABILITIES) for name in names)
+    return [name for name, result in zip(names, results, strict=True) if result.allowed]
 
 
 def subject_has_role(subject: SubjectRef | None, role: ObjectRef) -> bool:

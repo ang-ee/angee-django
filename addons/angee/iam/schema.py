@@ -59,6 +59,7 @@ from angee.iam.roles import (
     validate_subject,
 )
 from angee.iam.roles import assignment_subject_labels as _assignment_subject_labels_owner
+from angee.iam.roles import declared_capabilities as _declared_capabilities_owner
 from angee.iam.roles import (
     grant_role as _grant_role_owner,
 )
@@ -90,6 +91,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
+from angee.iam.roles import subject_capabilities as _subject_capabilities_owner
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
@@ -176,7 +178,7 @@ class UserType(AngeeNode):
 
 @strawberry_django.type(User)
 class CurrentUserType(AngeeNode):
-    """GraphQL identity projection, including the identity's private role refs."""
+    """GraphQL identity projection, including the identity's private role refs and capabilities."""
 
     username: auto
     first_name: auto
@@ -208,6 +210,16 @@ class CurrentUserType(AngeeNode):
         """
 
         return sorted(str(role) for role in rebac_roles_of(cast(Any, self)))
+
+    @strawberry_django.field
+    def capabilities(self) -> list[str]:
+        """Return the named ``iam/capability`` permissions this identity holds, in one engine batch.
+
+        Unlike ``role_refs``, every derived path counts: group-held grants, role
+        hierarchies and live roster relations. Menu entries and routes gate on it.
+        """
+
+        return _subject_capabilities_owner(to_subject_ref(cast(Any, self)))
 
 
 @strawberry_django.type(Group)
@@ -817,6 +829,17 @@ class IAMQuery:
         ):
             return None
         return cast(CurrentUserType, user)
+
+    @strawberry.field
+    def declared_capabilities(self, info: strawberry.Info) -> list[str]:
+        """Return every capability name the installation declares, for a signed-in session only.
+
+        Names, never holders: the web shell checks its menu and route
+        ``requires`` against them in development.
+        """
+
+        user = getattr(_request(info), "user", None)
+        return _declared_capabilities_owner() if getattr(user, "is_authenticated", False) else []
 
 
 @strawberry.type

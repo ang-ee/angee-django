@@ -1,6 +1,6 @@
 // Additive REBAC extension — contributes to a definition owned by another addon.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
 // `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
 // `reviewer` relation and unions it into the `read` arm without editing the
@@ -42,4 +42,13 @@ definition iam/protected {
     relation manager: extcontrib/role // rebac:const=manager
 
     permission member = manager->effective_member
+}
+
+// Named capabilities: the team's roster manages people; only administrators,
+// through IAM's own constant, audit them.
+definition iam/capability {
+    relation manager: extcontrib/role // rebac:const=manager
+
+    permission manage_people = manager->effective_member
+    permission audit_people = admin->effective_member
 }
