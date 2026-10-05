@@ -59,6 +59,8 @@ dependencies = [
   # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
   # [standard] adds WebSocket and --reload support for dev.
   "uvicorn[standard]>=0.30",
+  # Error reporting; ProjectContract starts it only when the deployment sets SENTRY_DSN.
+  "sentry-sdk>=2.71.0",
 ]
 
 [project.urls]

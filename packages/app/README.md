@@ -4,9 +4,11 @@
 
 Install: `pnpm add @angee/app`
 
-The rendered host calls `bootApp({ target, loadSchemas, create })` to load
-generated metadata before composition. `create` receives the loaded schemas and
-returns the app to mount. See the [frontend guidelines](../../docs/frontend/guidelines.md).
+The rendered host calls `bootApp({ target, loadSchemas, create, errorReporting })`
+to load generated metadata before composition. `create` receives the loaded
+schemas and returns the app to mount. `errorReporting` carries the host's Sentry
+DSN and environment; without a DSN no reporting SDK is loaded. See the
+[frontend guidelines](../../docs/frontend/guidelines.md).
 
 Products declare the shell. An addon's `shell: { home, brand, perspective }`
 names the product's home (where `/` lands unless the person chose otherwise,

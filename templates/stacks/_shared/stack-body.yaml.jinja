@@ -13,7 +13,7 @@
 {# Wrapper-provided variables: stack_flavor, runtime_mode, postgres_user/_db/_address and redis_address/_db/_broker_db #}
 {# (the body composes database_url, redis_url, and celery_broker_url from them), operator_url, #}
 {# mcp_url, operator_bind, pgdata_mount, (process only) app_source; framework_source — plus the dev #}
-{# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, and work_state_source. #}
+{# copier inputs postgres_mode and redis_mode (unset for local), addons_profile, work_state_source, and (both templates) sentry_dsn / sentry_web_dsn. #}
 {# Process mode always renders development, even if a caller bypasses the Copier validator. #}
 {% set effective_serve_mode = "development" %}{% if runtime_mode == "docker" %}{% set effective_serve_mode = serve_mode %}{% endif %}{% set database_url = "postgres://"|add:postgres_user|add:":${secret.db-password}@"|add:postgres_address|add:"/"|add:postgres_db %}{% set redis_url = "redis://"|add:redis_address|add:"/"|add:redis_db %}{% set celery_broker_url = "redis://"|add:redis_address|add:"/"|add:redis_broker_db %}
 version: 1
@@ -292,7 +292,10 @@ jobs:
     mounts:
       - source://app:/app
     workdir: /app
-    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]
+    command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} build"]{% if sentry_web_dsn %}
+    env:
+      VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     depends_on: [codegen]
 {% endif %}
 {% else %}
@@ -314,7 +317,10 @@ jobs:
         && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packages=path.join(root,"packages"); const scope=path.join(root,"project/{{ web_path }}/node_modules/@angee"); fs.mkdirSync(scope,{recursive:true}); for (const dir of fs.readdirSync(packages)) { const target=path.join(packages,dir); const packageJson=path.join(target,"package.json"); if (!fs.existsSync(packageJson)) continue; const manifest=JSON.parse(fs.readFileSync(packageJson,"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const link=path.join(scope,manifest.name.slice("@angee/".length)); if (fs.existsSync(link)) continue; try { fs.unlinkSync(link); } catch (error) { if (error.code !== "ENOENT") throw error; } fs.symlinkSync(path.relative(scope,target),link,"dir"); }'
         && cd project/{{ web_path }}
         && pnpm codegen
-        && pnpm build
+        && pnpm build{% if sentry_web_dsn %}
+    env:
+      VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     depends_on: [provision, operator-schema]
 
 {% endif %}
@@ -441,7 +447,9 @@ services:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
       ANGEE_UI_PORT: "{{ ui_port }}"
       # The UI proxies /operator/* to the daemon (same-origin, no CORS).
-      ANGEE_OPERATOR_URL: "{{ operator_url }}"
+      ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if sentry_web_dsn %}
+      VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     ready:
       http: { port: {{ ui_port }}, path: / }
       interval: 5s
@@ -475,7 +483,9 @@ services:
       ANGEE_DJANGO_URL: http://django:8000
       ANGEE_UI_PORT: "{{ ui_port }}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if ingress_domain_value == "localhost" %}{% else %}
-      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}"{% endif %}
+      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}"{% endif %}{% if sentry_web_dsn %}
+      VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
+      VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     command:
       - sh
       - "-c"

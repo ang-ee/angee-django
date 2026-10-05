@@ -33,4 +33,9 @@ await bootApp({
   target: "#root",
   loadSchemas: loadComposedSchemas,
   create,
+  // Set by the stack's sentry_web_dsn input; empty leaves the Sentry SDK unloaded.
+  errorReporting: {
+    dsn: import.meta.env.VITE_SENTRY_DSN,
+    environment: import.meta.env.VITE_SENTRY_ENVIRONMENT,
+  },
 });

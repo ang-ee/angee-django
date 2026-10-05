@@ -237,6 +237,20 @@ redis_broker_db:
   default: 1
   help: Redis database for the Celery broker; keep it distinct from redis_db.
 
+# Sentry error reporting. An empty DSN (the default) renders nothing: Django
+# never starts the SDK and the SPA never loads it. sentry_dsn becomes SENTRY_DSN
+# for every Python service; sentry_web_dsn becomes VITE_SENTRY_DSN for the
+# frontend dev server and build, so a production SPA picks it up at build time.
+sentry_dsn:
+  type: str
+  default: ""
+  help: Sentry DSN for Django, Celery and management commands; empty disables backend error reporting.
+
+sentry_web_dsn:
+  type: str
+  default: ""
+  help: Sentry DSN for the React SPA; empty keeps the browser SDK unloaded.
+
 serve_mode:
   type: str
   default: development

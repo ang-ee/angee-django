@@ -12,7 +12,11 @@ from types import ModuleType
 from typing import Any
 
 import environ
+import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
+from sentry_sdk.integrations.celery import CeleryIntegration
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.compose import yamlconf
 from angee.project import (
@@ -23,6 +27,7 @@ from angee.project import (
 )
 
 DEFAULTS_SETTINGS_MODULE = "angee.compose.defaults"
+
 
 def prepend_import_paths(paths: Iterable[Path]) -> None:
     """Put import paths at the front of ``sys.path`` preserving order."""
@@ -49,7 +54,9 @@ class ProjectContract:
 
         Django may inspect the importing settings module during app discovery.
         Keeping work private prevents it from capturing a partial app graph, and
-        a failed reload leaves the previously published settings intact.
+        a failed reload leaves the previously published settings intact. Error
+        reporting starts as soon as the project environment is read, so a
+        composition failure is reported too.
         """
 
         from angee.compose.composer import Composer
@@ -58,6 +65,7 @@ class ProjectContract:
         self.namespace = {}
         try:
             root = self.load()
+            self._start_error_reporting()
             prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
             Composer(self.namespace).compose_settings(project_apps=self._project_apps)
             composed = self.namespace
@@ -65,6 +73,32 @@ class ProjectContract:
             self.namespace = published
         self._reset_settings()
         self.namespace.update(composed)
+
+    def _start_error_reporting(self) -> None:
+        """Start Sentry once per process when the deployment supplies ``SENTRY_DSN``.
+
+        Every Django, ASGI, Celery and management-command process composes
+        settings here, before ``django.setup()``, which is where Sentry's Django
+        and Celery integrations must start. The SDK reads ``SENTRY_DSN``,
+        ``SENTRY_ENVIRONMENT`` and ``SENTRY_RELEASE`` itself.
+
+        Only the Django and Celery integrations are enabled, and request bodies
+        and frame locals stay in the process. Unexpected GraphQL resolver errors
+        reach Sentry only through the schema sanitizer's log record, which omits
+        exception values. Strawberry's own error logger is ignored so each failure
+        is reported once.
+        """
+
+        if not self.env.str("SENTRY_DSN", default="") or sentry_sdk.is_initialized():
+            return
+        ignore_logger("strawberry.execution")
+        sentry_sdk.init(
+            send_default_pii=False,
+            include_local_variables=False,
+            max_request_body_size="never",
+            auto_enabling_integrations=False,
+            integrations=[DjangoIntegration(), CeleryIntegration()],
+        )
 
     def load(self) -> Path:
         """Load project settings and defaults without composing the Django app graph.
