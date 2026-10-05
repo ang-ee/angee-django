@@ -90,7 +90,7 @@ function displayColumns<TRow extends Row>(
     },
     cell: ({ row }) => (
       <ListCellContent
-        column={column}
+        column={{ ...column, queryField: column.queryField ?? options.query?.fields[column.field] }}
         row={row.original}
         metadata={options.metadata}
       />
