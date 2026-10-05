@@ -1485,6 +1485,7 @@ describe("createApp route tree", () => {
     { label: "fallback", preferences: {}, target: "/first" },
     { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/second?tab=activity#details" }, target: "/second?tab=activity#details" },
     { label: "default app", preferences: { "chrome.rail": { defaultItemId: "second" } }, target: "/second" },
+    { label: "fallback past a stale default app", preferences: { "chrome.rail": { defaultItemId: "removed" } }, target: "/first" },
   ])("redirects / to the $label without remounting the layout or leaving / in history", async ({ preferences, target }) => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -1528,6 +1529,41 @@ describe("createApp route tree", () => {
       expect(app.router.history.length).toBe(historyLength + 1);
       app.router.history.back();
       await waitFor(() => expect(app.router.state.location.pathname).toBe("/settings"));
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test.each([
+    { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/third" } },
+    { label: "default app", preferences: { "chrome.rail": { defaultItemId: "desk" } } },
+  ])("a confined app sends / to its own home and ignores the $label preference", async ({ preferences }) => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/");
+    const identityFetch: typeof fetch = async () => Response.json({ data: {
+      current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [], preferences },
+      real_user: null, viewable_people: [],
+    } });
+    const page = (name: string) => ({ name, path: `/${name}`, component: () => createElement("p", null, `${name} page`) });
+    const app = createApp({
+      ...testAppInput([{
+        id: "pages",
+        routes: [page("first"), page("second"), page("third")],
+        menus: [{ id: "desk", children: [{ id: "first", route: "first" }, { id: "second", route: "second" }, { id: "third", route: "third" }] }],
+      }]),
+      confineTo: "desk",
+      home: "second",
+      schemas: {
+        public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
+        console: { ...TEST_SCHEMAS.console, fetch: identityFetch },
+      },
+    });
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(host.textContent).toContain("second page"));
+      expect(app.router.state.location.href).toBe("/second");
     } finally {
       root.unmount();
       host.remove();
