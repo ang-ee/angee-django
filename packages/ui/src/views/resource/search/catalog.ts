@@ -118,7 +118,7 @@ export function useSearchCatalog<TRow extends Row>(input: UseSearchCatalogInput<
     });
   }, [input.groupOptions, input.contributedGroupOptions, contributedFacets, inferOptions, groups]);
   const text = React.useMemo(() => searchTextFields(query, input.textFilterField, shortcutTextFields).map((field) => ({
-    field, label: fieldLabel(field, modelMetadata?.fields[field], columns.find((column) => column.field === field)?.header),
+    field, label: fieldLabel(field, modelMetadata, columns.find((column) => column.field === field)?.header),
   })), [query, input.textFilterField, shortcutTextFields, modelMetadata, columns]);
   return React.useMemo(() => ({ query, renderItem: input.renderItem, text, filters, facets, fields, groups, curatedGroups, favorites: resourceView.savedFavorites }),
     [query, input.renderItem, text, filters, facets, fields, groups, curatedGroups, resourceView.savedFavorites]);

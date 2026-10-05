@@ -56,6 +56,8 @@ export type ModelFieldMetadata =
 export interface ModelMetadata {
   resource: DataResourceMetadata;
   fields: Readonly<Record<string, ModelFieldMetadata>>;
+  /** Scoped presentation overrides, including predicates absent from row fields. */
+  fieldVocabulary?: Readonly<Record<string, Pick<ModelFieldMetadata, "label" | "tones">>>;
   label?: string;
   pluralLabel?: string;
 }
@@ -75,21 +77,22 @@ export function schemaFieldMetadataWithVocabulary(
 ): SchemaFieldMetadata {
   const labels = Object.fromEntries(Object.entries(metadata.labels).map(([name, model]) => {
     const words = vocabulary[name];
-    return [name, words ? {
+    if (!words) return [name, model];
+    const fieldVocabulary = Object.fromEntries(Object.entries(words.fields ?? {}).map(([field, word]) =>
+      [field, typeof word === "string" ? { label: word } : word]));
+    return [name, {
       ...model,
       label: words.label,
       pluralLabel: words.pluralLabel,
+      fieldVocabulary,
       ...(words.relations ? { resource: { ...model.resource, grantable: model.resource.grantable?.map((relation) => ({
         ...relation, label: words.relations?.[relation.relation] ?? relation.label,
       })) } } : {}),
       fields: Object.fromEntries(Object.entries(model.fields).map(([field, facts]) => {
-        const word = words.fields?.[field];
-        return [field, word === undefined ? facts : {
-          ...facts,
-          ...(typeof word === "string" ? { label: word } : word),
-        }];
+        const word = fieldVocabulary[field];
+        return [field, word === undefined ? facts : { ...facts, ...word }];
       })),
-    } : model];
+    }];
   }));
   return {
     ...metadata,
