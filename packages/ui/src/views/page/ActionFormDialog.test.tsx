@@ -581,11 +581,16 @@ describe("ActionFormDialog", () => {
     expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Collection" }));
     const search = await screen.findByPlaceholderText<HTMLInputElement>("Search…");
-    fireEvent.change(search, { target: { value: "Zed" } });
-    // Server-side search keeps the (mocked) options listed; the create row is
-    // decided in the same render that reflects the typed query.
-    await waitFor(() => expect(search.value).toBe("Zed"));
+    fireEvent.change(search, { target: { value: "Primary" } });
+    // The typed text matches an option without naming it exactly, which is when
+    // a create row would be offered; it is decided in the same render that
+    // reflects the typed query.
+    await waitFor(() => expect(search.value).toBe("Primary"));
     expect(await screen.findByText("Primary Collection")).toBeTruthy();
+    expect(screen.queryByText("Create “Primary”")).toBeNull();
+    // Options that do not match the typed text are no longer listed.
+    fireEvent.change(search, { target: { value: "Zed" } });
+    await waitFor(() => expect(screen.queryByText("Primary Collection")).toBeNull());
     expect(screen.queryByText("Create “Zed”")).toBeNull();
   });
 

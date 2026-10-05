@@ -109,7 +109,6 @@ export function useInboxNavigation() {
                 {
                   ...state,
                   filter,
-                  group: null,
                   groupStack: [],
                   pagination: { ...state.pagination, pageIndex: 0 },
                 },
@@ -130,7 +129,6 @@ export function useInboxNavigation() {
               resourceViewStateToSearch(
                 {
                   ...state,
-                  group: groupStack[0] ?? null,
                   groupStack,
                   pagination: { ...state.pagination, pageIndex: 0 },
                 },
