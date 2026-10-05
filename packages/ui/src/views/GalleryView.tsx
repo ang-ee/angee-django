@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import type { Row } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
-import { useInAppLinkClick } from "../lib/in-app-link";
+import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload } from "../lib/dnd";
 import { Card } from "../ui/card";
@@ -229,7 +229,7 @@ function GalleryCardFrame<TRow extends Row>({
   cardClass,
   children,
 }: GalleryCardFrameProps<TRow>): ReactElement {
-  const handleLinkClick = useInAppLinkClick(href, undefined, { onFollow: () => onClick?.(row) });
+  const link = useInAppLink(href, undefined, { onFollow: () => onClick?.(row) });
   const bodyClass = cn(
     "block outline-none focus-visible:focus-ring",
     actions ? "rounded-t-8" : "rounded-inherit",
@@ -237,7 +237,7 @@ function GalleryCardFrame<TRow extends Row>({
   return (
     <Card {...dragProps} density="sm" className={cardClass}>
       {href ? (
-        <a href={href} className={bodyClass} onClick={handleLinkClick}>
+        <a href={href} className={bodyClass} {...link}>
           {children}
         </a>
       ) : (

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import type { Row as TableRowModel } from "@tanstack/react-table";
-import { useInAppLinkClick } from "../../../lib/in-app-link";
+import { useInAppLink } from "../../../lib/in-app-link";
 import { type ModelMetadata, type Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
 import { Glyph } from "../../../chrome/Glyph";
@@ -257,10 +257,10 @@ function BoardCardFrame({
   onRecordOpen?: () => void;
   children: React.ReactNode;
 }): React.ReactElement {
-  const handleLinkClick = useInAppLinkClick(href, undefined, { onFollow: onRecordOpen });
+  const link = useInAppLink(href, undefined, { onFollow: onRecordOpen });
   if (href) {
     return (
-      <a href={href} className={BOARD_CARD_SHELL_CLASS} onClick={handleLinkClick}>
+      <a href={href} className={BOARD_CARD_SHELL_CLASS} {...link}>
         {children}
       </a>
     );

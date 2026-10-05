@@ -1,7 +1,7 @@
 import { parse } from "graphql";
 // @vitest-environment happy-dom
 
-import { createElement, useEffect, type ReactNode } from "react";
+import { Fragment, createElement, useEffect, useState, type ReactNode } from "react";
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
@@ -16,9 +16,10 @@ import {
   useRouteHref,
   HOME_PATH_PREFERENCE_KEY,
 } from "@angee/ui/runtime";
-import { useParams } from "@tanstack/react-router";
+import { lazyRouteComponent, useParams } from "@tanstack/react-router";
+import { ControlBand, ControlBandProvider } from "@angee/ui/layouts/ControlBand";
 import { resourcePageRoutes } from "./define-base-addon";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   createApp,
@@ -1481,6 +1482,79 @@ describe("createApp route tree", () => {
     }
   });
 
+  test("while a code-split page loads, the previous page's band leaves sight and reach and the page skeleton holds the row", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/first");
+    let releaseChunk!: () => void;
+    const chunk = new Promise<void>((resolve) => { releaseChunk = resolve; });
+    const app = createApp(testAppInput([{ id: "pages", routes: [
+      { name: "first", path: "/first", component: () => createElement("div", null,
+        createElement(ControlBand, null, createElement("button", { type: "button" }, "Group by")),
+        createElement("p", null, "First page")) },
+      { name: "second", path: "/second", component: lazyRouteComponent(async () => {
+        await chunk;
+        return { SecondPage: () => createElement("p", null, "Second page") };
+      }, "SecondPage") },
+    ] }], { console: { chrome: BandChrome, requireAuth: false } }));
+    const root = app.mount(host);
+    try {
+      await within(host).findByRole("button", { name: "Group by" });
+      void app.router.navigate({ to: "/second" });
+      const pending = await within(host).findByRole("status", {}, { timeout: 3000 });
+      expect(pending.textContent).toContain("Loading…");
+      expect(within(host).queryByRole("button", { name: "Group by" })).toBeNull();
+      const visibleBands = [...within(host).getByTestId("band-host").children]
+        .filter((band) => (band as HTMLElement).style.display !== "none");
+      expect(visibleBands).toHaveLength(1);
+      expect(visibleBands[0]?.textContent).toBe("");
+      releaseChunk();
+      await waitFor(() => expect(host.textContent).toContain("Second page"));
+      expect(within(host).getByTestId("band-host").children).toHaveLength(0);
+    } finally {
+      releaseChunk();
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test("an intent preload follows / to its home without navigating or writing session state", async () => {
+    window.sessionStorage.clear();
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/first?debug=1");
+    const loadHome = vi.fn(async () => ({ HomePage: () => createElement("p", null, "Home page") }));
+    const app = createApp({
+      ...testAppInput([{ id: "pages", routes: [
+        { name: "first", path: "/first", component: () => createElement("p", null, "First page") },
+        { name: "home", path: "/home", component: lazyRouteComponent(loadHome, "HomePage") },
+      ] }]),
+      home: "home",
+    });
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(host.textContent).toContain("First page"));
+      expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");
+      // The user menu switched developer mode off; the URL still says ?debug=1.
+      window.sessionStorage.setItem("angee:developer-mode", "0");
+      const preload = app.router.preloadRoute;
+      const preloaded: unknown[] = [];
+      vi.spyOn(app.router, "preloadRoute").mockImplementation(((options: { to?: unknown }) => {
+        preloaded.push(options.to);
+        return preloaded.length > 4 ? Promise.resolve(undefined) : preload(options as never);
+      }) as typeof preload);
+      await app.router.preloadRoute({ to: "/" });
+      expect(preloaded).toEqual(["/", "/home"]);
+      expect(loadHome).toHaveBeenCalledOnce();
+      expect(app.router.state.location.href).toBe("/first?debug=1");
+      expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("0");
+    } finally {
+      root.unmount();
+      host.remove();
+      window.sessionStorage.clear();
+    }
+  });
+
   test.each([
     { label: "fallback", preferences: {}, target: "/first" },
     { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/second?tab=activity#details" }, target: "/second?tab=activity#details" },
@@ -1891,6 +1965,14 @@ describe("createApp route tree", () => {
 
 function TestChrome({ children }: RefineLayoutChromeProps): ReactNode {
   return children;
+}
+
+/** A layout's control band row, as ConsoleLayout hosts it, above the routed page. */
+function BandChrome({ children }: RefineLayoutChromeProps): ReactNode {
+  const [bandHost, setBandHost] = useState<HTMLDivElement | null>(null);
+  return createElement(ControlBandProvider, { host: bandHost, children: createElement(Fragment, null,
+    createElement("div", { "data-testid": "band-host", ref: setBandHost }),
+    children) });
 }
 
 function EmptyPage(): ReactNode {

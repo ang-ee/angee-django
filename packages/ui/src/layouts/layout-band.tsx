@@ -104,6 +104,7 @@ export function createLayoutBand(
   }): React.ReactElement | React.ReactPortal | null {
     const context = React.useContext(BandContext);
     const id = React.useId();
+    const node = React.useRef<HTMLElement>(null);
     const registry = context?.registry;
     // useLayoutEffect so a page mounting several bands settles to inline
     // before the browser paints the stacked-portal intermediate state.
@@ -116,18 +117,29 @@ export function createLayoutBand(
       registry?.count ?? zero,
       registry?.count ?? zero,
     );
-    const band = React.createElement(
-      element,
-      { className: cn(baseClassName, className) },
-      children,
-    );
-    if (!context) return band; // no provider (standalone/test) → inline
-    const { host } = context;
     // A shared host row is claimed only by a solitary band; siblings all
     // render inline beside their own sections. Until this band's own
     // registration lands (count 0), keep the solitary assumption.
-    if (host && count <= 1) return createPortal(band, host);
-    if (host === undefined || count > 1) return band;
+    const portalHost = context?.host && count <= 1 ? context.host : null;
+    // React hides a suspended page (the previous route while the next one
+    // loads) by styling the page's own top-level nodes, which never include a
+    // band portaled into the layout row. Layout effects are torn down while
+    // their subtree is hidden and re-run when it reappears, so the portaled
+    // band follows its page out of sight and out of reach.
+    React.useLayoutEffect(() => {
+      const band = node.current;
+      if (!portalHost || !band) return undefined;
+      band.style.removeProperty("display");
+      return () => band.style.setProperty("display", "none", "important");
+    }, [portalHost]);
+    const band = React.createElement(
+      element,
+      { className: cn(baseClassName, className), ref: node },
+      children,
+    );
+    if (!context) return band; // no provider (standalone/test) → inline
+    if (portalHost) return createPortal(band, portalHost);
+    if (context.host === undefined || count > 1) return band;
     return null; // host === null and solitary: host row mounts next commit.
   }
 
