@@ -44,7 +44,7 @@ importers:
         version: link:../../../../packages/ui
       '@assistant-ui/react':
         specifier: 0.14.26
-        version: 0.14.26(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
+        version: 0.14.26(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
       '@refinedev/core':
         specifier: ^5.0.12
         version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -62,8 +62,8 @@ importers:
         version: 1.4.2(typescript@6.0.3)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -102,8 +102,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -145,8 +145,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -188,8 +188,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -237,8 +237,8 @@ importers:
         specifier: ^5.0.12
         version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -280,8 +280,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -335,8 +335,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -381,8 +381,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -433,8 +433,8 @@ importers:
         version: 10.1.1(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -488,8 +488,8 @@ importers:
         version: 10.1.1(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -558,8 +558,8 @@ importers:
         version: 10.1.1(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -607,8 +607,8 @@ importers:
         version: 7.81.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -650,8 +650,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -742,8 +742,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -806,8 +806,8 @@ importers:
         specifier: ^5.101.1
         version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -858,8 +858,8 @@ importers:
         specifier: workspace:*
         version: link:../../../../packages/metadata
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -898,14 +898,14 @@ importers:
         version: link:../../../../packages/ui
       nuqs:
         specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
     devDependencies:
       '@tanstack/react-query':
         specifier: ^5.101.1
         version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -950,8 +950,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -996,8 +996,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1073,8 +1073,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1122,8 +1122,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1174,8 +1174,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1232,8 +1232,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1275,8 +1275,8 @@ importers:
         specifier: workspace:*
         version: link:../../../../packages/refine
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1315,8 +1315,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1361,8 +1361,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1425,8 +1425,8 @@ importers:
         version: 10.4.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1468,8 +1468,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1545,8 +1545,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1582,8 +1582,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1610,8 +1610,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1638,8 +1638,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1666,8 +1666,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1694,8 +1694,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1722,8 +1722,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1750,8 +1750,8 @@ importers:
         version: link:../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1793,8 +1793,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1848,8 +1848,8 @@ importers:
         specifier: ^5.0.12
         version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1906,49 +1906,6 @@ importers:
         specifier: ^4.1.9
         version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
 
-  addons/angee/workflows_parties/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/decisions':
-        specifier: workspace:*
-        version: link:../../decisions/web
-      '@angee/parties':
-        specifier: workspace:*
-        version: link:../../parties/web
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      valibot:
-        specifier: ^1.4.2
-        version: 1.4.2(typescript@6.0.3)
-    devDependencies:
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
   examples/addons/example/notes/web:
     dependencies:
       '@angee/agents':
@@ -1968,8 +1925,8 @@ importers:
         version: 1.24.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -1993,8 +1950,8 @@ importers:
         version: link:../../../../../packages/ui
     devDependencies:
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -2064,7 +2021,7 @@ importers:
         version: 26.3.6(typescript@6.0.3)
       nuqs:
         specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       vite:
         specifier: ^8.0.0
         version: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0)
@@ -2073,8 +2030,8 @@ importers:
         specifier: ^5.101.1
         version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-table':
         specifier: ^8.21.3
         version: 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2165,8 +2122,8 @@ importers:
         specifier: ^5.101.1
         version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2232,7 +2189,7 @@ importers:
         version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       nuqs:
         specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -2250,8 +2207,8 @@ importers:
         specifier: ^4.3.1
         version: 4.3.2(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
@@ -2368,7 +2325,7 @@ importers:
         version: 1.24.0(react@19.2.7)
       nuqs:
         specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       react-day-picker:
         specifier: ^10.0.1
         version: 10.0.1(@types/react@19.2.17)(react@19.2.7)
@@ -2404,8 +2361,8 @@ importers:
         specifier: ^5.101.1
         version: 5.101.2(react@19.2.7)
       '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -4715,8 +4672,8 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/history@1.162.0':
-    resolution: {integrity: sha512-79pf/RkhteYZTRgcR4F9kbk84P2N8rugQJswxfIqovlbRiT3yI7eBE+5QorIrZaOKktsgzRlXh1l/du/xpl4iA==}
+  '@tanstack/history@1.162.4':
+    resolution: {integrity: sha512-utTS5L2OkeYUzXGohL1Z8sefu1GLNOJcxe8Hd6iIdc/Xo1K1nDB2JEp4iSFhvYh33xKC9V91TxrS8qfrpoKobQ==}
     engines: {node: '>=20.19'}
 
   '@tanstack/query-core@5.101.2':
@@ -4727,15 +4684,15 @@ packages:
     peerDependencies:
       react: ^18 || ^19
 
-  '@tanstack/react-router@1.170.17':
-    resolution: {integrity: sha512-ppLkjCfSMaeug9rmFRYzOd4TIqWV+yTE7tzIny7alJsSnM7w4lzEZm6eqCehG0SPetpZ0R3K+UnanSmBgOAVcQ==}
+  '@tanstack/react-router@1.170.41':
+    resolution: {integrity: sha512-Mpvw8Wm5MGDbTqI8Yc9flLKxbOHwoWocv0H2aGKcgw2a017oK5nZWqa954P+DrUx/8fI98YNywnHP5XcD3tQ9w==}
     engines: {node: '>=20.19'}
     peerDependencies:
       react: '>=18.0.0 || >=19.0.0'
       react-dom: '>=18.0.0 || >=19.0.0'
 
-  '@tanstack/react-store@0.9.3':
-    resolution: {integrity: sha512-y2iHd/N9OkoQbFJLUX1T9vbc2O9tjH0pQRgTcx1/Nz4IlwLvkgpuglXUx+mXt0g5ZDFrEeDnONPqkbfxXJKwRg==}
+  '@tanstack/react-store@0.11.2':
+    resolution: {integrity: sha512-oj5O5DmiMWE+ih+SioX2ayC1kbK7d3fpLx0B75fPJr9nY3zU+hoW010yr64qXsY/9fyiLVE2bn5mGNV3owm8RQ==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -4753,12 +4710,12 @@ packages:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
-  '@tanstack/router-core@1.171.14':
-    resolution: {integrity: sha512-Mo3hwx0qB0cJsVYGDjG0+Ouf7VV74h/vsoDMGztdlyzDanp4gBA2s7IVvm6hFrmQM6GpD9F0Z7SqD7OldfLE7g==}
+  '@tanstack/router-core@1.171.34':
+    resolution: {integrity: sha512-X+19pGuuLVPvvAvPYw9v/+ktRk5cCll8AtfpBpOhDRmVgUMrfqze0467xtq8YRVVs/mmo5rVtWn/7Tp32RDBKw==}
     engines: {node: '>=20.19'}
 
-  '@tanstack/store@0.9.3':
-    resolution: {integrity: sha512-8reSzl/qGWGGVKhBoxXPMWzATSbZLZFWhwBAFO9NAyp0TxzfBP0mIrGb8CP8KrQTmvzXlR/vFPPUrHTLBGyFyw==}
+  '@tanstack/store@0.11.2':
+    resolution: {integrity: sha512-sJ4mjol8uQsHV0gOJzzjwXfh2Fwm+Sz0+8deqiTm4jGbMdjzNSW+xZCFm0kUa870uhd8yi+DpKnZb5Kc4apa0Q==}
 
   '@tanstack/table-core@8.21.3':
     resolution: {integrity: sha512-ldZXEhOBb8Is7xLs01fR3YEc3DERiz5silj8tnGkFZytt1abEvl/GhUmCE0PMLaMPTa3Jk4HbKmRlHmu+gCftg==}
@@ -6030,8 +5987,8 @@ packages:
     resolution: {integrity: sha512-e6rvdUCiQCAuumZslxRJWR/Doq4VpPR82kqclvcS0efgt430SlGIk05vdCN58+VrzgtIcfNODjozVielycD4Sw==}
     engines: {node: '>=16'}
 
-  isbot@5.2.0:
-    resolution: {integrity: sha512-gbZiGCb4B5xaoxg9mS7koAyRdvJnArk10VLSHOgz6rtBG93/pi1xOFaVvXMKZ7JXgyZ8zAbNRK5uIBdIUTFSqw==}
+  isbot@5.2.2:
+    resolution: {integrity: sha512-iQcBXcd+Rv/pkubRyGh2utW2j1oPG5hZY6TUhVPpqK4G+o3IbxpJNx04hgksjc/N7GK5pEorUxDeg31cFgEk/w==}
     engines: {node: '>=18'}
 
   isomorphic-ws@5.0.0:
@@ -6867,14 +6824,14 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  seroval-plugins@1.5.5:
-    resolution: {integrity: sha512-+BDhqYM6CEn3x09v44dpa9p6974FuUB2dxk+Ctn04k0cO1Zt6QODTXfmEZK0eBaTe/fJBvP4NMGuNJ+R8T+QMg==}
+  seroval-plugins@1.6.8:
+    resolution: {integrity: sha512-N7mWAMydj89EnYTHtRpS3LBrAz3J9O6oVrqpuXuvlAHfAUG8WEKqtbAd7SBiJNY5NfCAFhSdyAh7wI4Shjqy4g==}
     engines: {node: '>=10'}
     peerDependencies:
       seroval: ^1.0
 
-  seroval@1.5.5:
-    resolution: {integrity: sha512-bSjOuPcwPKLSJNhr9+bZxA20nQxVle5J5MNsYRVE6cIg7KpRLXGupymePavu0jrxlPiPsr4xGZSB8yUY2sH2sw==}
+  seroval@1.6.8:
+    resolution: {integrity: sha512-HlSgSAkTk4EqHcje1ptJjfZi1YDv5KbhVJ/d3P7T/nAXua2VmDu+AKDX5VTdFfZf48nDkWB2TKYt0DrCSa+3wg==}
     engines: {node: '>=10'}
 
   shell-quote@1.9.0:
@@ -7210,6 +7167,11 @@ packages:
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
+  use-sync-external-store@1.7.0:
+    resolution: {integrity: sha512-6L+EeigHMQhdaIPNIFUKwfWJSwWFQ8gJbJ2DLOs5sDIegTwR9fRxvnM3uciHKjIZhFz+KAv2emhWMRvDmMcY8A==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   uuid@14.0.1:
     resolution: {integrity: sha512-6ZxzVpzDXDa3bJWaHilVayA+BH/1zmxCJoVgvmqJnid/gPoKHxUrS/aC/T6LGQtNHT+XHG9fXPJB4d+IrU30Ew==}
     hasBin: true
@@ -7469,7 +7431,7 @@ snapshots:
       immutable: 5.1.9
       invariant: 2.2.4
 
-  '@assistant-ui/core@0.2.20(@assistant-ui/store@0.2.19(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.34)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7)))':
+  '@assistant-ui/core@0.2.20(@assistant-ui/store@0.2.19(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.34)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7)))':
     dependencies:
       '@assistant-ui/store': 0.2.19(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
       '@assistant-ui/tap': 0.9.3(@types/react@19.2.17)(react@19.2.7)
@@ -7479,14 +7441,14 @@ snapshots:
       '@types/react': 19.2.17
       assistant-cloud: 0.1.34
       react: 19.2.7
-      zustand: 5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
+      zustand: 5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
     transitivePeerDependencies:
       - ioredis
       - redis
 
-  '@assistant-ui/react@0.14.26(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))':
+  '@assistant-ui/react@0.14.26(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))':
     dependencies:
-      '@assistant-ui/core': 0.2.20(@assistant-ui/store@0.2.19(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.34)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7)))
+      '@assistant-ui/core': 0.2.20(@assistant-ui/store@0.2.19(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.34)(react@19.2.7)(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7)))
       '@assistant-ui/store': 0.2.19(@assistant-ui/tap@0.9.3(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
       '@assistant-ui/tap': 0.9.3(@types/react@19.2.17)(react@19.2.7)
       '@radix-ui/primitive': 1.1.5
@@ -7506,7 +7468,7 @@ snapshots:
       react-textarea-autosize: 8.5.9(@types/react@19.2.17)(react@19.2.7)
       safe-content-frame: 0.0.22
       zod: 4.4.3
-      zustand: 5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
+      zustand: 5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
     optionalDependencies:
       '@types/react': 19.2.17
       '@types/react-dom': 19.2.3(@types/react@19.2.17)
@@ -9797,7 +9759,7 @@ snapshots:
       tailwindcss: 4.3.2
       vite: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0)
 
-  '@tanstack/history@1.162.0': {}
+  '@tanstack/history@1.162.4': {}
 
   '@tanstack/query-core@5.101.2': {}
 
@@ -9806,21 +9768,21 @@ snapshots:
       '@tanstack/query-core': 5.101.2
       react: 19.2.7
 
-  '@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@tanstack/history': 1.162.0
-      '@tanstack/react-store': 0.9.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/router-core': 1.171.14
-      isbot: 5.2.0
+      '@tanstack/history': 1.162.4
+      '@tanstack/react-store': 0.11.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/router-core': 1.171.34
+      isbot: 5.2.2
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
-  '@tanstack/react-store@0.9.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@tanstack/react-store@0.11.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@tanstack/store': 0.9.3
+      '@tanstack/store': 0.11.2
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      use-sync-external-store: 1.6.0(react@19.2.7)
+      use-sync-external-store: 1.7.0(react@19.2.7)
 
   '@tanstack/react-table@8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
@@ -9834,14 +9796,14 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
-  '@tanstack/router-core@1.171.14':
+  '@tanstack/router-core@1.171.34':
     dependencies:
-      '@tanstack/history': 1.162.0
+      '@tanstack/history': 1.162.4
       cookie-es: 3.1.1
-      seroval: 1.5.5
-      seroval-plugins: 1.5.5(seroval@1.5.5)
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
 
-  '@tanstack/store@0.9.3': {}
+  '@tanstack/store@0.11.2': {}
 
   '@tanstack/table-core@8.21.3': {}
 
@@ -11197,7 +11159,7 @@ snapshots:
     dependencies:
       is-inside-container: 1.0.0
 
-  isbot@5.2.0: {}
+  isbot@5.2.2: {}
 
   isomorphic-ws@5.0.0(ws@8.21.0):
     dependencies:
@@ -11783,12 +11745,12 @@ snapshots:
     dependencies:
       remove-trailing-separator: 1.1.0
 
-  nuqs@2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7):
+  nuqs@2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7):
     dependencies:
       '@standard-schema/spec': 1.0.0
       react: 19.2.7
     optionalDependencies:
-      '@tanstack/react-router': 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-router': 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
 
   object-inspect@1.13.4: {}
 
@@ -12301,11 +12263,11 @@ snapshots:
 
   semver@7.8.5: {}
 
-  seroval-plugins@1.5.5(seroval@1.5.5):
+  seroval-plugins@1.6.8(seroval@1.6.8):
     dependencies:
-      seroval: 1.5.5
+      seroval: 1.6.8
 
-  seroval@1.5.5: {}
+  seroval@1.6.8: {}
 
   shell-quote@1.9.0: {}
 
@@ -12641,6 +12603,10 @@ snapshots:
     dependencies:
       react: 19.2.7
 
+  use-sync-external-store@1.7.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
+
   uuid@14.0.1: {}
 
   valibot@1.4.2(typescript@6.0.3):
@@ -12782,10 +12748,10 @@ snapshots:
       '@types/react': 19.2.17
       react: 19.2.7
 
-  zustand@5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7)):
+  zustand@5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7)):
     optionalDependencies:
       '@types/react': 19.2.17
       react: 19.2.7
-      use-sync-external-store: 1.6.0(react@19.2.7)
+      use-sync-external-store: 1.7.0(react@19.2.7)
 
   zwitch@2.0.4: {}

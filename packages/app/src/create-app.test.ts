@@ -1614,14 +1614,9 @@ describe("createApp route tree", () => {
       expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");
       // The user menu switched developer mode off; the URL still says ?debug=1.
       window.sessionStorage.setItem("angee:developer-mode", "0");
-      const preload = app.router.preloadRoute;
-      const preloaded: unknown[] = [];
-      vi.spyOn(app.router, "preloadRoute").mockImplementation(((options: { to?: unknown }) => {
-        preloaded.push(options.to);
-        return preloaded.length > 4 ? Promise.resolve(undefined) : preload(options as never);
-      }) as typeof preload);
-      await app.router.preloadRoute({ to: "/" });
-      expect(preloaded).toEqual(["/", "/home"]);
+      // The router follows the redirect inside one preload, which resolves to the landing page's matches.
+      const matches = await app.router.preloadRoute({ to: "/" });
+      expect(matches?.at(-1)?.pathname).toBe("/home");
       expect(loadHome).toHaveBeenCalledOnce();
       expect(app.router.state.location.href).toBe("/first?debug=1");
       expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("0");

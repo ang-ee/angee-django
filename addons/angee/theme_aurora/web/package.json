@@ -3,5 +3,5 @@
   "exports": { ".": "./src/index.ts", "./themes": { "types": "./src/themes.d.mts", "import": "./src/themes.mjs" }, "./styles": { "types": "./src/styles.d.ts", "import": "./src/theme.css" } }, "scripts": { "typecheck": "tsc --noEmit" },
   "dependencies": { "@angee/app": "workspace:*", "@angee/ui": "workspace:*" },
   "peerDependencies": { "react": "^19", "react-dom": "^19", "@tanstack/react-router": "^1" },
-  "devDependencies": { "typescript": "^6.0.3", "react": "^19.2.7", "react-dom": "^19.2.7", "@types/react": "^19.2.17", "@types/react-dom": "^19.2.3", "@tanstack/react-router": "^1.170.16" }
+  "devDependencies": { "typescript": "^6.0.3", "react": "^19.2.7", "react-dom": "^19.2.7", "@types/react": "^19.2.17", "@types/react-dom": "^19.2.3", "@tanstack/react-router": "^1.170.41" }
 }
