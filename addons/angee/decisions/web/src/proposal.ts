@@ -3,9 +3,13 @@ import { JsonValueSchema } from "@angee/ui";
 
 const RecordActionsSchema = v.strictObject({
   model: v.optional(v.pipe(v.string(), v.minLength(1))),
-  fields: v.optional(v.record(v.string(), v.strictObject({ set: v.optional(JsonValueSchema) })), {}),
+  fields: v.optional(v.record(v.string(), v.pipe(v.strictObject({ set: v.optional(JsonValueSchema),
+    choose: v.optional(v.strictObject({ filter: v.optional(v.pipe(v.unknown(), v.check((filter) => !Array.isArray(filter)), v.record(v.string(), JsonValueSchema))) })),
+  }), v.check((action) => !(Object.hasOwn(action, "set") && Object.hasOwn(action, "choose"))))), {}),
   record: v.optional(v.strictObject({ call: v.pipe(v.string(), v.regex(/^[A-Za-z][A-Za-z0-9_]*$/)), arguments: v.optional(v.record(v.string(), JsonValueSchema), {}) })),
 });
+
+export const VerdictValuesSchema = v.record(v.string(), v.record(v.string(), JsonValueSchema));
 
 /** Alternatives are the sole source of labels, changes and continuation outcomes. */
 export const ProposalSchema = v.strictObject({

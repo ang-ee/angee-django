@@ -8,6 +8,7 @@ export const enDecisionsMessages = {
   "decision.chose": "Chose: {labels}",
   "decision.none": "None",
   "decision.currentValue": "Keep the current value",
+  "decision.chooseValue": "Choose a value",
   "decision.requestedBy": "Asked by {name}",
   "decision.multipleAlternatives": "Alternatives, choose one or more",
   "decision.alternatives": "Alternatives, choose one",

@@ -11,7 +11,9 @@ import {
 import { useDebounce } from "use-debounce";
 import {
   refineFieldsFromPaths,
+  listQueryMeta,
   } from "@angee/refine";
+import { listBatchTarget } from "../resource/resource-operations";
 import { useValueStable } from "../../lib/use-value-stable";
 import type {
   RelationOption,
@@ -40,6 +42,7 @@ export interface RelationOptionsConfig {
    * resource's own queryset exposes.
    */
   filters?: readonly CrudFilter[];
+  where?: Record<string, unknown>;
   /** Explicit server order for relations whose row sequence is semantic. */
   sorters?: readonly CrudSort[];
 }
@@ -156,6 +159,7 @@ export function useRelationOptions(
     enabled = true,
     fields: extraFields,
     filters,
+    where,
     labelField: optionLabelField,
     page = 1,
     pageSize = RELATION_OPTION_LIMIT,
@@ -190,11 +194,18 @@ export function useRelationOptions(
   const stableFilters = useValueStable([...(filters ?? []), ...searchFilters]);
   const stableSorters = useValueStable(sorters);
   const stableFields = useValueStable(extraFields);
+  const stableWhere = useValueStable(where);
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
     () => refineFieldsFromPaths(["id", labelField, ...(stableFields ?? [])]),
     [stableFields, labelField],
   );
+  const meta = React.useMemo(() => {
+    if (!stableWhere) return { fields };
+    const target = resource && listBatchTarget(resource);
+    if (!target) throw new Error("A filtered relation requires a list query contract.");
+    return listQueryMeta(target, ["id", labelField, ...(stableFields ?? [])], stableWhere);
+  }, [fields, resource, labelField, stableFields, stableWhere]);
   const run = useList<RowRecord, HttpError>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
@@ -205,7 +216,7 @@ export function useRelationOptions(
     },
     ...(stableFilters ? { filters: [...stableFilters] } : {}),
     ...(stableSorters ? { sorters: [...stableSorters] } : {}),
-    meta: { fields },
+    meta,
     queryOptions: {
       enabled: enabled && relation !== null && resource !== null,
     },

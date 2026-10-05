@@ -22,3 +22,12 @@ test("rejects empty and duplicate alternatives while preserving null sets", () =
   expect(v.parse(ProposalSchema, proposal).alternatives[0]?.actions.nte_1?.model).toBe("knowledge.Note");
   expect(v.safeParse(ProposalSchema, { alternatives: [{ ...proposal.alternatives[0], actions: { nte_1: { model: "" } } }] }).success).toBe(false);
 });
+
+test("accepts choose with optional filters and refuses mixed or unknown field actions", () => {
+  const withFields = (fields: unknown) => ({ alternatives: [{ key: "other", label: "Other", outcome: "done", actions: { nte_1: { fields } } }] });
+  const fields = { parent: { choose: { filter: { name: { _neq: "Hidden" } } } }, title: { choose: {} } };
+  expect(v.parse(ProposalSchema, withFields(fields)).alternatives[0]?.actions.nte_1?.fields).toEqual(fields);
+  expect(decisionFieldMarks([{ is_open: true, proposal: withFields(fields) }], "nte_1")).toEqual([{ field: "parent" }, { field: "title" }]);
+  for (const action of [{ choose: {}, set: "mixed" }, { choose: { unknown: true } }, { choose: { filter: [] } }, { unknown: true }])
+    expect(v.safeParse(ProposalSchema, withFields({ parent: action })).success, JSON.stringify(action)).toBe(false);
+});

@@ -1,16 +1,15 @@
 import { useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 import * as v from "valibot";
-import type { ActionFieldName } from "@angee/gql/console/actions";
 import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "@angee/metadata";
 import {
-  Button, Card, Checkbox, ErrorBanner, MetaGrid, RadioGroup, RecordReference,
+  Button, Card, Checkbox, ErrorBanner, FieldDescriptorControl, JsonValueSchema, MetaGrid, RadioGroup, RecordReference,
   RelativeTime, StatusIcon, cn, radioGroupVariants,
-  actionOutcomeSubmitResult, formSubmitError, titleCase, useActionOutcomeMutation, useRevealedRecordField, useRecordPeek,
+  actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField, useRecordPeek,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
-import { DECISION_MODELS, type Decision } from "./documents.console";
+import { DECISION_MODELS, DecideDocument, type Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
-import { ProposalSchema } from "./proposal";
+import { ProposalSchema, VerdictValuesSchema } from "./proposal";
 import { DecisionProvider, DecisionOriginOutlet } from "./origin";
 
 export interface DecisionCardProps {
@@ -42,19 +41,29 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   }, [highlighted]);
   const open = decision.is_open;
   const verdict = v.safeParse(v.array(v.string()), decision.verdict);
-  const [choice, setChoice] = useState({ revision: decision.revision, keys: [] as string[], accepted: false });
+  const [choice, setChoice] = useState({ revision: decision.revision, keys: [] as string[], values: {} as v.InferOutput<typeof VerdictValuesSchema>, accepted: false });
   const chosen = choice.revision === decision.revision ? choice.keys : [];
-  const setChosen = (keys: string[]) => setChoice({ revision: decision.revision, keys, accepted: false });
+  const alternatives = proposal.success ? proposal.output.alternatives : [];
+  const chooseFields = alternatives.filter((alternative) => chosen.includes(alternative.key)).flatMap((alternative) =>
+    Object.entries(alternative.actions).flatMap(([id, action]) => Object.entries(action.fields)
+      .flatMap(([field, operation]) => operation.choose ? [{ id, field }] : [])));
+  const values: v.InferOutput<typeof VerdictValuesSchema> = {};
+  for (const { id, field } of chooseFields) {
+    const value = choice.values[id]?.[field];
+    if (value !== undefined) (values[id] ??= {})[field] = value;
+  }
+  const complete = chosen.length > 0 && chooseFields.every(({ id, field }) => values[id]?.[field] != null && values[id]?.[field] !== "");
+  const setChosen = (keys: string[]) => setChoice((current) => ({ ...current, revision: decision.revision, keys, accepted: false }));
   const [error, setError] = useState<string>();
   useEffect(() => {
-    setChoice((current) => current.revision === decision.revision ? current : { revision: decision.revision, keys: [], accepted: false });
+    setChoice((current) => current.revision === decision.revision ? current : { revision: decision.revision, keys: [], values: {}, accepted: false });
     setError(undefined);
   }, [decision.revision]);
   const [busy, setBusy] = useState(false);
   const locked = busy || (choice.revision === decision.revision && choice.accepted);
   useEffect(() => { if (!open && choice.accepted) closedRef.current?.focus(); }, [open, choice.accepted]);
-  const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", {
-    dataProviderName: "console", invalidateModels: [...new Set([...DECISION_MODELS,
+  const [decide] = useAuthoredResourceMutation(DecideDocument, {
+    dataProviderName: "console", shouldInvalidate: (data) => data?.decide.ok === true, invalidateModels: [...new Set([...DECISION_MODELS,
       ...decision.records.flatMap((record) => record.record_model ? [record.record_model] : []),
       ...(proposal.success ? proposal.output.alternatives.flatMap((alternative) => Object.values(alternative.actions)
         .flatMap((action) => action.model ? [action.model] : [])) : []),
@@ -64,12 +73,12 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   const references = context.success ? [...context.output.references, ...context.output.facts.flatMap((fact) => fact.evidence)] : [];
   const canAnswer = open && holdsPermission(decision, "act");
   const submit = async () => {
-    if (locked) return;
+    if (locked || !complete) return;
     setBusy(true); setError(undefined);
     try {
-      const result = await decide(decision.id, { revision: decision.revision, chosen })
-        .then(actionOutcomeSubmitResult).catch(formSubmitError);
-      if (result.status === "ok") setChoice({ revision: decision.revision, keys: chosen, accepted: true });
+      const result = await decide({ id: decision.id, revision: decision.revision, chosen, values })
+        .then((data) => actionFormSubmitResult(data, "decide")).catch(formSubmitError);
+      if (result.status === "ok") setChoice({ revision: decision.revision, keys: chosen, values, accepted: true });
       else setError(result.status === "conflict" ? t("decision.conflict")
         : [...result.issues.formErrors, ...Object.values(result.issues.fieldErrors).flat()].join(" "));
     } finally { setBusy(false); }
@@ -80,11 +89,23 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
     return record?.record_model && record.record_id ? <RecordReference model={record.record_model} id={record.record_id} label={label}
       onOpen={() => openRecord({ model: record.record_model!, id: record.record_id! })} /> : null;
   };
+  const fieldValue = (id: string, field: string, value: v.InferOutput<typeof JsonValueSchema>, model?: string) => {
+    const facts = modelMetadataForLabel(metadata, model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
+    const reference = references.find((reference) => reference.id === value);
+    return <FactValue value={value} relationModel={facts?.relationModelLabel ?? reference?.model} label={reference?.label} options={facts?.values}
+      widget={facts?.widget} row={context.success ? context.output.facts.find((fact) => Object.keys(fact.row).length)?.row : undefined}
+      emptyLabel={t("decision.none")} />;
+  };
   if (!open) {
     const withdrawn = verdict.success && verdict.output.length === 0;
+    const supplied = v.safeParse(VerdictValuesSchema, decision.verdict_values);
     return <p ref={closedRef} tabIndex={-1} className="text-xs text-fg-muted">{decision.kind_label}{" · "}
       {!withdrawn && decision.answered_by ? <><span>{decision.answered_by.display_name}</span>{" · "}</> : null}<span>{withdrawn
       ? t("decision.withdrawn", { name: decision.answered_by?.display_name ?? t("decision.operator") })
+      : supplied.success && verdict.success && proposal.success ? <>{t("decision.chose", { labels: "" })}{alternatives.filter((alternative) => verdict.output.includes(alternative.key)).map((alternative, index) =>
+        <span key={alternative.key}>{index ? "; " : ""}{alternative.label}{Object.entries(alternative.actions).flatMap(([id, action]) => Object.entries(action.fields)
+          .filter(([field, operation]) => operation.choose && Object.hasOwn(supplied.output[id] ?? {}, field))
+          .map(([field]) => <span key={`${id}:${field}`}>: {fieldValue(id, field, supplied.output[id]![field]!, action.model)}</span>))}</span>)}</>
       : t("decision.chose", { labels: decision.verdict_label })}</span></p>;
   }
   const changes = (alternative: v.InferOutput<typeof ProposalSchema>["alternatives"][number]) =>
@@ -95,16 +116,16 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
           id: field,
           label: fieldLabel(id, field, actions.model),
           value: (() => {
+            if (operation.choose) return chosen.includes(alternative.key) ? <FieldDescriptorControl
+              key={`${decision.revision}:${id}:${field}`} resource={actions.model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? ""}
+              field={{ name: field }} where={operation.choose.filter} value={values[id]?.[field]} disabled={locked || !canAnswer}
+              onChange={(next) => setChoice((current) => ({ ...current, values: { ...current.values,
+                [id]: { ...current.values[id], [field]: v.parse(JsonValueSchema, next) } } }))} /> : t("decision.chooseValue");
             if (operation.set === undefined) return t("decision.currentValue");
-            const facts = modelMetadataForLabel(metadata, actions.model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
-            const reference = references.find((reference) => reference.id === operation.set);
-            return <FactValue value={operation.set} relationModel={facts?.relationModelLabel ?? reference?.model} label={reference?.label} options={facts?.values}
-              widget={facts?.widget} row={context.success ? context.output.facts.find((fact) => Object.keys(fact.row).length)?.row : undefined}
-              emptyLabel={t("decision.none")} />;
+            return fieldValue(id, field, operation.set, actions.model);
           })(),
         }))} />
       </span>)}</span>;
-  const alternatives = proposal.success ? proposal.output.alternatives : [];
   const editField = alternatives.flatMap((alternative) => Object.keys(alternative.actions[selfId ?? ""]?.fields ?? {}))[0];
   return <DecisionProvider value={{ decision }}><Card asChild className={cn("min-w-0 p-3 shadow-none", highlighted && "border-brand ring-2 ring-brand/30")}>
     <section ref={ref} aria-label={decision.kind_label} data-decision={decision.id}>
@@ -134,7 +155,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
       </> : <ErrorBanner description={t("decision.invalidProposal")} />}
       {error ? <ErrorBanner description={error} /> : null}
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {canAnswer && proposal.success ? <Button size="sm" variant="primary" disabled={locked || !chosen.length} onClick={() => void submit()}>{t("decision.submit")}</Button> : null}
+        {canAnswer && proposal.success ? <Button size="sm" variant="primary" disabled={locked || !complete} onClick={() => void submit()}>{t("decision.submit")}</Button> : null}
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
         {actions}
       </div>
