@@ -7,13 +7,18 @@ chosen keys with `answered_by` and `answered_at`. Withdrawal records an empty
 verdict with who stopped it; no verdict is the sole open-state rule.
 
 `Decision.objects.ask(DecisionRequest(...), actor=actor)` admits one question.
-Requests declare `kind`, saved `records`, `assignees`, `proposal`, and optional
-`requester` and `context`. Omission makes the asking actor the requester;
-explicit `None` allows self-assignment. Assignees must be active, and at least
-one must be permitted to answer. Requesters cannot answer their own questions
-without the administrative role. Admission requires standing read access to
-concerns and context references for the asking actor, requester and assignees.
-It creates no grants. Concern links use canonical model identities.
+Requests declare `kind`, saved `records`, `proposal`, and optional `assignees`,
+`requester` and `context`. Assignees default to `()` and requester to `None`.
+When supplied, assignees must be active and at least one must be permitted to
+answer. The composed `act` permission governs answers, including an owning
+addon's `owner_eligible` contribution. Without such a contribution or named
+assignees, only active administrators may answer. Admission requires at least
+one participant and standing read access to concerns and context references for
+the asking actor, requester and assignees. It creates no grants. Concern links
+use canonical model identities. An owning addon may declare
+`DerivedFromRelation("decisions.DecisionRecord", related_query_name=...)` on the
+canonical concerned model and contribute typed `owner_eligible` and `read` arms
+through that query path. Deleting the source preserves these retained links.
 
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 

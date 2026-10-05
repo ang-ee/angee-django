@@ -125,7 +125,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 link(decision=decision, content_type=ct, object_id=pk)
                 for ct, pk in sorted(targets, key=lambda target: (target[0].pk, target[1]))
             ])
-            if not any(decision.with_actor(person).has_access("act") for person in assignees):
+            if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
             publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision

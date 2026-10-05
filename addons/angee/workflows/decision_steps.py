@@ -90,7 +90,7 @@ class DecisionStep[I, O, C](Step[I, O, C]):
 class DecisionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: str = Field(min_length=1)
-    assignees: tuple[str, ...] = Field(min_length=1)
+    assignees: tuple[str, ...] = ()
     proposal: DecisionProposal
     requester: str | None = None
     context: DecisionContext = Field(default_factory=DecisionContext)

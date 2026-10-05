@@ -1,10 +1,21 @@
 // Generic role anchored to one team's live roster.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition extcontrib/role {
     relation admin: angee/role // rebac:const=admin
     relation team: spaces/group
 
     permission effective_member = team->write + admin->member
+}
+
+definition extcontrib/record {
+    relation reader: auth/user
+    relation writer: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = reader + writer + admin->member
+    permission write = writer + admin->member
+    permission delete = admin->member
 }

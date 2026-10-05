@@ -10,10 +10,10 @@ from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.workflows.decision_steps import DecisionStep, apply_proposals
+from angee.workflows.decision_steps import AskDecision, DecisionStep, apply_proposals
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import decide, load_workflow, run_until
+from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
@@ -110,6 +110,36 @@ def test_ask_answer_then_apply_as_run_actor(review):
     assert question.review_subject.name == "Applied"
     assert run.output == {"decision": public_id_of(decision), "chosen": ["approve"]}
     assert any(name == "workflows.execute" for name, _ in sent)
+
+
+@pytest.mark.parametrize("assignment_config", [{}, {"assignees": []}])
+def test_configured_decision_without_assignees_waits_answers_and_applies(execution, register_step, assignment_config):
+    actor, _sent = execution
+    register_step(AskDecision)
+    subject = vault_for(actor)
+    workflow = load_workflow({
+        "nodes": {"review": {"step": "ask_decision", "config": {
+            "kind": "rename", **assignment_config,
+            "proposal": {"alternatives": [{
+                "key": "rename", "label": "Rename", "outcome": "renamed",
+                "actions": {"subject": {"fields": {"name": {"set": "Applied"}}}},
+            }]},
+        }}},
+        "results": [{"from": "review", "when": ["renamed"], "as": "renamed"}],
+    }, actor=actor)
+    run = start_run(workflow, actor=actor, subject=subject)
+    run_until(run)
+    step = system_queryset(StepRun).get(run=run, node_key="review")
+    assert (step.status, step.waiting_kind) == ("waiting", "decision")
+    decision = questions(step)[0]
+    assert not decision.assignees.with_actor(actor).exists()
+    decide(decision, actor=actor, chosen=["rename"])
+    subject.refresh_from_db()
+    assert subject.name != "Applied"
+    run_until(run)
+    subject.refresh_from_db()
+    assert run.status == "succeeded" and run.outcome == "renamed" and subject.name == "Applied"
+    assert run.output == {"decision": public_id_of(decision), "chosen": ["rename"]}
 
 
 def test_multiple_choices_receive_the_set_and_route_done(review):

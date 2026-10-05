@@ -1,6 +1,6 @@
 // Additive REBAC extension — contributes to a definition owned by another addon.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 // `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
 // `reviewer` relation and unions it into the `read` arm without editing the
@@ -26,4 +26,12 @@ definition auth/user {
 
     permission create = manager->effective_member
     permission issue_password = manager->effective_member
+}
+
+// Decision access follows the concerned record's live permissions.
+definition decisions/decision {
+    relation concerned_record: extcontrib/record // rebac:field=records__extcontrib_record
+
+    permission owner_eligible = concerned_record->write
+    permission read = concerned_record->read
 }

@@ -11,7 +11,7 @@ from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.decisions.testing.models import Decision
-from tests.conftest import create_user, vault_for
+from tests.conftest import create_platform_admin, create_user, vault_for
 
 
 @pytest.fixture
@@ -55,6 +55,34 @@ def test_one_question_lifecycle_and_audit(people):
     assert answered.answered_by_id == reviewer.pk and answered.answered_at
     assert answered.revision == question.revision + 1
     assert system_queryset(Decision).count() == 1
+
+
+@pytest.mark.parametrize("assignments", [{}, {"assignees": ()}])
+def test_unassigned_question_accepts_only_an_active_admin_answer(people, assignments):
+    requester, reviewer, other, outsider, subject = people
+    admin = create_platform_admin("unassigned-admin")
+    request = DecisionRequest(
+        kind="note_review", records=(subject,), requester=requester,
+        proposal=request_for(people).proposal, **assignments,
+    )
+    assert request.assignees == ()
+    question = Decision.objects.ask(request, actor=requester)
+    assert not question.assignees.with_actor(admin).exists()
+    for person in (requester, reviewer, other, outsider):
+        with pytest.raises(PermissionDenied):
+            Decision.objects.decide(question, actor=person, chosen=["complete"])
+    question.refresh_from_db()
+    assert question.is_open and question.revision == 1
+    answered = Decision.objects.decide(question, actor=admin, chosen=["complete"])
+    assert answered.verdict == ["complete"] and answered.answered_by_id == admin.pk
+
+
+def test_unassigned_actorless_question_still_requires_an_admission_reader(people):
+    *_, subject = people
+    request = DecisionRequest(kind="note_review", records=(subject,), proposal=request_for(people).proposal)
+    with system_context(reason="test.actorless_question"), pytest.raises(ValidationError, match="requires a reader"):
+        Decision.objects.ask(request, actor=None)
+    assert not system_queryset(Decision).exists()
 
 
 @pytest.mark.parametrize("chosen", [[], ["unknown"], ["complete", "complete"], ["complete", "decline"], "complete"])
@@ -130,10 +158,15 @@ def test_two_assignees_still_answer_one_question(people):
     assert system_queryset(Decision).get(pk=question.pk).answered_by_id == reviewer.pk
 
 
-def test_inactive_assignee_and_self_requester_are_not_admitted(people):
-    requester, reviewer, *_ = people
-    with pytest.raises(ValidationError):
+def test_named_assignee_who_cannot_answer_rolls_back_admission(people):
+    requester, *_ = people
+    with pytest.raises(ValidationError, match="At least one assignee must be allowed to answer"):
         Decision.objects.ask(request_for(people, assignees=(requester,)), actor=requester)
+    assert not system_queryset(Decision).exists()
+
+
+def test_inactive_assignee_is_not_admitted(people):
+    requester, reviewer, *_ = people
     with system_context(reason="test.inactive_assignee"):
         type(reviewer).objects.filter(pk=reviewer.pk).update(is_active=False)
     with pytest.raises(PermissionDenied):

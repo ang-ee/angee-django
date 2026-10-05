@@ -159,7 +159,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
         {actions}
       </div>
-      <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p>
+      {decision.assignees.length ? <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
       {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
         <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
           ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>

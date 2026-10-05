@@ -227,12 +227,12 @@ class DecisionProposal(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    """One immutable question for one or more named assignees."""
+    """One immutable question with optional named assignees."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True, revalidate_instances="always")
     kind: str = Field(min_length=1, pattern=r"\S")
     records: tuple[InstanceOf[models.Model], ...] = Field(min_length=1)
-    assignees: tuple[Any, ...] = Field(min_length=1)
+    assignees: tuple[Any, ...] = ()
     proposal: DecisionProposal
     requester: Any = None
     context: InstanceOf[DecisionContext] = Field(default_factory=DecisionContext)
