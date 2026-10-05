@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { composeAppVocabulary, createAngeeI18nRuntime } from "./i18n";
 import { MenuTree } from "@angee/ui/chrome/menu-tree";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import type { AppVocabulary } from "@angee/ui/runtime";
 
 const resources = {
@@ -68,6 +68,29 @@ describe("scoped vocabulary validation", () => {
   ];
   test.each(invalidVocabulary)("rejects unknown vocabulary references: %j", (declaration) => {
     expect(() => compose([declaration])).toThrow(/unknown/i);
+  });
+
+  const predicateModels = [testDataResource("test.Record", { query: testResourceQuery({ fields: {
+    author_name: testQueryField("author_name", { row: null }),
+    authored_by_viewer: testQueryField("authored_by_viewer", { row: null, scalar: "Boolean",
+      filter: { field: "authored_by_viewer", scalar: "Boolean", values: [], operators: ["exact"] } }),
+    sort_only: testQueryField("sort_only", { row: null, filter: null, sort: { field: "sort_only" } }),
+    disabled_filter: testQueryField("disabled_filter", { row: null,
+      filter: { field: "disabled_filter", scalar: "String", values: [], operators: [] } }),
+  } }) })];
+
+  test("accepts vocabulary for declared filter-only predicates at app composition", () => {
+    const fields = { author_name: "Who wrote it", authored_by_viewer: { label: "Written by me" } };
+    const resolve = composeAppVocabulary(resources, [
+      { app: "desk", resources: { "test.Record": { fields } } },
+    ], predicateModels, menu, routes);
+    expect(resolve("desk", "desk.record").vocabulary.resources["test.Record"]?.fields).toEqual(fields);
+  });
+
+  test.each(["missing", "sort_only", "disabled_filter"])("rejects vocabulary for undeclared predicates: %s", (field) => {
+    expect(() => composeAppVocabulary(resources, [
+      { app: "desk", resources: { "test.Record": { fields: { [field]: "Unknown" } } } },
+    ], predicateModels, menu, routes)).toThrow(`Vocabulary references unknown field "test.Record.${field}".`);
   });
 
   test("inherits app vocabulary into records and restores base copy outside the app", () => {

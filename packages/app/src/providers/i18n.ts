@@ -3,7 +3,7 @@ import type { TOptions, i18n } from "i18next";
 import { recordValue, type I18nResources, type MessageVars } from "@angee/refine";
 import { createAngeeI18nInstance } from "@angee/ui/runtime";
 import type { AppVocabulary, RuntimeVocabulary } from "@angee/ui/runtime";
-import { canonicalModelLabel, type DataResourceMetadata, type ResourceVocabulary } from "@angee/metadata";
+import { canonicalModelLabel, ResourceQuery, type DataResourceMetadata, type ResourceVocabulary } from "@angee/metadata";
 import type { MenuTree } from "@angee/ui/chrome/menu-tree";
 import type { AddonRoute } from "../define-addon";
 import { isTone } from "@angee/ui/lib";
@@ -89,15 +89,19 @@ export function composeAppVocabulary(
     const normalized: Record<string, ResourceVocabulary> = {};
     for (const [spelling, words] of Object.entries(declaration.resources ?? {})) {
       const model = canonicalModelLabel(resources, spelling);
-      const fields = new Set(resources.filter((resource) => resource.modelLabel === model).flatMap((resource) => (resource.fields ?? []).map((field) => field.name)));
+      const modelResources = resources.filter((resource) => resource.modelLabel === model);
+      const fields = new Set(modelResources.flatMap((resource) => [
+        ...(resource.fields ?? []).map((field) => field.name),
+        ...Object.entries(ResourceQuery.from(resource).fields)
+          .filter(([, field]) => field.filter?.operators.length).map(([name]) => name),
+      ]));
       for (const [field, word] of Object.entries(words.fields ?? {})) {
         if (!fields.has(field)) throw new Error(`Vocabulary references unknown field "${model}.${field}".`);
         if (typeof word !== "string") for (const [value, tone] of Object.entries(word.tones ?? {})) {
           if (!value.trim() || !isTone(tone)) throw new Error(`Vocabulary field "${model}.${field}" names an unknown tone "${String(tone)}" for "${value}".`);
         }
       }
-      const relations = new Set(resources.filter((resource) => resource.modelLabel === model)
-        .flatMap((resource) => (resource.grantable ?? []).map((relation) => relation.relation)));
+      const relations = new Set(modelResources.flatMap((resource) => (resource.grantable ?? []).map((relation) => relation.relation)));
       for (const relation of Object.keys(words.relations ?? {})) {
         if (!relations.has(relation)) throw new Error(`Vocabulary references unknown relation "${model}.${relation}".`);
       }

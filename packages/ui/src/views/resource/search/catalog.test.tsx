@@ -2,8 +2,8 @@
 import type { ReactNode } from "react";
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { testDataResource } from "@angee/metadata/testing";
-import { ResourceQuery } from "@angee/metadata";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, schemaFieldMetadataWithVocabulary } from "@angee/metadata";
 import { ResourceViewProvider, useResourceView } from "../resource-view-context";
 import { useSearchCatalog, searchTextFields, type UseSearchCatalogInput } from "./catalog";
 import type { SearchFacet } from "./types";
@@ -76,6 +76,26 @@ test("text defaults and shortcuts deduplicate and require iContains; null remove
   const search = { shortcuts: [{ kind: "text", field: "title" }, { kind: "text", field: "owner.name" }] } as const;
   expect(catalog({ textFilterField: "owner.name", search }).text.map((item) => item.field)).toEqual(["owner.name", "title"]);
   expect(catalog({ textFilterField: null, search }).text.map((item) => item.field)).toEqual(["title", "owner.name"]);
+});
+
+test.each(["Who wrote it", { label: "Who wrote it" }])("filter-only field and text shortcut labels come from vocabulary: %j", (word) => {
+  const resource = testDataResource("test.Record", { query: testResourceQuery({ fields: {
+    author_name: testQueryField("author_name", { row: null,
+      filter: { field: "author_name", scalar: "String", values: [], operators: ["exact", "iContains"] } }),
+  } }) });
+  const metadata = schemaFieldMetadataWithVocabulary(schemaFieldMetadataFromDataResources([resource]), {
+    "test.Record": { fields: { author_name: word } },
+  });
+  const modelMetadata = metadata.labels["test.Record"]!;
+  expect(modelMetadata.resource).toBe(resource);
+  expect(Object.keys(modelMetadata.fields)).toEqual([]);
+  const search = { shortcuts: [{ kind: "text", field: "author_name" }] } as const;
+  const result = catalog({ query: ResourceQuery.from(resource), modelMetadata,
+    columns: [], textFilterField: null, search });
+  expect(result.fields.find((field) => field.field === "author_name")?.label).toBe("Who wrote it");
+  expect(result.text).toEqual([{ field: "author_name", label: "Who wrote it" }]);
+  render(<SearchControls search={searchFixture({ catalog: result })} shortcuts={pageSearchShortcuts(search)} />);
+  expect(screen.getByRole("searchbox", { name: "Who wrote it" }).getAttribute("placeholder")).toBe("Who wrote it");
 });
 
 test("curated grouping preserves declared, contributed and inferred precedence", () => {

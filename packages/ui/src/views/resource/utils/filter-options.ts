@@ -73,7 +73,7 @@ export function buildFilterFields<TRow extends Row>(
       fields.push({
         id: fieldName,
         field: fieldName,
-        label: fieldLabel(fieldName, field, column?.header),
+        label: fieldLabel(fieldName, metadata, column?.header),
         type: "selection",
         operators,
         options: options.length > 0
@@ -90,7 +90,7 @@ export function buildFilterFields<TRow extends Row>(
     fields.push({
       id: fieldName,
       field: fieldName,
-      label: fieldLabel(fieldName, field, column?.header),
+      label: fieldLabel(fieldName, metadata, column?.header),
       type: filterType,
       operators,
     });
