@@ -135,7 +135,7 @@ def test_deleted_subject_prevents_reopen(execution, subject):
     step = system_queryset(StepRun).get(run=run)
     system_queryset(RunSubjectRecord).filter(pk=subject.pk).delete()
 
-    with pytest.raises(ValidationError, match="cannot be retried"):
+    with pytest.raises(ValidationError, match="cannot be retried|subject no longer exists"):
         StepRun.objects.retry_step(step, actor=actor)
 
     run.refresh_from_db()

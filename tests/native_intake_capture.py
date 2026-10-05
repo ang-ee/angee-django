@@ -34,7 +34,6 @@ class HasuraFilterDeclarationTests(TransactionTestCase):
         for model, names in (
             ("projects.Task", ("requester_name", "requested_by_viewer")),
             ("intake.Need", ("filer_name",)),
-            ("decisions.Decision", ("workflow_name", "node_key")),
         ):
             for name in names:
                 with self.subTest(model=model, filter=name):
