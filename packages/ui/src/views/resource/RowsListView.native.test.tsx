@@ -172,6 +172,19 @@ function fixture(filter: ResourceViewFilter) {
   </ResourceViewProvider></ToastProvider>);
 }
 
+test("embedded rows show search and a pager only once they outgrow a page", () => {
+  const view = (props: { presentation: "embedded" | "page"; pageSize?: number }) =>
+    render(<ToastProvider><RowsListView scope="local" rows={rows} columns={columns} {...props} /></ToastProvider>);
+  view({ presentation: "embedded" });
+  expect(screen.queryByPlaceholderText(/^Filter/)).toBeNull();
+  cleanup();
+  view({ presentation: "embedded", pageSize: 2 });
+  expect(screen.getByPlaceholderText(/^Filter/)).toBeTruthy();
+  cleanup();
+  view({ presentation: "page" });
+  expect(screen.getByPlaceholderText(/^Filter/)).toBeTruthy();
+});
+
 test("bare rows search across declared columns keeps its other filters", () => {
   fixture({ title: { iContains: "alpha" }, status: { exact: "active" } });
   expect(screen.getByText("Alpha")).toBeTruthy();
