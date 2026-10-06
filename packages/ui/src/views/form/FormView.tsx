@@ -175,6 +175,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     recordTabList,
     tabs,
     tabbed,
+    recordTabPending,
     visibleDeleteAction,
     loading,
     pending,
@@ -271,7 +272,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     : overviewContent;
   const panelFills = (tab: RecordTabDescriptor) => recordPresentation === "workspace" || tab.presentation === "full-bleed";
   const renderRecordPanel = (tab: RecordTabDescriptor) => {
-    if (!recordPanelContext || awaitingRecord) return null;
+    if (!recordPanelContext || awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === tab.id;
     const content = withRail(tab.render({ ...recordPanelContext, active }), active, panelFills(tab));
     return recordChromeContext

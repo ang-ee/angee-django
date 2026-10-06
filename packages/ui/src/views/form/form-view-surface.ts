@@ -220,6 +220,8 @@ export interface FormViewSurface
   tabs: readonly FormViewTab[];
   /** Whether the tab strip shows: only with two or more visible tabs. */
   tabbed: boolean;
+  /** A default-tab rule has not chosen for this record yet: no record panel mounts until it does. */
+  recordTabPending: boolean;
   visibleDeleteAction: RecordDeleteAction | undefined;
 }
 
@@ -841,6 +843,9 @@ export function useFormViewSurface({
     tabs,
     // A strip of one tab only repeats its label: that tab renders as the body under its heading.
     tabbed: tabs.length > 1,
+    // Until a rule chooses, the fallback is a placeholder: mounting its panel would flash it.
+    recordTabPending: recordTab === undefined && localRecordTab === null && !isCreate
+      && typeof defaultRecordTab === "function" && ruledRecordTab?.key !== ruledRecordKey,
     visibleDeleteAction,
   };
 }

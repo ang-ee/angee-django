@@ -3683,6 +3683,7 @@ describe("FormView", () => {
           ...defaultModel("NoteType", "notes.Note"),
           fields: {
             title: { name: "title", kind: "scalar", scalar: "String" },
+            summary: { name: "summary", kind: "scalar", scalar: "String" },
             deadline: { name: "deadline", kind: "scalar", scalar: "DateTime" },
           },
           resource: {
@@ -3699,8 +3700,10 @@ describe("FormView", () => {
 
     renderWithProviders(
       <FormView resource="notes.Note" layout="tabs">
+        {/* Two groups with fields of their own make two body tabs (the title moves to the header). */}
         <Group label="Overview">
           <Field name="title" label="Title" />
+          <Field name="summary" label="Summary" />
         </Group>
         <Group label="Schedule">
           <Field name="deadline" label="Deadline" />
