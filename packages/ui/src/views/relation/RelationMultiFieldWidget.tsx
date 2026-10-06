@@ -23,6 +23,8 @@ export interface RelationMultiFieldWidgetProps {
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by the multi-picker. */
   filters?: readonly CrudFilter[];
+  /** Hasura condition narrowing the related rows offered by the picker. */
+  where?: Record<string, unknown>;
   /**
    * Enables inline creation: a visible button (`actionLabel`, else `New <model>`)
    * opens the related model's create form, and the saved record joins the
@@ -48,6 +50,7 @@ export function RelationMultiFieldWidget({
   controlProps,
   relation,
   filters,
+  where,
   create,
   "aria-label": ariaLabel,
 }: RelationMultiFieldWidgetProps): ReactElement {
@@ -56,6 +59,7 @@ export function RelationMultiFieldWidget({
   const { options, list } = useRelationOptions(relation, {
     enabled: !readOnly,
     filters,
+    where,
     sort: true,
   });
   const field = useMemo<WidgetField>(

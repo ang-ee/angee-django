@@ -42,14 +42,22 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                                              values=(decision.verdict_values or {}).get(identity))
                 except ValueError as error:
                     raise ValidationError(str(error)) from error
+                relations = {}
+                updated = []
                 for name, value in values.items():
-                    setattr(record, name, value)
+                    if record._meta.get_field(name).many_to_many:
+                        relations[name] = value
+                    else:
+                        setattr(record, name, value)
+                        updated.append(name)
                 if values:
                     record.full_clean()
-                    updated = [*values]
                     if any(field.name == "updated_at" for field in record._meta.fields):
                         updated.append("updated_at")
-                    record.save(update_fields=updated)
+                    if updated:
+                        record.save(update_fields=updated)
+                    for name, value in relations.items():
+                        getattr(record, name).set(value)
                     if ctx is not None:
                         ctx.record(record, operation="changed")
                 if actions.record:

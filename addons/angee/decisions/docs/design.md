@@ -75,7 +75,7 @@ How the ontology maps to this addon.
   Supplied values pass through the same field resolution as `set` under the answering actor, including
   related-record read access, validators and write permissions. Every chosen `choose` field needs a value,
   and no other field may receive one. Multiple alternatives cannot overlap a field write.
-  Many-to-many writes remain refused; `choose` does not apply inside method arguments.
+  Updatable many-to-many fields replace their set with related public ids (an empty list clears it); one-to-many writes remain refused, and `choose` does not apply inside method arguments.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Readers:**

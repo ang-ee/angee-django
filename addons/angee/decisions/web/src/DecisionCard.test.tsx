@@ -48,6 +48,8 @@ const record = testDataResource("notes.Note", { fields: [
     creatable: true, updatable: true, requiredOnCreate: false, aggregatable: false },
   { name: "enabled", label: "Enabled", kind: "scalar", scalar: "Boolean", readable: true,
     creatable: true, updatable: true, requiredOnCreate: false, aggregatable: false },
+  { name: "contacts", label: "Contacts", kind: "list", scalar: null, relationModelLabel: "contacts.Contact",
+    readable: true, creatable: true, updatable: true, requiredOnCreate: false, aggregatable: false },
 ] });
 const where = { name: { _neq: "Hidden" } };
 const chooseDecision = (multiple = false) => decisionFixture({ proposal: { multiple, alternatives: [
@@ -92,6 +94,30 @@ test("a relation choose uses server search and filters, gates Confirm, sends pub
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() => expect(decide).toHaveBeenCalledExactlyOnceWith({ id: "dcn_review",
     revision: 4, chosen: ["other"], values: { nte_7: { contact: selected.id } },
+  }));
+});
+
+test.each([false, true])("a many-to-many choose renders the multi widget and submits a list (clear: %s)", async (clear) => {
+  decide.mockResolvedValue({ decide: { ok: true, message: "" } });
+  const contacts = [{ id: "cnt_1", name: "First contact" }, { id: "cnt_2", name: "Second contact" }];
+  const getList = vi.fn(async (_params: unknown) => ({ data: contacts, total: contacts.length }));
+  const initial = decisionFixture({ proposal: { alternatives: [{ key: "select", label: "Select contacts", outcome: "done",
+    actions: { nte_7: { fields: { contacts: { choose: { filter: where } } } } },
+  }] } });
+  render(<ChooseHarness initial={initial} dataProvider={{ getList }} />);
+  fireEvent.click(screen.getByRole("radio", { name: /^Select contacts/ }));
+  expect(confirmDisabled()).toBe(true);
+  await waitFor(() => expect(getList.mock.calls.at(-1)?.[0]).toMatchObject({ meta: { gqlVariables: { where } } }));
+  await waitFor(() => expect((screen.getByRole("combobox", { name: "Contacts" }) as HTMLButtonElement).disabled).toBe(false));
+  for (const contact of contacts) {
+    fireEvent.click(screen.getByRole("combobox", { name: "Contacts" }));
+    fireEvent.click(await screen.findByRole("option", { name: contact.name }));
+  }
+  if (clear) for (const contact of contacts) fireEvent.click(screen.getByRole("button", { name: `Remove ${contact.name}` }));
+  expect(confirmDisabled()).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(decide).toHaveBeenCalledExactlyOnceWith({ id: initial.id, revision: initial.revision,
+    chosen: ["select"], values: { nte_7: { contacts: clear ? [] : contacts.map(({ id }) => id) } },
   }));
 });
 

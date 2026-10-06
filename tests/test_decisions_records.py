@@ -1,5 +1,8 @@
 """Concern relations, proposals, attention and answers across unrelated owners."""
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 import strawberry_django
 from django.apps import apps
@@ -14,10 +17,153 @@ from angee.base.scoping import system_queryset
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordActions
 from angee.decisions.testing.models import Decision
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
+from angee.graphql.schema import SchemaParts
+from angee.workflows.decision_steps import apply_proposals
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
+from tests.linesdemo.models import Document, DocumentLine, Tag
+
+
+@pytest.fixture
+def many_to_many(composed_tables, monkeypatch):
+    actor = create_platform_admin("relation-answerer")
+    with system_context(reason="test.decision_many_to_many"):
+        document = Document.objects.create(title="Document")
+        line = DocumentLine.objects.create(document=document, label="Before")
+        tags = tuple(Tag.objects.create(name=name) for name in ("First", "Second", "Hidden"))
+        line.tags.set(tags[:1])
+
+    @strawberry_django.type(DocumentLine)
+    class LineType(AngeeNode):
+        label: str
+
+        @strawberry_django.field
+        def tags(self) -> list[str]:
+            return [tag.public_id for tag in self.tags.all()]
+
+    resource = hasura_model_resource(
+        LineType, model=DocumentLine, name="decision_lines", filterable=("id",), sortable=("id",),
+        aggregatable=("id",), writable=("label", "tags"), field_id_decode={"tags": public_pk_decoder(Tag)},
+    )
+    monkeypatch.setattr("angee.decisions.contracts.schema_parts_for", lambda app: {
+        "console": SchemaParts(mutation=(resource.mutation,)),
+    })
+    return actor, line, tags
+
+
+@pytest.mark.parametrize("choose", [False, True])
+@pytest.mark.parametrize("clear", [False, True])
+def test_many_to_many_proposals_replace_or_clear_after_the_scalar_save(many_to_many, choose, clear):
+    actor, line, tags = many_to_many
+    identities = [] if clear else [tag.public_id for tag in tags[1:]]
+    proposal = DecisionProposal(alternatives=[{
+        "key": "apply", "label": "Apply", "outcome": "done", "actions": {line.public_id: {"fields": {
+            "label": {"set": "After"}, "tags": {"choose": {}} if choose else {"set": identities},
+        }}},
+    }])
+    values = {line.public_id: {"tags": identities}} if choose else {}
+    selected = proposal.choose(["apply"], values=values, record_models={line.public_id: DocumentLine})
+    related = []
+    resolved = selected[0].actions[line.public_id].resolve(
+        line, context={"actor": actor, "related_records": related}, values=values.get(line.public_id),
+    )
+    assert resolved["tags"] == (() if clear else tags[1:])
+    assert related == ([] if clear else list(tags[1:]))
+    links = Mock()
+    links.with_actor.return_value.all.return_value = [SimpleNamespace(record_public_id=line.public_id, record=line)]
+    decision = SimpleNamespace(is_open=False, verdict=["apply"], proposal=proposal.model_dump(mode="json"),
+                               verdict_values=values, records=links)
+    ctx = Mock()
+
+    def relation_changed(sender, instance, action, **kwargs):
+        if action.startswith("pre_"):
+            assert system_queryset(DocumentLine).get(pk=instance.pk).label == "After"
+
+    models.signals.m2m_changed.connect(relation_changed, sender=DocumentLine.tags.through, weak=False)
+    try:
+        assert apply_proposals(decision, actor=actor, ctx=ctx) == "done"
+    finally:
+        models.signals.m2m_changed.disconnect(relation_changed, sender=DocumentLine.tags.through)
+    line.refresh_from_db()
+    assert line.label == "After"
+    assert set(line.tags.all()) == (set() if clear else set(tags[1:]))
+    ctx.record.assert_called_once_with(line, operation="changed")
+
+
+@pytest.mark.parametrize("value", [None, "tag_single", [1], ["tag_one", None], {"id": "tag_one"}])
+def test_many_to_many_set_and_choose_require_string_lists(many_to_many, value):
+    actor, line, _tags = many_to_many
+    with pytest.raises(ValueError):
+        RecordActions(fields={"tags": {"set": value}}).resolve(line, context={"actor": actor})
+    proposal = DecisionProposal(alternatives=[{
+        "key": "apply", "label": "Apply", "outcome": "done",
+        "actions": {line.public_id: {"fields": {"tags": {"choose": {}}}}},
+    }])
+    with pytest.raises(ValueError):
+        proposal.choose(["apply"], values={line.public_id: {"tags": value}},
+                        record_models={line.public_id: DocumentLine})
+    with pytest.raises(ValueError):
+        proposal.alternatives[0].actions[line.public_id].resolve(
+            line, context={"actor": actor}, values={"tags": value},
+        )
+
+
+@pytest.mark.parametrize("choose", [False, True])
+def test_many_to_many_refuses_an_unreadable_related_id(many_to_many, monkeypatch, choose):
+    actor, line, tags = many_to_many
+    original = type(Tag.objects).with_actor
+    actors = []
+
+    def scoped(manager, answering):
+        if manager.model is Tag:
+            actors.append(answering)
+            return original(manager, answering).exclude(pk=tags[-1].pk)
+        return original(manager, answering)
+
+    monkeypatch.setattr(type(Tag.objects), "with_actor", scoped)
+    identities = [tags[1].public_id, tags[-1].public_id]
+    actions = RecordActions(fields={"tags": {"choose": {}} if choose else {"set": identities}})
+    with pytest.raises(ValueError, match="absent or unreadable"):
+        actions.resolve(line, context={"actor": actor}, values={"tags": identities} if choose else None)
+    assert actors == [actor]
+    assert list(line.tags.all()) == [tags[0]]
+
+
+@pytest.mark.parametrize("choose", [False, True])
+def test_one_to_many_proposals_stay_refused(many_to_many, choose):
+    actor, line, _tags = many_to_many
+    with pytest.raises(ValueError, match="Set a scalar field"):
+        RecordActions(fields={"lines": {"choose": {}} if choose else {"set": []}}).resolve(
+            line.document, context={"actor": actor}, values={"lines": []} if choose else None,
+        )
+
+
+def test_many_to_many_requires_an_updatable_resource(many_to_many, monkeypatch):
+    actor, line, _tags = many_to_many
+    monkeypatch.setattr("angee.decisions.contracts.schema_parts_for", lambda app: {})
+    with pytest.raises(ValueError, match="does not expose writes to tags"):
+        RecordActions(fields={"tags": {"set": []}}).resolve(line, context={"actor": actor})
+
+
+def test_many_to_many_is_not_written_when_scalar_full_clean_fails(many_to_many):
+    actor, line, tags = many_to_many
+    line.with_actor(actor).label = ""
+    line.save(update_fields=["label"])
+    proposal = DecisionProposal(alternatives=[{
+        "key": "apply", "label": "Apply", "outcome": "done",
+        "actions": {line.public_id: {"fields": {"tags": {"set": [tags[1].public_id]}}}},
+    }])
+    links = Mock()
+    links.with_actor.return_value.all.return_value = [SimpleNamespace(record_public_id=line.public_id, record=line)]
+    decision = SimpleNamespace(is_open=False, verdict=["apply"], proposal=proposal.model_dump(mode="json"),
+                               verdict_values={}, records=links)
+    ctx = Mock()
+    with pytest.raises(ValidationError, match="label"):
+        apply_proposals(decision, actor=actor, ctx=ctx)
+    assert list(line.tags.all()) == [tags[0]]
+    ctx.record.assert_not_called()
 
 
 @pytest.fixture

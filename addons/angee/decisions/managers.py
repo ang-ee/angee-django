@@ -146,11 +146,15 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             try:
                 values = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python({} if values is None else values)
-                selected = DecisionProposal.model_validate(row.proposal).choose(chosen, values=values)
+                links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
+                selected = DecisionProposal.model_validate(row.proposal).choose(
+                    chosen, values=values,
+                    record_models={identity: model for identity, link in links.items()
+                                   if identity in values and (model := link.content_type.model_class()) is not None},
+                )
             except ValueError as error:
                 raise ValidationError({"chosen": str(error)}) from error
             try:
-                links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
                 for alternative in selected:
                     for identity, actions in alternative.actions.items():
                         if identity not in values:

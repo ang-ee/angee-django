@@ -10,8 +10,9 @@ import {
   type WidgetFocusTarget,
   relationValueId,
 } from "../../widgets";
-import { fieldsWithMetadataDefaults, relationFieldInfoForDescriptor } from "../resource/model-metadata-defaults";
+import { fieldsWithMetadataDefaults, relationFieldInfoForDescriptor, relationListFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
+import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { textWidget } from "../../widgets/text";
 import { useUiT } from "../../i18n";
 import {
@@ -85,8 +86,13 @@ export function FieldDescriptorControl(props: FieldDescriptorControlProps): Reac
   const schema = useSchemaFieldMetadata();
   const field = props.resource ? { ...props.field, ...fieldsWithMetadataDefaults([props.field], model, schema)[0] } : props.field;
   const relation = props.resource ? relationFieldInfoForDescriptor(field, model, schema) : null;
+  const relationList = props.resource ? relationListFieldInfo(field.name, model, schema) : null;
   const widgetId = fieldWidgetId(field);
   const widget = useResolvedWidget(widgetId) ?? FALLBACK_TEXT_WIDGET;
+  if (relationList && (!props.field.widget || props.field.widget === "many2many")) return <RelationMultiFieldWidget
+    value={Array.isArray(props.value) ? props.value : undefined} onChange={props.onChange}
+    readOnly={props.readOnly || props.disabled} relation={relationList} filters={field.filters} where={props.where}
+    aria-label={typeof field.label === "string" ? field.label : field.name} controlProps={props.controlProps} />;
   if (relation && (!field.widget || field.widget === "many2one")) return <RelationFieldWidget
     value={relationValueId(props.value) || null} onChange={props.onChange} onCommit={props.onCommit}
     readOnly={props.readOnly || props.disabled} relation={relation} filters={field.filters} where={props.where}

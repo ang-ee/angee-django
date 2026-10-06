@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import * as v from "valibot";
-import { decisionFieldMarks, ProposalSchema } from "./proposal";
+import { decisionFieldMarks, ProposalSchema, VerdictValuesSchema } from "./proposal";
 
 const proposal = { multiple: true, alternatives: [
   { key: "rename", label: "Rename", outcome: "done", actions: { nte_1: { model: "knowledge.Note", fields: { title: { set: "Draft" }, body: { set: null } } } } },
@@ -30,4 +30,12 @@ test("accepts choose with optional filters and refuses mixed or unknown field ac
   expect(decisionFieldMarks([{ is_open: true, proposal: withFields(fields) }], "nte_1")).toEqual([{ field: "parent" }, { field: "title" }]);
   for (const action of [{ choose: {}, set: "mixed" }, { choose: { unknown: true } }, { choose: { filter: [] } }, { unknown: true }])
     expect(v.safeParse(ProposalSchema, withFields({ parent: action })).success, JSON.stringify(action)).toBe(false);
+});
+
+test.each([{ ids: [] }, { ids: ["cnt_1", "cnt_2"] }])("preserves relation lists in sets and verdict values: %j", ({ ids }) => {
+  const proposal = { alternatives: [{ key: "select", label: "Select", outcome: "done",
+    actions: { nte_1: { fields: { contacts: { set: ids } } } },
+  }] };
+  expect(v.parse(ProposalSchema, proposal).alternatives[0]?.actions.nte_1?.fields.contacts?.set).toEqual(ids);
+  expect(v.parse(VerdictValuesSchema, { nte_1: { contacts: ids } })).toEqual({ nte_1: { contacts: ids } });
 });
