@@ -2,28 +2,26 @@ import type { ReactElement } from "react";
 import { useModelMetadata } from "@angee/metadata";
 
 import { useResourceRecordHrefLookup } from "../../runtime";
-import { Button } from "../../ui/button";
 import { ChipList } from "../../ui/chip";
 import { TextLink } from "../../ui/text-link";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
+import { recordTargetHref, type RecordTargetSearch } from "../resource/record-navigation-context";
 import { useRelationSelectedOption } from "./relation-options";
 
-export interface RecordReferenceProps {
+export interface RecordReferenceProps extends RecordTargetSearch {
   model: string;
   id: string;
   /** A retained display label avoids another record read. */
   label?: string;
-  /** An owning surface may open a record peek instead of following its route. */
-  onOpen?: () => void;
 }
 
 /** Display a record through its metadata and follow its registered record route. */
-export function RecordReference({ model, id, label, onOpen }: RecordReferenceProps): ReactElement {
+export function RecordReference({ model, id, label, tab, search }: RecordReferenceProps): ReactElement {
   const recordHref = useResourceRecordHrefLookup();
   const content = label || <RecordReferenceLabel model={model} id={id} />;
-  if (onOpen) return <Button type="button" size="sm" variant="ghost" className="h-auto min-h-btn-sm max-w-full whitespace-normal py-1 text-left leading-snug [overflow-wrap:anywhere]" onClick={onOpen}>{content}</Button>;
   const href = recordHref(model, id);
-  return href ? <TextLink href={href} className="[overflow-wrap:anywhere]">{content}</TextLink> : <span className="[overflow-wrap:anywhere]">{content}</span>;
+  const className = "max-w-full whitespace-normal text-left leading-snug [overflow-wrap:anywhere]";
+  return href ? <TextLink href={recordTargetHref(href, { tab, search })} className={className}>{content}</TextLink> : <span className={className}>{content}</span>;
 }
 
 /** Related records as one chip each, every chip a {@link RecordReference}. */

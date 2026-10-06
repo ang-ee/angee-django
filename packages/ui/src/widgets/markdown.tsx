@@ -17,7 +17,7 @@ import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Toolbar } from "../ui/toolbar";
-import { widgetControlSurface } from "../ui/widget-control";
+import { widgetControlSurface, widgetControlPresentationProps } from "../ui/widget-control";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 import { useCodeMirrorEditor } from "./codemirror-editor";
 import { useWikilinkResolver, type WikilinkResolver } from "./wikilink";
@@ -123,6 +123,8 @@ function MarkdownEditable({
       }}
       className={widgetControlSurface({
         focus: "within",
+        ...widgetControlPresentationProps(field?.controlProps?.presentation),
+        invalid: field?.controlProps?.["aria-invalid"],
         readOnly,
         disabled: "none",
         className: "w-full overflow-hidden",

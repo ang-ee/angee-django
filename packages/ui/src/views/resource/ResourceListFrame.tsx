@@ -74,7 +74,8 @@ export function ResourceListFrame({
         hint={heading.hint == null ? undefined : <>· {heading.hint}</>}
         audience={heading.audience == null ? undefined : <>· {heading.audience}</>}
       /> : null}
-      <ControlBand wrap={toolbar.wrap}>
+      {/* Embedded: the band pads like a table cell, so the box starts where the first header's text does. */}
+      <ControlBand wrap={toolbar.wrap} className={presentation === "embedded" ? "px-3" : undefined}>
         <ResourceToolbar
           {...toolbar}
           className={cn(

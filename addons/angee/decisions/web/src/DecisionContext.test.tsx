@@ -1,42 +1,48 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
-import { defaultWidgets } from "@angee/ui";
+import { createRouteHref, defaultWidgets } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
+import { testDataResource } from "@angee/metadata/testing";
 
 import { DecisionContext, FactValue } from "./DecisionContext";
 
-const mocks = vi.hoisted(() => ({ openRecord: vi.fn() }));
-vi.mock("@angee/ui", async (importOriginal) => {
-  const { createUiTestModule } = await import("@angee/ui/testing");
-  return createUiTestModule(importOriginal, { useRecordPeek: () => mocks.openRecord });
+const { Provider, clearClients } = createUiTestProviders({
+  resources: [testDataResource("notes.Note"), testDataResource("storage.File")],
 });
-afterEach(() => { cleanup(); mocks.openRecord.mockReset(); });
+const runtime = {
+  routeHref: createRouteHref([{ name: "notes.record", path: "/notes/$id" }, { name: "storage.file", path: "/storage/$id" }]),
+  routesByResource: {
+    "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } },
+    "storage.File": { collection: "storage.files", record: { name: "storage.file", param: "id" } },
+  },
+};
+afterEach(() => { cleanup(); clearClients(); });
 
 describe("decision context", () => {
   test("a proposed relation retains its readable reference label", () => {
-    render(<ShellPageTestProviders><FactValue value="nte_related" relationModel="notes.Note"
-      label="Related note" /></ShellPageTestProviders>);
-    expect(screen.getByRole("button", { name: "Related note" })).toBeTruthy();
+    render(<Provider><ShellPageTestProviders runtime={runtime}><FactValue value="nte_related" relationModel="notes.Note"
+      label="Related note" tab="details" search={{ query: "passage" }} /></ShellPageTestProviders></Provider>);
+    expect(screen.getByRole("link", { name: "Related note" }).getAttribute("href")).toBe("/notes/nte_related?recordTab=details&query=passage");
     expect(screen.queryByText("nte_related")).toBeNull();
   });
 
-  test("shows attributed facts and evidence and passes complete locators to the native record peek", async () => {
-    const evidence = { model: "notes.Note", id: "nte_evidence", label: "Evidence note", tab: "source", page: 2, search: { query: "passage", stale: null } };
-    render(<ShellPageTestProviders><DecisionContext context={{
+  test("shows attributed facts and links evidence to its record tab and preview page", async () => {
+    const evidence = { model: "storage.File", id: "fil_source", label: "Evidence file", tab: "preview", page: 2, search: { previewPage: "fil_source:2", stale: null } };
+    render(<Provider><ShellPageTestProviders runtime={runtime}><DecisionContext context={{
       facts: [{ pointer: "/count", label: "Count", value: 7, authority: "source", evidence: [evidence] }],
       references: [{ model: "notes.Note", id: "nte_related", label: "Related note" }],
-    }} /></ShellPageTestProviders>);
+    }} /></ShellPageTestProviders></Provider>);
     expect(await screen.findByText("7")).toBeTruthy();
     expect(screen.getByText("Count")).toBeTruthy();
     expect(screen.getByTitle("Source")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Facts", level: 2 })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Evidence", level: 3 })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "References", level: 2 })).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "References" })).getByRole("button", { name: "Related note" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Evidence note" }));
-    expect(mocks.openRecord).toHaveBeenCalledWith(evidence);
-
+    expect(within(screen.getByRole("region", { name: "References" })).getByRole("link", { name: "Related note" }).getAttribute("href")).toBe("/notes/nte_related");
+    expect(screen.getByRole("link", { name: "Evidence file" }).getAttribute("href")).toBe("/storage/fil_source?recordTab=preview&previewPage=fil_source%3A2");
+    expect(screen.queryByRole("button", { name: "Evidence file" })).toBeNull();
   });
 
   test("renders nothing for empty context", () => {

@@ -208,7 +208,12 @@ export function useResourceViewTableState<TRow extends Row>({
       buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
     [columns, groupStack, modelMetadata, clientOperations, query],
   );
-  const columnVisibility = resourceView.state.columnVisibility;
+  const columnVisibility = React.useMemo(() => ({
+    ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
+    ...resourceView.state.columnVisibility,
+    ...Object.fromEntries(columns.filter((column) => column.hideable === false)
+      .map((column) => [column.id ?? column.field, true])),
+  }), [columns, resourceView.state.columnVisibility]);
   const setColumnVisibility = resourceView.setColumnVisibility;
   const effectiveColumnVisibility = React.useMemo(
     () => withQueryOnlyColumnsHidden(tableColumns, columnVisibility),

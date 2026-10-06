@@ -68,6 +68,9 @@ describe("page element markers", () => {
           header="Title"
           widget="text"
           sortable
+          hiddenByDefault
+          hideable={false}
+          minWidth={160}
           headerVisuallyHidden
           aggregate="count"
           align="left"
@@ -86,6 +89,9 @@ describe("page element markers", () => {
       header: "Title",
       widget: "text",
       sortable: true,
+      hiddenByDefault: true,
+      hideable: false,
+      minWidth: 160,
       headerVisuallyHidden: true,
       aggregate: "count",
       align: "left",

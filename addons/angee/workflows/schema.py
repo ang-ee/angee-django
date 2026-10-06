@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import F, Prefetch
+from django.db.models.lookups import IsNull
 from rebac import system_context
 from rebac.resources import model_for_resource_type
 from strawberry import auto
@@ -27,7 +29,7 @@ from angee.graphql.actions import (
     authorized_action_target,
     authorized_permission_target,
 )
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
@@ -84,7 +86,7 @@ class WorkflowType(AngeeNode):
     name: auto
     description: auto
     subject_model: auto
-    permissions = permissions_field(("monitor", "write"))
+    permissions = permissions_field(("monitor", "write", "start"))
     draft: JSON | None
     draft_revision: int | None
     layout: JSON | None
@@ -103,6 +105,18 @@ class WorkflowVersionType(AngeeNode):
     created_at: auto
     published_by: UserType | None = actor_scoped_to_one("published_by")
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
+
+    @strawberry_django.field(only=["document"])
+    def input_schema(self) -> JSON | None:
+        """Project the definition's admission contract for manual start forms.
+
+        A published graph whose step classes are no longer registered has no
+        contract and cannot be started; it projects null instead of failing the list.
+        """
+        try:
+            return cast(Any, self).definition.input_schema
+        except ImproperlyConfigured:
+            return None
 
 
 @strawberry_django.type(WorkflowRun)
@@ -469,12 +483,16 @@ class TriggerEventType(RecordReferenceNode):
 _WORKFLOW_RESOURCE = hasura_model_resource(
     WorkflowType,
     model=Workflow,
-    filterable=["id", "key", "subject_model"],
+    filterable=["id", "key", "subject_model", "can_start", "is_published"],
     sortable=["key", "name", "created_at"],
     aggregatable=["id"],
     insert=False,
     update=False,
     delete=False,
+    filter_expressions={
+        "can_start": partial(permission_expression, name="start"),
+        "is_published": IsNull(F("published_id"), False),
+    },
 )
 _VERSION_RESOURCE = hasura_model_resource(
     WorkflowVersionType,
@@ -620,9 +638,31 @@ _TRIGGER_EVENT_RESOURCE = hasura_model_resource(
 )
 
 
+@strawberry.input
+class WorkflowRunSubjectInput:
+    """The actor-readable record a manual run works on."""
+
+    model: str
+    id: PublicID
+
+
 @strawberry.type
 class WorkflowActionMutation:
     """Operator requests whose authorization and transitions belong to managers."""
+
+    @strawberry.mutation
+    @action_guard("Start workflow failed.", camel_case_keys=False)
+    def start_workflow_run(
+        self, info: strawberry.Info, workflow_id: PublicID, subject: WorkflowRunSubjectInput,
+        input: JSON, request_key: str,
+    ) -> ActionResult:
+        """Admit or replay a manual run through the start and record read scopes."""
+        workflow = authorized_permission_target(info, Workflow, workflow_id, "start")
+        record = authorized_permission_target(info, apps.get_model(subject.model), subject.id, "read")
+        run = WorkflowRun.objects.start(
+            workflow, actor=request_from_info(info).user, subject=record, input=input, request_key=request_key,
+        )
+        return ActionResult(ok=True, message=f"{workflow.name} started", id=run.sqid)
 
     @strawberry.mutation
     @action_guard("Enable trigger failed.")

@@ -4,7 +4,7 @@ import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "
 import {
   Button, Card, Checkbox, ErrorBanner, FieldDescriptorControl, JsonValueSchema, MetaGrid, RadioGroup, RecordReference,
   RelativeTime, StatusIcon, cn, radioGroupVariants,
-  actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField, useRecordPeek,
+  actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
 import { DECISION_MODELS, DecideDocument, type Decision } from "./documents.console";
@@ -28,7 +28,6 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   const ref = useRef<HTMLElement>(null);
   const closedRef = useRef<HTMLParagraphElement>(null);
   const domId = useId();
-  const openRecord = useRecordPeek();
   const metadata = useSchemaFieldMetadata();
   const revealed = useRevealedRecordField();
   const fieldLabel = (id: string, field: string, model?: string) => modelMetadataForLabel(metadata, model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field]?.label
@@ -85,14 +84,15 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   };
   const recordLink = (id: string) => {
     const record = decision.records.find((record) => record.record_id === id);
-    const label = references.find((reference) => reference.id === id)?.label || undefined;
-    return record?.record_model && record.record_id ? <RecordReference model={record.record_model} id={record.record_id} label={label}
-      onOpen={() => openRecord({ model: record.record_model!, id: record.record_id! })} /> : null;
+    const reference = references.find((reference) => reference.id === id);
+    return record?.record_model && record.record_id ? <RecordReference model={record.record_model} id={record.record_id}
+      label={reference?.label || undefined} tab={reference?.tab} search={reference?.search} /> : null;
   };
   const fieldValue = (id: string, field: string, value: v.InferOutput<typeof JsonValueSchema>, model?: string) => {
     const facts = modelMetadataForLabel(metadata, model ?? decision.records.find((record) => record.record_id === id)?.record_model ?? "")?.fields[field];
     const reference = references.find((reference) => reference.id === value);
-    return <FactValue value={value} relationModel={facts?.relationModelLabel ?? reference?.model} label={reference?.label} options={facts?.values}
+    return <FactValue value={value} relationModel={facts?.relationModelLabel ?? reference?.model} label={reference?.label}
+      tab={reference?.tab} search={reference?.search} options={facts?.values}
       widget={facts?.widget} row={context.success ? context.output.facts.find((fact) => Object.keys(fact.row).length)?.row : undefined}
       emptyLabel={t("decision.none")} />;
   };
@@ -159,7 +159,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
         {actions}
       </div>
-      <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p>
+      {decision.assignees.length ? <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
       {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
         <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
           ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>

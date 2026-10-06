@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import {
-  TextInput,
+  Input,
   rowValueAtPath,
   widgetLabel,
   type WidgetDefinition,
@@ -89,6 +89,7 @@ function MoneyEdit({
   field,
   row,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<MoneyWidgetValue>): ReactElement {
   const code = resolveCurrencyCode(row, (field as MoneyWidgetField | undefined)?.currencyField);
   const stored = typeof value === "string" ? /^([-+]?\d+)\.(\d{6})$/.exec(value) : null;
@@ -103,12 +104,14 @@ function MoneyEdit({
     ? `${integer}${currencyDigits ? `.${fraction.slice(0, currencyDigits)}` : ""}`
     : value == null ? "" : String(value);
   return (
-    <TextInput
+    <Input
+      {...field?.controlProps}
+      ref={controlRef}
       value={displayValue}
       readOnly={readOnly}
       inputMode="decimal"
       aria-label={widgetLabel(field, "Amount")}
-      className="tabular-nums"
+      className="text-right tabular-nums"
       onChange={(event) => onChange?.(event.currentTarget.value)}
     />
   );

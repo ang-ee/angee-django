@@ -5,6 +5,14 @@ export const STEP_RUN_MODEL = "workflows.StepRun";
 export const STEP_EVIDENCE_MODELS = ["workflows.StepAttempt", "workflows.StepRecord"] as const;
 export const RUN_MODELS = [RUN_MODEL, STEP_RUN_MODEL, "workflows.StepWatch", ...STEP_EVIDENCE_MODELS] as const;
 
+export const StartableRecordWorkflowsDocument = graphql(`
+  query StartableRecordWorkflows($models: [String!]!) {
+    workflow(where: { subject_model: { _in: $models }, can_start: { _eq: true }, is_published: { _eq: true } }, order_by: [{ name: asc }]) {
+      id name published { input_schema }
+    }
+  }
+`);
+
 export const StepDecisionDocument = graphql(`
   query StepDecision($id: String!) {
     steprun_by_pk(id: $id) { decision { ...DecisionCardFields } }

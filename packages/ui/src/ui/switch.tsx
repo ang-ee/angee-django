@@ -7,6 +7,7 @@ import type {
 
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
+import { widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
 export const switchVariants = tv({
   slots: {
@@ -40,13 +41,13 @@ type SwitchRecipeProps = VariantProps<typeof switchVariants>;
 export type SwitchSize = NonNullable<SwitchRecipeProps["size"]>;
 
 export type SwitchRootProps = Omit<BaseSwitchRootProps, "className"> &
-  SwitchRecipeProps & {
+  SwitchRecipeProps & Pick<WidgetControlSurfaceProps, "presentation"> & {
     className?: string;
   };
 
 export const SwitchRoot = React.forwardRef<HTMLElement, SwitchRootProps>(
-  function SwitchRoot({ className, size = "sm", ...props }, ref) {
-    const styles = switchVariants({ size });
+  function SwitchRoot({ className, size = "sm", presentation, ...props }, ref) {
+    const styles = switchVariants({ size, ...widgetControlPresentationProps(presentation) });
     return (
       <BaseSwitch.Root
         ref={ref}
@@ -83,9 +84,10 @@ export type SwitchProps = Omit<SwitchRootProps, "children"> & {
 };
 
 export const Switch = React.forwardRef<HTMLElement, SwitchProps>(
-  function Switch({ size = "sm", thumbClassName, ...props }, ref) {
+  function Switch({ size = "sm", presentation, thumbClassName, ...props }, ref) {
+    size = widgetControlPresentationProps(presentation).size ?? size;
     return (
-      <SwitchRoot ref={ref} size={size} {...props}>
+      <SwitchRoot ref={ref} size={size} presentation={presentation} {...props}>
         <SwitchThumb size={size} className={thumbClassName} />
       </SwitchRoot>
     );

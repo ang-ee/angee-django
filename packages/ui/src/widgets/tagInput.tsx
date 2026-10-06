@@ -1,9 +1,24 @@
 import { useState, type KeyboardEvent, type ReactElement } from "react";
 
 import { useUiT } from "../i18n";
+import { tv } from "../lib/variants";
 import { ChipList } from "../ui/chip";
+import { inputVariants } from "../ui/input";
+import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
-import type { WidgetDefinition, WidgetRenderProps } from "./types";
+import type { WidgetControlProps, WidgetDefinition, WidgetRenderProps } from "./types";
+
+const tagInputVariants = tv({
+  extend: inputVariants,
+  base: "flex flex-wrap items-center gap-1 py-1",
+  variants: {
+    size: {
+      sm: "h-auto min-h-btn-sm",
+      md: "h-auto min-h-input-h",
+      lg: "h-auto min-h-input-h-lg",
+    },
+  },
+});
 
 function TagInputEdit({
   value,
@@ -14,6 +29,7 @@ function TagInputEdit({
 }: WidgetRenderProps<readonly string[]>): ReactElement {
   const t = useUiT();
   const tags = normaliseTags(value);
+  const { presentation, ...controlProps } = field?.controlProps ?? ({} as Partial<WidgetControlProps>);
   const [draft, setDraft] = useState("");
 
   function commit(input = draft): void {
@@ -42,10 +58,17 @@ function TagInputEdit({
   if (readOnly) return <TagInputRead value={tags} />;
 
   return (
-    <div className="flex min-h-input-h w-full flex-wrap items-center gap-1 rounded-6 border border-border bg-sheet px-1.5 py-1 text-13 text-fg focus-within:border-border-focus focus-within:focus-ring">
+    <div
+      className={tagInputVariants({
+        ...widgetControlPresentationProps(presentation),
+        focus: "within" as const,
+        invalid: Boolean(controlProps["aria-invalid"]),
+      })}
+    >
       {/* `contents` lets the chips and the draft input share one wrapping row. */}
       <ChipList className="contents" items={tags.map((tag) => ({ id: tag, label: tag }))} onRemove={remove} />
       <input
+        {...controlProps}
         ref={controlRef}
         value={draft}
         className="h-5 min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"

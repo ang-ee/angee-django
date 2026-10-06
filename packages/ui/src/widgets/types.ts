@@ -2,6 +2,7 @@ import type { ComponentType, ReactNode } from "react";
 
 import type { ActionOutcome, AuthoredDocument } from "@angee/refine";
 import type { Tone } from "../lib/tones";
+import type { WidgetControlSurfaceProps } from "../ui/widget-control";
 
 /** A verb binding; allowed values are returned by the record's authorization owner. */
 export interface VisibilityBinding {
@@ -134,11 +135,11 @@ export interface WidgetField extends FieldPresentation {
   containerWidth?: number;
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
-  /** DOM association supplied by a descriptor-form owner for its actual control. */
+  /** Control association and presentation supplied by a descriptor-form owner. */
   controlProps?: WidgetControlProps;
 }
 
-export interface WidgetControlProps {
+export interface WidgetControlProps extends Pick<WidgetControlSurfaceProps, "presentation"> {
   id: string;
   "aria-describedby"?: string;
   "aria-labelledby"?: string;

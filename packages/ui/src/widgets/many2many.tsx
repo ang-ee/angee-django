@@ -21,6 +21,9 @@ export function Many2ManyEdit({
   controlRef,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
   const t = useUiT();
+  if (field?.controlProps?.presentation === "cell") {
+    return <Many2ManyCellEdit value={value} onChange={onChange} field={field} readOnly={readOnly} controlRef={controlRef} />;
+  }
   const selected = relationIdList(value);
   const options = field?.options ?? [];
   const available = options.filter((option) => !selected.includes(option.value));
@@ -35,6 +38,7 @@ export function Many2ManyEdit({
         onRemove={(next) => onChange?.(next)}
       />
       <Select
+        {...field?.controlProps}
         triggerRef={controlRef}
         value=""
         options={available}
@@ -58,6 +62,7 @@ export function Many2ManyCellEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
   const t = useUiT();
   const selected = relationIdList(value);
@@ -81,6 +86,7 @@ export function Many2ManyCellEdit({
       onValueChange={(next) => onChange?.(next)}
     >
       <SelectPrimitive.Trigger
+        ref={controlRef}
         {...field?.controlProps}
         disabled={choices.length === 0}
         aria-label={widgetLabel(field, t("many2many.label"))}

@@ -75,7 +75,7 @@ How the ontology maps to this addon.
   Supplied values pass through the same field resolution as `set` under the answering actor, including
   related-record read access, validators and write permissions. Every chosen `choose` field needs a value,
   and no other field may receive one. Multiple alternatives cannot overlap a field write.
-  Many-to-many writes remain refused; `choose` does not apply inside method arguments.
+  Updatable many-to-many fields replace their set with related public ids (an empty list clears it); one-to-many writes remain refused, and `choose` does not apply inside method arguments.
 - **Attention query:** one queryset helper and one GraphQL filter over `Decision.records`, usable on any model
   with no per-model declaration: records with open decisions, and the open decisions of a record.
 - **Readers:**
@@ -104,6 +104,7 @@ UI, all in this addon's web fragment:
 
 - **Decision card:** the question, the concerned records as links, the alternatives with what each would change. One component, used in
   the inbox, in the record timeline and next to a record set.
+  Links in the pane follow the record route in the main window and carry the breadcrumb trail.
   The alternative's label describes a record-method action; the card does not display its internal method name.
 - **Field mark:** a form marks the fields named in the proposals of its record's open decisions; choosing the
   mark opens the card.

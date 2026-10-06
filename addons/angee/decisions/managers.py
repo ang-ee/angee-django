@@ -125,7 +125,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 link(decision=decision, content_type=ct, object_id=pk)
                 for ct, pk in sorted(targets, key=lambda target: (target[0].pk, target[1]))
             ])
-            if not any(decision.with_actor(person).has_access("act") for person in assignees):
+            if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
             publish_change(decision, action="create", update_fields=None)
         return decision.with_actor(asking) if asking is not None else decision
@@ -146,11 +146,15 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             try:
                 values = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python({} if values is None else values)
-                selected = DecisionProposal.model_validate(row.proposal).choose(chosen, values=values)
+                links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
+                selected = DecisionProposal.model_validate(row.proposal).choose(
+                    chosen, values=values,
+                    record_models={identity: model for identity, link in links.items()
+                                   if identity in values and (model := link.content_type.model_class()) is not None},
+                )
             except ValueError as error:
                 raise ValidationError({"chosen": str(error)}) from error
             try:
-                links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
                 for alternative in selected:
                     for identity, actions in alternative.actions.items():
                         if identity not in values:

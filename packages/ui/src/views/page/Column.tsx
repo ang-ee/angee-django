@@ -25,6 +25,11 @@ export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   /** Options passed to enum-like cell widgets; derived from SDL when omitted. */
   options?: readonly WidgetOption[];
   sortable?: boolean;
+  /** Optional display columns start hidden until chosen in the header menu. */
+  hiddenByDefault?: boolean;
+  /** Required columns remain visible and cannot be hidden in the header menu. */
+  hideable?: boolean;
+  minWidth?: number;
   aggregate?: ColumnAggregate;
   align?: PageColumnAlign;
   /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
@@ -54,6 +59,11 @@ export interface ColumnDescriptor<
   /** Options passed to enum-like cell widgets; derived from SDL when omitted. */
   options?: readonly WidgetOption[];
   sortable?: boolean;
+  /** Optional display columns start hidden until chosen in the header menu. */
+  hiddenByDefault?: boolean;
+  /** Required columns remain visible and cannot be hidden in the header menu. */
+  hideable?: boolean;
+  minWidth?: number;
   aggregate?: ColumnAggregate;
   align?: PageColumnAlign;
   /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */

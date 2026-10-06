@@ -72,6 +72,8 @@ export function interactiveSurface(
  * The danger ring lives in compound variants (applied last) so its resting
  * `border-danger` wins over the surface border, and every danger compound is
  * guarded on `readOnly: false` so a read-only invalid control stays transparent.
+ * `presentation: "cell"` reveals plain controls and their marked affordances on
+ * row hover or focus; callers compose its surface and size through the helper below.
  */
 export const widgetControlSurfaceVariants = tv({
   extend: interactiveSurfaceVariants,
@@ -82,6 +84,10 @@ export const widgetControlSurfaceVariants = tv({
       inset: "border-border bg-inset hover:border-border-strong",
       plain: "border-transparent bg-transparent",
       none: "",
+    },
+    presentation: {
+      form: "",
+      cell: "border-transparent bg-transparent shadow-none [&_[data-widget-affordance]]:opacity-0 group-hover/record:[&_[data-widget-affordance]]:opacity-100 group-focus-within/record:[&_[data-widget-affordance]]:opacity-100 focus-within:[&_[data-widget-affordance]]:opacity-100 data-[popup-open]:[&_[data-widget-affordance]]:opacity-100",
     },
     focus: {
       self: "focus:border-border-focus",
@@ -104,7 +110,18 @@ export const widgetControlSurfaceVariants = tv({
     },
   },
   compoundVariants: [
+    {
+      presentation: "cell",
+      readOnly: false,
+      class: "group-hover/record:border-border group-focus-within/record:border-border hover:border-border focus:border-border-focus focus-visible:border-border-focus focus-within:border-border-focus data-[popup-open]:border-border-focus",
+    },
     { invalid: true, readOnly: false, class: "border-danger" },
+    {
+      presentation: "cell",
+      invalid: true,
+      readOnly: false,
+      class: "group-hover/record:border-danger group-focus-within/record:border-danger hover:border-danger focus:border-danger focus-visible:border-danger focus-within:border-danger data-[popup-open]:border-danger",
+    },
     {
       invalid: true,
       readOnly: false,
@@ -126,6 +143,7 @@ export const widgetControlSurfaceVariants = tv({
   ],
   defaultVariants: {
     surface: "sheet",
+    presentation: "form",
     focus: "self",
     invalid: false,
     readOnly: false,
@@ -136,6 +154,15 @@ export const widgetControlSurfaceVariants = tv({
 export type WidgetControlSurfaceProps = VariantProps<
   typeof widgetControlSurfaceVariants
 >;
+
+/** Cell controls compose the existing compact size and plain surface in every recipe. */
+export function widgetControlPresentationProps(
+  presentation: WidgetControlSurfaceProps["presentation"],
+) {
+  return presentation === "cell"
+    ? { presentation, size: "sm" as const, surface: "plain" as const }
+    : { presentation };
+}
 
 export function widgetControlSurface(
   props: WidgetControlSurfaceProps & { className?: string } = {},

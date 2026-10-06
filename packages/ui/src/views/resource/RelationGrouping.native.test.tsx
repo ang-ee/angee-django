@@ -143,7 +143,8 @@ test("the same relation projection labels flat grouped headers", async () => {
   for (const name of channelNames) {
     expect(await screen.findByRole("button", { name: `${name} 2` })).toBeTruthy();
   }
-  expect(screen.getAllByRole("columnheader")).toHaveLength(6);
+  // Five data columns plus the trailing visible-fields header.
+  expect(screen.getAllByRole("columnheader")).toHaveLength(7);
 });
 
 test.each(["list", "board"] as const)("null and empty text render distinct %s headers", async (view) => {

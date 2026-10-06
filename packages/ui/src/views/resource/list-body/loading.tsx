@@ -32,15 +32,17 @@ export function ListSkeletonRows<TRow extends Row>({
   rowCount = 8,
   loadingLabel,
   trailingColumn = false,
+  reorderable = false,
 }: {
   table: TableModel<TRow>;
   selectable?: boolean;
   rowCount?: number;
   loadingLabel?: React.ReactNode;
   trailingColumn?: boolean;
+  reorderable?: boolean;
 }): React.ReactElement {
   const columns = table.getVisibleLeafColumns();
-  const colSpan = columns.length + (selectable ? 1 : 0) + (trailingColumn ? 1 : 0);
+  const colSpan = columns.length + (selectable ? 1 : 0) + (trailingColumn ? 1 : 0) + (reorderable ? 1 : 0);
   return (
     <>
       {loadingLabel ? (
@@ -58,6 +60,7 @@ export function ListSkeletonRows<TRow extends Row>({
       ) : null}
       {Array.from({ length: Math.max(1, rowCount) }, (_, rowIndex) => (
         <TableRow key={rowIndex} aria-hidden="true">
+          {reorderable ? <TableCell className="w-8" /> : null}
           {selectable ? (
             <TableCell className="w-8">
               <Skeleton className="size-3.5 rounded-[3px]" />

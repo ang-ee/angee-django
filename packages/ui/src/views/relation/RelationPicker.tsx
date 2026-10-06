@@ -8,6 +8,7 @@ import {
   RelationField,
   type RelationSearchState,
   type RelationOption,
+  type RelationFieldProps,
 } from "../../widgets/RelationField";
 import type { FormSubmit } from "../form/FormView";
 import type { FieldDescriptor } from "../page";
@@ -51,7 +52,7 @@ export interface RelationEditConfig {
   title?: ReactNode;
 }
 
-export interface RelationPickerProps {
+export interface RelationPickerProps extends Pick<RelationFieldProps, "presentation"> {
   controlRef?: Ref<HTMLButtonElement>;
   id?: string;
   value?: string | null;
@@ -130,6 +131,7 @@ export function RelationPicker({
   onSearchChange,
   searchState,
   followHref,
+  presentation,
 }: RelationPickerProps): ReactElement {
   const t = useUiT();
   // The open inline-form dialog; `null` means closed.
@@ -142,6 +144,7 @@ export function RelationPicker({
       <div className="flex min-w-0 items-center gap-1">
         <div className="min-w-0 flex-1">
           <RelationField
+            presentation={presentation}
             triggerRef={controlRef}
             id={id}
             value={value}

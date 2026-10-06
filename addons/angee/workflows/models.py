@@ -164,9 +164,9 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         rebac_resource_type = "workflows/workflow"
 
     def validate_subject(self, subject: Any) -> None:
-        """Require the declared concrete model when this workflow has a subject."""
+        """Accept the declared model and its MTI children when a subject is required."""
         if self.subject_model and (
-            subject is None or subject._meta.label != self.subject_model
+            subject is None or not isinstance(subject, apps.get_model(self.subject_model))
         ):
             raise ValidationError("The workflow subject has the wrong model.")
 

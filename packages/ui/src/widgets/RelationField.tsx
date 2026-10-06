@@ -5,6 +5,9 @@ import { LazyBoundary } from "../fragments/LazyBoundary";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Skeleton } from "../ui/skeleton";
+import { inputVariants } from "../ui/input";
+import { widgetControlPresentationProps } from "../ui/widget-control";
+import type { WidgetControlProps } from "./types";
 import {
   PopoverContent,
   PopoverPortal,
@@ -29,7 +32,7 @@ export interface RelationSearchState {
   retry?: () => void;
 }
 
-export interface RelationFieldProps {
+export interface RelationFieldProps extends Pick<WidgetControlProps, "presentation"> {
   value?: string | null;
   onChange?: (value: string) => void;
   options: readonly RelationOption[];
@@ -60,11 +63,6 @@ export interface RelationFieldProps {
   triggerRef?: Ref<HTMLButtonElement>;
 }
 
-const TRIGGER_CLASS =
-  "flex h-9 w-full items-center gap-2 rounded-6 border border-border bg-sheet px-3 " +
-  "text-left text-13 text-fg outline-none transition-colors hover:border-border-strong " +
-  "focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60";
-
 /**
  * A searchable relation picker: a trigger showing the selected record, and a
  * popover (the owned `Command` list) with a search box, the filtered options,
@@ -90,6 +88,7 @@ export function RelationField({
   onSearchChange,
   searchState,
   triggerRef,
+  presentation,
 }: RelationFieldProps): ReactElement {
   const t = useUiT();
   const [open, setOpen] = useState(false);
@@ -115,7 +114,13 @@ export function RelationField({
       <PopoverTrigger
         ref={triggerRef}
         id={id}
-        className={TRIGGER_CLASS}
+        className={inputVariants({
+          focus: "visible",
+          ...widgetControlPresentationProps(presentation),
+          invalid: ariaInvalid,
+          readOnly,
+          class: "flex items-center gap-2 text-left",
+        })}
         disabled={readOnly}
         aria-label={ariaLabelledBy ? undefined : triggerLabel}
         aria-labelledby={ariaLabelledBy}
@@ -131,11 +136,9 @@ export function RelationField({
         >
           {selected ? selected.label : placeholder ?? t("relation.placeholder")}
         </span>
-        <Glyph
-          decorative
-          name="chevron-down"
-          className="shrink-0 text-fg-muted"
-        />
+        <span data-widget-affordance="" className="shrink-0 text-fg-muted">
+          <Glyph decorative name="chevron-down" />
+        </span>
       </PopoverTrigger>
       <PopoverPortal>
         <PopoverPositioner sideOffset={4} align="start">

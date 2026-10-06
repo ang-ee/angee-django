@@ -2,6 +2,8 @@ import { createNamespaceT } from "@angee/ui";
 import { enCatalogueMessages } from "./i18n-catalogue";
 
 export const enWorkflowsMessages = {
+  "action.runWorkflow": "Run workflow",
+  "action.startFailed": "Start workflow failed.",
   "timeline.continuedBy": "Continued at the request of {name}",
   ...enCatalogueMessages,
   "timeline.unavailable": "Timeline unavailable.",

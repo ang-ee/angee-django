@@ -7,10 +7,11 @@ import { Button } from "../../ui/button";
 import {
   optionTextLabel,
   relationIdList,
+  type WidgetControlProps,
   type WidgetField,
   type WidgetFocusTarget,
 } from "../../widgets/types";
-import { Many2ManyCellEdit, Many2ManyEdit } from "../../widgets/many2many";
+import { Many2ManyEdit } from "../../widgets/many2many";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import type { RelationCreateConfig } from "./RelationPicker";
 import { RecordReferenceChips } from "./RecordReference";
@@ -30,11 +31,16 @@ export interface RelationMultiFieldWidgetProps {
   /** Called after each completed pick, removal or inline create. */
   onCommit?: () => void;
   readOnly?: boolean;
-  /** Compact picker presentation for editable table cells only. */
-  compact?: boolean;
+  /**
+   * Control association and presentation from the owning form or lines table;
+   * `presentation: "cell"` renders the compact cell picker and an icon create.
+   */
+  controlProps?: WidgetControlProps;
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by the multi-picker. */
   filters?: readonly CrudFilter[];
+  /** Hasura condition narrowing the related rows offered by the picker. */
+  where?: Record<string, unknown>;
   /**
    * Explicit inline-create configuration. Overrides the default derived from the
    * related model's metadata, exactly as `RelationFieldWidget` does; pass null to
@@ -60,9 +66,10 @@ export function RelationMultiFieldWidget({
   onChange,
   onCommit,
   readOnly,
-  compact = false,
+  controlProps,
   relation,
   filters,
+  where,
   create,
   "aria-label": ariaLabel,
   controlRef,
@@ -73,6 +80,7 @@ export function RelationMultiFieldWidget({
   const { options, list } = useRelationOptions(relation, {
     enabled: !readOnly,
     filters,
+    where,
     sort: true,
   });
   // Loaded related records carry their own labels, also outside the option page;
@@ -98,8 +106,9 @@ export function RelationMultiFieldWidget({
         ...selectedOptions.filter((option) => !options.some((item) => item.value === option.value)),
       ],
       label: ariaLabel,
+      controlProps,
     }),
-    [options, selectedOptions, ariaLabel],
+    [options, selectedOptions, ariaLabel, controlProps],
   );
   if (readOnly) {
     return <RecordReferenceChips model={relation.resource} records={ids.map((id) => ({
@@ -110,15 +119,15 @@ export function RelationMultiFieldWidget({
     onChange?.(next);
     onCommit?.();
   };
-  const Edit = compact ? Many2ManyCellEdit : Many2ManyEdit;
-  const control = <Edit value={value ?? []} onChange={change} field={field} controlRef={controlRef} />;
+  // `Many2ManyEdit` owns the cell/form presentation split through `field.controlProps`.
+  const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef} />;
   if (!forms.create) return control;
   const createLabel = forms.create.actionLabel ?? relationCreateTitle(forms.create, t);
   return (
     <>
       <div className="flex min-w-0 items-start gap-1">
         <div className="min-w-0 flex-1">{control}</div>
-        {compact ? (
+        {controlProps?.presentation === "cell" ? (
           <Button type="button" variant="ghost" size="iconSm" className="shrink-0"
             aria-label={optionTextLabel(createLabel, t("actions.create"))}
             onClick={() => setDialog({ mode: "create", query: "" })}>

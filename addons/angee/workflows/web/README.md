@@ -28,6 +28,9 @@ replacement through the resource route owner. Retained errors are evidence, and 
 the stack traces returned by the backend's field policy.
 Trigger enablement uses the same action confirmation surface to show prospective
 principal grants and workflow run readers from the server's authorized preview.
+The **Run workflow** record verb contributes a `form#actions-menu` submenu of
+published, startable definitions and sends `start_workflow_run`. Required inputs
+compose the shared schema action dialog; success refreshes the record's timeline.
 
 Workflows contributes the waiting run as a `decisions#origin` child. Records gain
 one timeline chatter tab (`record#aside/workflows.timeline`). `RecordTimeline`

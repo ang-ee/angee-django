@@ -28,7 +28,7 @@ test("offers inline create from the related model's metadata unless the caller d
   expect(screen.getByRole("button", { name: "New tag" })).toBeTruthy();
 
   rerender(<Provider dataProvider={{ getList }}>
-    <RelationMultiFieldWidget compact value={[]} relation={relation} aria-label="Tags" />
+    <RelationMultiFieldWidget controlProps={{ id: "tags", presentation: "cell" }} value={[]} relation={relation} aria-label="Tags" />
   </Provider>);
   expect(screen.getByRole("button", { name: "New tag" }).textContent).toBe("");
 

@@ -62,14 +62,15 @@ test("keeps the identity readable when a record cannot be read or routed", async
   expect(screen.queryByRole("link")).toBeNull();
 });
 
-test("uses a supplied label without a record read and retains the owning surface's open action", async () => {
+test("uses a supplied label without a record read and follows the exact tab and detail search", async () => {
   const getOne = vi.fn();
-  const open = vi.fn();
-  renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
-    <RecordReference model="notes.Note" id="note-1" label="Retained note" onOpen={open} />
+  const router = renderInRouter(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
+    <RecordReference model="notes.Note" id="note-1" label="Retained note" tab="source" search={{ query: "passage", stale: null }} />
   </AppRuntimeProvider></Provider>);
-  fireEvent.click(await screen.findByRole("button", { name: "Retained note" }));
-  expect(open).toHaveBeenCalledOnce();
+  const link = await screen.findByRole("link", { name: "Retained note" });
+  expect(link.getAttribute("href")).toBe("/notes/note-1?recordTab=source&query=passage");
+  expect(fireEvent.click(link)).toBe(false);
+  await waitFor(() => expect(router.state.location.href).toBe("/notes/note-1?recordTab=source&query=passage"));
   expect(getOne).not.toHaveBeenCalled();
-  expect(screen.queryByRole("link")).toBeNull();
+  expect(screen.queryByRole("button")).toBeNull();
 });

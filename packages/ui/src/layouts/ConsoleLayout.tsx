@@ -6,6 +6,7 @@ import { BreadcrumbContentLinks, BreadcrumbLabelProvider, useNestedBreadcrumbIte
 import { BreadcrumbBar } from "../chrome/BreadcrumbBar";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
+import { useDrawers } from "../runtime/containers";
 import { TopBar } from "../chrome/TopBar";
 import { ChromePlaceProvider } from "../chrome/refine-menu";
 import { Chatter, useChatterPresentation } from "../communication/Chatter";
@@ -243,6 +244,8 @@ function ConsoleWorkbench({
   const t = useUiT();
   const { registerSecondaryController } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
+  // The bottom drawer rail floats over the content's last lines; reserve its height.
+  const bottomRail = useDrawers("bottom").length > 0;
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const [desktopPrimaryController, setDesktopPrimaryController] =
     React.useState<CollapsiblePane | null>(null);
@@ -331,7 +334,7 @@ function ConsoleWorkbench({
         onPrimaryController={setDesktopPrimaryController}
         onSecondaryController={desktopChatter ? registerSecondaryController : undefined}
       >
-        <main className="console-content-main">{children}</main>
+        <main className={cn("console-content-main", bottomRail && "pb-12")}>{children}</main>
       </Workbench>
       <Drawer.Root
         open={compactPrimary != null && compactPrimaryOpen}

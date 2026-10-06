@@ -1,13 +1,13 @@
 """The proposal and the evidence accompanying one question."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from inspect import Parameter, signature
 from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
-from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, ValidationInfo, model_validator
+from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, TypeAdapter, ValidationInfo, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
 from rebac import current_actor
 from rebac.schema.walker import field_gated_actions
@@ -103,9 +103,11 @@ class RecordActions(BaseModel):
                 raise ValueError(f"Unknown field: {name}.") from error
             if not operation.model_fields_set:
                 continue
-            if resources and not any(name in resource.updatable_fields for resource in resources):
+            if (resources or field.many_to_many) and not any(name in resource.updatable_fields for resource in resources):
                 raise ValueError(f"The record owner does not expose writes to {name}.")
-            if (field.auto_created or not field.concrete or field.name != name
+            if field.one_to_many:
+                raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
+            if (field.auto_created or not (field.concrete or field.many_to_many) or field.name != name
                     or field.primary_key or not field.editable or isinstance(field, StateField)):
                 raise ValueError(f"Use an editable model field name: {field.name}.")
             definition = effective_rebac_definition(model)
@@ -113,31 +115,32 @@ class RecordActions(BaseModel):
             if ("actor" in context and definition and permission in field_gated_actions(definition, "write")
                     and not record.with_actor(context["actor"]).has_access(permission)):
                 raise ValueError(f"The actor cannot write {name}.")
-            if field.many_to_many or field.one_to_many:
-                raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
             if isinstance(operation, ChooseValue) and values is None:
                 continue
             value = values[name] if isinstance(operation, ChooseValue) else operation.set
-            supplied = value
             try:
                 if field.is_relation:
-                    if value is not None and not isinstance(value, str):
+                    if field.many_to_many:
+                        identities = TypeAdapter(list[str]).validate_python(value, strict=True)
+                    elif value is not None and not isinstance(value, str):
                         raise ValueError(f"Use a related record public id or null for {name}.")
-                    if value is None and not field.null:
+                    elif value is None and not field.null:
                         raise ValueError(f"The field {name} cannot be null.")
+                    else:
+                        identities = [] if value is None else [value]
                     # Request construction validates shape; admission/application supply the read actor.
                     if "actor" not in context:
                         continue
                     if not callable(getattr(field.related_model.objects, "with_actor", None)):
                         raise ValueError(f"The related record for {name} does not support actor scoping.")
-                    value = None if value is None else instance_from_public_id(
-                        field.related_model, value,
-                        queryset=field.related_model.objects.with_actor(context.get("actor", current_actor())),
-                    )
-                    if value is None and supplied is not None:
+                    queryset = field.related_model.objects.with_actor(context.get("actor", current_actor()))
+                    related = tuple(instance_from_public_id(field.related_model, identity, queryset=queryset)
+                                    for identity in identities)
+                    if any(instance is None for instance in related):
                         raise ValueError(f"The related record for {name} is absent or unreadable.")
-                    if value is not None:
-                        context.get("related_records", []).append(value)
+                    context.get("related_records", []).extend(related)
+                    value = related if field.many_to_many else next(iter(related), None)
+                    if not field.many_to_many and value is not None:
                         field.run_validators(field.to_python(value.pk))
                 else:
                     value = field.clean(value, record)
@@ -198,6 +201,7 @@ class DecisionProposal(BaseModel):
 
     def choose(
         self, chosen: Sequence[str], *, values: dict[str, dict[str, JsonValue]] | None = None,
+        record_models: Mapping[str, type[models.Model]] | None = None,
     ) -> tuple[Alternative, ...]:
         """Validate a verdict and return alternatives in authored order."""
         if isinstance(chosen, (str, bytes)) or not chosen or any(not isinstance(key, str) for key in chosen):
@@ -223,16 +227,26 @@ class DecisionProposal(BaseModel):
             raise ValueError("Supply a value for every chosen choose field.")
         if supplied - required or set(values or {}) - {identity for identity, _ in required}:
             raise ValueError("Supply values only for choose fields of chosen alternatives.")
+        for alternative in selected:
+            for identity, actions in alternative.actions.items():
+                if identity not in (values or {}):
+                    continue
+                model = apps.get_model(actions.model) if actions.model else (record_models or {}).get(identity)
+                if model is None:
+                    continue
+                for name, operation in actions.fields.items():
+                    if isinstance(operation, ChooseValue) and model._meta.get_field(name).many_to_many:
+                        TypeAdapter(list[str]).validate_python((values or {})[identity][name], strict=True)
         return selected
 
 
 class DecisionRequest(BaseModel):
-    """One immutable question for one or more named assignees."""
+    """One immutable question with optional named assignees."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True, revalidate_instances="always")
     kind: str = Field(min_length=1, pattern=r"\S")
     records: tuple[InstanceOf[models.Model], ...] = Field(min_length=1)
-    assignees: tuple[Any, ...] = Field(min_length=1)
+    assignees: tuple[Any, ...] = ()
     proposal: DecisionProposal
     requester: Any = None
     context: InstanceOf[DecisionContext] = Field(default_factory=DecisionContext)

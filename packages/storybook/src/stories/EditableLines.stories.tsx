@@ -5,6 +5,7 @@ import {
   Button,
   EditableLines,
   Input,
+  ModalsHost,
   defaultWidgets,
   type WidgetDefinition,
   type WidgetRenderProps,
@@ -62,9 +63,10 @@ const lines = {
 
 const patchWidget = {
   read: ({ value }: WidgetRenderProps) => <span>{String(value ?? "")}</span>,
-  edit: ({ value, onChange, onRowChange }: WidgetRenderProps) => (
+  edit: ({ value, onChange, onRowChange, field }: WidgetRenderProps) => (
     <div className="grid gap-1.5">
       <Input
+        {...field?.controlProps}
         aria-label="Line label"
         value={String(value ?? "")}
         onChange={(event) => onChange?.(event.target.value)}
@@ -118,20 +120,23 @@ function EditableLinesDemo() {
     <RuntimeRegistryFixture
       runtime={{ widgets: { ...defaultWidgets, "story.editableLinePatch": patchWidget } }}
     >
-      <div className="grid max-w-5xl gap-4">
-        <p className="text-sm text-fg-muted">
-          Schedule the delayed label patch, then focus and edit its quantity while it is pending.
-        </p>
-        <EditableLines
-          control={form.control}
-          setValue={form.setValue}
-          name="lines"
-          lines={lines}
-        />
-        <pre aria-label="Live line values" className="overflow-auto rounded-8 bg-inset p-3 text-xs text-fg">
-          {JSON.stringify(liveLines, null, 2)}
-        </pre>
-      </div>
+      <ModalsHost>
+        <div className="grid max-w-5xl gap-4">
+          <p className="text-sm text-fg-muted">
+            Choose Quantity in the header's Visible fields menu, then schedule a delayed label patch and edit the quantity while it is pending.
+          </p>
+          <EditableLines
+            control={form.control}
+            setValue={form.setValue}
+            name="lines"
+            lines={lines}
+            primaryFields={["label"]}
+          />
+          <pre aria-label="Live line values" className="overflow-auto rounded-8 bg-inset p-3 text-xs text-fg">
+            {JSON.stringify(liveLines, null, 2)}
+          </pre>
+        </div>
+      </ModalsHost>
     </RuntimeRegistryFixture>
   );
 }

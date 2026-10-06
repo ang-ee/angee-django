@@ -92,6 +92,9 @@ export interface FlatListBodyProps<TRow extends Row> {
   onRowClick?: (row: TRow) => void;
   activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
+  onReorder?: (fromId: string, toId: string) => void;
+  /** Content of one footer cell spanning the visible table columns. */
+  footerRow?: React.ReactNode;
   emptyContent: ListEmptyContent;
   fetching: boolean;
   footerAggregate?: AggregateBucket | null;
@@ -120,15 +123,24 @@ export function FlatListBody<TRow extends Row>({
   onRowClick,
   activeRowId,
   draggableRow,
+  onReorder,
+  footerRow,
   emptyContent,
   fetching,
   footerAggregate,
 }: FlatListBodyProps<TRow>): React.ReactElement {
   const t = useUiT();
   const hasRowActions = renderRowActions !== undefined;
+  // The visible-fields menu sits in its own trailing header cell (shared with the row
+  // actions when they exist), so every data column's header aligns with its values.
+  const fieldsMenu = visibleFields.length > 0
+    ? <VisibleFieldsMenu fields={visibleFields} onToggle={onVisibleFieldToggle} /> : null;
+  const trailingColumn = hasRowActions || fieldsMenu !== null;
+  const reorderType = `angee.list-row.${React.useId()}`;
+  const reorderRows = onReorder ? rowModels.filter((row) => !row.getIsGrouped()) : [];
   const colSpan = Math.max(
     1,
-    visibleColumnCount + (selectable ? 1 : 0) + (hasRowActions ? 1 : 0),
+    visibleColumnCount + (selectable ? 1 : 0) + (trailingColumn ? 1 : 0) + (onReorder ? 1 : 0),
   );
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
@@ -140,6 +152,9 @@ export function FlatListBody<TRow extends Row>({
     (index) =>
       rowModels[index]?.getIsGrouped() ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
   );
+  const extraFooterRow = footerRow == null ? null : (
+    <TableRow><TableCell colSpan={colSpan}>{footerRow}</TableCell></TableRow>
+  );
   return (
     <div
       ref={tableScrollRef}
@@ -149,6 +164,9 @@ export function FlatListBody<TRow extends Row>({
         <TableHeader className={headerVisibility === "visually-hidden" ? "sr-only" : undefined}>
           {table.getHeaderGroups().map((group) => (
             <TableRow key={group.id}>
+              {onReorder ? <TableHead sticky className="w-8">
+                <span className="sr-only">{t("list.reorderRow")}</span>
+              </TableHead> : null}
               {selectable ? (
                 <LeadingSelectionCell
                   head
@@ -158,17 +176,14 @@ export function FlatListBody<TRow extends Row>({
                   onCheckedChange={onPageSelectionChange}
                 />
               ) : null}
-              {group.headers.map((header, index) => (
+              {group.headers.map((header) => (
                 <ListHeaderCell
                   key={header.id}
                   header={header}
                   resourceView={resourceView}
-                  visibleFields={visibleFields}
-                  onVisibleFieldToggle={onVisibleFieldToggle}
-                  withVisibleFields={index === group.headers.length - 1}
                 />
               ))}
-              {hasRowActions ? <RowActionsHeader /> : null}
+              {trailingColumn ? <RowActionsHeader>{fieldsMenu}</RowActionsHeader> : null}
             </TableRow>
           ))}
         </TableHeader>
@@ -177,7 +192,8 @@ export function FlatListBody<TRow extends Row>({
             <ListSkeletonRows
               table={table}
               selectable={selectable}
-              trailingColumn={hasRowActions}
+              reorderable={Boolean(onReorder)}
+              trailingColumn={trailingColumn}
               loadingLabel={t("list.loading")}
             />
           ) : rowModels.length === 0 ? (
@@ -199,6 +215,7 @@ export function FlatListBody<TRow extends Row>({
               ) : null}
               {visibleIndexes.map((index) => {
                 const row = rowModels[index];
+                const reorderIndex = row ? reorderRows.indexOf(row) : -1;
                 return row
                   ? renderListRow({
                       row,
@@ -211,7 +228,16 @@ export function FlatListBody<TRow extends Row>({
                       onRowClick,
                       activeRowId,
                       draggableRow,
-                      renderRowActions,
+                      // An empty trailing cell keeps rows aligned under the fields-menu header.
+                      renderRowActions: renderRowActions ?? (trailingColumn ? () => null : undefined),
+                      reorder: onReorder ? {
+                        type: reorderType,
+                        onReorder: (fromId, toId) => {
+                          if (table.getCoreRowModel().rowsById[fromId]) onReorder(fromId, toId);
+                        },
+                        previousId: reorderRows[reorderIndex - 1]?.id,
+                        nextId: reorderRows[reorderIndex + 1]?.id,
+                      } : undefined,
                     })
                   : null;
               })}
@@ -230,9 +256,10 @@ export function FlatListBody<TRow extends Row>({
             measures={measures}
             aggregate={footerAggregate}
             selectable={selectable}
-            trailingColumn={hasRowActions}
-          />
-        ) : null}
+            trailingColumn={trailingColumn}
+            reorderable={Boolean(onReorder)}
+          >{extraFooterRow}</MeasureFooter>
+        ) : extraFooterRow ? <TableFooter>{extraFooterRow}</TableFooter> : null}
       </Table>
     </div>
   );
@@ -246,6 +273,8 @@ export function MeasureFooter<TRow extends Row>({
   reserveLeadingColumn = false,
   labelInSelectionColumn = false,
   trailingColumn = false,
+  reorderable = false,
+  children,
 }: {
   table: TableModel<TRow>;
   measures: readonly GroupMeasure[];
@@ -260,12 +289,15 @@ export function MeasureFooter<TRow extends Row>({
   reserveLeadingColumn?: boolean;
   labelInSelectionColumn?: boolean;
   trailingColumn?: boolean;
+  reorderable?: boolean;
+  children?: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
   const byColumn = new Map(measures.map((measure) => [measure.columnId, measure]));
   return (
     <TableFooter>
       <TableRow>
+        {reorderable ? <TableCell className="w-8" /> : null}
         {selectable || reserveLeadingColumn ? (
           <TableCell className="w-8 text-fg-muted">
             {labelInSelectionColumn ? t("list.total") : null}
@@ -299,16 +331,18 @@ export function MeasureFooter<TRow extends Row>({
         })}
         {trailingColumn ? <TableCell /> : null}
       </TableRow>
+      {children}
     </TableFooter>
   );
 }
 
 /** Accessible, non-sortable header for the framework-owned row-action column. */
-export function RowActionsHeader(): React.ReactElement {
+export function RowActionsHeader({ children }: { children?: React.ReactNode } = {}): React.ReactElement {
   const t = useUiT();
   return (
-    <TableHead sticky className="text-right">
+    <TableHead sticky className="w-10 text-right">
       <span className="sr-only">{t("list.actions")}</span>
+      {children}
     </TableHead>
   );
 }
@@ -336,6 +370,7 @@ export function ListHeaderCell<TRow extends Row>({
       sticky
       title={header.isPlaceholder ? undefined : developerTitle(header.column.id, resourceView.resource)}
       className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
+      style={{ minWidth: header.column.columnDef.minSize }}
       aria-sort={ariaSortForColumn(header.column)}
     >
       {showVisibleFields ? (

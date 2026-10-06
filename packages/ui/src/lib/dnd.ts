@@ -181,6 +181,7 @@ export function useDropTarget<TData = unknown>({
 }: UseDropTargetOptions<TData>): {
   isOver: boolean;
   dropProps: {
+    onDragEnter: DragEventHandler;
     onDragOver: DragEventHandler;
     onDragLeave: DragEventHandler;
     onDrop: DragEventHandler;
@@ -190,12 +191,16 @@ export function useDropTarget<TData = unknown>({
   // Track enter/leave depth so moving over child elements doesn't flicker.
   const depth = useRef(0);
 
+  const onDragEnter = useCallback<DragEventHandler>((event) => {
+    if (!dragHasAcceptedType(event.dataTransfer, accept)) return;
+    depth.current += 1;
+    setIsOver(true);
+  }, [accept]);
   const onDragOver = useCallback<DragEventHandler>(
     (event) => {
       if (!dragHasAcceptedType(event.dataTransfer, accept)) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
-      depth.current += 1;
       setIsOver(true);
     },
     [accept],
@@ -219,7 +224,7 @@ export function useDropTarget<TData = unknown>({
     [accept, canDrop, onDrop],
   );
 
-  return { isOver, dropProps: { onDragOver, onDragLeave, onDrop: handleDrop } };
+  return { isOver, dropProps: { onDragEnter, onDragOver, onDragLeave, onDrop: handleDrop } };
 }
 
 /**

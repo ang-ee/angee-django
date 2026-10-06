@@ -30,6 +30,7 @@ test("registers read-only workflow and run pages with additive record and decisi
   expect(addon.routes?.map((route) => route.name)).toContain("workflows.runs.record");
   expect(Object.keys(addon.containers?.["decisions#origin"] ?? {})).toEqual(["workflows.run"]);
   expect(Object.keys(addon.containers?.["record#aside"] ?? {})).toEqual(["workflows.timeline"]);
+  expect(Object.keys(addon.containers?.["form#actions-menu"] ?? {})).toEqual(["workflows.run-workflow"]);
 });
 
 test("trigger record breadcrumbs inherit the declared Triggers collection label", async () => {

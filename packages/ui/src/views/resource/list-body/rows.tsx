@@ -3,7 +3,10 @@ import { useInAppLink } from "../../../lib/in-app-link";
 import { type Row as TableRowModel } from "@tanstack/react-table";
 import type { Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
-import { dragSourceProps, type DndPayload, type DragSourceProps } from "../../../lib/dnd";
+import { useRuntimeViewAs } from "../../../runtime";
+import { dragSourceProps, useDropTarget, type DndPayload } from "../../../lib/dnd";
+import { Glyph } from "../../../chrome/Glyph";
+import { Button } from "../../../ui/button";
 import { cn } from "../../../lib/cn";
 import { Checkbox } from "../../../ui/checkbox";
 import { TableCell, TableHead, TableRow } from "../../../ui/table";
@@ -18,6 +21,13 @@ import {
 } from "./cell-utils";
 import { GroupHeader } from "./grouping";
 import { ALIGN_CLASS } from "./types";
+interface RowReorder {
+  type: string;
+  onReorder: (fromId: string, toId: string) => void;
+  previousId?: string;
+  nextId?: string;
+}
+
 function RecordRowInner<TRow extends Row>({
   row,
   selected,
@@ -31,6 +41,7 @@ function RecordRowInner<TRow extends Row>({
   active,
   draggableRow,
   renderRowActions,
+  reorder,
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
@@ -51,8 +62,42 @@ function RecordRowInner<TRow extends Row>({
   active?: boolean;
   draggableRow?: (row: TRow) => DndPayload | null;
   renderRowActions?: (row: TRow) => React.ReactNode;
+  reorder?: RowReorder;
 }): React.ReactElement {
-  const dragProps = dragSourceProps(draggableRow?.(row.original) ?? null);
+  const t = useUiT();
+  const preview = useRuntimeViewAs();
+  const blocked = Boolean(preview.viewAs || preview.pending);
+  const { dropProps, isOver } = useDropTarget<string>({
+    accept: reorder?.type,
+    canDrop: (payload) => !blocked && Boolean(reorder) && typeof payload.data === "string" && payload.data !== row.id,
+    onDrop: (payload) => reorder?.onReorder(payload.data, row.id),
+  });
+  const dragProps = {
+    ...dragSourceProps(draggableRow?.(row.original) ?? null),
+    ...(reorder ? dropProps : {}),
+    "data-drop-target": isOver ? "" : undefined,
+  };
+  const handleDragProps = dragSourceProps(reorder && !blocked ? { type: reorder.type, data: row.id } : null);
+  const reorderCell = reorder ? <TableCell className="w-8">
+    <Button type="button" variant="ghost" size="iconSm" aria-label={t("list.reorderRow")}
+      disabled={blocked}
+      title={t("list.reorderRowHint")}
+      className="cursor-grab active:cursor-grabbing"
+      {...handleDragProps}
+      onDragStart={(event) => {
+        event.stopPropagation();
+        if (blocked) event.preventDefault();
+        else handleDragProps?.onDragStart(event);
+      }}
+      onKeyDown={(event) => {
+        if (blocked || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const targetId = event.key === "ArrowUp" ? reorder.previousId : reorder.nextId;
+        if (targetId) reorder.onReorder(row.id, targetId);
+      }}
+    ><Glyph name="grip-vertical" decorative /></Button>
+  </TableCell> : null;
   const href = rowHref?.(row.original);
   if (href) {
     return (
@@ -66,6 +111,7 @@ function RecordRowInner<TRow extends Row>({
         onRecordOpen={onRecordOpen}
         active={active}
         dragProps={dragProps}
+        reorderCell={reorderCell}
         rowActions={renderRowActions?.(row.original)}
       />
     );
@@ -82,6 +128,7 @@ function RecordRowInner<TRow extends Row>({
       onRecordOpen={onRecordOpen}
       active={active}
       dragProps={dragProps}
+      reorderCell={reorderCell}
       rowActions={renderRowActions?.(row.original)}
     />
   );
@@ -103,6 +150,7 @@ function LinkedRecordRow<TRow extends Row>({
   onRecordOpen,
   active = false,
   dragProps,
+  reorderCell,
   rowActions,
 }: {
   row: TableRowModel<TRow>;
@@ -114,7 +162,8 @@ function LinkedRecordRow<TRow extends Row>({
   href: string;
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
-  dragProps?: DragSourceProps;
+  dragProps?: React.HTMLAttributes<HTMLTableRowElement>;
+  reorderCell?: React.ReactNode;
   rowActions?: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
@@ -136,7 +185,7 @@ function LinkedRecordRow<TRow extends Row>({
   return (
     <TableRow
       {...dragProps}
-      className="group/record"
+      className="group/record data-[drop-target]:bg-brand-soft"
       interactive
       aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
@@ -153,6 +202,7 @@ function LinkedRecordRow<TRow extends Row>({
           : undefined
       }
     >
+      {reorderCell}
       {selectable ? (
         <LeadingSelectionCell
           grouped={reserveLeadingColumn}
@@ -167,6 +217,7 @@ function LinkedRecordRow<TRow extends Row>({
         <TableCell
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
+          style={{ minWidth: cell.column.columnDef.minSize }}
         >
           {index === 0 &&
           !columnHasInteractiveContent(cell.column.columnDef) ? (
@@ -211,6 +262,7 @@ function PlainRecordRow<TRow extends Row>({
   onRecordOpen,
   active = false,
   dragProps,
+  reorderCell,
   rowActions,
 }: {
   row: TableRowModel<TRow>;
@@ -223,7 +275,8 @@ function PlainRecordRow<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   onRecordOpen?: (row: TRow) => void;
   active?: boolean;
-  dragProps?: DragSourceProps;
+  dragProps?: React.HTMLAttributes<HTMLTableRowElement>;
+  reorderCell?: React.ReactNode;
   rowActions?: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
@@ -234,7 +287,7 @@ function PlainRecordRow<TRow extends Row>({
   return (
     <TableRow
       {...dragProps}
-      className="group/record"
+      className="group/record data-[drop-target]:bg-brand-soft"
       interactive={interactive}
       aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
@@ -263,6 +316,7 @@ function PlainRecordRow<TRow extends Row>({
           : undefined
       }
     >
+      {reorderCell}
       {selectable ? (
         <LeadingSelectionCell
           grouped={reserveLeadingColumn}
@@ -277,6 +331,7 @@ function PlainRecordRow<TRow extends Row>({
         <TableCell
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
+          style={{ minWidth: cell.column.columnDef.minSize }}
         >
           {interactive &&
           index === 0 &&
@@ -324,6 +379,7 @@ export function renderListRow<TRow extends Row>({
   activeRowId,
   draggableRow,
   renderRowActions,
+  reorder,
 }: {
   row: TableRowModel<TRow>;
   colSpan: number;
@@ -336,6 +392,7 @@ export function renderListRow<TRow extends Row>({
   activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
   renderRowActions?: (row: TRow) => React.ReactNode;
+  reorder?: RowReorder;
 }): React.ReactElement {
   if (row.getIsGrouped()) {
     return (
@@ -360,6 +417,7 @@ export function renderListRow<TRow extends Row>({
       active={activeRowId != null && String(row.original.id) === activeRowId}
       draggableRow={draggableRow}
       renderRowActions={renderRowActions}
+      reorder={reorder}
     />
   );
 }

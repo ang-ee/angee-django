@@ -9,24 +9,11 @@ import {
   writeDndPayload,
 } from "./dnd";
 import type { DragEvent } from "react";
-
-/** A minimal DataTransfer stand-in (happy-dom's is incomplete for setData). */
-function fakeTransfer(): DataTransfer {
-  const store = new Map<string, string>();
-  return {
-    setData: (type: string, data: string) => store.set(type.toLowerCase(), data),
-    getData: (type: string) => store.get(type.toLowerCase()) ?? "",
-    get types() {
-      return [...store.keys()];
-    },
-    effectAllowed: "none",
-    dropEffect: "none",
-  } as unknown as DataTransfer;
-}
+import { testDndTransfer } from "./dnd-test-fixtures";
 
 describe("dnd seam", () => {
   test("round-trips a payload and exposes its type marker during drag", () => {
-    const dt = fakeTransfer();
+    const dt = testDndTransfer();
     writeDndPayload(dt, { type: "storage.file", data: { id: "f1" } });
 
     expect(readDndPayload<{ id: string }>(dt)?.data.id).toBe("f1");
@@ -38,11 +25,11 @@ describe("dnd seam", () => {
   });
 
   test("readDndPayload returns null for a foreign/empty transfer", () => {
-    expect(readDndPayload(fakeTransfer())).toBeNull();
+    expect(readDndPayload(testDndTransfer())).toBeNull();
   });
 
   test("dragHasFiles recognizes native file drags", () => {
-    const empty = fakeTransfer();
+    const empty = testDndTransfer();
     expect(dragHasFiles(empty)).toBe(false);
 
     const filesType = {
@@ -57,7 +44,7 @@ describe("dnd seam", () => {
 
     const props = dragSourceProps({ type: "storage.file", data: { id: "f1" } });
     expect(props?.draggable).toBe(true);
-    const dt = fakeTransfer();
+    const dt = testDndTransfer();
     props?.onDragStart({ dataTransfer: dt } as unknown as DragEvent);
     expect(readDndPayload<{ id: string }>(dt)?.data.id).toBe("f1");
   });

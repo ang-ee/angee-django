@@ -6,6 +6,7 @@ import {
 } from "../../runtime";
 
 import type { RelationOption } from "../../widgets/RelationField";
+import type { WidgetControlProps } from "../../widgets/types";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "./RelationPicker";
 import { useRelationForms } from "./RelationRecordDialog";
@@ -39,6 +40,7 @@ export interface RelationFieldWidgetProps {
   placeholder?: string;
   "aria-label"?: string;
   controlRef?: Ref<HTMLButtonElement>;
+  controlProps?: WidgetControlProps;
 }
 
 /**
@@ -73,6 +75,7 @@ function EditableRelationFieldWidget(
   placeholder,
   "aria-label": ariaLabel,
   controlRef,
+  controlProps,
 }: RelationFieldWidgetProps,
 ): ReactElement {
   const picker = useRelationPickerOptions(relation, {
@@ -98,6 +101,7 @@ function EditableRelationFieldWidget(
 
   return (
     <RelationPicker
+      {...controlProps}
       controlRef={controlRef}
       value={value}
       onChange={onChange}

@@ -101,6 +101,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   /** Domain-owned filters applied to relation pickers on editable lines. */
   lineRelationFilters?: EditableLinesProps["relationFilters"];
+  /** Content under the editable lines (totals and the like); other tabs never show it. */
+  lineFooter?: (context: RecordToolbarContext) => React.ReactNode;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
   /** Overview visibility on forms without body tabs. */
@@ -153,6 +155,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     linePrimaryFields,
     lineSupplementalColumns,
     lineRelationFilters,
+    lineFooter,
     recordPresentation = "document",
     overviewTab,
     publishBreadcrumbLabel = false,
@@ -248,6 +251,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       linePrimaryFields={linePrimaryFields}
       lineSupplementalColumns={lineSupplementalColumns}
       lineRelationFilters={lineRelationFilters}
+      lineFooter={lineFooter && !awaitingRecord ? () => lineFooter(recordToolbarContext) : undefined}
     />
   );
   const recordExtrasPanel =

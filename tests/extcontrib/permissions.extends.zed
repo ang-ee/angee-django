@@ -43,3 +43,11 @@ definition iam/protected {
 
     permission member = manager->effective_member
 }
+
+// Decision access follows the concerned record's live permissions.
+definition decisions/decision {
+    relation concerned_record: extcontrib/record // rebac:field=records__extcontrib_record
+
+    permission owner_eligible = concerned_record->write
+    permission read = concerned_record->read
+}

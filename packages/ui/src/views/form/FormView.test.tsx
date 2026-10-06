@@ -493,6 +493,7 @@ describe("FormView", () => {
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Schedule", "Editor", "Earlier2", "Later"]);
     expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
     expect(screen.getByText("Body summary")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Summary" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: /Earlier/ }));
     const contributedForm = await screen.findByRole("form", { name: "Contributed form" });
     expect(contributedForm.parentElement?.closest("form")).toBeNull();
@@ -503,6 +504,7 @@ describe("FormView", () => {
     expect(screen.getByTestId("body-retained-active").textContent).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
     expect(await screen.findByLabelText("Reminder")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Schedule" })).toBeNull();
     expect(mounted).toHaveBeenCalledTimes(1);
   });
 

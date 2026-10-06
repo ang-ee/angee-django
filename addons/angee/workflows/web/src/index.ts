@@ -1,4 +1,5 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { createElement } from "react";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
@@ -7,6 +8,7 @@ import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
+import { RunWorkflowRecordActions } from "./run-workflow-actions";
 
 export { RecordTimeline, type RecordTimelineProps, type TimelineRecord } from "./RecordTimeline";
 export { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
@@ -32,6 +34,7 @@ export default defineBaseAddon({
     "workflows.triggers": { parent: "workflows.studio", label: "Triggers", icon: "activity", route: "workflows.triggers" },
   },
   containers: {
+    "form#actions-menu": { "workflows.run-workflow": { sequence: 40, content: createElement(RunWorkflowRecordActions) } },
     "record#aside": { "workflows.timeline": recordTimelineTab },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },

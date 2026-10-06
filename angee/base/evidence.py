@@ -5,10 +5,10 @@ from enum import StrEnum
 from typing import Any
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models
 from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
@@ -46,6 +46,16 @@ class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
 
     class Meta:
         abstract = True
+
+
+class DerivedFromRelation(GenericRelation):
+    """Query retained derivation links without collecting them on source deletion.
+
+    Declare on the canonical source model, matching the links' content type.
+    """
+
+    def bulk_related_objects(self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS) -> list[models.Model]:
+        return []
 
 
 class EvidenceReference(BaseModel):

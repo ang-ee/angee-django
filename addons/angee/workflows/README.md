@@ -81,6 +81,12 @@ the console exposes execution reads, monitor-readable draft authoring metadata,
 and writer-only save and publish operations, alongside explicit operator actions through the
 shared GraphQL resource and action owners.
 
+Record verbs include **Run workflow**, which offers published, startable workflows
+for the record's model or canonical MTI ancestor, collects required definition
+inputs, and calls `start_workflow_run` with a client-generated UUID request key.
+The workflow resource's `subject_model`, `can_start` and `is_published` filters
+own discovery; run admission owns authorization, validation and replay.
+
 [`Runner`](runner.py) owns execution and the tick. The run and step managers and
 querysets in [`managers.py`](managers.py) own admission, locked row transitions,
 cancellation and retention. A database step holds its run lock for its
