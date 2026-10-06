@@ -153,9 +153,9 @@ describe("EditableLines", () => {
 
   test("shared row actions duplicate live values with a new client identity and remove the duplicate", async () => {
     const f = rowPatchFixture();
-    act(() => f.form().setValue("lines.0.quantity", 8, { shouldDirty: true }));
+    act(() => f.form().setValue("lines.0.quantity" as never, 8 as never, { shouldDirty: true }));
     await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!); });
-    const duplicate = f.form().getValues("lines.1") as Record<string, unknown>;
+    const duplicate = f.form().getValues("lines.1" as never) as unknown as Record<string, unknown>;
     expect(duplicate).toMatchObject({ label: "Widget", quantity: 8 });
     expect(duplicate.id).toBeUndefined();
     expect(typeof duplicate[CLIENT_LINE_KEY]).toBe("string");

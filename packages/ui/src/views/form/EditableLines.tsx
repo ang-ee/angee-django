@@ -127,7 +127,7 @@ export function EditableLines({
     const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
     return {
       id: field.name, field: `value.${field.name}`, header, widget,
-      currencyField: field.currencyField,
+      ...(field.currencyField ? { currencyField: field.currencyField } : {}),
       sortable: false, interactive: true,
       hiddenByDefault: Boolean(primary && !primary.has(field.name)),
       // Validation reveals an optional field even if the user previously hid it.
