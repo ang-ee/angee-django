@@ -2439,18 +2439,27 @@ test("a selected app's links, vocabulary and Settings follow one projection; pag
       title: t("title"), field: model?.fields.title?.label, label: model?.label, preset: runtime.defaultResourceView, menu };
     return createElement("span", null, "Projection probe");
   }
-  const addon: BaseAddon = {
-    id: "desk",
+  // desk's own page of records.Record is its app's claim; the records addon it depends on owns the canonical one.
+  const records: BaseAddon = {
+    id: "records",
     i18n: { records: { title: "Records" } },
     routes: [
       ...resourcePageRoutes("records.all", "/records", Probe, "records.Record"),
       ...resourcePageRoutes("teams.all", "/teams", Probe, "teams.Team"),
-      ...resourcePageRoutes("desk.incoming", "/desk/incoming", Probe, "records.Record", { defaultResourceView: "desk.open" }),
-      ...resourcePageRoutes("desk.review", "/desk/review", Probe, undefined, { recordModel: "records.Record" }),
     ],
     menus: [
       { id: "records", route: "records.all" },
       { id: "teams", route: "teams.all" },
+    ],
+  };
+  const addon: BaseAddon = {
+    id: "desk",
+    dependsOn: ["records"],
+    routes: [
+      ...resourcePageRoutes("desk.incoming", "/desk/incoming", Probe, "records.Record", { defaultResourceView: "desk.open" }),
+      ...resourcePageRoutes("desk.review", "/desk/review", Probe, undefined, { recordModel: "records.Record" }),
+    ],
+    menus: [
       { id: "desk", home: "desk.incoming", children: [
         { id: "desk.incoming", route: "desk.incoming" },
         { id: "desk.review", route: "desk.review" },
@@ -2467,7 +2476,7 @@ test("a selected app's links, vocabulary and Settings follow one projection; pag
   };
   history.replaceState(null, "", "/desk/incoming/r1");
   const app = createApp({
-    ...testAppInput([addon], { console: { requireAuth: false } }),
+    ...testAppInput([records, addon], { console: { requireAuth: false } }),
     schemas: testSchemasWithConsoleResources([record, testDataResource("teams.Team")]),
     location: { search: "?app=desk" },
   });
