@@ -577,7 +577,7 @@ describe("ActionFormDialog", () => {
         },
         {
           name: "documentIds", argKind: "relationList", resource: "Document", label: "Documents",
-          create: { resource: "Document" }, fromContext: ({ selectedIds }) => selectedIds,
+          create: { resource: "Document" },
         },
       ],
     });
@@ -654,7 +654,8 @@ describe("ActionFormDialog", () => {
       expect(await screen.findByText("Created collection")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Collect" }));
       await waitFor(() => expect(submit).toHaveBeenCalledWith({
-        target: argKind === "relation" ? "created-1" : ["doc-1", "doc-2", "created-1"],
+        // A list of collections never inherits the invoking documents' ids.
+        target: argKind === "relation" ? "created-1" : ["created-1"],
       }, context));
     },
   );
