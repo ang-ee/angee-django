@@ -41,7 +41,7 @@ afterEach(() => {
   clearClients();
 });
 
-function renderPartyForm(
+async function renderPartyForm(
   form: ReactElement,
   organizationFields: Readonly<Record<string, ContainerChild>> = {},
 ) {
@@ -58,6 +58,7 @@ function renderPartyForm(
     </AppRuntimeProvider></ToastProvider></ModalsHost>
   ) });
   const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
   return render(
     <Provider resources={resources} dataProvider={provider} queryClientConfig={{ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }}>
       <RouterProvider router={router} />
@@ -67,21 +68,21 @@ function renderPartyForm(
 
 describe("organization form extensions", () => {
   test.each(forms)("offers contact actions for saved $resource records", async ({ resource, Component }) => {
-    renderPartyForm(<Component resource={resource} id="party-1" />);
+    await renderPartyForm(<Component resource={resource} id="party-1" />);
     await screen.findByDisplayValue("Saved party");
     fireEvent.click(screen.getByRole("button", { name: "Actions" }));
     expect(await screen.findByRole("menuitem", { name: "Add email" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Add phone" })).toBeTruthy();
   });
 
-  test.each(forms)("hides contact actions while creating $resource records", ({ resource, Component }) => {
-    renderPartyForm(<Component resource={resource} id={null} />);
+  test.each(forms)("hides contact actions while creating $resource records", async ({ resource, Component }) => {
+    await renderPartyForm(<Component resource={resource} id={null} />);
     expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
   });
 
   test.each(forms)("read-only $resource records lock fields and keep declared contact actions", async ({ resource, Component }) => {
-    renderPartyForm(<Component resource={resource} id="party-1" readOnly />);
+    await renderPartyForm(<Component resource={resource} id="party-1" readOnly />);
     expect(await screen.findByRole("heading", { name: "Saved party" })).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
     // FormView's read-only contract locks fields and generated CRUD; declared actions remain.
@@ -91,14 +92,14 @@ describe("organization form extensions", () => {
   });
 
   test("offers identity and address tabs on saved organizations", async () => {
-    renderPartyForm(<OrganizationForm resource="parties.Organization" id="party-1" />);
+    await renderPartyForm(<OrganizationForm resource="parties.Organization" id="party-1" />);
     await screen.findByDisplayValue("Saved party");
     expect(screen.getByRole("tab", { name: "Identity" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Addresses" })).toBeTruthy();
   });
 
-  test.each([false, true])("keeps base fields with consumer extension present: %s", (withExtension) => {
-    renderPartyForm(<OrganizationForm resource="parties.Organization" id={null} />, withExtension ? {
+  test.each([false, true])("keeps base fields with consumer extension present: %s", async (withExtension) => {
+    await renderPartyForm(<OrganizationForm resource="parties.Organization" id={null} />, withExtension ? {
       "consumer.reference": { content: <Field name="external_reference" label="External reference" /> },
     } : {});
     const title = screen.getByRole("textbox", { name: /display name/i });
