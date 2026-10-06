@@ -305,7 +305,11 @@ shared UI copy through an addon bundle.
   callback that reads the latest execution context from a ref (`useLatestRef`).
   Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
   navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Page tests use
+  projection, route transitions, DnD policy, and domain actions. Context another
+  addon owns beside a page's list is that addon's pane component, published with
+  `usePrimaryPane` rather than stacked as a second list:
+  [My Work](../../addons/angee/projects/web/src/views/MyWorkPage.tsx) publishes
+  messaging's `ActivityAgendaPane`. Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
 - Chatter publishers compose by owner for their mounted lifetime. Panels mount
