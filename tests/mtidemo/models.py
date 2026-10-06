@@ -62,8 +62,8 @@ class MtiChildProxy(MtiChild):
     """An untyped proxy over the typed concrete ``MtiChild``.
 
     Carries no ``rebac_resource_type`` of its own (a bare proxy Meta), so it pins the
-    proxy rule in :func:`angee.base.refs.canonical_record_target`: a proxy resolves to its
-    concrete model first, then the MTI walk runs — an untyped proxy over a typed concrete
+    proxy rule in :func:`rebac.generic_target`: a proxy resolves to its concrete
+    model first, then the MTI walk runs — an untyped proxy over a typed concrete
     row keys on the typed ancestor (``MtiParent``), never the proxy's own content type.
     """
 
@@ -111,9 +111,9 @@ class MtiTwoParent(MtiParent, MtiSideParent):
     """A multiple-MTI child with two concrete parents — the corrupting shape refs rejects.
 
     ``MtiSideParent``'s row keeps its own primary key, so this child's pk does not address
-    it; :func:`angee.base.refs.canonical_record_target` fails fast rather than store the
-    child pk against the side parent's content type. ``managed = False`` — instantiated
-    only to exercise the guard, never saved.
+    it; :func:`angee.base.refs.ancestor_object_refs` fails fast rather than fan a grant
+    onto the side parent's content type. ``managed = False`` — instantiated only to
+    exercise the guard, never saved.
     """
 
     class Meta:

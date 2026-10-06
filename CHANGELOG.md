@@ -31,6 +31,19 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- `angee.base.refs.canonical_record_target`, `canonical_record_model` and
+  `CanonicalRecordTarget` are removed: a polymorphic edge stores
+  `rebac.generic_target`, and model-level canonical projections read
+  `rebac.field_backing.canonical_model`. Currency-rate contexts, resource
+  `RecordRefField` imports and tag assignments key their target the same way and
+  refuse an untyped row with `ValueError` (a currency-rate context reports it as
+  a `ValidationError`). The two edges that name rows outside REBAC — a chatter
+  thread on an ungated host and an import record link to a plain domain sink —
+  store `angee.base.refs.record_target`, the library's identity for a gated row
+  and Django's own for an ungated one. Consumers that imported the removed
+  helpers move to `rebac.generic_target` (an instance's stored content type and
+  id) or `rebac.field_backing.canonical_model` (a model's canonical class,
+  `None` when untyped).
 - Workflow subjects, step records, step watches, decision records and extraction
   sources stay owner-authorized evidence edges: their access follows the run,
   decision or extraction, and the owner's admission gate (`readable_records`,

@@ -19,7 +19,7 @@ ergonomic reverse accessor (``GenericRelation("tags.TagAssignment")`` on
 on ``tags`` for every composing project, so it lands in ``parties`` (model +
 ``addon.toml`` dependency together) only when that dependency is wanted. Declare
 that reverse relation on ``Party`` itself — the topmost REBAC-typed MTI ancestor
-the canonical edge keys on (:func:`angee.base.refs.canonical_record_target`), never
+the canonical edge keys on (:func:`rebac.generic_target`), never
 on a ``Person``/``Organization`` child — so the delete collector filters at the same
 content type the write used (the placement invariant in :mod:`angee.base.refs`).
 """
@@ -31,7 +31,7 @@ from typing import Any
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from rebac import system_context
+from rebac import GenericTarget, generic_target, system_context
 from rebac.resources import model_for_resource_type
 
 from angee.base.identity import instance_from_public_id
@@ -46,7 +46,7 @@ from angee.base.models import (
     AngeeQuerySet,
     role_anchor,
 )
-from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
+from angee.base.refs import RecordRefMixin
 
 
 class TagQuerySet(
@@ -94,17 +94,17 @@ class TagAssignmentManager(AngeeManager):
     gated call sites) and the pre-insert check has no row id to gate on.
     """
 
-    def resolve_target(self, target_type: str, target_id: str) -> CanonicalRecordTarget | None:
+    def resolve_target(self, target_type: str, target_id: str) -> GenericTarget | None:
         """Resolve the canonical edge target for a public target address.
 
         ``target_type`` is a REBAC resource type (e.g. ``parties/party``) and
         ``target_id`` the row's public id. Returns ``None`` when the type or row
         is unknown **or unreadable** — the lookup runs on the actor-scoped default
-        manager. The returned :class:`~angee.base.refs.CanonicalRecordTarget` carries
-        the ``content_type`` and ``object_id`` canonicalized to the target's topmost
-        REBAC MTI ancestor (:func:`angee.base.refs.canonical_record_target`): a
-        ``parties/person`` address and a ``parties/party`` address resolve to one
-        ``parties/party`` edge, so mixed-level addressing never splits the edge set.
+        manager. The returned :class:`rebac.GenericTarget` carries the
+        ``content_type`` and ``object_id`` canonicalized to the target's topmost
+        REBAC MTI ancestor (:func:`rebac.generic_target`): a ``parties/person``
+        address and a ``parties/party`` address resolve to one ``parties/party``
+        edge, so mixed-level addressing never splits the edge set.
         """
 
         model = model_for_resource_type(target_type)
@@ -113,7 +113,7 @@ class TagAssignmentManager(AngeeManager):
         instance = instance_from_public_id(model, target_id)
         if instance is None:
             return None
-        return canonical_record_target(instance)
+        return generic_target(instance)
 
     def for_target(self, target_type: str, target_id: str) -> models.QuerySet[Any]:
         """Return the assignments on one target row, empty when it does not resolve."""

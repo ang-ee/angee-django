@@ -46,7 +46,6 @@ from django.utils import timezone
 from rebac import PermissionDenied, SubjectRef, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
-from rebac.field_backing import canonical_model
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
@@ -54,6 +53,7 @@ from angee.base.actors import actor_user_id
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
+from angee.base.refs import record_target, record_target_model
 from angee.base.scoping import system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import mute_changes
@@ -908,8 +908,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 class ThreadAttachmentManager(AngeeManager):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
-    The edge names its record by :func:`record_target`: a gated record and each
-    of its REBAC-typed MTI ancestors share one chatter thread. ``permissions.zed``
+    The edge names its record by :func:`angee.base.refs.record_target`: a gated
+    record and each of its REBAC-typed MTI ancestors share one chatter thread,
+    and an ungated host keeps its own content type. ``permissions.zed``
     backs one relation per attachable record type with ``target``, so a source
     edge is created and deleted under the actor with write on its record; the
     chatter edge is the record's own thread, which the record's verbs
@@ -2115,32 +2116,13 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         return activity
 
 
-def record_target_model(model: type[models.Model]) -> type[models.Model]:
-    """Return the model a chatter edge names a host of ``model`` by.
-
-    A gated host is named by its canonical REBAC model
-    (:func:`rebac.field_backing.canonical_model`), so a multi-table child shares
-    its typed parent's chatter and the schema's target relations reach it. An
-    ungated host, which no schema relation can name, keeps its own concrete
-    model: Django's generic-pointer default.
-    """
-
-    return canonical_model(model) or model._meta.concrete_model or model
-
-
-def record_target(record: Any) -> tuple[Any, Any]:
-    """Return the content type and object id the chatter edges of ``record`` store."""
-
-    return ContentType.objects.get_for_model(record_target_model(type(record))), record.pk
-
-
 def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type: Any) -> None:
     """Fail fast on a child-composed / parent-uncomposed threaded MTI split.
 
     ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation and the
     ``pre_delete`` teardown, both of which key on the model that composes the mixin — while
     the attachment row is written at the *canonical* (topmost REBAC-typed) target
-    (:func:`record_target`). If a child composes the mixin but its canonical ancestor
+    (:func:`angee.base.refs.record_target`). If a child composes the mixin but its canonical ancestor
     does not, the ancestor cannot collect the child's attachment on delete and a reused
     primary key would mis-resolve. Guard it where the write keys — the placement
     invariant stated in :mod:`angee.base.refs`.

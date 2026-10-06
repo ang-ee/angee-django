@@ -9,8 +9,9 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from import_export import fields, widgets
+from rebac import GenericTarget, generic_target
 
-from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
+from angee.base.refs import RecordRefMixin
 from angee.base.serialization import canonical_json
 
 
@@ -52,13 +53,17 @@ class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
         value: Any,
         row: Mapping[str, Any] | None = None,
         **kwargs: Any,
-    ) -> CanonicalRecordTarget | None:
-        """Return a canonical target, or ``None`` for an empty reference."""
+    ) -> GenericTarget | None:
+        """Return a canonical target, or ``None`` for an empty reference.
+
+        ``ValueError`` for an xref that names a row without a REBAC type: a
+        polymorphic edge cannot name it.
+        """
 
         del row, kwargs
         if value in (None, ""):
             return None
-        return canonical_record_target(resolve_xref(value, self.ledger_model, self.addon_aliases))
+        return generic_target(resolve_xref(value, self.ledger_model, self.addon_aliases))
 
 
 class RecordRefField(fields.Field):
