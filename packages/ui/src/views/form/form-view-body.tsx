@@ -30,6 +30,7 @@ import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
+import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
 import {
   fieldAriaLabel,
@@ -37,6 +38,7 @@ import {
   gridFieldClass,
   isCompositeFieldDescriptor,
   recordRepresentationValue,
+  relationListValue,
   resolveField,
   titleText,
   type FormSectionModel,
@@ -357,15 +359,7 @@ export function FormViewOverview({
     : undefined;
   const renderField = (field: FieldDescriptor): React.ReactNode => {
     if (field.hidden) return null;
-    const relation = surface.relationByField.get(field.name);
-    return (
-      <BoundFormField
-        key={field.name}
-        surface={surface}
-        field={field}
-        relation={relation}
-      />
-    );
+    return <BoundFormField key={field.name} surface={surface} field={field} />;
   };
   const editableLines = linesActive && linesResource && linesField ? (
     <FormEditableLines
@@ -455,17 +449,17 @@ export function FormViewOverview({
 function BoundFormField({
   surface,
   field,
-  relation,
   rail = false,
 }: {
   surface: FormViewSurface;
   field: FieldDescriptor;
-  relation: RelationFieldInfo | undefined;
   rail?: boolean;
 }): React.ReactElement {
   const values = useWatch({ control: surface.form.control });
   const value = get(values, field.name);
   const readOnly = surface.fieldReadOnly(field);
+  const relation = surface.relationByField.get(field.name);
+  const relationList = surface.relationListByField.get(field.name);
   const currentRelationId = relationValueId(value);
   const savedOption = relation
     ? relationSelectedOption(get(surface.displayRecord ?? {}, field.name), relation.labelField)
@@ -486,13 +480,18 @@ function BoundFormField({
           field={field}
           rail={rail}
           relation={relation}
+          relationList={relationList}
           selectedOption={selectedOption}
           value={value}
           row={values}
           readOnly={readOnly}
           errors={fieldState.error ? [fieldState.error] : []}
           onCommit={() => surface.commitFieldInteraction(field.name)}
-          onChange={(next) => {
+          onChange={(picked) => {
+            // A re-picked equal set restores the baseline, so it never dirties the form.
+            const next = relationList
+              ? relationListValue(picked, get(surface.form.formState.defaultValues, field.name))
+              : picked;
             surface.startFieldInteraction(field.name);
             surface.clearServerFieldError(field.name);
             controller.onChange(next);
@@ -511,8 +510,7 @@ export function FormViewRail({ surface }: { surface: FormViewSurface }): React.R
     <div className="grid gap-7">
       {surface.railGroups.map((group) => <section key={group.id} className="grid gap-3">
         <SectionHeading label={group.label} summary={group.summary} hint={group.hint} audience={group.audience} />
-        {(group.fields ?? []).map(({ field }) => <BoundFormField key={field.name} surface={surface} field={field}
-          relation={surface.relationByField.get(field.name)} rail />)}
+        {(group.fields ?? []).map(({ field }) => <BoundFormField key={field.name} surface={surface} field={field} rail />)}
         {group.content}
       </section>)}
     </div>
@@ -658,6 +656,7 @@ function BoundFieldRow({
   field,
   rail = false,
   relation,
+  relationList,
   selectedOption,
   value,
   row,
@@ -671,6 +670,7 @@ function BoundFieldRow({
   field: FieldDescriptor;
   rail?: boolean;
   relation?: RelationFieldInfo;
+  relationList?: RelationFieldInfo;
   selectedOption?: RelationOption;
   value: unknown;
   row: FormValues;
@@ -717,6 +717,17 @@ function BoundFieldRow({
             relation={relation}
             filters={field.filters}
             selectedOption={selectedOption}
+            aria-label={fieldAriaLabel(field)}
+          />
+        ) : relationList ? (
+          <RelationMultiFieldWidget
+            controlRef={controlRef}
+            value={Array.isArray(value) ? value : []}
+            onChange={onChange}
+            onCommit={onCommit}
+            readOnly={effectiveReadOnly}
+            relation={relationList}
+            filters={field.filters}
             aria-label={fieldAriaLabel(field)}
           />
         ) : (

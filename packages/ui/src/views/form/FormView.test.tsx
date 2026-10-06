@@ -1285,6 +1285,75 @@ describe("FormView", () => {
     expect(sdkMocks.recordSelection).not.toContain("stages");
   });
 
+  test("edits a to-many relation as chips and saves the picked id list", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "team-1", name: "Core", members: [{ id: "user-1", display_name: "Ada" }] };
+    sdkMocks.listRows = [{ id: "user-1", display_name: "Ada" }, { id: "user-2", display_name: "Grace" }];
+    renderWithProviders(<FormView resource="teams.Team" id="team-1" fields={[
+      { name: "name", title: true }, { name: "members", label: "Members" },
+    ]} />, teamMetadata());
+
+    expect(await screen.findByRole("button", { name: "Remove Ada" })).toBeTruthy();
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining(["members.id", "members.display_name"]));
+    expect(screen.queryByRole("textbox", { name: "Members" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New user" })).toBeTruthy();
+    await chooseOption("Members", "Grace");
+    expect(await screen.findByRole("button", { name: "Remove Grace" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { id: "team-1", members: ["user-1", "user-2"] },
+    }));
+  });
+
+  test("re-picking a to-many relation's saved records leaves the form clean", async () => {
+    sdkMocks.record = { id: "team-1", name: "Core", members: [
+      { id: "user-1", display_name: "Ada" }, { id: "user-2", display_name: "Grace" },
+    ] };
+    sdkMocks.listRows = [{ id: "user-1", display_name: "Ada" }, { id: "user-2", display_name: "Grace" }];
+    renderWithProviders(<FormView resource="teams.Team" id="team-1" fields={[
+      { name: "name", title: true }, { name: "members", label: "Members" },
+    ]} />, teamMetadata());
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Ada" }));
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    await chooseOption("Members", "Ada");
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
+    expect(screen.getAllByRole("button", { name: /^Remove / }).map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Remove Ada", "Remove Grace"]);
+  });
+
+  test("a create form submits a to-many relation as its picked id list", async () => {
+    sdkMocks.record = null;
+    sdkMocks.listRows = [{ id: "user-1", display_name: "Ada" }];
+    renderWithProviders(<FormView resource="teams.Team" id={null} fields={[
+      { name: "name", title: true }, { name: "members", label: "Members" },
+    ]} />, teamMetadata());
+
+    await chooseOption("Members", "Ada");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ members: ["user-1"] }),
+    }));
+  });
+
+  test("a read-only to-many relation renders linked chips without listing options", async () => {
+    sdkMocks.record = { id: "team-1", name: "Core", members: [{ id: "user-1", display_name: "Ada" }] };
+    renderWithProviders(<FormView resource="teams.Team" id="team-1" readOnly fields={[
+      { name: "name", title: true }, { name: "members", label: "Members" },
+    ]} />, teamMetadata(), undefined, {
+      routeHref: createRouteHref([{ name: "users", path: "/users" }, { name: "users.record", path: "/users/$id" }]),
+      routesByResource: { "iam.User": { collection: "users", record: { name: "users.record", param: "id" } } },
+    });
+
+    expect((await screen.findByRole("link", { name: "Ada" })).getAttribute("href")).toBe("/users/user-1");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Remove|New user/ })).toBeNull();
+    expect(sdkMocks.getList).not.toHaveBeenCalled();
+  });
+
   test("falls back from a missing relation label to identity, then Untitled", async () => {
     sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1" } };
     const metadata = workflowRelationMetadata();
@@ -3859,6 +3928,36 @@ function workflowRelationMetadata(): TestSchemaMetadata {
       },
     },
   };
+}
+
+/** A team whose `members` is a to-many relation to users represented by name. */
+function teamMetadata(): TestSchemaMetadata {
+  return {
+    types: {
+      TeamType: {
+        ...defaultModel("TeamType", "teams.Team"),
+        fields: {
+          name: { name: "name", kind: "scalar", scalar: "String" },
+          members: { name: "members", kind: "list", scalar: null, relationModelLabel: "iam.User" },
+        },
+      },
+      UserType: {
+        ...defaultModel("UserType", "iam.User"),
+        fields: { display_name: { name: "display_name", kind: "scalar", scalar: "String" } },
+        resource: { ...defaultResource("UserType", "iam.User"), recordRepresentation: "display_name" },
+      },
+    },
+  };
+}
+
+/** Open a select by its accessible name once its options load, and pick one option. */
+async function chooseOption(label: string, option: string): Promise<void> {
+  const trigger = await screen.findByRole("combobox", { name: label });
+  await waitFor(() => expect(trigger.hasAttribute("data-disabled")).toBe(false));
+  fireEvent.click(trigger);
+  const item = await screen.findByRole("option", { name: option });
+  fireEvent.pointerDown(item, { pointerType: "mouse" });
+  fireEvent.click(item);
 }
 
 /**

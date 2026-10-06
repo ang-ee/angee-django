@@ -10,10 +10,10 @@ import { type UiTranslate } from "../../../i18n";
 import { enumValueLabel, groupFieldLabel, statusLabel } from "../../../lib/labels";
 import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
-import { Chip } from "../../../ui/chip";
+import { ChipList } from "../../../ui/chip";
 import { dateFromUnknown, formatDate, formatDateTime } from "../../../widgets/date-format";
 import { canonicalOptionValue } from "../../../widgets/types";
-import { RecordReference } from "../../relation/RecordReference";
+import { RecordReferenceChips } from "../../relation/RecordReference";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
 import type { GroupMeasure } from "./types";
@@ -32,21 +32,17 @@ export function cellContent<TRow extends Row>(
       throw new Error(`Relation list column "${column.field}" expected an array.`);
     }
     const { model, identityPath, labelPath } = column.relationList;
-    return (
-      <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
-        {projected.map((item: unknown) => {
-          if (item == null || typeof item !== "object") {
-            throw new Error(`Relation list column "${column.field}" expected related records.`);
-          }
-          const id = rowValueAtPath(item as Row, identityPath);
-          const label = rowValueAtPath(item as Row, labelPath);
-          if (typeof id !== "string") {
-            throw new Error(`Relation list column "${column.field}" expected a related record identity.`);
-          }
-          return <Chip key={id} tone="info" size="sm"><RecordReference model={model} id={id} label={label == null ? undefined : String(label)} /></Chip>;
-        })}
-      </span>
-    );
+    return <RecordReferenceChips model={model} records={projected.map((item: unknown) => {
+      if (item == null || typeof item !== "object") {
+        throw new Error(`Relation list column "${column.field}" expected related records.`);
+      }
+      const id = rowValueAtPath(item as Row, identityPath);
+      const label = rowValueAtPath(item as Row, labelPath);
+      if (typeof id !== "string") {
+        throw new Error(`Relation list column "${column.field}" expected a related record identity.`);
+      }
+      return { id, label: label == null ? undefined : String(label) };
+    })} />;
   }
   const labelPath = queryField?.relation?.labelPath;
   const value = labelPath ? rowValueAtPath(row, labelPath) ?? projected : projected;
@@ -62,15 +58,7 @@ export function cellContent<TRow extends Row>(
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return "—";
-    return (
-      <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
-        {value.map((item, index) => (
-          <Chip key={`${String(item)}:${index}`} tone="info" size="sm">
-            {String(item)}
-          </Chip>
-        ))}
-      </span>
-    );
+    return <ChipList items={value.map((item, index) => ({ id: `${String(item)}:${index}`, label: String(item) }))} />;
   }
   if (enumValue) return enumValue.label;
   const date = isDateField(field, column.field)

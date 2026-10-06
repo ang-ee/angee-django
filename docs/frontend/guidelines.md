@@ -386,7 +386,7 @@ shared UI copy through an addon bundle.
   (`ResourceList`/`ResourceCreate`/`ResourceEdit`/`ResourceShow`), `List`/`Form`
   declarations, and record fragments (`RecordHeader`/`MetaGrid`/`MetricStrip`);
   for a linked cell, compose `TextLink`/`Chip`/`MetricTile`, never a bespoke link
-  class. If a shared view lacks what your case needs, extend it in `@angee/ui`
+  class, and for a list of values, `ChipList`. If a shared view lacks what your case needs, extend it in `@angee/ui`
   (the owner) so every addon gets it. The shared-primitive rule lives in the
   [constitution](../../AGENTS.md#constitution).
 - **Routes and pages stay thin.** A route declares URL, layout, menu/chrome,
@@ -1096,13 +1096,20 @@ Hard-won traps — the wise learn from others' mistakes
   defaults apply — Strawberry rejects `""` for Decimal/Int/Date — and ships `null`
   on an existing row (the honest "cleared" value); only a String-scalar cell's
   `""` is a real wire value and ships verbatim.
-- **An M2M line cell is a relation multi-select, not a `tagInput`** — a `kind:"list"`
-  child field that carries a relation target (an M2M, e.g. a line's `tags`) renders
-  through `relationListFieldInfo` + `RelationMultiFieldWidget` (fetched options,
-  chips) and reads/writes an array of public sqids; the diff serializes it via
-  `relationIdList`. A `kind:"list"` field with *no* relation target (a plain string
-  array) stays the `tagInput`. This mirrors the to-one `relationFieldInfo` +
-  `RelationFieldWidget` cell — compose those, never hand-roll a lines cell.
+- **A to-many relation is a relation multi-select, not a `tagInput`** — a
+  `kind:"list"` field that carries a relation target (an M2M, e.g. a team's
+  `members` or a line's `tags`) defaults to the `many2many` widget, on record forms
+  and editable lines alike. Both render it through `relationListFieldInfo` +
+  `RelationMultiFieldWidget`: fetched options and removable chips when editable,
+  linked chips when read-only, and inline create derived from the related model's
+  metadata by the same rule as the to-one picker (`useRelationForms`; pass
+  `create={null}` to decline it). Reads select the related records' identity and
+  representation; writes send an array of public ids (`relationIdList`), from the
+  form's `mutationData` or the lines diff. A form keeps a re-picked equal set as
+  its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
+  (a plain string array) stays the `tagInput`. This mirrors the to-one
+  `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
+  relation-list control.
 - **Resource relation pickers support server-backed search.** Compose
   `RelationFieldWidget`; its
   [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)

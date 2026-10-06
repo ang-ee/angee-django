@@ -46,21 +46,6 @@ const NON_EDITABLE_FIELDS = new Set([
 ]);
 
 /**
- * The default widget for a field from its resource metadata: enums pick a select,
- * object relations a `many2one` picker, string-list fields a tag input, and
- * scalars map by GraphQL scalar (Boolean→switch, Int→integer, …). Returns
- * `undefined` for a plain string scalar (the FormView text fallback). Shared by
- * both the declared-field path (`fieldsWithMetadataDefaults`) and the inline
- * relation-create path (`formFieldDescriptor`) so a field resolves the same
- * widget wherever it is rendered.
- */
-export function defaultWidgetFor(
-  field: ModelFieldMetadata | undefined,
-): string | undefined {
-  return defaultWidgetForModelField(field);
-}
-
-/**
  * Resolve a form field to its relation target, or `null` when it carries no
  * listable relation. Two field shapes qualify: a nested object relation
  * (`kind: "relation"`), and a to-one FK the node projects as a bare `ID` scalar
@@ -116,10 +101,10 @@ export function relationFieldInfoForDescriptor(
 }
 
 /**
- * The to-many analog of {@link relationFieldInfo}: an M2M child field
- * (`kind: "list"`) whose `relationModelLabel` resolved to a listable related
- * model. `EditableLines` renders it as a multi-select of related rows and
- * persists the picked public ids. A `kind: "list"` field with no relation target
+ * The to-many analog of {@link relationFieldInfo}: a to-many relation field
+ * (`kind: "list"`) whose relation target resolved to a listable related model.
+ * `FormView` and `EditableLines` render it as a multi-select of related rows and
+ * persist the picked public ids. A `kind: "list"` field with no relation target
  * (a plain string/array column) stays a tag input.
  */
 export function relationListFieldInfo(
@@ -128,8 +113,7 @@ export function relationListFieldInfo(
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
   const field = modelMetadata?.fields[fieldName];
-  if (field?.kind !== "list") return null;
-  return resolveRelationTarget(field, modelMetadata, schemaMetadata);
+  return field ? relationListFieldInfoForField(field, schemaMetadata, modelMetadata) : null;
 }
 
 /** Resolve an editable-line field directly from its canonical wire context. */
@@ -211,7 +195,7 @@ export function formFieldsFromMetadata(
 }
 
 function formFieldDescriptor(field: ModelFieldMetadata): FieldDescriptor {
-  const widget = defaultWidgetFor(field);
+  const widget = defaultWidgetForModelField(field);
   return widget ? { name: field.name, widget } : { name: field.name };
 }
 
@@ -299,11 +283,12 @@ export function fieldsWithMetadataDefaults(
     const fieldMetadata = resolved?.field;
     // A declared field with no explicit widget inherits the metadata-derived default
     // for its kind/scalar: enum→select, relation→many2one (selecting `<field>.id`
-    // for the picker), Boolean→switch, list→tagInput, etc. Without this every
-    // bare `<Field>` falls to the text widget — booleans then submit "" and fail.
+    // for the picker), relation list→many2many, value list→tagInput,
+    // Boolean→switch, etc. Without this every bare `<Field>` falls to the text
+    // widget — booleans then submit "" and fail.
     const widget =
       field.widget === undefined && field.options === undefined
-        ? defaultWidgetFor(fieldMetadata)
+        ? defaultWidgetForModelField(fieldMetadata, resolved?.model)
         : field.widget;
     const options = enumOptions(fieldMetadata);
     return {

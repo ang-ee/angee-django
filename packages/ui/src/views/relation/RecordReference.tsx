@@ -3,6 +3,7 @@ import { useModelMetadata } from "@angee/metadata";
 
 import { useResourceRecordHrefLookup } from "../../runtime";
 import { Button } from "../../ui/button";
+import { ChipList } from "../../ui/chip";
 import { TextLink } from "../../ui/text-link";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { useRelationSelectedOption } from "./relation-options";
@@ -23,6 +24,16 @@ export function RecordReference({ model, id, label, onOpen }: RecordReferencePro
   if (onOpen) return <Button type="button" size="sm" variant="ghost" className="h-auto min-h-btn-sm max-w-full whitespace-normal py-1 text-left leading-snug [overflow-wrap:anywhere]" onClick={onOpen}>{content}</Button>;
   const href = recordHref(model, id);
   return href ? <TextLink href={href} className="[overflow-wrap:anywhere]">{content}</TextLink> : <span className="[overflow-wrap:anywhere]">{content}</span>;
+}
+
+/** Related records as one chip each, every chip a {@link RecordReference}. */
+export function RecordReferenceChips({ model, records }: {
+  model: string;
+  records: readonly { id: string; label?: string }[];
+}): ReactElement {
+  return <ChipList items={records.map(({ id, label }) => ({
+    id, label: <RecordReference model={model} id={id} label={label} />,
+  }))} />;
 }
 
 function RecordReferenceLabel({ model, id }: Pick<RecordReferenceProps, "model" | "id">): ReactElement {

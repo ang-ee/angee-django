@@ -1,4 +1,4 @@
-import { Chip, RemovableChip, Select, textRoleVariants, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
+import { ChipList, Select, textRoleVariants, type WidgetDefinition, type WidgetRenderProps } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
 import { useAssignmentSubjects, type AssignmentSubjectKind } from "./assignment-subjects";
@@ -30,19 +30,12 @@ export function subjectsWidget({ kinds }: { kinds: readonly AssignmentSubjectKin
     return (
       <div className="grid gap-2">
         {selected.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {selected.map((subject) => (
-              <RemovableChip
-                key={subject}
-                tone="info"
-                size="sm"
-                removeLabel={String(labels.get(subject) ?? subject)}
-                onRemove={() => update(selected.filter((candidate) => candidate !== subject))}
-              >
-                {labels.get(subject) ?? subject}
-              </RemovableChip>
-            ))}
-          </div>
+          <ChipList
+            items={selected.map((subject) => ({
+              id: subject, label: labels.get(subject) ?? subject, text: String(labels.get(subject) ?? subject),
+            }))}
+            onRemove={(subject) => update(selected.filter((candidate) => candidate !== subject))}
+          />
         ) : null}
         <Select
           triggerRef={controlRef}
@@ -71,17 +64,7 @@ export function subjectsWidget({ kinds }: { kinds: readonly AssignmentSubjectKin
   }: WidgetRenderProps<readonly string[]>): ReactElement {
     const selected = useMemo(() => normaliseSubjects(value), [value]);
     const subjects = useAssignmentSubjects({ subjects: selected });
-    const labels = subjects.labels;
-    if (selected.length === 0) return <span className={textRoleVariants({ role: "meta" })} />;
-    return (
-      <span className="inline-flex flex-wrap gap-1">
-        {selected.map((subject) => (
-          <Chip key={subject} tone="info" size="sm">
-            {labels.get(subject) ?? subject}
-          </Chip>
-        ))}
-      </span>
-    );
+    return <ChipList items={selected.map((subject) => ({ id: subject, label: subjects.labels.get(subject) ?? subject }))} />;
   }
 
   return {

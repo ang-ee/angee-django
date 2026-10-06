@@ -13,11 +13,12 @@ import {
 } from "@angee/metadata";
 
 import { dateFromUnknown, formatDate } from "../../widgets/date-format";
-import { canonicalOptionValue, relationValueId } from "../../widgets/types";
+import { canonicalOptionValue, relationIdList, relationValueId } from "../../widgets/types";
 import type { UiTranslate } from "../../i18n";
 import {
   fieldWidgetId,
   isRelationIdField,
+  isRelationListField,
   type FieldDescriptor,
   type GroupDescriptor,
 } from "../page";
@@ -461,8 +462,24 @@ function cloneFormValue(value: unknown): unknown {
   return structuredClone(value);
 }
 
+/**
+ * The form value of a to-many relation after its picker reports `next`. A set
+ * equal to the baseline's takes the baseline's value, so picking the same
+ * records again, in any order, leaves the field unchanged; otherwise retained
+ * ids keep their loaded records and labels. The wire value is the id list.
+ */
+export function relationListValue(next: unknown, baseline: unknown): unknown[] {
+  const ids = relationIdList(next);
+  const saved = Array.isArray(baseline) ? baseline : [];
+  const savedIds = relationIdList(saved);
+  if (ids.length === savedIds.length && ids.every((id) => savedIds.includes(id))) return [...saved];
+  const records = new Map(saved.map((record) => [relationValueId(record), record]));
+  return ids.map((id) => records.get(id) ?? id);
+}
+
 function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
   if (isRelationIdField(field)) return relationValueId(value);
+  if (isRelationListField(field)) return relationIdList(value);
   // NumberField keeps an ordinary keyboard clear as an editable blank string
   // so the user can type a replacement without leaving value mode. The wire
   // boundary owns the nullable scalar representation.
@@ -473,7 +490,7 @@ function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
 function emptyValue(field: FieldDescriptor): unknown {
   if (isNumericField(field)) return null;
   if (isNullableScalarWidget(field)) return null;
-  if (field.widget === "tagInput") return [];
+  if (field.widget === "tagInput" || isRelationListField(field)) return [];
   if (field.kind === "switch" || field.widget === "switch") return false;
   if (fieldWidgetId(field) === "json") return {};
   return "";

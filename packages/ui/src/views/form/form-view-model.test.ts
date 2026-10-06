@@ -11,6 +11,7 @@ import {
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
+  relationListValue,
   resolveField,
   titleText,
 } from "./form-view-model";
@@ -336,4 +337,17 @@ describe("dotted form fields", () => {
       },
     )).toEqual({ id: "record-1", count: null, ratio: null });
   });
+});
+
+test("a to-many relation keeps an equal re-picked set as its baseline and submits public ids", () => {
+  const baseline = [{ id: "user-1", display_name: "Ada" }, { id: "user-2", display_name: "Grace" }];
+  expect(relationListValue(["user-2", "user-1"], baseline)).toEqual(baseline);
+  expect(relationListValue(["user-2", "user-3"], baseline)).toEqual([baseline[1], "user-3"]);
+  expect(relationListValue([], undefined)).toEqual([]);
+  expect(mutationData(
+    { members: [baseline[0], "user-3"] },
+    [{ name: "members", widget: "many2many" }],
+    { dirtyFields: { members: true }, id: "team-1", isCreate: false },
+  )).toEqual({ id: "team-1", members: ["user-1", "user-3"] });
+  expect(emptyDraft([{ name: "members", widget: "many2many" }])).toEqual({ members: [] });
 });

@@ -10,12 +10,18 @@ import {
   type WidgetFocusTarget,
   relationValueId,
 } from "../../widgets";
-import { fieldsWithMetadataDefaults, relationFieldInfoForDescriptor } from "../resource/model-metadata-defaults";
+import {
+  fieldsWithMetadataDefaults,
+  relationFieldInfoForDescriptor,
+  relationListFieldInfo,
+} from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
+import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { textWidget } from "../../widgets/text";
 import { useUiT } from "../../i18n";
 import {
   fieldWidgetId,
+  isRelationListField,
   type FieldDescriptor,
 } from "../page";
 import type { FormSpecFieldDescriptor } from "./form-spec";
@@ -85,12 +91,18 @@ export function FieldDescriptorControl(props: FieldDescriptorControlProps): Reac
   const schema = useSchemaFieldMetadata();
   const field = props.resource ? { ...props.field, ...fieldsWithMetadataDefaults([props.field], model, schema)[0] } : props.field;
   const relation = props.resource ? relationFieldInfoForDescriptor(field, model, schema) : null;
+  const relationList = props.resource && isRelationListField(field) ? relationListFieldInfo(field.name, model, schema) : null;
   const widgetId = fieldWidgetId(field);
   const widget = useResolvedWidget(widgetId) ?? FALLBACK_TEXT_WIDGET;
+  const ariaLabel = typeof field.label === "string" ? field.label : field.name;
   if (relation && (!field.widget || field.widget === "many2one")) return <RelationFieldWidget
     value={relationValueId(props.value) || null} onChange={props.onChange} onCommit={props.onCommit}
     readOnly={props.readOnly || props.disabled} relation={relation} filters={field.filters} where={props.where}
-    aria-label={typeof field.label === "string" ? field.label : field.name} controlRef={props.controlRef} />;
+    aria-label={ariaLabel} controlRef={props.controlRef} />;
+  if (relationList) return <RelationMultiFieldWidget
+    value={Array.isArray(props.value) ? props.value : []} onChange={props.onChange} onCommit={props.onCommit}
+    readOnly={props.readOnly || props.disabled} relation={relationList} filters={field.filters}
+    aria-label={ariaLabel} controlRef={props.controlRef} />;
   const Component = props.readOnly ? widget.read : (widget.edit ?? widget.read);
   const mode = Component === widget.read ? "read" : "edit";
   // Draft validity belongs to the mounted editor; temporary disabling keeps it.

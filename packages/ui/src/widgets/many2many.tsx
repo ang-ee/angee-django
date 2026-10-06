@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
 
-import { Chip, RemovableChip } from "../ui/chip";
+import { useUiT } from "../i18n";
+import { Chip, ChipList } from "../ui/chip";
 import { Select, SelectPrimitive, SelectValue, SelectIcon, SelectList, SelectItem, SelectItemText, SelectItemIndicator } from "../ui/select";
-import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import {
   optionLabel,
@@ -20,6 +20,7 @@ export function Many2ManyEdit({
   readOnly,
   controlRef,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
+  const t = useUiT();
   const selected = relationIdList(value);
   const options = field?.options ?? [];
   const available = options.filter((option) => !selected.includes(option.value));
@@ -38,11 +39,11 @@ export function Many2ManyEdit({
         value=""
         options={available}
         disabled={available.length === 0}
-        aria-label={widgetLabel(field, "Related records")}
+        aria-label={widgetLabel(field, t("many2many.label"))}
         placeholder={
           available.length === 0
-            ? "All records selected"
-            : widgetLabel(field, "Add record")
+            ? t("many2many.allSelected")
+            : widgetLabel(field, t("many2many.add"))
         }
         onValueChange={(next) => {
           if (next) onChange?.([...selected, next]);
@@ -58,6 +59,7 @@ export function Many2ManyCellEdit({
   field,
   readOnly,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
+  const t = useUiT();
   const selected = relationIdList(value);
   const options = field?.options ?? [];
   // Retain selected ids outside the loaded option window. They remain visible
@@ -81,7 +83,7 @@ export function Many2ManyCellEdit({
       <SelectPrimitive.Trigger
         {...field?.controlProps}
         disabled={choices.length === 0}
-        aria-label={widgetLabel(field, "Related records")}
+        aria-label={widgetLabel(field, t("many2many.label"))}
         title={summary || undefined}
       >
         <SelectValue>
@@ -92,7 +94,7 @@ export function Many2ManyCellEdit({
               </Chip>
               {selected.length > 1 ? <span className="shrink-0 text-xs">+{selected.length - 1}</span> : null}
             </span>
-          ) : widgetLabel(field, "Add record")}
+          ) : widgetLabel(field, t("many2many.add"))}
         </SelectValue>
         <SelectIcon />
       </SelectPrimitive.Trigger>
@@ -128,6 +130,7 @@ function Many2ManyRead({
   );
 }
 
+/** Selected ids as chips labelled by their options; removable when editing. */
 function Many2ManyChips({
   values,
   options,
@@ -137,31 +140,15 @@ function Many2ManyChips({
   options: readonly WidgetOption[];
   onRemove?: (next: readonly string[]) => void;
 }): ReactElement {
-  if (values.length === 0) return <span className={textRoleVariants({ role: "meta" })} />;
-
+  const t = useUiT();
   return (
-    <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
-      {values.map((item) => {
-        const label = optionLabel(options, item);
-        return onRemove ? (
-          <RemovableChip
-            key={item}
-            tone="info"
-            size="sm"
-            removeLabel={optionTextLabel(label, "record")}
-            onRemove={() =>
-              onRemove(values.filter((value) => value !== item))
-            }
-          >
-            {label}
-          </RemovableChip>
-        ) : (
-          <Chip key={item} tone="info" size="sm">
-            {label}
-          </Chip>
-        );
+    <ChipList
+      items={values.map((id) => {
+        const label = optionLabel(options, id);
+        return { id, label, text: optionTextLabel(label, t("many2many.record")) };
       })}
-    </span>
+      onRemove={onRemove && ((id) => onRemove(values.filter((value) => value !== id)))}
+    />
   );
 }
 
