@@ -1015,23 +1015,24 @@ and current contracts before applying a historical example to a new deployment.
   deleting and recreating it; the library refuses a retargeting save. A type
   without a relation is refused under an actor, and an edge that accepts only
   some types derives that set from the schema through
-  `angee.base.refs.edge_target_models` instead of listing it again.
-  [File attachments](../../addons/angee/storage/permissions.zed),
-  [links](../../addons/angee/projects/permissions.zed) and
-  [health reports](../../addons/angee/portfolio/permissions.zed) require write on
-  the target, [knowledge bindings](../../addons/angee/knowledge/permissions.zed)
-  both ends, [project bindings](../../addons/angee/projects/permissions.zed)
-  share on both ends, and [source conversations](../../addons/angee/messaging/permissions.zed)
-  write on the record (a const relation on the row's role keeps the arms off
-  chatter edges). Evidence and provenance edges whose access follows their owner
-  (workflow subjects, step records and watches, decision records, extraction
-  sources, integrate record links, currency-rate contexts) take no target
-  relations: the owner's admission gate checks the record at write time, and the
-  edge still stores `rebac.generic_target`. Only an edge that names rows outside
-  REBAC (a chatter thread on an ungated host, an import record link to a plain
-  sink) stores `angee.base.refs.record_target`, which keeps Django's own
-  identity for such a row. Compose `ThreadedModelMixin` and reverse
-  `GenericRelation`s on the same canonical ancestor either way.
+  `RecordRefMixin.declared_target_models` instead of listing it again. Each
+  edge's own `permissions.zed` states its rule:
+  [storage](../../addons/angee/storage/permissions.zed),
+  [knowledge](../../addons/angee/knowledge/permissions.zed),
+  [projects](../../addons/angee/projects/permissions.zed) (a binding takes
+  share on the project and the type's grant authority),
+  [portfolio](../../addons/angee/portfolio/permissions.zed) and
+  [messaging](../../addons/angee/messaging/permissions.zed) (a const relation on
+  the row's role keeps the arms off chatter edges). Evidence and provenance edges
+  whose access follows their owner (workflow subjects, step records and watches,
+  decision records, extraction sources, integrate record links, currency-rate
+  contexts) take no target relations: the owner's admission gate checks the
+  record at write time, and the edge still stores `rebac.generic_target`. Only
+  an edge that names rows outside REBAC (a chatter thread on an ungated host, an
+  import record link to a plain sink) stores
+  `angee.base.refs.generic_pointer_target`, which keeps Django's own identity
+  for such a row. Compose `ThreadedModelMixin` and reverse `GenericRelation`s on
+  the same canonical ancestor either way.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.

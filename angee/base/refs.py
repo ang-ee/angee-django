@@ -5,10 +5,10 @@ different sides. An edge stores :func:`rebac.generic_target`, which owns the
 canonical write identity: a row is named by its topmost REBAC-typed MTI
 ancestor, and a row without a REBAC type cannot be named at all. The two edges
 that also name rows outside REBAC — a chatter thread on an ungated host, an
-import record link to a plain sink — store :func:`record_target`, which falls
+import record link to a plain sink — store :func:`generic_pointer_target`, which falls
 back to Django's own generic-pointer identity for such a row.
 :func:`ancestor_object_refs` owns the read/grant fan-out, and
-:func:`edge_target_models` reads the target types an edge's schema declares.
+:meth:`RecordRefMixin.declared_target_models` reads the target types an edge's schema declares.
 
 **Placement invariant.** Every polymorphic edge and every reverse
 ``GenericRelation`` onto one (``messaging.ThreadedModelMixin.thread_attachments``,
@@ -31,6 +31,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
+from django.utils.text import capfirst
 from rebac import ObjectRef, to_object_ref
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
@@ -80,7 +81,7 @@ def ancestor_object_refs(obj: models.Model) -> tuple[ObjectRef, ...]:
     return tuple(refs)
 
 
-def record_target_model(model: type[models.Model]) -> type[models.Model]:
+def generic_pointer_model(model: type[models.Model]) -> type[models.Model]:
     """Return the model a generic pointer stores for rows of ``model``.
 
     A gated row is named by its canonical REBAC model
@@ -95,14 +96,14 @@ def record_target_model(model: type[models.Model]) -> type[models.Model]:
     return canonical_model(model) or model._meta.concrete_model or model
 
 
-def record_target(record: models.Model) -> tuple[ContentType, Any]:
+def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     """Return the content type and id a generic pointer stores for ``record``.
 
     :func:`rebac.generic_target`'s identity for a gated row, Django's own for an
-    ungated one; see :func:`record_target_model`.
+    ungated one; see :func:`generic_pointer_model`.
     """
 
-    return ContentType.objects.get_for_model(record_target_model(type(record))), record.pk
+    return ContentType.objects.get_for_model(generic_pointer_model(type(record))), record.pk
 
 
 def is_record_target_model(model: type[models.Model]) -> bool:
@@ -247,6 +248,54 @@ class RecordRefMixin(models.Model):
         return references[0]
 
     @classmethod
+    def declared_target_models(cls) -> dict[str, type[models.Model]]:
+        """Return the target models this edge's effective schema declares, by ``label_lower``.
+
+        One relation per target type, backed by the generic pointer
+        (``// rebac:field=target``), names the types the edge may hold under an
+        actor. Owners derive their accepted-target sets from this one
+        declaration instead of listing the types again.
+        """
+
+        definition = effective_rebac_definition(cls)
+        if definition is None:
+            raise ImproperlyConfigured(f"{cls._meta.label} declares no REBAC definition to read target types from.")
+        pointer = cls.record_ref_field().name
+        targets: dict[str, type[models.Model]] = {}
+        for relation in definition.relations:
+            backing = relation.backing
+            if not isinstance(backing, FieldBinding) or backing.path != pointer:
+                continue
+            model = model_for_resource_type(relation.allowed_subjects[0].type)
+            if model is not None:
+                targets[model._meta.label_lower] = model
+        return targets
+
+    @classmethod
+    def declared_target_model(cls, model_label: str) -> type[models.Model]:
+        """Return the declared target model for a ``app_label.model`` label, or a ``ValidationError``."""
+
+        declared = cls.declared_target_models()
+        try:
+            return declared[str(model_label).strip().lower()]
+        except KeyError as error:
+            raise cls._undeclared_target(declared) from error
+
+    @classmethod
+    def validate_target(cls, target: models.Model) -> None:
+        """Reject a target whose canonical model the edge's schema does not declare."""
+
+        model = canonical_model(type(target))
+        declared = cls.declared_target_models()
+        if model is None or model._meta.label_lower not in declared:
+            raise cls._undeclared_target(declared)
+
+    @classmethod
+    def _undeclared_target(cls, declared: dict[str, type[models.Model]]) -> ValidationError:
+        names = ", ".join(sorted(str(model._meta.verbose_name) for model in declared.values()))
+        return ValidationError({"target": f"{capfirst(str(cls._meta.verbose_name))} may target only: {names}."})
+
+    @classmethod
     def record_public_id_operand(cls, value: str) -> models.Case:
         """Decode a public ID to a SQL operand bound to the pointer's model.
 
@@ -286,30 +335,6 @@ class RecordRefMixin(models.Model):
         """Return the referenced record's stable public id."""
 
         return self.record_ref.public_id
-
-
-def edge_target_models(edge: type[RecordRefMixin]) -> dict[str, type[models.Model]]:
-    """Return the target models ``edge``'s effective schema declares, by ``label_lower``.
-
-    One relation per target type, backed by the edge's generic pointer
-    (``// rebac:field=target``), names the types a polymorphic edge may hold
-    under an actor. Owners derive their accepted-target sets from this one
-    declaration instead of listing the types again.
-    """
-
-    definition = effective_rebac_definition(edge)
-    if definition is None:
-        return {}
-    pointer = edge.record_ref_field().name
-    targets: dict[str, type[models.Model]] = {}
-    for relation in definition.relations:
-        backing = relation.backing
-        if not isinstance(backing, FieldBinding) or backing.path != pointer or len(relation.allowed_subjects) != 1:
-            continue
-        model = model_for_resource_type(relation.allowed_subjects[0].type)
-        if model is not None:
-            targets[model._meta.label_lower] = model
-    return targets
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

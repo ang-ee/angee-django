@@ -50,7 +50,6 @@ from angee.base.validation import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
-from angee.projects.access import bind
 from angee.proposals.inputs import RoundTemplate
 
 _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
@@ -2073,7 +2072,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                             owns_items=True,
                         )
                     drive = system_queryset(drive_model).get(pk=drive.pk)
-                    bind(project=track, target=drive)
+                    apps.get_model("projects", "ProjectBinding").objects.bind(project=track, target=drive)
         bind_actor(track, actor)
         _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
         self._state.fields_cache["track"] = track

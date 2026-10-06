@@ -37,7 +37,6 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
-from angee.projects.access import bind, unbind
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
 from angee.storage.schema import FolderType
@@ -708,7 +707,7 @@ class ProjectTaskActionMutation:
     ) -> ActionResult:
         """Create or refresh one URL-keyed link on a writable project or task."""
 
-        target_model = Link.objects.target_model(target.model_label)
+        target_model = Link.declared_target_model(target.model_label)
         target_record = authorized_action_target(info, target_model, target.record_id, "write")
         link = Link.objects.upsert(
             target=target_record,
@@ -733,7 +732,7 @@ class ProjectTaskActionMutation:
         if target_model is None:
             raise ValueError(f"Unknown resource type {target.resource_type!r}.")
         target_record = authorized_action_target(info, target_model, target.record_id, "write")
-        binding = bind(project=project, target=target_record)
+        binding = ProjectBinding.objects.bind(project=project, target=target_record)
         return ActionResult(ok=True, message="Resource bound to project.", id=binding.sqid)
 
     @strawberry.mutation
@@ -751,7 +750,7 @@ class ProjectTaskActionMutation:
         if target_model is None:
             raise ValueError(f"Unknown resource type {target.resource_type!r}.")
         target_record = authorized_action_target(info, target_model, target.record_id, "write")
-        unbind(project=project, target=target_record)
+        ProjectBinding.objects.unbind(project=project, target=target_record)
         return ActionResult(ok=True, message="Resource unbound from project.", id=project.sqid)
 
 

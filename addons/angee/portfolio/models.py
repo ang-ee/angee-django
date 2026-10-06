@@ -22,7 +22,6 @@ from rebac import (
     generic_target,
     system_context,
 )
-from rebac.field_backing import canonical_model
 
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, HierarchyMixin
@@ -31,7 +30,7 @@ from angee.base.models import (
     AngeeManager,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin, edge_target_models
+from angee.base.refs import RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 
@@ -408,13 +407,6 @@ class UpdateManager(AngeeManager):
     written under the actor.
     """
 
-    def validate_target(self, target: models.Model) -> None:
-        """Reject a target outside the teleological types the update schema declares."""
-
-        model = canonical_model(type(target))
-        if model is None or model._meta.label_lower not in edge_target_models(self.model):
-            raise ValidationError({"target": "Portfolio updates may target only projects or initiatives."})
-
     def report(
         self,
         *,
@@ -426,7 +418,7 @@ class UpdateManager(AngeeManager):
 
         if target.pk is None:
             raise ValidationError({"target": "A saved project or initiative is required."})
-        self.validate_target(target)
+        self.model.validate_target(target)
         with transaction.atomic():
             locked_target = system_queryset(type(target), lock=("self",)).get(pk=target.pk)
             report = self.model(health=health, body=body, **generic_target(locked_target).lookups(self.model, "target"))
@@ -464,13 +456,13 @@ class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
             raise ValidationError({"health": "A portfolio update must assert health."})
         if self.target is None:
             raise ValidationError({"target": "A project or initiative target is required."})
-        type(self).objects.validate_target(self.target)
+        self.validate_target(self.target)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the report and the target's latest-health denorm.
 
-        The target is stored at :func:`rebac.generic_target`; the library
-        refuses a retargeting save under an actor.
+        The target is stored at :func:`rebac.generic_target` and is immutable:
+        the denormalized health belongs to the target the report was made on.
         """
 
         if self.health in (None, ""):
@@ -478,10 +470,14 @@ class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
         target = self.target
         if target is None:
             raise ValidationError({"target": "A project or initiative target is required."})
-        type(self).objects.validate_target(target)
+        self.validate_target(target)
         canonical = generic_target(target)
         self.content_type = canonical.content_type
         self.object_id = canonical.object_id
+        if not self._state.adding:
+            persisted = type(self)._base_manager.filter(pk=self.pk).values_list("content_type_id", "object_id").first()
+            if persisted is not None and persisted != (self.content_type_id, self.object_id):
+                raise ValidationError({"target": "An update's target is immutable."})
         with transaction.atomic():
             super().save(*args, **kwargs)
             # Django QuerySet.update() bypasses save-path re-denormalization by nature;

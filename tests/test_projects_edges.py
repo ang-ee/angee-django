@@ -8,9 +8,9 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, generic_target, system_context
 
-from angee.projects.access import bind, unbind
+from angee.integrate.testing.integration import Integration
 from angee.projects.testing.models import Link, Project, ProjectBinding, Task
-from tests.conftest import Backend, Drive, Folder, create_user, vault_for
+from tests.conftest import Backend, Drive, Folder, Vendor, create_user, vault_for
 from tests.test_knowledge import _grant
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -55,10 +55,10 @@ def test_link_refuses_undeclared_and_untyped_targets(task_project: Any) -> None:
     owner, _reader, _outsider, task = task_project
     vault = vault_for(owner, name="Not linkable")
     with actor_context(owner):
-        with pytest.raises(ValidationError, match="only projects or tasks"):
+        with pytest.raises(ValidationError, match="may target only"):
             Link.objects.upsert(target=vault, url="https://example.test/vault")
-        with pytest.raises(ValidationError, match="only projects or tasks"):
-            Link.objects.target_model("knowledge.Vault")
+        with pytest.raises(ValidationError, match="may target only"):
+            Link.declared_target_model("knowledge.Vault")
         # The schema itself refuses a type no relation names, before any model validation.
         with pytest.raises(PermissionDenied):
             Link.objects.insert(Link(url="https://example.test/raw", **generic_target(vault).lookups(Link, "target")))
@@ -97,16 +97,16 @@ def test_binding_create_and_delete_take_share_on_both_ends(bindable: dict[str, A
     owner, writer, reader, outsider = (bindable[name] for name in ("owner", "writer", "reader", "outsider"))
     project, drive, vault = bindable["project"], bindable["drive"], bindable["vault"]
     with actor_context(owner):
-        binding = bind(project=project, target=drive)
-        assert bind(project=project, target=drive).pk == binding.pk
+        binding = ProjectBinding.objects.bind(project=project, target=drive)
+        assert ProjectBinding.objects.bind(project=project, target=drive).pk == binding.pk
         assert binding.actor() is not None
     assert project.with_actor(writer).has_access("share")
     assert vault.with_actor(writer).has_access("write") and not vault.with_actor(writer).has_access("share")
     with actor_context(writer), pytest.raises(PermissionDenied):
-        bind(project=project, target=vault)
+        ProjectBinding.objects.bind(project=project, target=vault)
     # A project reader sees the binding but holds share on neither end.
     with actor_context(reader), pytest.raises(PermissionDenied):
-        unbind(project=project, target=drive)
+        ProjectBinding.objects.unbind(project=project, target=drive)
     with actor_context(reader), pytest.raises(PermissionDenied):
         ProjectBinding.objects.get(pk=binding.pk).delete()
     assert ProjectBinding._base_manager.filter(pk=binding.pk).exists()
@@ -116,18 +116,24 @@ def test_binding_create_and_delete_take_share_on_both_ends(bindable: dict[str, A
         assert [row.pk for row in rows] == ([binding.pk] if visible else [])
         assert sum(ProjectBinding._meta.db_table in query["sql"] for query in queries.captured_queries) == 1
     with actor_context(owner):
-        bind(project=project, target=vault)
-        unbind(project=project, target=drive)
+        ProjectBinding.objects.bind(project=project, target=vault)
+        ProjectBinding.objects.unbind(project=project, target=drive)
     with system_context(reason="test.bindings.remaining"):
         assert list(ProjectBinding.objects.values_list("object_id", flat=True)) == [vault.pk]
 
 
 def test_binding_refuses_undeclared_targets_and_moves(bindable: dict[str, Any]) -> None:
     owner, project, task, folder = bindable["owner"], bindable["project"], bindable["task"], bindable["folder"]
+    with system_context(reason="test.bindings.integration"):
+        vendor = Vendor.objects.create(slug="plain-integration", display_name="Plain integration")
+        integration = Integration.objects.create(vendor=vendor, owner=owner)
     with actor_context(owner):
-        with pytest.raises(PermissionDenied):
-            bind(project=project, target=task)
-        binding = bind(project=project, target=folder)
+        with pytest.raises(ValidationError, match="may target only"):
+            ProjectBinding.objects.bind(project=project, target=task)
+        # The schema reaches integrations (a channel stores as one); the manager admits only channels.
+        with pytest.raises(ValidationError, match="only through its channel"):
+            ProjectBinding.objects.bind(project=project, target=integration)
+        binding = ProjectBinding.objects.bind(project=project, target=folder)
         binding.target = bindable["drive"]
         with pytest.raises(PermissionDenied):
             binding.save()

@@ -58,7 +58,7 @@ def test_report_requires_write_on_the_target_and_denormalizes_health(reportable:
         report.body = "Recovered"
         report.save(update_fields=("body", "updated_at"))
         report.target = reportable["product"]
-        with pytest.raises(ValidationError, match="only projects or initiatives"):
+        with pytest.raises(ValidationError, match="may target only"):
             report.save()
         Update.objects.get(pk=report.pk).delete()
     initiative.refresh_from_db()
@@ -68,9 +68,9 @@ def test_report_requires_write_on_the_target_and_denormalizes_health(reportable:
 def test_report_refuses_phasal_and_undeclared_targets(reportable: dict[str, Any]) -> None:
     manager, product = reportable["manager"], reportable["product"]
     with actor_context(manager):
-        with pytest.raises(ValidationError, match="only projects or initiatives"):
+        with pytest.raises(ValidationError, match="may target only"):
             Update.objects.report(target=product, health="on_track")
-        with pytest.raises(ValidationError, match="only projects or initiatives"):
+        with pytest.raises(ValidationError, match="may target only"):
             Update.objects.create(target=product, health="on_track")
     with system_context(reason="test.updates.system"):
         # System writes still enter declared edges; the phasal product has no arm either way.

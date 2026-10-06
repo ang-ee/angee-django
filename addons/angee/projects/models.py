@@ -39,10 +39,10 @@ from angee.base.mixins import (
     RevisionMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin, edge_target_models
+from angee.base.refs import RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
-from angee.projects.access import bind, require_binding_access, require_target_binding_access
+from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
     milestone_reached,
     project_phase_changed,
@@ -322,20 +322,39 @@ class LinkManager(AngeeManager):
             link.save(update_fields=(*values, "updated_at"))
         return link
 
+
+
+class ProjectBindingManager(AngeeManager):
+    """Own project-container bindings; ``permissions.zed`` authorizes both ends."""
+
     def validate_target(self, target: models.Model) -> None:
-        """Reject a target outside the types the link schema declares."""
+        """Reject a resource outside the declared types; an integration binds only as a messaging channel."""
 
-        model = canonical_model(type(target))
-        if model is None or model._meta.label_lower not in edge_target_models(self.model):
-            raise ValidationError({"target": "Links may target only projects or tasks."})
+        self.model.validate_target(target)
+        if canonical_model(type(target)) is apps.get_model("integrate", "Integration") and not (
+            apps.get_model("messaging", "Channel")._base_manager.filter(pk=target.pk).exists()
+        ):
+            raise ValidationError({"target": "Project bindings reach an integration only through its channel."})
 
-    def target_model(self, model_label: str) -> type[models.Model]:
-        """Return the installed model for an allowed link target label."""
+    def bind(self, *, project: models.Model, target: models.Model) -> models.Model:
+        """Idempotently persist one canonical binding under the actor.
 
-        try:
-            return edge_target_models(self.model)[str(model_label).strip().lower()]
-        except KeyError as error:
-            raise ValidationError({"target": "Links may target only projects or tasks."}) from error
+        The binding's ``create`` requires share on the project and the resource
+        type's own grant authority through the relation declared for it.
+        """
+
+        if project.pk is None or target.pk is None:
+            raise ValidationError("A project binding requires saved project and target rows.")
+        self.validate_target(target)
+        binding, _created = self.get_or_create(project=project, **generic_target(target).lookups(self.model, "target"))
+        return binding
+
+    def unbind(self, *, project: models.Model, target: models.Model) -> int:
+        """Remove one explicit binding; its ``delete`` requires the same authority as ``bind``."""
+
+        key = generic_target(target).lookups(self.model, "target")
+        deleted, _by_model = self.filter(project=project, **key).delete()
+        return deleted
 
 
 class Project(
@@ -483,7 +502,7 @@ class Project(
             vault = vault_model.objects.create_from(
                 vault_template, name=self.title, client_creation_key=f"project:{self.pk}",
             )
-            bind(project=self, target=vault)
+            binding_model.objects.bind(project=self, target=vault)
 
     @classmethod
     def setup_complete_condition(cls, actor: Any) -> Q:
@@ -1376,7 +1395,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     backs one relation per bindable type with ``target`` and requires share on
     the project and the type's own grant authority to create or delete a
     binding, so bindings are written under the actor through
-    :mod:`angee.projects.access`; a type no relation names is refused. A
+    :meth:`ProjectBindingManager.bind`; a type no relation names is refused. A
     binding is not moved: the library refuses a retargeting save under an actor.
     """
 
@@ -1392,7 +1411,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
 
-    objects = AngeeManager()
+    objects = ProjectBindingManager()
 
     class Meta:
         """Django model options for explicit project resource bindings."""
@@ -1408,12 +1427,21 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         )
         indexes = (models.Index(fields=("content_type", "object_id")),)
 
+    def clean(self) -> None:
+        """Require a live, declared resource."""
+
+        super().clean()
+        if self.target is None:
+            raise ValidationError({"target": "A project binding target is required."})
+        type(self).objects.validate_target(self.target)
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Store the resource at its canonical identity (a channel as its integration)."""
 
         target = self.target
         if target is None:
             raise ValidationError({"target": "A project binding target is required."})
+        type(self).objects.validate_target(target)
         canonical = generic_target(target)
         self.content_type = canonical.content_type
         self.object_id = canonical.object_id
@@ -1460,7 +1488,7 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         super().clean()
         if self.target is None:
             raise ValidationError({"target": "A project or task target is required."})
-        type(self).objects.validate_target(self.target)
+        self.validate_target(self.target)
 
     def __str__(self) -> str:
         """Return the link title or URL."""

@@ -53,7 +53,7 @@ from angee.base.actors import actor_user_id
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.refs import record_target, record_target_model
+from angee.base.refs import generic_pointer_model, generic_pointer_target
 from angee.base.scoping import system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import mute_changes
@@ -908,7 +908,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 class ThreadAttachmentManager(AngeeManager):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
-    The edge names its record by :func:`angee.base.refs.record_target`: a gated
+    The edge names its record by :func:`angee.base.refs.generic_pointer_target`: a gated
     record and each of its REBAC-typed MTI ancestors share one chatter thread,
     and an ungated host keeps its own content type. ``permissions.zed``
     backs one relation per attachable record type with ``target``, so a source
@@ -922,7 +922,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return None
-        content_type, object_id = record_target(record)
+        content_type, object_id = generic_pointer_target(record)
         return (
             self.model._base_manager.select_related("thread")
             .filter(content_type=content_type, object_id=object_id, role=role)
@@ -935,15 +935,13 @@ class ThreadAttachmentManager(AngeeManager):
         if record.pk is None:
             return self.model._base_manager.none()
         record.require_access("read")
-        content_type, object_id = record_target(record)
         visible_threads = apps.get_model("messaging", "Thread").objects.all().scoped().values("pk")
         return (
             self.all()
             .scoped()
             .select_related("thread")
             .filter(
-                content_type=content_type,
-                object_id=object_id,
+                **generic_target(record).lookups(self.model, "target"),
                 role="source",
                 thread_id__in=models.Subquery(visible_threads),
             )
@@ -1014,7 +1012,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             raise ValueError("Cannot attach a thread to an unsaved record.")
-        content_type, object_id = record_target(record)
+        content_type, object_id = generic_pointer_target(record)
         _assert_canonical_composes_thread_mixin(record, content_type)
         external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
         thread_model = self.model._meta.get_field("thread").related_model
@@ -1080,7 +1078,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return
-        content_type, object_id = record_target(record)
+        content_type, object_id = generic_pointer_target(record)
         target_model = content_type.model_class()
         if target_model is None:
             return
@@ -1204,7 +1202,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         for rows in collections:
             if not issubclass(rows.model, ThreadedModelMixin):
                 continue
-            content_type = ContentType.objects.get_for_model(record_target_model(rows.model))
+            content_type = ContentType.objects.get_for_model(generic_pointer_model(rows.model))
             selection |= models.Q(
                 content_type=content_type,
                 object_id__in=rows.order_by().values("pk"),
@@ -2122,7 +2120,7 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
     ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation and the
     ``pre_delete`` teardown, both of which key on the model that composes the mixin — while
     the attachment row is written at the *canonical* (topmost REBAC-typed) target
-    (:func:`angee.base.refs.record_target`). If a child composes the mixin but its canonical ancestor
+    (:func:`angee.base.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
     does not, the ancestor cannot collect the child's attachment on delete and a reused
     primary key would mis-resolve. Guard it where the write keys — the placement
     invariant stated in :mod:`angee.base.refs`.

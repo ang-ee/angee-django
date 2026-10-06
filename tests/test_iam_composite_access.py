@@ -21,8 +21,7 @@ from rebac.relationships import write_relationships
 from angee.base.identity import public_subject_ref
 from angee.iam.roles import principal_access
 from angee.messaging.testing.models import Channel, Message, Thread
-from angee.projects.access import bind
-from angee.projects.testing.models import Project
+from angee.projects.testing.models import Project, ProjectBinding
 from tests.conftest import Backend, Drive, Folder, Vendor
 from tests.iam_models import Group
 from tests.test_project_access import project_access_schema as project_access_schema
@@ -75,8 +74,8 @@ def test_group_membership_reaches_and_revokes_project_resource_cascade(
         project = Project.objects.create(title="Composite access")
         thread = Thread.objects.create(channel=channel)
         message = Message.objects.create(thread=thread)
-        bind(project=project, target=folder)
-        bind(project=project, target=channel)
+        ProjectBinding.objects.bind(project=project, target=folder)
+        ProjectBinding.objects.bind(project=project, target=channel)
         group_members = SubjectRef.of("auth/group", str(group.pk), "member")
         write_relationships(
             [

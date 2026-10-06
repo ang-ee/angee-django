@@ -39,8 +39,8 @@ live in code docstrings.
   refuse an untyped row with `ValueError` (a currency-rate context reports it as
   a `ValidationError`). The two edges that name rows outside REBAC — a chatter
   thread on an ungated host and an import record link to a plain domain sink —
-  store `angee.base.refs.record_target`, the library's identity for a gated row
-  and Django's own for an ungated one. Consumers that imported the removed
+  store `angee.base.refs.generic_pointer_target`, the library's identity for a
+  gated row and Django's own for an ungated one. Consumers that imported the removed
   helpers move to `rebac.generic_target` (an instance's stored content type and
   id) or `rebac.field_backing.canonical_model` (a model's canonical class,
   `None` when untyped).
@@ -62,19 +62,23 @@ live in code docstrings.
   on the row's role): the chatter edge remains the record's own thread,
   materialized by its verbs under system context, with access riding on the
   thread as before, and an ungated host keeps its own concrete content type
-  (`angee.messaging.managers.record_target`). The edge's `create` no longer
+  (`angee.base.refs.generic_pointer_target`). The edge's `create` no longer
   admits every authenticated actor.
 - Project links, project resource bindings and portfolio health reports
   authorize their target in the REBAC schema: each edge's per-type relations are
   backed by its `GenericForeignKey`, rows are stored at `rebac.generic_target`
-  and created, written and deleted under the actor. Links and reports derive
-  their accepted target types from the schema (`angee.base.refs.edge_target_models`)
-  instead of listing them; a binding requires share on the project and the
-  resource type's own grant authority on both create and delete, binds a channel
-  as its integration, and is never retargeted under an actor. Removed:
-  `LinkManager.TARGET_RELATIONS`/`target_relation`, `UpdateManager.TARGET_RELATIONS`
-  /`target_relation`/`target_model`, the update's stored relationship tuples,
-  `ProjectBinding.allowed_target_models`/`validate_target`, its
+  and created, written and deleted under the actor. The three edges derive
+  their accepted target types from the schema
+  (`RecordRefMixin.declared_target_models` / `validate_target`) instead of
+  listing them; a binding requires share on the project and the resource type's
+  own grant authority on both create and delete, stores a channel as its
+  integration (still the only integration kind a project binds), and is never
+  retargeted; a report's target stays immutable. `ProjectBinding.objects.bind`
+  and `unbind` replace `angee.projects.access.bind`/`unbind`. Removed:
+  `LinkManager.TARGET_RELATIONS`/`target_relation`/`target_model`
+  (`Link.declared_target_model` replaces the last), `UpdateManager
+  .TARGET_RELATIONS`/`target_relation`/`target_model`, the update's stored
+  relationship tuples, `ProjectBinding.allowed_target_models`, its
   `ProjectBindingQuerySet` and the hand-rolled binding save/delete gates;
   `projects.access.require_binding_access` now guards only the project's home
   folder.

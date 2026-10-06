@@ -59,7 +59,7 @@ from angee.base.refs import (
     concrete_child,
     concrete_child_accessor,
     concrete_child_models,
-    record_target,
+    generic_pointer_target,
 )
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -3221,7 +3221,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             if target.pk is None:
                 raise ValidationError("A record target must be saved.")
             # Provenance names any applied row, a plain domain sink included.
-            link.target_content_type, object_id = record_target(target)
+            link.target_content_type, object_id = generic_pointer_target(target)
             link.target_object_id = str(object_id)
 
     def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils.module_loading import import_string
@@ -22,12 +23,13 @@ from angee.base.refs import (
     concrete_child,
     concrete_child_accessor,
     concrete_child_models,
-    edge_target_models,
+    generic_pointer_model,
+    generic_pointer_target,
     is_record_target_model,
     record_ref_for,
-    record_target,
-    record_target_model,
 )
+from angee.projects.testing.models import Link
+from tests.conftest import FileAttachment
 from tests.mtidemo.models import (
     MtiChild,
     MtiChildProxy,
@@ -382,16 +384,15 @@ def test_record_target_models_are_the_rebac_typed_canonical_models() -> None:
     assert not is_record_target_model(RecordRefPlainTarget)
 
 
-def test_edge_target_models_read_the_declared_target_relations(composed_permissions: None) -> None:
+def test_declared_target_models_read_the_schema_target_relations(composed_permissions: None) -> None:
     """An edge's accepted target types are the schema's `target`-backed relations, by label."""
 
     del composed_permissions
-    from angee.projects.testing.models import Link
-    from tests.conftest import FileAttachment
-
-    assert set(edge_target_models(Link)) == {"projects.project", "projects.task"}
-    assert edge_target_models(Link)["projects.task"] is Link._meta.apps.get_model("projects", "Task")
-    assert {"projects.task", "storage.drive", "mtidemo.mtiparent"} <= set(edge_target_models(FileAttachment))
+    assert set(Link.declared_target_models()) == {"projects.project", "projects.task"}
+    assert Link.declared_target_model("projects.Task") is Link._meta.apps.get_model("projects", "Task")
+    with pytest.raises(ValidationError, match="Link may target only: project, task"):
+        Link.declared_target_model("knowledge.vault")
+    assert {"projects.task", "storage.drive", "mtidemo.mtiparent"} <= set(FileAttachment.declared_target_models())
 
 
 def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:
@@ -441,10 +442,10 @@ def test_generic_target_keys_every_edge_on_the_typed_canonical_row(record_ref_ta
         generic_target(plain)
     # An edge that admits ungated rows shares the gated identity and keeps Django's own for the rest.
     for row in (child, parent, child_proxy, parent_proxy, typed):
-        assert record_target(row) == (generic_target(row).content_type, row.pk)
-    assert record_target(plain) == (ContentType.objects.get_for_model(RecordRefPlainTarget), plain.pk)
-    assert record_target_model(MtiChildProxy) is MtiParent
-    assert record_target_model(RecordRefPlainTarget) is RecordRefPlainTarget
+        assert generic_pointer_target(row) == (generic_target(row).content_type, row.pk)
+    assert generic_pointer_target(plain) == (ContentType.objects.get_for_model(RecordRefPlainTarget), plain.pk)
+    assert generic_pointer_model(MtiChildProxy) is MtiParent
+    assert generic_pointer_model(RecordRefPlainTarget) is RecordRefPlainTarget
 
 
 def test_ancestor_object_refs_fans_out_every_rebac_ancestor(record_ref_tables: None) -> None:

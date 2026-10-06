@@ -12,13 +12,13 @@ from django.db.models.functions import Now
 from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
-from rebac.field_backing import canonical_model
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import readable_records
 from angee.base.identity import public_id_of
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import generic_pointer_model
 from angee.base.scoping import lock_if_supported, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_answered
@@ -49,7 +49,7 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
         return self.open().filter(concerns).distinct()
 
     def attention_expression(self, queryset: Any) -> Exists:
-        model = canonical_model(queryset.model) or queryset.model
+        model = generic_pointer_model(queryset.model)
         # Attention belongs to the readable record, regardless of who can answer
         # or read the question. Only the boolean crosses that permission boundary.
         return Exists(system_queryset(self.model).open().filter(
