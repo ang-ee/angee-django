@@ -22,7 +22,7 @@ vi.mock("../lib/use-media-query", async (importOriginal) => {
 afterEach(() => { cleanup(); viewport.mobile = false; });
 
 const ui = createUiTestProviders({ refineResources: [
-  { name: "menu:desk", list: "/desk", meta: { menuId: "desk", label: "Desk", appRoot: true } },
+  { name: "menu:desk", list: "/desk", meta: { menuId: "desk", label: "Desk" } },
   { name: "menu:desk.notes", list: "/notes", show: "/notes/:id", meta: { menuId: "desk.notes", label: "Notes", parent: "menu:desk" } },
 ] });
 

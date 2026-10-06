@@ -109,7 +109,6 @@ async function fixture(action: Action, outcome: Outcome, observePending = false)
     addons: [{ id: "auth-cache", routes: [{ name: "auth-cache", path: "/auth-cache", layout: "public", component: Probe }] }],
     layouts: { public: { chrome: PassthroughChrome, requireAuth: false, schema: "public" } },
     schemas: { public: { url: "https://auth-cache.test/graphql/public/", fetch } },
-    home: "/auth-cache",
   });
   let root!: Root;
   await act(async () => { root = app.mount(host); });

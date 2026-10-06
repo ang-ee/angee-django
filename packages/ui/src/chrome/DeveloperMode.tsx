@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState, type ReactElement } from "react";
 
 import { useUiT } from "../i18n";
 import {
+  isPresent,
+  sessionPermitted,
   useAppRuntime,
   useDeveloperMode,
   useDeveloperModeSwitch,
@@ -31,7 +33,7 @@ export function DeveloperModeMenuItem(): ReactElement {
 
 /**
  * The top-bar developer button, shown only in developer mode: hovering gives the
- * page's route, app, perspective and home; clicking opens the composition.
+ * page's route and app, the selected app and home; clicking opens the composition.
  */
 export function DeveloperMenu(): ReactElement | null {
   const t = useUiT();
@@ -62,13 +64,14 @@ function DeveloperSummary(): ReactElement {
   const t = useUiT();
   const runtime = useAppRuntime();
   const composition = useRuntimeComposition();
-  const perspective = composition?.shell.perspective;
+  const selection = composition?.selection;
   const none = t("developer.none");
   const facts = [
     [t("developer.route"), runtime.activeRouteName ?? none],
     [t("developer.app"), runtime.activeApp ?? none],
-    [t("developer.perspective"), perspective ? t("developer.perspectiveValue", { id: perspective.id, root: perspective.root }) : none],
-    [t("developer.home"), composition?.effective.home ?? none],
+    [t("developer.selection"), selection?.app && selection.rail
+      ? t("developer.selectionValue", { app: selection.app, rail: selection.rail.join(", ") }) : none],
+    [t("developer.home"), composition?.home ?? none],
   ] as const;
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono">
@@ -111,16 +114,22 @@ const layersOf = (fields: Readonly<Record<string, string | undefined>>): string 
 
 function CompositionSections({ composition }: { composition: RuntimeComposition }): ReactElement {
   const t = useUiT();
-  const { shell, menus } = composition;
+  const { selection, menus } = composition;
+  // Presence: what the session's identity lacks a `requires` for, menu nodes with their subtrees.
+  const permitted = sessionPermitted(useAppRuntime().auth.user);
+  const absent = (declared: Readonly<Record<string, string>> = {}): string[] => Object.entries(declared)
+    .filter(([, ref]) => !isPresent(ref, permitted))
+    .map(([subject, ref]) => t("developer.absentLine", { subject, ref }));
   const sections: readonly (readonly [string, readonly string[]])[] = [
-    [t("developer.shell"), Object.entries(shell.provenance).flatMap(([field, layer]) =>
-      layer === undefined ? [] : [t("developer.setBy", { subject: field, layers: layer })])],
+    [t("developer.selection"), Object.entries(selection.sources).flatMap(([field, source]) =>
+      source === undefined ? [] : [t("developer.setBy", { subject: field, layers: source })])],
     [t("developer.removed"), menus.removed.map((node) => t("developer.setBy", { subject: node.id, layers: node.by }))],
     [t("developer.hidden"), menus.hidden.map((node) =>
       t("developer.hiddenLine", { id: node.id, layer: node.by, reason: t(`developer.reason.${node.reason}`) }))],
     [t("developer.unavailable"), Object.entries(menus.unavailable).map(([route, reason]) => t("developer.unavailableLine", { route, reason }))],
+    [t("developer.absent"), [...absent(composition.requires?.menus), ...absent(composition.requires?.containers)]],
     // Composition findings are the app's own English diagnostics, shown as raised.
-    [t("developer.diagnostics"), [...shell.diagnostics, ...menus.diagnostics, ...(composition.containers?.diagnostics ?? [])]],
+    [t("developer.diagnostics"), [...selection.diagnostics, ...menus.diagnostics, ...(composition.containers?.diagnostics ?? [])]],
     [t("developer.menus"), Object.entries(menus.provenance).map(([id, fields]) => t("developer.setBy", { subject: id, layers: layersOf(fields) }))],
     [t("developer.containerRules"), (composition.containers?.rules ?? []).map((rule) =>
       t("developer.ruleLine", { address: rule.address, layer: rule.layer, summary: rule.summary }))],

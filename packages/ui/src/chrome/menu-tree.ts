@@ -1,4 +1,4 @@
-import type { ComposedMenuItem, MenuItem } from "../runtime";
+import type { ComposedMenuItem, MenuItem, RuntimeBrand } from "../runtime";
 import {
   UnknownRouteError,
   type RouteHref,
@@ -31,7 +31,6 @@ export type ChromeMenuTone = Extract<
  */
 export interface ChromeMenuExtra {
   parentId?: string;
-  appRoot?: boolean;
   description?: string;
   group?: ChromeMenuGroup;
   status?: ChromeMenuStatus;
@@ -40,10 +39,16 @@ export interface ChromeMenuExtra {
   /** Left out of the rail and Settings; it still owns its routes and stays in the palette. */
   hidden?: boolean;
   /**
-   * A Settings root every user has, such as their appearance: a perspective
-   * keeps it in Settings and admits its routes. Only on a root in `platform`.
+   * A Settings root every user has, such as their appearance: a selected app's
+   * rail keeps it in Settings. Only on a root in `platform`.
    */
   personal?: boolean;
+  /** Where the app lands when it is selected: a route name inside this root. Only on a root. */
+  home?: string;
+  /** The app's identity when it is selected; defaults to its label and icon. Only on a root. */
+  brand?: RuntimeBrand;
+  /** The installed theme a person who chose none sees when the app is selected. Only on a root. */
+  theme?: string;
 }
 
 export interface BaseMenuItem extends MenuItem, ChromeMenuExtra {
@@ -144,7 +149,6 @@ export class ChromeMenuNode implements ChromeMenuItem {
   children?: readonly ChromeMenuNode[];
   parentId?: string;
   parentNode?: ChromeMenuNode;
-  appRoot?: boolean;
   app?: boolean;
   description?: string;
   group?: ChromeMenuGroup;
@@ -153,6 +157,10 @@ export class ChromeMenuNode implements ChromeMenuItem {
   badge?: number;
   hidden?: boolean;
   personal?: boolean;
+  home?: string;
+  brand?: RuntimeBrand;
+  theme?: string;
+  requires?: string;
   /** An included app shown without an entry of its own (logical tree only); still an app for words and rules (G-8). */
   flatten?: boolean;
 
@@ -267,7 +275,7 @@ export class MenuTree {
         ...item,
         children: item.children?.flatMap((child) => {
           if (child.group !== "platform") return [project(child)];
-          settings.push({ ...child, parentId: undefined, appRoot: false, app: false });
+          settings.push({ ...child, parentId: undefined, app: false });
           return [];
         }),
       });
@@ -276,25 +284,38 @@ export class MenuTree {
     }));
   }
 
-  /** Project one host-selected root, retaining contributed descendants and the personal Settings roots. */
-  confineTo(rootId: string): MenuTree {
-    const root = this.roots.find((item) => item.id === rootId);
-    if (!root) throw new Error(`Unknown menu root "${rootId}" in confineTo.`);
-    const app = { ...root, appRoot: true, group: "domain" as const };
-    const personal = this.roots.filter((item) => item.personal && item.group === "platform" && item.id !== rootId);
-    return MenuTree.from([app, ...personal]).withSettingsPlace();
+  /**
+   * This tree without the nodes in `ids`, each leaving with its subtree; a node
+   * that reached somewhere only through nodes that left goes with them.
+   */
+  without(ids: ReadonlySet<string>): MenuTree {
+    if (!ids.size) return this;
+    const reaches = (item: ChromeMenuItem): boolean => Boolean(item.to) || (item.children ?? []).some(reaches);
+    const keep = (items: readonly ChromeMenuNode[]): ChromeMenuItem[] => items.flatMap((item) => {
+      if (ids.has(item.id)) return [];
+      const kept: ChromeMenuItem = { ...item, children: item.children && keep(item.children) };
+      return item.target && !reaches(kept) ? [] : [kept];
+    });
+    return MenuTree.from(keep(this.roots));
   }
 
-  /** Explicit app roots win; without an opt-in every root remains an app. */
-  appRoots(): readonly ChromeMenuNode[] {
-    return this.roots.some((item) => item.appRoot === true)
-      ? this.roots.filter((item) => item.appRoot === true)
-      : this.roots;
+  /**
+   * Project a selected app's rail: the listed roots, in order and as apps, with
+   * their contributed descendants, then the personal Settings roots.
+   */
+  confineTo(rootIds: readonly string[]): MenuTree {
+    const rail = rootIds.map((rootId) => {
+      const root = this.roots.find((item) => item.id === rootId);
+      if (!root) throw new Error(`Unknown menu root "${rootId}" in the rail.`);
+      return { ...root, group: "domain" as const };
+    });
+    const personal = this.roots.filter((item) => item.personal && item.group === "platform" && !rootIds.includes(item.id));
+    return MenuTree.from([...rail, ...personal]).withSettingsPlace();
   }
 
-  /** The app roots the rail lists; developer mode's rail includes the hidden ones. */
+  /** The roots the rail lists; developer mode's rail includes the hidden ones. */
   railMenuItems(includeHidden = false): readonly ChromeMenuNode[] {
-    return this.appRoots().filter((item) => {
+    return this.roots.filter((item) => {
       if (item.hidden && !includeHidden) return false;
       if (item.group === "platform") return false;
       return Boolean(item.target);
@@ -537,12 +558,6 @@ export function buildMenuTree(
 
 function validateMenuTree(tree: MenuTree): void {
   for (const item of tree.byId.values()) {
-    if (item.appRoot !== undefined && (item.parentNode || item.parentKey)) {
-      throw new Error(`Menu item "${item.id}" declares appRoot on a non-root item.`);
-    }
-    if (item.appRoot === true && !item.target) {
-      throw new Error(`Menu item "${item.id}" declares appRoot without a target.`);
-    }
     void tree.trailFor(item.id);
     void item.target;
   }

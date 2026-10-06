@@ -1,59 +1,21 @@
-import { forwardRef } from "react";
 import { describe, expect, test } from "vitest";
 
 import { composeAddons, defineAddon } from "./define-addon";
 
 const canonicalizer = { canonicalModelLabel: (name: string) => name };
-const mark = () => null;
 const brand = { name: "Notebook", mark: "notebook-mark" };
 
-describe("addon brand ownership", () => {
-  test("composes one brand whose icon is contributed by a later addon", () => {
-    const composed = composeAddons([
-      defineAddon({ id: "notebook", brand }),
-      defineAddon({ id: "artwork", icons: { "notebook-mark": mark } }),
-    ], canonicalizer);
-    expect(composed.brand).toEqual(brand);
-    expect(composed.icons[brand.mark]).toBe(mark);
+describe("the deployment shell", () => {
+  test("composes the deployment layer's ANGEE_UI.shell and nothing else's", () => {
+    const shell = { brand, theme: "notebook.paper", hosts: { "notes.localhost": "notes" } };
+    expect(composeAddons([{ id: "notes" }, { id: "deployment", dependsOn: ["notes"], shell }], canonicalizer).shell).toBe(shell);
+    expect(composeAddons([{ id: "notes" }], canonicalizer).shell).toBeUndefined();
   });
 
-  test("returns a null brand when no addon claims identity", () => {
-    expect(composeAddons([{ id: "notes" }], canonicalizer).brand).toBeNull();
+  test("refuses a shell on an addon, whose home, brand and theme belong on its menu root", () => {
+    expect(() => composeAddons([defineAddon({ id: "notebook", shell: { brand } })], canonicalizer))
+      .toThrow('Addon "notebook" declares shell, which only the deployment\'s ANGEE_UI does; declare home, brand and theme on the addon\'s menu root.');
   });
-
-  test("leaves two unrelated brand claims unbranded and says why", () => {
-    const composed = composeAddons([
-      { id: "first", brand, icons: { "notebook-mark": mark } },
-      { id: "second", shell: { brand } },
-    ], canonicalizer);
-    expect(composed.brand).toBeNull();
-    expect(composed.shell.diagnostics).toEqual([
-      "Unrelated products first, second declare a shell; pin one in ANGEE_UI.",
-    ]);
-  });
-
-  test.each([undefined, "not-a-component", { arbitrary: true }])(
-    "refuses an unrenderable mark registration: %j", (icon) => {
-      expect(() => composeAddons([
-        { id: "notebook", brand, icons: { "notebook-mark": icon } },
-      ], canonicalizer)).toThrow(/notebook-mark.*not registered/);
-    },
-  );
-
-  test("uses the icon registry's normalization and forwardRef component support", () => {
-    const icon = forwardRef<SVGSVGElement>(() => null);
-    expect(composeAddons([{
-      id: "notebook", brand: { ...brand, mark: " NOTEBOOK-MARK " },
-      icons: { "notebook-mark": icon },
-    }], canonicalizer).brand?.mark).toBe(" NOTEBOOK-MARK ");
-  });
-
-  test.each([{ ...brand, name: " " }, { ...brand, mark: " " }])(
-    "refuses empty identity fields: %j", (identity) => {
-      expect(() => composeAddons([{ id: "empty", brand: identity }], canonicalizer))
-        .toThrow(/empty.*brand name or mark/);
-    },
-  );
 });
 
 describe("addon translation ownership", () => {

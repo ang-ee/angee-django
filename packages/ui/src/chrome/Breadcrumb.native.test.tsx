@@ -19,7 +19,7 @@ const ui = createUiTestProviders({
   routerProvider: tanStackRouterProvider,
   resources: [testDataResource("agents.Agent"), testDataResource("models.Model")],
   refineResources: [
-    { name: "menu:desk", list: "/desk", meta: { menuId: "desk", label: "Desk", appRoot: true } },
+    { name: "menu:desk", list: "/desk", meta: { menuId: "desk", label: "Desk" } },
     { name: "agents", list: "/agents", show: "/agents/:id", meta: { menuId: "desk.agents", label: "Agents", parent: "menu:desk" } },
     { name: "models", list: "/models", show: "/models/:id", meta: { menuId: "desk.models", label: "Models", parent: "menu:desk" } },
   ],

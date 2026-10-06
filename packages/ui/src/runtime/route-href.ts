@@ -118,6 +118,26 @@ export function createRouteHref(
   });
 }
 
+/**
+ * A route href that builds some route names as others. Inside a mount, the
+ * mounted route's names build the alias family's (`iam.users` → `x.people`,
+ * `iam.users.record` → `x.people.record`), so a borrowed page's own links stay
+ * in the borrowing app; every other name builds unchanged.
+ */
+export function aliasRouteHref(
+  routeHref: RouteHref,
+  aliases: ReadonlyMap<string, string>,
+): RouteHref {
+  const aliased = (name: string): string => aliases.get(name) ?? name;
+  return Object.assign(
+    (name: string, params?: RouteHrefParams, search?: RouteHrefSearch) => routeHref(aliased(name), params, search),
+    {
+      maybe: (name: string, params?: RouteHrefParams, search?: RouteHrefSearch) =>
+        routeHref.maybe(aliased(name), params, search),
+    },
+  );
+}
+
 function routeParameterNames(template: string): string[] {
   return template
     .split("/")

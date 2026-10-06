@@ -302,11 +302,7 @@ def final_wire_field_names(
     fields = getattr(node, "fields", None)
     if not isinstance(fields, dict):
         return names
-    by_source: dict[str, str] = {}
-    for wire_name, graphql_field in fields.items():
-        source = (graphql_field.extensions or {}).get("strawberry-definition")
-        python_name = str(getattr(source, "python_name", None) or wire_name)
-        by_source[python_name] = wire_name
+    by_source = _wire_names_by_source(fields)
     mapped: list[str] = []
     for path in names:
         separator = "__" if "__" in path else "." if "." in path else None
@@ -335,11 +331,7 @@ def final_input_policy_fields(
     # Resource policies may already name a final wire field whose Python name
     # is internal (e.g. guarded relation ordering). Native Python declarations
     # still take precedence when a schema renames a public input field.
-    by_source: dict[str, str] = {name: name for name in fields}
-    for wire_name, input_field in fields.items():
-        source = (input_field.extensions or {}).get("strawberry-definition")
-        python_name = str(getattr(source, "python_name", None) or wire_name)
-        by_source[python_name] = wire_name
+    by_source = {**{name: name for name in fields}, **_wire_names_by_source(fields)}
     projected: list[str] = []
     for path in accepted:
         if path in by_source:
@@ -372,10 +364,7 @@ def final_aggregate_wire_fields(
         for operation in operation_fields.values():
             columns = getattr(get_named_type(operation.type), "fields", None)
             if isinstance(columns, dict):
-                for wire_name, column in columns.items():
-                    source = (column.extensions or {}).get("strawberry-definition")
-                    python_name = str(getattr(source, "python_name", None) or wire_name)
-                    by_source[python_name] = wire_name
+                by_source.update(_wire_names_by_source(columns))
             for argument in operation.args.values():
                 enum_type = get_named_type(argument.type)
                 if not isinstance(enum_type, GraphQLEnumType):
@@ -402,14 +391,29 @@ def final_input_wire_fields(
     if not isinstance(fields, dict):
         raise ImproperlyConfigured(f"resource metadata input type {input_name!r} is absent from the composed schema.")
     excluded = set(exclude)
-    by_source: dict[str, str] = {}
-    for wire_name, input_field in fields.items():
-        source = (input_field.extensions or {}).get("strawberry-definition")
-        python_name = str(getattr(source, "python_name", None) or wire_name)
-        by_source[python_name] = wire_name
+    by_source = _wire_names_by_source(fields)
     return tuple(
         wire_name for name in accepted if (wire_name := by_source.get(name)) is not None and wire_name not in excluded
     )
+
+
+def final_input_extension_fields(schema: GraphQLSchema, surface: type | None) -> tuple[str, ...]:
+    """Return the Python names composed input extensions add to a native input.
+
+    Strawberry merges ``extend=True`` donors into the executable input type and
+    leaves the native definition unchanged, so the final fields that definition
+    lacks are the donors' contributions. They are write policy like the native
+    columns, which the resource's write backend applies, so metadata marks them
+    writable.
+    """
+
+    if surface is None:
+        return ()
+    fields = getattr(schema.get_type(str(resource_type_name(surface))), "fields", None)
+    if not isinstance(fields, dict):
+        return ()
+    native = set(surface_field_names(surface))
+    return tuple(name for name in _wire_names_by_source(fields) if name not in native)
 
 
 def final_required_input_wire_fields(
@@ -603,6 +607,15 @@ def _wire_field_name(field: Any) -> str:
     """Return the GraphQL wire name the schema gives one Strawberry field."""
 
     return str(_WIRE_NAME_CONVERTER.get_graphql_name(field))
+
+
+def _wire_names_by_source(fields: dict[str, Any]) -> dict[str, str]:
+    """Map each final graphql-core field's authored Python name to its wire name."""
+
+    return {
+        str(getattr((field.extensions or {}).get("strawberry-definition"), "python_name", None) or wire_name): wire_name
+        for wire_name, field in fields.items()
+    }
 
 
 def _surface_field_type(surface: type | None, name: str) -> object | None:

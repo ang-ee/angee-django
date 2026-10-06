@@ -1,6 +1,6 @@
 import { parse } from "graphql";
 import type { TypedDocumentNode } from "@angee/refine";
-import { currentUserSelection, type AngeeCurrentUserData } from "./documents.public";
+import { currentUserSelection, identitySelection, type AngeeCurrentUserData } from "./documents.public";
 
 export interface AngeeViewAsIdentityResult {
   current_user: AngeeCurrentUserData;
@@ -10,9 +10,9 @@ export interface AngeeViewAsIdentityResult {
 
 /** IAM's console-only preview projection; no generated project schema import. */
 export const AngeeViewAsIdentityDocument = parse(`
-  query AngeeViewAsIdentity {
-    current_user { ${currentUserSelection} }
+  query AngeeViewAsIdentity($refs: [String!]!) {
+    current_user { ${identitySelection} }
     real_user { ${currentUserSelection} }
     viewable_people { id name: display_name }
   }
-`) as TypedDocumentNode<AngeeViewAsIdentityResult, Record<string, never>>;
+`) as TypedDocumentNode<AngeeViewAsIdentityResult, { refs: string[] }>;

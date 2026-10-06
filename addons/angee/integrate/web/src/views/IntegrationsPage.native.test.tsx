@@ -83,7 +83,6 @@ function mountApp(childRouted = true) {
     layouts: { console: { requireAuth: false } },
     schemas: { ...TEST_SCHEMAS, console: { ...TEST_SCHEMAS.console, metadata: { angee: { resources } } } },
     defaultSchema: "console",
-    home: "/start",
   });
   const host = document.createElement("div");
   document.body.append(host);

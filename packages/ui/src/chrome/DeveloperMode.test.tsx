@@ -31,8 +31,12 @@ afterEach(() => {
 });
 
 const composition: RuntimeComposition = {
-  shell: { brand: null, perspective: { id: "desk", root: "desk" }, provenance: { perspective: "desk" }, diagnostics: [] },
-  effective: { home: "/desk", confineTo: "desk" },
+  selection: {
+    app: "desk", rail: ["desk"], brand: { name: "Desk", mark: "desk" }, home: "desk.home",
+    sources: { app: "?app=desk", rail: 'menu root "desk"', brand: 'menu root "desk" label and icon', home: 'menu root "desk"' },
+    diagnostics: [],
+  },
+  home: "/desk",
   menus: {
     provenance: { "desk.notes": { label: "desk", sequence: "suite" } },
     removed: [
@@ -96,6 +100,10 @@ describe("developer mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "Composition" }));
     expect(await screen.findByRole("dialog")).toBeTruthy();
     expect(screen.getAllByText("desk.home").length).toBeGreaterThan(0);
+    // The selected app, its rail and where each of its facts came from.
+    expect(screen.getAllByText("desk (rail desk)").length).toBeGreaterThan(0);
+    expect(screen.getByText("app ← ?app=desk")).toBeTruthy();
+    expect(screen.getByText('brand ← menu root "desk" label and icon')).toBeTruthy();
     expect(screen.getByText("desk.archive ← suite (hide)")).toBeTruthy();
     expect(screen.getByText('desk.board: menu item "desk.board" was removed')).toBeTruthy();
     expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");

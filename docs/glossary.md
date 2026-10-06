@@ -320,20 +320,26 @@ views, container children, and other UI to the composition.
 **`createApp`** — the frontend entry point the host uses to compose addons into the
 running app.
 
-**Shell** — the app's home, brand and selected perspective. Product addons
-declare it (`shell`); a dependent overrides its dependencies, and the
-deployment's `ANGEE_UI` pins it last.
+**App** — a top-level menu root, with the `home`, `brand` and `theme` it shows
+when selected. A **named app** is a deployment's rail of roots
+(`ANGEE_UI.shell.apps`).
 
-**Perspective** — a named confinement: the console shows one menu root and sends
-other console routes home. Declared by an addon, selected by the shell.
+**Selection** — the app the console shows: `?app=` or the hostname's
+`ANGEE_UI.shell.hosts` entry picks a root or a named app, whose **rail** of
+roots the rail, palette and menus follow; nothing selected shows every root.
+It shapes navigation and identity, never which routes open.
 
 **Aggregator** — an addon that places other addons' apps under its own menu root
 (`include`), like the `angee.pm` suite. A **flattened** include shows the app's
 items as the aggregator's own while the app keeps its routes and words.
 
+**Mount** — a menu node that borrows another addon's page (`mount: "<route>"`):
+an alias route named after the node, under the node's app, reusing the page.
+Unlike an include, which absorbs an app and takes it off the rail, the source
+app keeps its page.
+
 **Layer** — one composed addon manifest, ordered by its addon dependencies; the
-deployment layer comes last. Menus, containers and the shell resolve layer by
-layer.
+deployment layer comes last. Menus and containers resolve layer by layer.
 
 **Container** — a named, ordered list on a node that the node's owner renders,
 addressed `node#name` (`form#sections`, `projects.Task#actions`,

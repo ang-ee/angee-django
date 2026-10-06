@@ -6,13 +6,12 @@ import { compileContainers, type ContainerLayer } from "./containers";
 import { explainComposition } from "./explain";
 import { DEPLOYMENT_LAYER_ID } from "./layers";
 import { compileMenus } from "./menus";
-import { resolveShell } from "./shell";
 
 const core: CoreContainer[] = [{ address: "form#sections", models: true }, { address: "form#actions", models: true }];
 const layer = (id: string, containers: Record<string, unknown>, dependsOn: string[] = []): ContainerLayer =>
   ({ id, dependsOn, containers: containers as ContainersDeclaration });
 const ids = (children: readonly { id: string }[]): string[] => children.map((child) => child.id);
-const scope = (routes: string[] = [], apps: string[] = []) => ({ apps, routes, perspective: null });
+const scope = (routes: string[] = [], apps: string[] = []) => ({ apps, routes });
 
 test("search extras interleave with contributions and route narrowing reaches page ids with diagnostics", () => {
   const composed = compileContainers([layer("extension", { "notes.Note#search": [
@@ -221,6 +220,29 @@ describe("compileContainers", () => {
     expect(ids(resolveContainer(compileContainers([work, deployment], core), "form#sections", { models }))).toEqual(["work.edit"]);
   });
 
+  test("a child whose requires the session lacks is absent whatever the row, its variants with it", () => {
+    const work = layer("work", { "form#actions": {
+      "work.archive": { content: 1, requires: "projects.Task#delete" },
+      "work.resume": { content: 2 },
+      "work.fast": { content: 3, variant: { of: "work.archive", impl: "fast" } },
+      "work.slow": { content: 4, variant: { of: "work.resume", impl: "slow" }, requires: "projects.Task#write" },
+    } });
+    const composed = compileContainers([work], core);
+    const resolve = (permitted: readonly string[] | undefined, impls: readonly string[] = []) =>
+      ids(resolveContainer(composed, "form#actions", { permitted, impls }));
+    // Without the session's refs the declarations stand; holding every ref changes nothing.
+    expect(resolve(undefined)).toEqual(["work.archive", "work.resume"]);
+    expect(resolve(["projects.Task#delete", "projects.Task#write"], ["fast", "slow"])).toEqual(["work.fast", "work.slow"]);
+    // An absent original takes its variants along; an absent variant leaves its original in place.
+    expect(resolve([], ["fast", "slow"])).toEqual(["work.resume"]);
+    expect(resolve(["projects.Task#delete"], ["fast", "slow"])).toEqual(["work.fast", "work.resume"]);
+    // A projection reads no absent child's fields.
+    expect(ids(resolveContainer(composed, "form#actions", { projection: true, permitted: [] }))).toEqual(["work.resume"]);
+    // Presence is the declaring addon's: a dependent cannot alter it.
+    expect(() => compileContainers([work, layer("product", { "form#actions": { "work.resume": { requires: "projects.Task#write" } } }, ["work"])], core))
+      .toThrow(/unknown key "requires"/);
+  });
+
   test("addons narrow only; a deployment only narrows too unless it forces, standing in for every layer's (G-14)", () => {
     const work = layer("work", { "form#sections": { "work.a": { content: 1 }, "work.b": { content: 2 }, "work.c": { content: 3 } } });
     const product = layer("product", { "form#sections": [{ only: ["work.a", "work.b"] }, { except: ["work.c"] }, { "work.b": { hide: true } }] }, ["work"]);
@@ -235,7 +257,8 @@ describe("compileContainers", () => {
     ] })], core);
     expect(forced.rules["form#sections"]?.find((rule) => rule.layer === DEPLOYMENT_LAYER_ID && rule.only)?.force).toBe(true);
     expect(ids(resolveContainer(forced, "form#sections"))).toEqual(["work.b", "work.c"]);
-    expect(explainComposition(resolveShell([]), compileMenus([]), new Map(), { home: "/", confineTo: null }, forced).containers?.rules)
+    const nothingSelected = { app: null, rail: null, brand: null, sources: {}, diagnostics: [] };
+    expect(explainComposition(nothingSelected, compileMenus([]), new Map(), "/", forced).containers?.rules)
       .toContainEqual({ address: "form#sections", layer: DEPLOYMENT_LAYER_ID, summary: "force only [work.b, work.c]" });
     // A condition scopes the force like any narrowing.
     const conditional = compileContainers([work, product, deployment({ "form#sections": [

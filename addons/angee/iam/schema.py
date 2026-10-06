@@ -19,6 +19,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import QuerySet
 from rebac import RebacQuerySet, current_actor, resolve_subjects, system_context, to_object_ref, to_subject_ref
@@ -90,6 +91,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
+from angee.iam.roles import subject_permitted as _subject_permitted_owner
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
@@ -176,7 +178,7 @@ class UserType(AngeeNode):
 
 @strawberry_django.type(User)
 class CurrentUserType(AngeeNode):
-    """GraphQL identity projection, including the identity's private role refs."""
+    """GraphQL identity projection, including the identity's private role refs and permitted refs."""
 
     username: auto
     first_name: auto
@@ -208,6 +210,23 @@ class CurrentUserType(AngeeNode):
         """
 
         return sorted(str(role) for role in rebac_roles_of(cast(Any, self)))
+
+    @strawberry_django.field
+    def permitted(self, refs: list[str]) -> list[str]:
+        """Return which ``<app_label.ModelName>#<permission>`` refs this identity holds at type level.
+
+        The web shell asks once per identity load for every ``requires`` its
+        composition declares and leaves out the menu entries and container
+        children whose ref is missing. Presence only: querysets, row permissions
+        and field gates still decide. A row-dependent arm is false at type level;
+        an unknown model or permission is an error.
+        """
+
+        try:
+            return _subject_permitted_owner(to_subject_ref(cast(Any, self)), refs)
+        except ValueError as error:
+            # A mistyped ref is the author's error: say which, publicly, not an internal one.
+            raise ValidationError(str(error)) from error
 
 
 @strawberry_django.type(Group)

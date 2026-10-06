@@ -17,7 +17,7 @@ test("flattens Decisions into Workflows' top bar while the rail keeps one app", 
   const { menuComposition } = composeAddons([decisionsMenu, { ...addon, dependsOn: ["decisions"] }], { canonicalModelLabel: (model) => model });
   expect(menuComposition.diagnostics).toEqual([]);
   const tree = MenuTree.from(resolveMenuRouteTargets(menuComposition.navigation, createRouteHref([...(decisions.routes ?? []), ...(addon.routes ?? [])])));
-  expect(tree.appRoots().map((node) => node.id)).toEqual(["workflows"]);
+  expect(tree.roots.map((node) => node.id)).toEqual(["workflows"]);
   const workflows = tree.byId.get("workflows")!;
   expect(workflows.appChildren()).toEqual([]);
   expect(workflows.menuItems().map((node) => node.label)).toEqual(["Runs", "Decisions", "Studio"]);

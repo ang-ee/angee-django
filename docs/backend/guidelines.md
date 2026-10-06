@@ -433,9 +433,19 @@ Use these owners instead of maintaining another contract in an addon:
   `input_extensions`. Input extensions are the write-side equivalent: they name the
   target input and add fields only; Strawberry merges multiple donors additively in
   addon order and fails fast on field-name collisions. strawberry-django-hasura
-  forwards extension values in the resource's write data, so the resource's write
-  owner must consume them, as IAM's
-  [`UserPasswordInsertInput`](../../addons/angee/iam/schema.py) does. Type and
+  forwards extension values in the resource's write data. The default
+  [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) writes
+  values naming model fields with the row and, in the same transaction, passes
+  the rest to the written row's cooperative
+  [`AngeeModel.apply_input_extensions`](../../angee/base/models.py), nested line
+  rows included. Its consumer (a mixin or `extends` donor on the model) takes
+  each value it owns as a keyword-only parameter and delegates the rest once
+  through `super()`; the terminal fails fast on a value no consumer took. A
+  custom write backend consumes its own extensions: IAM's
+  [`UserPasswordInsertInput`](../../addons/angee/iam/schema.py) names the
+  password column, which only the person factory may hash. Resource metadata
+  marks every field of the final insert/set input creatable/updatable,
+  extensions included. Type and
   input extensions are global-additive, like a model `extends`: the field lands
   on the target wherever it appears (the bucket only gates registration), so
   reference a field type that some bucket lacks and that bucket's build fails

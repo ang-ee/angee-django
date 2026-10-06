@@ -44,15 +44,32 @@ export function mostSpecific(
   return candidates.filter((id) => !candidates.some((other) => other !== id && ancestors.get(other)?.has(id)));
 }
 
-/** Refuse an alteration of something owned by an addon the altering layer does not depend on. */
+/** The candidate every other candidate depends on, if one does. */
+export function commonBase(
+  candidates: readonly string[],
+  ancestors: ReadonlyMap<string, ReadonlySet<string>>,
+): string | undefined {
+  const distinct = [...new Set(candidates)];
+  return distinct.find((id) => distinct.every((other) => other === id || ancestors.get(other)?.has(id)));
+}
+
+/** Each route's declaring layer, by route name. */
+export function routeOwners(
+  layers: readonly (Layer & { routes?: readonly { name: string }[] })[],
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(layers.flatMap((layer) => (layer.routes ?? []).map((route) => [route.name, layer.id] as const)));
+}
+
+/** Refuse an alteration (or a mount) of something owned by an addon the altering layer does not depend on. */
 export function assertMayAlter(
   ancestors: ReadonlyMap<string, ReadonlySet<string>>,
   layer: string,
   owner: string,
   what: string,
+  verb = "alters",
 ): void {
   if (owner !== layer && !ancestors.get(layer)?.has(owner)) {
-    throw new Error(`Addon "${layer}" alters ${what} of "${owner}", which it does not depend on.`);
+    throw new Error(`Addon "${layer}" ${verb} ${what} of "${owner}", which it does not depend on.`);
   }
 }
 

@@ -85,12 +85,13 @@ export function createAddonRouteNodes({
   routes,
   routesByName,
   layoutRoutes,
-  consoleConfinement,
+  unavailable,
 }: {
   routes: readonly BaseAddonRoute[];
   routesByName: ReadonlyMap<string, BaseAddonRoute>;
   layoutRoutes: ReadonlyMap<string, AnyRoute>;
-  consoleConfinement?: { allows: (route: BaseAddonRoute, pathname: string) => boolean; home: string };
+  /** Console routes a menu removal made unavailable; they redirect home. */
+  unavailable?: { routes: ReadonlyMap<string, string>; home: string };
 }): void {
   const routeNodes = new Map<string, AnyRoute>();
   const childrenByParent = new Map<AnyRoute, Array<NamedRouteNode>>();
@@ -109,18 +110,11 @@ export function createAddonRouteNodes({
     const parentNode = parentManifestRoute
       ? buildRoute(parentManifestRoute)
       : layoutRouteFor(route, layoutRoutes);
-    let ancestor = route;
-    while (ancestor.parent) {
-      const parent = routesByName.get(ancestor.parent);
-      if (!parent) break;
-      ancestor = parent;
-    }
-    const confined = consoleConfinement && (ancestor.layout ?? "console") === "console";
     const node = createAddonRouteNode(
       route,
       parentNode,
       parentManifestRoute,
-      confined ? consoleConfinement : undefined,
+      unavailable?.routes.has(route.name) ? unavailable.home : undefined,
     );
     routeNodes.set(route.name, node);
     if (route.indexComponent) {
@@ -303,15 +297,14 @@ function createAddonRouteNode(
   route: BaseAddonRoute,
   parentNode: AnyRoute,
   parentManifestRoute: BaseAddonRoute | undefined,
-  confinement?: { allows: (route: BaseAddonRoute, pathname: string) => boolean; home: string },
+  /** Home, for a route a menu removal made unavailable. */
+  unavailableHome?: string,
 ): AnyRoute {
   return createRoute({
     getParentRoute: () => parentNode,
     path: routePathUnderParent(route, parentManifestRoute),
-    ...(confinement ? { beforeLoad: ({ location }) => {
-      if (!confinement.allows(route, location.pathname)) {
-        throw redirect({ to: confinement.home, replace: true });
-      }
+    ...(unavailableHome !== undefined ? { beforeLoad: () => {
+      throw redirect({ to: unavailableHome, replace: true });
     } } : {}),
     ...(route.component ? { component: route.component } : {}),
   });

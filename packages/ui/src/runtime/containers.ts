@@ -6,7 +6,7 @@ import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
 import type { ChatterTabContent, DrawerContribution, DrawerEdge } from "./contracts";
-import { useAppRuntime } from "./runtime";
+import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
 /**
  * Container names and the content their children carry. Each container's owner
@@ -78,12 +78,11 @@ export interface ResourceViewKindContent {
   render?: ComponentType<{ resource: string }>;
 }
 
-/** When a render-time verb applies: an app or route on the active trail, or the perspective. */
+/** When a render-time verb applies: an app or route on the active trail. */
 export interface ContainerCondition {
   app?: string | readonly string[];
   /** The route or any route below it. */
   route?: string | readonly string[];
-  perspective?: string | readonly string[];
 }
 
 /** One child of a container: the owner's typed content plus the fields every container honours. */
@@ -94,6 +93,11 @@ export interface ContainerChild<TContent = unknown> {
   after?: string;
   /** A projected record permission the row must hold. */
   permission?: string;
+  /**
+   * Presence: `<app_label.ModelName>#<permission>` the session's identity must
+   * hold (`current_user.permitted`), whatever the row; else the child is absent.
+   */
+  requires?: string;
   /** Readable fields the child consumes from the record. */
   requiredFields?: readonly string[];
   /** Shown only on rows whose implementation (`ImplClassField` value) is this one. */
@@ -194,13 +198,12 @@ export interface ComposedContainers {
   diagnostics: readonly string[];
 }
 
-/** Where the page is, for `when`: its apps, its routes and the perspective. */
+/** Where the page is, for `when`: its apps and its routes. */
 export interface ContainerScope {
   /** Every app on the page's menu trail, outermost first, flattened ones too (G-8). */
   apps: readonly string[];
   /** The page's route and its parent routes, nearest first. */
   routes: readonly string[];
-  perspective: string | null;
 }
 
 const warnedAddresses = new Set<string>();
@@ -233,7 +236,7 @@ export function containersFromChildren(
     children: composed,
   };
 }
-const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [], perspective: null };
+const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [] };
 
 /** Split an address into its node and container name. */
 export function containerName(address: string): string {
@@ -262,6 +265,11 @@ export interface ResolveContainerOptions {
    * variants included, no permission check. A record's field projection reads it.
    */
   projection?: boolean;
+  /**
+   * The `requires` refs the session holds: a child requiring another is absent,
+   * its variants with it, in projections too. Omitted, declarations stand.
+   */
+  permitted?: readonly string[];
 }
 
 /** A record's models for a container, most general first: its MTI parent, then itself. */
@@ -273,8 +281,7 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
   if (!condition) return true;
   const any = (wanted: string | readonly string[] | undefined, present: readonly string[]): boolean =>
     wanted === undefined || (typeof wanted === "string" ? [wanted] : wanted).some((id) => present.includes(id));
-  return any(condition.app, scope.apps) && any(condition.route, scope.routes)
-    && any(condition.perspective, scope.perspective ? [scope.perspective] : []);
+  return any(condition.app, scope.apps) && any(condition.route, scope.routes);
 }
 
 /**
@@ -284,7 +291,8 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
  * unpositioned extras trail, and `before`/`after` may anchor on composed ids.
  * Then every layer's narrowing whose condition holds applies in dependency
  * order, with variants standing in for their originals on matching rows and the row's
- * permission last. Narrowing by a variant's own id drops that variant (its
+ * permission last. A child whose `requires` the session lacks is absent, with its
+ * variants, as a hidden one is. Narrowing by a variant's own id drops that variant (its
  * original returns); narrowing by an original's id carries its variants along.
  * A deployment `only` that holds forces: its narrowing replaces the addons'.
  * `projection` keeps every candidate (impl children and all variants) for the
@@ -293,7 +301,7 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
 export function resolveContainer<TContent = unknown>(
   composed: ComposedContainers,
   address: string,
-  { models = [], scope = EMPTY_SCOPE, row, impls = [], extra = [], projection = false }: ResolveContainerOptions = {},
+  { models = [], scope = EMPTY_SCOPE, row, impls = [], extra = [], projection = false, permitted }: ResolveContainerOptions = {},
 ): readonly ComposedContainerChild<TContent>[] {
   // Composition validates every address; a runtime composed without this container
   // (a story, a bare test) has no composed children for it, only the page's own.
@@ -318,13 +326,15 @@ export function resolveContainer<TContent = unknown>(
   const forcing = rules.find((rule) => rule.force)?.layer;
   const narrowing = forcing === undefined ? rules : rules.filter((rule) => rule.layer === forcing);
   const excepted = new Set(narrowing.flatMap((rule) => rule.except ?? []));
-  const blocked = (id: string): boolean => hidden.has(id) || excepted.has(id);
+  // Presence: a child whose `requires` the session lacks is absent, as a hidden one is.
+  const absent = new Set(merged.filter((child) => !isPresent(child.requires, permitted)).map((child) => child.id));
+  const blocked = (id: string): boolean => hidden.has(id) || excepted.has(id) || absent.has(id);
 
   // A variant carries its original's admission: its id and its owner for `only`'s exemption.
   const originals = new Map(merged.map((child) => [child.id, child]));
   const lineage = (child: ComposedContainerChild): string => child.variant?.of ?? child.id;
   const ownerOf = (child: ComposedContainerChild): string => originals.get(lineage(child))?.owner ?? child.owner;
-  const permitted = (child: ComposedContainerChild): boolean =>
+  const rowAllows = (child: ComposedContainerChild): boolean =>
     projection || row === undefined || !child.permission || holdsPermission(row, child.permission);
   // A variant positioned in its own right keeps its place; one without stands where
   // its original stood, or keeps its own when the original is not on this page.
@@ -346,7 +356,7 @@ export function resolveContainer<TContent = unknown>(
     // row lacks the permission for leaves the original in place (G-13).
     const variants = new Map<string, ComposedContainerChild>();
     for (const child of visible) {
-      if (!child.variant || !impls.includes(child.variant.impl) || !permitted(child)) continue;
+      if (!child.variant || !impls.includes(child.variant.impl) || !rowAllows(child)) continue;
       const taken = variants.get(child.variant.of);
       if (taken) throw new Error(`Children "${taken.id}" and "${child.id}" of "${address}" are both variants of "${child.variant.of}" for this row.`);
       variants.set(child.variant.of, child);
@@ -365,27 +375,29 @@ export function resolveContainer<TContent = unknown>(
     const kept = new Set(rule.only);
     visible = visible.filter((child) => kept.has(child.id) || kept.has(lineage(child)) || rule.exempt.includes(ownerOf(child)));
   }
-  return visible.filter(permitted) as readonly ComposedContainerChild<TContent>[];
+  return visible.filter(rowAllows) as readonly ComposedContainerChild<TContent>[];
 }
 
 /**
  * The children of one container for the current page: the app and route come
- * from the runtime, the models and row from the rendering owner. Memoize
- * `models` and `impls`; a fresh array each render recomputes the list.
+ * from the runtime, presence from the session's identity, the models and row
+ * from the rendering owner. Memoize `models` and `impls`; a fresh array each
+ * render recomputes the list.
  */
 export function useContainer<TContent = unknown>(
   address: string,
-  options: Omit<ResolveContainerOptions, "scope"> = {},
+  options: Omit<ResolveContainerOptions, "scope" | "permitted"> = {},
 ): readonly ComposedContainerChild<TContent>[] {
-  const { containers = EMPTY_CONTAINERS, containerScope } = useAppRuntime();
+  const { containers = EMPTY_CONTAINERS, containerScope, auth } = useAppRuntime();
   const { models, row, impls, extra, projection } = options;
+  const permitted = sessionPermitted(auth.user);
   if (developmentMode() && containers !== EMPTY_CONTAINERS && !containers.declared[address] && !warnedAddresses.has(address)) {
     warnedAddresses.add(address);
     console.warn(`[angee] useContainer("${address}"): no such container was composed.`);
   }
   return useMemo(
-    () => resolveContainer<TContent>(containers, address, { models, row, impls, extra, projection, ...(containerScope ? { scope: containerScope } : {}) }),
-    [address, containerScope, containers, extra, impls, models, projection, row],
+    () => resolveContainer<TContent>(containers, address, { models, row, impls, extra, projection, permitted, ...(containerScope ? { scope: containerScope } : {}) }),
+    [address, containerScope, containers, extra, impls, models, permitted, projection, row],
   );
 }
 

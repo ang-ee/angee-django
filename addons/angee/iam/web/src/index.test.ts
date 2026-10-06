@@ -117,9 +117,12 @@ describe("iam addon manifest", () => {
   });
 
   test("declares the users list's columns container with IAM's default columns and activity presets", () => {
-    const columns = iam.containers?.["iam.users#columns"] as Record<string, { sequence?: number }>;
+    const columns = iam.containers?.["iam.users#columns"] as Record<string, { sequence?: number; requires?: string }>;
     expect(Object.keys(columns)).toEqual(["iam.username", "iam.email", "iam.is-staff", "iam.is-active", "iam.last-login"]);
     expect(Object.values(columns).map((child) => child.sequence)).toEqual([10, 20, 30, 40, 50]);
+    // Last sign-in is present only for viewers reading it on every row; the field gate still decides each value.
+    expect(Object.entries(columns).flatMap(([id, child]) => child.requires ? [[id, child.requires]] : []))
+      .toEqual([["iam.last-login", "iam.User#read__last_login"]]);
     expect(iam.resourceViews?.map((preset) => [preset.id, preset.label, preset.filter])).toEqual([
       ["iam.users.active", "Active", { is_active: { exact: true } }],
       ["iam.users.deactivated", "Deactivated", { is_active: { exact: false } }],

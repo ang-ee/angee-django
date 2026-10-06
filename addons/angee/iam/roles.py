@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Iterable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, cast
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import QuerySet, Subquery
@@ -16,6 +18,9 @@ from rebac import (
     ObjectRef,
     SubjectRef,
     app_settings,
+    check_new,
+    current_evaluator,
+    evaluator_scope,
     resolve_subjects,
     system_context,
     to_object_ref,
@@ -83,6 +88,46 @@ def subject_has_role(subject: SubjectRef | None, role: ObjectRef) -> bool:
         action="effective_member",
         resource=role,
     ).allowed)
+
+
+def subject_permitted(subject: SubjectRef | None, refs: Iterable[str]) -> list[str]:
+    """Return the ``<app_label.ModelName>#<permission>`` refs ``subject`` holds at type level.
+
+    Each ref is the engine's create-path evaluation (``rebac.check_new``) of the
+    permission on a candidate row with no proposed relationships, so only role-
+    and const-backed arms, the administrator set among them, can hold: an arm
+    that depends on the row is false here. The web shell reads this to leave out
+    what a person cannot use; querysets, row permissions and field gates still
+    decide. Refs are checked together in one evaluator scope and returned once
+    each, in request order. Every ref is validated first, so an unknown model or
+    permission raises ``ValueError`` whoever asks; without a subject none is held.
+    """
+
+    targets = {ref: _permission_target(ref) for ref in dict.fromkeys(refs)}
+    if subject is None:
+        return []
+    with ExitStack() as stack:
+        if current_evaluator() is None:
+            stack.enter_context(evaluator_scope())
+        return [
+            ref for ref, (resource_type, permission) in targets.items()
+            if check_new(subject=subject, action=permission, resource_type=resource_type).allowed
+        ]
+
+
+def _permission_target(ref: str) -> tuple[str, str]:
+    """Resolve one ``<app_label.ModelName>#<permission>`` ref to its REBAC resource type and permission."""
+
+    label, _, permission = ref.partition("#")
+    try:
+        resource_type = model_resource_type(apps.get_model(label))
+    except (LookupError, ValueError):
+        resource_type = None
+    if resource_type is None:
+        raise ValueError(f'Unknown model in "{ref}": expected "<app_label.ModelName>#<permission>" on a REBAC model.')
+    if rebac_backend().schema().get_permission(resource_type, permission) is None:
+        raise ValueError(f'Unknown permission in "{ref}": {resource_type} declares no permission "{permission}".')
+    return resource_type, permission
 
 
 class IAMRoleRow(BaseModel):

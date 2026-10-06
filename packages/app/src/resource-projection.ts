@@ -9,13 +9,14 @@ import type { ResourceProps } from "@refinedev/core";
 import type { ResourceMutationOperations } from "@angee/refine";
 import {
   MenuTree,
-  pathMatchesTarget,
   type ChromeMenuNode,
   type MenuMatch,
 } from "@angee/ui/chrome/menu-tree";
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
+import { commonBase } from "./layers";
+import { absentMenuNodes } from "./presence";
 import {
   childRoutesByParentName,
   fullRoutePath,
@@ -74,7 +75,6 @@ export function refineRouteResourceProjection(
 ): RefineRouteResourceProjection {
   const resourcesByIdentifier = new Map<string, ResourceProps>();
   const metadataByResource: Record<string, RefineResourceMetadata> = {};
-  const appRootIds = new Set(navigationTree.appRoots().map((item) => item.id));
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const childrenByParentName = childRoutesByParentName(routes);
 
@@ -86,7 +86,6 @@ export function refineRouteResourceProjection(
         resourcesByIdentifier,
         item,
         menuTrail[index - 1],
-        appRootIds.has(item.id),
         menuRouteShowPath(item, routesByName, childrenByParentName),
         breadcrumbTrail.at(-2),
       );
@@ -159,35 +158,74 @@ export function resourceRouteIndex(
   return byResource;
 }
 
-/** One projection for app resource claims, navigation membership and admission. */
+/**
+ * The canonical claim per resource among the roots' claimants: the one route, or
+ * those of the addon every other claimant depends on, as a dependent's page of a
+ * model is its own app's. Addons that do not depend on one another cannot both
+ * claim a resource.
+ */
+function canonicalClaims(
+  claimants: ReadonlyMap<string, readonly BaseAddonRoute[]>,
+  owners: Readonly<Record<string, string>>,
+  ancestors: ReadonlyMap<string, ReadonlySet<string>>,
+): BaseAddonRoute[] {
+  return [...claimants].flatMap(([resource, routes]) => {
+    if (routes.length === 1) return routes;
+    const ownerOf = (route: BaseAddonRoute): string => owners[route.name] ?? route.name;
+    const base = commonBase(routes.map(ownerOf), ancestors);
+    if (base === undefined) {
+      const named = routes.map((route) => `"${route.name}" of "${ownerOf(route)}"`).join(", ");
+      throw new Error(`Routes ${named} claim resource "${resource}" from addons that do not depend on one another; one must depend on the other.`);
+    }
+    return routes.filter((route) => ownerOf(route) === base);
+  });
+}
+
+/** One projection for app resource claims, navigation membership and route availability. */
 export class AppRouteProjection {
   readonly navigationTree: MenuTree;
   readonly canonical: Readonly<Record<string, RuntimeResourceRoutes>>;
+  /** The root pages outside a selected app's rail sit in: its home's root, else its first. */
+  readonly homeApp: string | undefined;
   private readonly roots = new Map<string, string | undefined>();
   private readonly claims = new Map<string, Map<string, RuntimeResourceRoutes[]>>();
-  private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
+  /** Record match claims per resource, in every app: a matching row opens there. */
+  private readonly recordDestinations = new Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  private readonly presentNavigation = new Map<string, MenuTree>();
 
   /** Console routes removed menu nodes made unavailable, with the reason; they redirect home. */
   readonly unavailable: ReadonlyMap<string, string>;
 
   /**
-   * `menuTree` is the logical tree (route ownership, trails); `navigation` is what
-   * the chrome shows (defaults to the logical tree); `removed` lists the menu
-   * nodes composition removed, which decides route availability.
+   * `menuTree` is the logical tree (route ownership, trails); `selection` is the
+   * selected app's rail and home route, without which every root shows;
+   * `navigation` is what the chrome shows (defaults to the logical tree);
+   * `removed` lists the menu nodes composition removed, which decides route
+   * availability. Every root claims its own resource routes, whatever the
+   * selection; `owners` (each route's addon) and `ancestors` (each addon's
+   * dependencies) decide which claim is canonical, so links are the same on
+   * every host.
    */
   constructor(
     readonly routes: readonly BaseAddonRoute[],
     readonly menuTree: MenuTree,
-    readonly confineTo?: string,
-    options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
+    readonly selection?: { rail: readonly string[]; home?: string },
+    options: {
+      navigation?: MenuTree;
+      removed?: readonly { id: string; route?: string }[];
+      owners?: Readonly<Record<string, string>>;
+      ancestors?: ReadonlyMap<string, ReadonlySet<string>>;
+    } = {},
   ) {
     const navigation = options.navigation ?? menuTree;
-    this.navigationTree = confineTo === undefined ? navigation.withSettingsPlace() : navigation.confineTo(confineTo);
+    this.navigationTree = selection === undefined ? navigation.withSettingsPlace() : navigation.confineTo(selection.rail);
     this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
-    const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
+    const home = selection?.home !== undefined ? this.routesByName.get(selection.home) : undefined;
+    this.homeApp = selection && ((home && this.rootFor(home)) ?? selection.rail[0]);
     const canonical: BaseAddonRoute[] = [];
+    const claimants = new Map<string, BaseAddonRoute[]>();
     // Menu order selects the app's fallback when it has several views of a model.
     const order = [...menuTree.byId.values()].map((item) => item.route);
     const ordered = [...routes].sort((a, b) => {
@@ -200,7 +238,22 @@ export class AppRouteProjection {
       if (this.unavailable.has(route.name)) continue;
       const root = this.rootFor(route);
       const resource = route.resource ?? route.recordModel;
-      if (!resource || !root || !appIds.has(root)) {
+      const claimOf = (model: string) => resourceRouteIndex([
+        { ...route, resource: model },
+        ...routes.filter((child) => child.parent === route.name),
+      ])[model]!;
+      const match = route.recordMatch;
+      if (match && resource) {
+        if (route.path.includes("$")) throw new Error(`Route "${route.name}" declares recordMatch on a parameterized path.`);
+        const { record } = claimOf(resource);
+        if (!record) throw new Error(`Route "${route.name}" declares recordMatch without a record child.`);
+        const destinations = this.recordDestinations.get(resource) ?? [];
+        if (destinations.some((item) => item.match.field === match.field && item.match.equals === match.equals)) {
+          throw new Error(`Resource "${resource}" has duplicate record match "${match.field}=${match.equals}".`);
+        }
+        this.recordDestinations.set(resource, [...destinations, { record, match }]);
+      }
+      if (!resource || !root) {
         canonical.push(route);
         continue;
       }
@@ -208,42 +261,29 @@ export class AppRouteProjection {
         if (route.resource) resourceRouteIndex([route]); // Same collection contract in every scope.
         continue;
       }
-      const claim = resourceRouteIndex([
-        { ...route, resource },
-        ...routes.filter((child) => child.parent === route.name),
-      ])[resource]!;
-      if (route.recordMatch && !claim.record) {
-        throw new Error(`Route "${route.name}" declares recordMatch without a record child.`);
-      }
-      if (route.recordMatch && claim.record) {
-        const byResource = this.recordDestinations.get(root) ?? new Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>();
-        const destinations = byResource.get(resource) ?? [];
-        if (destinations.some((item) => item.match.field === route.recordMatch?.field && item.match.equals === route.recordMatch?.equals)) {
-          throw new Error(`Resource "${resource}" has duplicate record match "${route.recordMatch.field}=${route.recordMatch.equals}".`);
-        }
-        byResource.set(resource, [...destinations, { record: claim.record, match: route.recordMatch }]);
-        this.recordDestinations.set(root, byResource);
-      }
+      const claim = claimOf(resource);
       const resources = this.claims.get(root) ?? new Map<string, RuntimeResourceRoutes[]>();
       resources.set(resource, [...(resources.get(resource) ?? []), claim]);
       this.claims.set(root, resources);
+      // A borrowed model (`recordModel`, as a mount's alias) never claims canonically.
+      if (route.resource) claimants.set(route.resource, [...(claimants.get(route.resource) ?? []), route]);
     }
-    this.canonical = resourceRouteIndex(canonical);
+    this.canonical = resourceRouteIndex([
+      ...canonical,
+      ...canonicalClaims(claimants, options.owners ?? {}, options.ancestors ?? new Map()),
+    ]);
   }
 
   rootFor(route: BaseAddonRoute, visited = new Set<string>()): string | undefined {
     if (this.roots.has(route.name)) return this.roots.get(route.name);
     if (visited.has(route.name)) throw new Error(`Route "${route.name}" creates a parent cycle.`);
     visited.add(route.name);
-    // Record children inherit their collection owner; an app's Settings link
-    // admits that target without transferring ownership of the foreign route.
+    // Record children inherit their collection owner; a route several roots
+    // reference without a `route.menu` anchor has no owner.
     const parent = route.parent ? this.routesByName.get(route.parent) : undefined;
     const selected = route.menu ? menuNodeForRoute(route, this.menuTree) : undefined;
     const refs = selected ? [selected] : this.menuTree.itemsForRoute(route.name);
     const roots = new Set(refs.map((item) => this.menuTree.trailFor(item.id)[0]?.id));
-    if (roots.size > 1 && this.confineTo !== undefined && !parent) {
-      throw new Error(`Route "${route.name}" is referenced by different menu roots; declare route.menu.`);
-    }
     const root = parent && !selected ? this.rootFor(parent, visited)
       : roots.size === 1 ? roots.values().next().value : undefined;
     this.roots.set(route.name, root);
@@ -258,24 +298,49 @@ export class AppRouteProjection {
     return owner ? menuNodeForRoute(owner, this.menuTree) : undefined;
   }
 
-  activeMenu(pathname: string, routeName?: string, search?: string): MenuMatch | undefined {
-    return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  activeMenu(pathname: string, routeName?: string, search?: string, navigation = this.navigationTree): MenuMatch | undefined {
+    return navigation.match(pathname, search, false, this.menuAnchor(routeName)?.id);
   }
 
-  /** The logical root a page sits in; lifting a node into Settings does not change it. */
+  /**
+   * The navigation a session holding `permitted` sees: a menu node whose
+   * `requires` it lacks leaves the rail, menus and palette with its subtree.
+   * Presence only: routes, trails, app scope and admission do not change.
+   * Without refs (`undefined`) the navigation stands as declared.
+   */
+  navigationFor(permitted: readonly string[] | undefined): MenuTree {
+    if (permitted === undefined) return this.navigationTree;
+    const key = [...new Set(permitted)].sort().join("\n");
+    let navigation = this.presentNavigation.get(key);
+    if (!navigation) {
+      navigation = this.navigationTree.without(absentMenuNodes(this.menuTree, permitted));
+      this.presentNavigation.set(key, navigation);
+    }
+    return navigation;
+  }
+
+  /**
+   * The logical root a page sits in; lifting a node into Settings does not change
+   * it. A page outside a selected app's rail sits in the app's home root.
+   */
   activeApp(pathname: string, routeName?: string, search?: string): string | undefined {
-    return this.confineTo ?? this.menuTree.match(pathname, search, false, this.menuAnchor(routeName)?.id)?.trail[0]?.id;
+    const root = this.menuTree.match(pathname, search, false, this.menuAnchor(routeName)?.id)?.trail[0]?.id;
+    return this.inRail(root) ? root : this.homeApp;
   }
 
   /**
    * The apps a container `when: { app }` matches on this path, outermost first:
-   * every app on its menu trail. Under a confinement only the root's own count;
-   * a page another root owns (a Settings link) sits in the root alone.
+   * every app on its menu trail. A page outside a selected app's rail sits in the
+   * app's home root alone.
    */
   appTrail(pathname: string, routeName?: string, search?: string): readonly string[] {
     const trail = this.menuTree.appTrail(pathname, search, this.menuAnchor(routeName)?.id).map((item) => item.id);
-    if (this.confineTo === undefined) return trail;
-    return trail[0] === this.confineTo ? trail : [this.confineTo];
+    return this.inRail(trail[0]) ? trail : [this.homeApp!];
+  }
+
+  /** Whether a root shows on the rail: any root when no app is selected. */
+  private inRail(root: string | undefined): boolean {
+    return this.selection === undefined || (root !== undefined && this.selection.rail.includes(root));
   }
 
   /** Collection defaults are inherited by its record children. */
@@ -284,37 +349,34 @@ export class AppRouteProjection {
     return route ? inheritedRouteFact(route, this.routesByName, (item) => item.defaultResourceView) : undefined;
   }
 
+  /**
+   * The resource routes on a page of `app`. A record opens, in order: at the
+   * record match claim its row matches, in every app; at the app's own claim;
+   * at the canonical route.
+   */
   resourceRoutes(app?: string, activeRoute?: string): Readonly<Record<string, RuntimeResourceRoutes>> {
     const result = { ...this.canonical };
     const route = activeRoute ? this.routesByName.get(activeRoute) : undefined;
-    for (const [resource, claims] of this.claims.get(app ?? "") ?? []) {
+    const owned = this.claims.get(app ?? "");
+    for (const [resource, claims] of owned ?? []) {
       const selected = claims.find((claim) => route && inheritedRouteFact(route, this.routesByName,
         (ancestor) => ancestor.name === claim.collection ? true : undefined)) ?? claims[0]!;
       const record = selected.record ?? claims.find((claim) => claim.record)?.record ?? this.canonical[resource]?.record;
       result[resource] = { ...selected, ...(record ? { record } : {}) };
     }
-    for (const [resource, destinations] of this.recordDestinations.get(app ?? "") ?? []) {
+    for (const [resource, destinations] of this.recordDestinations) {
       const selected = result[resource];
       if (!selected) continue;
+      // A row no match claims opens at the app's own claim, never another match's.
+      const fallback = owned?.get(resource)?.find((claim) => claim.record
+        && !this.routesByName.get(claim.collection)?.recordMatch)?.record ?? this.canonical[resource]?.record;
       result[resource] = {
         ...selected,
         recordDestinations: destinations,
-        ...(this.canonical[resource]?.record ? { recordFallback: this.canonical[resource].record } : {}),
+        ...(fallback ? { recordFallback: fallback } : {}),
       };
     }
     return result;
-  }
-
-  allows(route: BaseAddonRoute, pathname: string): boolean {
-    if (this.unavailable.has(route.name)) return false;
-    if (this.confineTo === undefined) return true;
-    const root = this.rootFor(route);
-    if (root === undefined || root === this.confineTo) return true;
-    return [...this.navigationTree.byId.values()].some((item) => {
-      const target = item.route ? this.routesByName.get(item.route) : undefined;
-      return target && this.rootFor(target) !== this.confineTo
-        && pathMatchesTarget(pathname, item.target);
-    });
   }
 }
 
@@ -322,23 +384,13 @@ function addMenuRouteResource(
   resourcesByIdentifier: Map<string, ResourceProps>,
   item: ChromeMenuNode,
   parent: ChromeMenuNode | undefined,
-  appRoot: boolean,
   showPath: string | undefined,
   breadcrumbParent: ChromeMenuNode | undefined,
 ): void {
   const target = item.target;
   if (!target || target === "#") return;
   const identifier = menuRouteResourceIdentifier(item.id);
-  const existing = resourcesByIdentifier.get(identifier);
-  if (existing) {
-    if (appRoot) {
-      existing.meta = {
-        ...existing.meta,
-        appRoot: true,
-      };
-    }
-    return;
-  }
+  if (resourcesByIdentifier.has(identifier)) return;
   resourcesByIdentifier.set(identifier, {
     name: identifier,
     identifier,
@@ -351,7 +403,6 @@ function addMenuRouteResource(
       menuOrder: resourcesByIdentifier.size,
       // Refine's list may borrow a descendant's target; chrome needs the own target.
       menuTarget: item.to ?? null,
-      ...(appRoot ? { appRoot: true } : {}),
       ...(item.app === true ? { app: true } : {}),
       ...(item.description ? { description: item.description } : {}),
       ...(item.group ? { group: item.group } : {}),
