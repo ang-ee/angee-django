@@ -26,6 +26,7 @@ from angee.graphql.data.query import ResourceQueryProjection
 from angee.graphql.data.resource_fields import (
     PREFERRED_DISPLAY_FIELDS,
     final_aggregate_wire_fields,
+    final_input_extension_fields,
     final_input_only_resource_fields,
     final_input_policy_fields,
     final_input_wire_fields,
@@ -211,8 +212,16 @@ def finalize_data_resources(
                 create_input=(resource_type_name(native_resource.insert_input_type) if create_name else None),
                 update_input=(resource_type_name(native_resource.set_input_type) if update_name or save_name else None),
             )
-            create_fields = native_resource.insertable_fields if create_name else ()
-            update_fields = native_resource.updatable_fields if update_name or save_name else ()
+            if create_name:
+                create_fields = (
+                    *native_resource.insertable_fields,
+                    *final_input_extension_fields(schema, native_resource.insert_input_type),
+                )
+            if update_name or save_name:
+                update_fields = (
+                    *native_resource.updatable_fields,
+                    *final_input_extension_fields(schema, native_resource.set_input_type),
+                )
             lines_declaration = _single_policy_value(model_label, contributions, "lines_declaration")
             if lines_declaration is not None:
                 from angee.graphql.data.hasura import HasuraLines, _line_metadata
