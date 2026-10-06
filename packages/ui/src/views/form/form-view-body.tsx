@@ -224,8 +224,9 @@ export function FormViewRecordHeader({
     <header className={cn(statusOnTitleRow ? "flex flex-wrap items-start gap-x-6 gap-y-4" : "grid", compact ? "gap-1" : !statusOnTitleRow && "gap-4")}>
       {!statusOnTitleRow ? status : null}
       <div className={cn("min-w-0 flex-1 self-start", statusOnTitleRow && "basis-64")}>
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="min-w-0 flex-1">
+        {/* The title keeps a readable width; its adornments (mark, title-placed field) wrap below it. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-form-title-row="true">
+          <div className="min-w-0 flex-[1_1_16rem]">
         {title !== undefined ? (
           <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
         ) : currentTitleField ? (
