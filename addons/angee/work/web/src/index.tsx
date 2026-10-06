@@ -20,7 +20,7 @@ import {
   Play,
   XCircle,
 } from "lucide-react";
-import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { PROJECT_MODEL, TASK_ACTION_FIELDS, TASK_MODEL } from "@angee/projects";
 import { ShareAccessRailGroup } from "@angee/iam";
 
 import { ProjectManagerAccessRole } from "./access-role";
@@ -148,7 +148,7 @@ const work = defineBaseAddon({
     [`${QUEUE_MODEL}#sections`]: QUEUE_FORM_SECTIONS,
     // Every triage verb is a menu verb: it joins the form's one Actions menu.
     [`${TASK_MODEL}#actions-menu`]: {
-      "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
+      "work.task-triage-actions": { sequence: 40, requiredFields: TASK_ACTION_FIELDS, content: <TriageRecordActions /> },
     },
   },
   icons: {

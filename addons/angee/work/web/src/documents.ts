@@ -47,7 +47,6 @@ export const WorkTaskContextDocument = graphql(`
       stage {
         id
         category
-        rule_owned
       }
     }
   }

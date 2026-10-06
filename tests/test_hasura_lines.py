@@ -33,7 +33,7 @@ from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
-from tests.linesdemo.models import Document, DocumentLine, PinnedLine, Product, Tag
+from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
 
 
 @strawberry_django.type(DocumentLine)
@@ -286,6 +286,34 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(composed_table
     assert rows == [("Keep", 3, 0), ("New", 7, 1)]
     with system_context(reason="test read"):
         assert not DocumentLine.objects.filter(pk=drop.pk).exists()
+
+
+def test_removing_a_line_other_records_use_is_a_public_refusal(composed_tables):
+    """A protected line is kept and the caller learns why, never an internal error."""
+
+    owner = create_user("owner")
+    with system_context(reason="seed"):
+        doc = Document.objects.create(title="Document", note="draft")
+        keep = DocumentLine.objects.create(document=doc, label="Keep", quantity=1, position=0)
+        used = DocumentLine.objects.create(document=doc, label="Used", quantity=2, position=1)
+        LineReceipt.objects.create(line=used)
+    _grant_owner(doc, owner)
+
+    result = execute_schema(
+        _SCHEMA,
+        _SAVE,
+        {"pk": doc.public_id, "patch": {"note": "confirmed"},
+         "lines": [{"id": keep.public_id, "label": "Keep", "quantity": 1, "position": 0}]},
+        user=owner,
+    )
+    assert result.errors is not None
+    message = result.errors[0].message
+    assert "cannot be removed: other records use them (1 line receipts)" in message
+    assert used.public_id not in message
+    with system_context(reason="test read"):
+        doc.refresh_from_db()
+        assert doc.note == "draft"
+        assert DocumentLine.objects.filter(pk=used.pk).exists()
 
 
 def test_save_without_lines_leaves_children_untouched(composed_tables):

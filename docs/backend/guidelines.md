@@ -1920,6 +1920,16 @@ optimized `allowed_visibility` projection share those conditions and native
 permission scopes. Hidden domain facts stay inside the projection query.
 Message writers must still preserve publication invariants under the task lock.
 
+Task hand verbs follow the same shape. [`Task.action_blockers`](../../addons/angee/projects/models.py)
+names each row condition refusing a verb with its validation message; contributors
+extend it and `hand_actions` through `super()`, as
+[work's stage rules](../../addons/angee/work/models.py) do. Each verb calls
+`validate_action` after its idempotent replay, and the `task_actions` projection
+batches the same conditions with the verb's `write` scope. A control shows where
+its verb would act (the row's status or stage) and where `task_actions` offers it.
+A round's lift reads `can_open`, which composes the same
+`Round.opening_phase_condition` its verb checks.
+
 Decision admission, answers and withdrawal belong to the
 [decisions manager](../../addons/angee/decisions/managers.py). Asking owners
 consume its verdict; controls consume the owning verb's eligibility.

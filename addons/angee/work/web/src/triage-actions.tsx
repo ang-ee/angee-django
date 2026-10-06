@@ -15,10 +15,10 @@ import {
   type WidgetOption,
 } from "@angee/ui";
 import * as React from "react";
-import { TASK_MODEL } from "@angee/projects";
+import { TASK_MODEL, offersTaskAction } from "@angee/projects";
 
 import { AcceptTaskDocument, DeclineTaskDocument } from "./documents";
-import { useQueueContext, useTaskContext } from "./context";
+import { useTaskContext } from "./context";
 import { useWorkT } from "./i18n";
 import { STAGE_MODEL } from "./resources";
 import { acceptStageFilters } from "./stage-filters";
@@ -160,21 +160,20 @@ export function TriageRecordActions(): React.ReactElement | null {
   const record = context.record as WorkTaskRow | null;
   const queueId = relationValueId(record?.queue);
   const actions = useTriageActions(queueId);
-  const { data } = useQueueContext(queueId);
   const taskContext = useTaskContext(context.recordId);
   const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
   const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
   const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
   if (!record || !queueId || context.formReadOnly) return null;
   if (!isTaskInTriage(record)) {
-    if (stage?.rule_owned) return null;
+    // Start shows where it would act (a waiting stage); the row's task_actions admit both verbs.
     const verbs: ActionDescriptor[] = [];
-    if (["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase())) verbs.push({
+    if (["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase()) && offersTaskAction(record, "start")) verbs.push({
       id: "work-start-task", label: t("task.action.start"), icon: "work-start",
       disabled: startState.fetching || returnState.fetching,
       run: () => start(context.recordId),
     });
-    if (data?.work_queues_by_pk?.triage_enabled) verbs.push({
+    if (offersTaskAction(record, "return_to_triage")) verbs.push({
       id: "work-return-to-triage", label: t("triage.action.return"), icon: "work-triage",
       disabled: startState.fetching || returnState.fetching,
       run: () => returnToTriage(context.recordId),

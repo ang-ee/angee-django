@@ -18,6 +18,7 @@ import {
   type WidgetOption,
   type FormProps,
 } from "@angee/ui";
+import type { Row } from "@angee/metadata";
 import * as React from "react";
 
 import { SetTaskVisibilityDocument } from "./documents";
@@ -26,6 +27,15 @@ import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
 export interface TaskActionRow extends StringIdRow {
   status?: unknown;
+}
+
+/** The task row's server-projected hand verbs (`task_actions`): the verbs' owners admit them for the viewer. */
+export const TASK_ACTION_FIELDS = ["task_actions"] as const;
+
+/** Whether the row's `task_actions` projection offers `action`; the client never derives admission itself. */
+export function offersTaskAction(record: Row, action: string): boolean {
+  const offered = record.task_actions;
+  return Array.isArray(offered) && offered.includes(action);
 }
 
 /** Task lifecycle verbs shared by every task collection surface. */
@@ -123,17 +133,18 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
     [dropReasonOptions, dropTask, t],
   );
 
+  // Each lifecycle verb shows where it would act (status) and its owner admits it (`task_actions`).
   const standardActions = <>
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("complete") ? <Action
       id="complete" placement="toolbar" label={t("task.action.complete")} permission="write"
-      icon="check" run={complete} visibleWhen={isOpenTask} /> : null}
+      icon="check" run={complete} visibleWhen={(record) => isOpenTask(record) && offersTaskAction(record, "complete")} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("drop") ? <Action
       id="drop" label={t("task.action.drop")} permission="write" icon="circle-x" danger
       args={[{ name: "reason", label: t("task.action.reason"), widget: "select", options: dropReasonOptions }]}
-      submit={dropSubmit} visibleWhen={isOpenTask} /> : null}
+      submit={dropSubmit} visibleWhen={(record) => isOpenTask(record) && offersTaskAction(record, "drop")} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("reopen") ? <Action
       id="reopen" label={t("task.action.reopen")} permission="write"
-      icon="activity" run={reopen} visibleWhen={(record) => !isOpenTask(record)} /> : null}
+      icon="activity" run={reopen} visibleWhen={(record) => !isOpenTask(record) && offersTaskAction(record, "reopen")} /> : null}
     {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
       id="promote" label={t("task.action.promote")} permission="write"
       icon="projects" run={promote} /> : null}
@@ -142,6 +153,7 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
     <Form resource={TASK_MODEL} contextLine={selection.contextLine} returning={selection.returning}>
       <Field name="title" title />
       <Field name="allowed_visibility" hidden readOnly />
+      <Field name="task_actions" hidden readOnly />
       <Field name="audience_label" hidden readOnly />
       <Field name="revision" readOnly hidden />
       {selection.visibility === false ? null

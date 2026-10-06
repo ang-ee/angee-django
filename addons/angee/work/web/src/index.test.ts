@@ -104,6 +104,10 @@ describe("work addon manifest", () => {
     expect(Object.keys(work.containers?.["work.Queue#sections"] ?? {})).toContain("work.queue-stages");
     // Menu verbs join the form's Actions menu; a bar in the toolbar would open a second one.
     expect(Object.keys(work.containers?.["projects.Task#actions-menu"] ?? {})).toEqual(["work.task-triage-actions"]);
+    // Start and Return read the task's server-projected admission, whichever form hosts them.
+    expect(work.containers?.["projects.Task#actions-menu"]).toMatchObject({
+      "work.task-triage-actions": { requiredFields: ["task_actions"] },
+    });
     expect(work.containers?.["projects.Task#actions"]).toBeUndefined();
     expect(Object.keys(work.icons ?? {}).sort()).toEqual([
       "work",

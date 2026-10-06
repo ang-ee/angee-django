@@ -121,6 +121,53 @@ describe("RecordActionBar", () => {
     await screen.findByText("Archive record?");
     expect(run).not.toHaveBeenCalled();
   });
+  test("a danger verb that runs on click asks the standard danger confirmation, titled by the verb", async () => {
+    const run = vi.fn();
+    renderActionBar(<RecordActionBar record={record} actions={[
+      { id: "drop", label: "Drop", placement: "toolbar", danger: true, run },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+    let confirmation = await screen.findByRole("alertdialog", { name: "Drop" });
+    expect(within(confirmation).getByText("Are you sure?")).toBeTruthy();
+    expect(toneOf(confirmation)).toBe("danger");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(run).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+    confirmation = await screen.findByRole("alertdialog", { name: "Drop" });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(run).toHaveBeenCalledOnce());
+  });
+  test("a danger verb's own copy takes the danger tone; a danger form confirms in its form", async () => {
+    const run = vi.fn();
+    const submit = vi.fn(async () => ({ ok: true, message: "Removed." }));
+    renderActionBar(<RecordActionBar record={record} actions={[
+      { id: "reset", label: "Reset access", placement: "toolbar", danger: true, run,
+        confirm: { title: "Reset requester access", body: "Reopen the decision?" } },
+      { id: "remove", label: "Remove", placement: "toolbar", danger: true, args: [], submit },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reset access" }));
+    const confirmation = await screen.findByRole("alertdialog", { name: "Reset requester access" });
+    expect(toneOf(confirmation)).toBe("danger");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByRole("dialog", { name: "Remove" })).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+  });
+  test("a submit verb without args runs through its action form, never a record patch", async () => {
+    const applyPatch = vi.fn();
+    const submit = vi.fn(async () => ({ ok: true, message: "Accepted." }));
+    renderActionBar(<RecordActionBar record={record} applyPatch={applyPatch} reload={vi.fn()} actions={[
+      { id: "accept", label: "Accept", placement: "toolbar", submit },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    const dialog = await screen.findByRole("dialog", { name: "Accept" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
+    expect(applyPatch).not.toHaveBeenCalled();
+  });
   test("preview keeps allowed verbs and delete visible but blocks click and keyboard activation", async () => {
     const run = vi.fn();
     const onDelete = vi.fn();
@@ -397,6 +444,10 @@ function DialogActionProbe({
       <input id="username" />
     </DialogForm>
   );
+}
+
+function toneOf(dialog: HTMLElement): string | null {
+  return (dialog.closest("[data-tone]") ?? dialog.querySelector("[data-tone]"))?.getAttribute("data-tone") ?? null;
 }
 
 function renderActionBar(children: React.ReactElement): void {

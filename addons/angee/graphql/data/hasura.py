@@ -385,7 +385,10 @@ class AngeeHasuraWriteBackend:
                     existing[pk].validate_row_delete()
             if removed:
                 # Removals free their unique values (a name) for the rows that follow.
-                child_model._base_manager.filter(pk__in=removed).delete()
+                try:
+                    child_model._base_manager.filter(pk__in=removed).delete()
+                except (models.ProtectedError, models.RestrictedError) as error:
+                    raise ValidationError(_line_removal_refusal(child_model, error)) from error
             for public_id, decoded in prepared:
                 extensions = _pop_input_extensions(child_model, decoded)
                 if public_id is not None:
@@ -507,6 +510,24 @@ class AngeeHasuraWriteBackend:
             instance = _write_public_instance(related_model, value)
             out[f"{key}_id"] = None if instance is None else instance.pk
         return out
+
+
+def _line_removal_refusal(
+    child_model: type[models.Model],
+    error: models.ProtectedError | models.RestrictedError,
+) -> str:
+    """Say which kinds of record still use removed lines, counted, never naming the rows."""
+
+    blockers = error.protected_objects if isinstance(error, models.ProtectedError) else error.restricted_objects
+    counts: dict[str, int] = {}
+    for row in blockers:
+        name = str(type(row)._meta.verbose_name_plural)
+        counts[name] = counts.get(name, 0) + 1
+    used_by = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
+    return (
+        f"Some {child_model._meta.verbose_name_plural} cannot be removed: other records use them "
+        f"({used_by}). Keep them, or remove what uses them first."
+    )
 
 
 def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> dict[str, Any]:

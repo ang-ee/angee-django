@@ -403,7 +403,10 @@ def test_facilitation_cannot_transfer_to_an_existing_or_retired_responder(campai
                 as_actor(round, manager).transfer_facilitation(c.person("responder"))
 
 
-def test_lift_ignores_phase_and_backward_moves_never_erase_disclosure(campaign: ProposalCampaign) -> None:
+@pytest.mark.parametrize("state", ("collecting", "canceled"))
+def test_lift_waits_for_the_phase_after_its_boundary_and_backward_moves_never_erase_disclosure(
+    campaign: ProposalCampaign, state: str,
+) -> None:
     c = campaign
     round = c.round()
     proposal = c.admit(round, "responder")
@@ -422,16 +425,26 @@ def test_lift_ignores_phase_and_backward_moves_never_erase_disclosure(campaign: 
                 as_actor(round.project, owner).set_current_milestone(milestone)
         as_actor(round.project, owner).set_current_milestone(first)
     with actor_context(manager):
+        if state == "canceled":
+            as_actor(round, manager).cancel()
+        # The boundary phase itself keeps the round undisclosed: the lift is neither offered nor admitted.
+        assert not as_actor(round, manager).can_open()
+        with pytest.raises(ValidationError, match="opening phase"):
+            as_actor(round, manager).open()
+    assert Round._base_manager.get(pk=round.pk).opened_at is None
+    with actor_context(owner):
+        as_actor(round.project, owner).set_current_milestone(second)
+    with actor_context(manager):
         assert as_actor(round, manager).can_open()
         opened = as_actor(round, manager).open()
     with actor_context(owner):
-        as_actor(round.project, owner).set_current_milestone(second)
         as_actor(round.project, owner).set_current_milestone(first)
     assert not as_actor(round, manager).can_open()
     with actor_context(owner):
         as_actor(round.project, owner).set_current_milestone(third)
         as_actor(round.project, owner).set_current_milestone(first)
-    assert Round._base_manager.get(pk=round.pk).opened_at == opened.opened_at
+    lifted = Round._base_manager.get(pk=round.pk)
+    assert (lifted.opened_at, lifted.status) == (opened.opened_at, "canceled" if state == "canceled" else "opened")
     assert Proposal._base_manager.get(pk=proposal.pk).disclosed_at == opened.opened_at
 
 

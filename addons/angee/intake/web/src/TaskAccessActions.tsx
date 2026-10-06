@@ -32,7 +32,8 @@ export function TaskAccessActions({ need }: { need: CurrentAccessRow }): ReactEl
   })) : current ? [{
     id: `access-reset-${need.id}`,
     label: t("access.reset"),
-    permission: "write", placement: "toolbar",
+    // Removing access is destructive: the shared action owner confirms it in the danger tone.
+    permission: "write", placement: "toolbar", danger: true,
     confirm: { title: t("access.resetTitle"), body: t("access.resetBody") },
     run: async () => {
       await settle(() => reset(need.id, { confirmed: true, expected_revision: need.revision }));

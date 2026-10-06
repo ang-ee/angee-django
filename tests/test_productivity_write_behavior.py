@@ -104,7 +104,18 @@ class CreateProject(AngeeDataModel):
         rebac_resource_type = "tests/create_project"
 
 
-class CreateTask(TaskWork, AuditMixin, AngeeDataModel):
+class CreateTaskHost(models.Model):
+    """The projects Task hand-verb contract the work donor extends through ``super()``."""
+
+    hand_actions = AbstractTask.__dict__["hand_actions"]
+    action_blockers = AbstractTask.__dict__["action_blockers"]
+    validate_action = AbstractTask.validate_action
+
+    class Meta:
+        abstract = True
+
+
+class CreateTask(TaskWork, CreateTaskHost, AuditMixin, AngeeDataModel):
     """Native Work donor over the lifecycle columns it projects."""
 
     sqid_prefix = "ctk_"

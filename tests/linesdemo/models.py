@@ -147,6 +147,21 @@ class DocumentLine(InputStampMixin, AngeeDataModel):
         ordering = ("position", "pk")
 
 
+class LineReceipt(AngeeDataModel):
+    """A record that keeps a document line in use: removing that line is refused."""
+
+    sqid_prefix = "lrc_"
+
+    line = models.ForeignKey(DocumentLine, on_delete=models.PROTECT, related_name="+")
+
+    class Meta(AngeeDataModel.Meta):
+        """Concrete protecting model; no ``rebac_resource_type`` by design."""
+
+        abstract = False
+        app_label = "linesdemo"
+        db_table = "test_linesdemo_line_receipt"
+
+
 class PinnedLine(RowLockMixin, AngeeDataModel):
     """A document part whose pinned rows are system rows (the row-lock handle).
 
