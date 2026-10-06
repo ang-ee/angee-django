@@ -96,6 +96,32 @@ export function useRelationSelectedOption(
   return relationSelectedOption(read.result, labelField);
 }
 
+/**
+ * Labels for selected ids that neither the loaded option page nor the value's own
+ * records label (ids an action seeded, or a page beyond the first), read in one
+ * bounded list query. The plural of {@link useRelationSelectedOption}.
+ */
+export function useRelationSelectedOptions(
+  relation: RelationFieldInfo | null,
+  ids: readonly string[],
+  known: readonly RelationOption[],
+): readonly RelationOption[] {
+  const missing = React.useMemo(
+    () => ids.filter((id) => !known.some((option) => option.value === id)),
+    [ids, known],
+  );
+  const filters = React.useMemo<CrudFilter[]>(
+    () => (missing.length > 0 ? [{ field: "id", operator: "in", value: missing }] : []),
+    [missing],
+  );
+  const { options } = useRelationOptions(relation, {
+    enabled: missing.length > 0,
+    filters,
+    pageSize: Math.max(missing.length, 1),
+  });
+  return options;
+}
+
 /** Own lazy remote search plus selected-record retention for a relation picker. */
 export function useRelationPickerOptions(
   relation: RelationFieldInfo | null,

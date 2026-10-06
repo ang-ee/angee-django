@@ -62,3 +62,21 @@ test("read-only related records are linked chips with their loaded labels and no
   expect(getList).not.toHaveBeenCalled();
   expect(getOne).not.toHaveBeenCalled();
 });
+
+test("ids seeded without their records are labelled from one bounded read", async () => {
+  const getList = vi.fn(async ({ filters }: { filters?: { field?: string; operator?: string; value?: unknown }[] }) => {
+    const ids = filters?.find((filter) => filter.field === "id" && filter.operator === "in")?.value;
+    return Array.isArray(ids)
+      ? { data: ids.map((id) => ({ id, name: id === "tag-3" ? "Seeded" : "Other" })), total: ids.length }
+      : { data: [], total: 0 };
+  });
+  render(<Provider dataProvider={{ getList }}>
+    <RelationMultiFieldWidget value={["tag-3"]} relation={relation} create={null} aria-label="Tags" />
+  </Provider>);
+
+  expect(await screen.findByText("Seeded")).toBeTruthy();
+  expect(screen.queryByText("tag-3")).toBeNull();
+  const idReads = getList.mock.calls.filter(([params]) => params.filters?.some((filter) => filter.field === "id"));
+  expect(idReads).toHaveLength(1);
+  expect(idReads[0]![0].filters).toEqual([{ field: "id", operator: "in", value: ["tag-3"] }]);
+});
