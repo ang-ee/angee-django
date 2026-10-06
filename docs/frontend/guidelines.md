@@ -577,6 +577,14 @@ shared UI copy through an addon bundle.
   tabs share one strip in that order; header fields and stacked groups stay visible.
   Overview appears only on forms without body tabs. `defaultRecordTab` and controlled
   `recordTab` address either kind; field reveal selects its owning body tab.
+- **A strip needs two tabs.** [The form surface](../../packages/ui/src/views/form/form-view-surface.ts)
+  counts the tabs that will show — body tabs, Overview unless `overviewTab.hidden`,
+  and the record tabs left after `visibleWhen`, permissions and the record's
+  implementation — and shows a strip only for two or more. One visible tab renders
+  no strip: its panel is the record body under the header, introduced by a
+  `SectionHeading` with the tab's label, in the column and presentation its strip
+  would have used; a single labelled group in `layout="tabs"` stacks. A routed,
+  chosen or default tab that is not visible falls back to the first visible tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the overview's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget

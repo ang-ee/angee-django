@@ -337,6 +337,7 @@ export function FormViewOverview({
     form,
     sections,
     bodyTabSections,
+    tabbed,
     linesActive,
     linesResource,
     linesField,
@@ -375,6 +376,8 @@ export function FormViewOverview({
       relationFilters={lineRelationFilters}
     />
   ) : null;
+  const bodySections = bodyTabSections.map((section) => section.key === "editable-lines"
+    ? { ...section, render: () => editableLines } : section);
   const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {
     const pair = groupLayout === "paired"
       ? list.filter((section) => section.label == null && section.key.startsWith("group:")).slice(0, 2)
@@ -429,11 +432,13 @@ export function FormViewOverview({
         </section>
       ) : null}
       <div className="grid gap-6">
-        {renderOverviewSections(bodyTabSections.length > 0
+        {renderOverviewSections(bodySections.length > 0
           ? sections.filter((section) => section.label == null || section.collapsible) : sections)}
-        {bodyTabSections.length > 0 ? <FormSectionTabs surface={surface} tabStrip={tabStrip}
-          sections={bodyTabSections.map((section) => section.key === "editable-lines"
-            ? { ...section, render: () => editableLines } : section)} renderField={renderField} /> : null}
+        {/* Without a strip, a lone body tab stacks in its place under its own heading. */}
+        {tabbed && bodySections.length > 0
+          ? <FormSectionTabs surface={surface} tabStrip={tabStrip} sections={bodySections} renderField={renderField} />
+          : bodySections.map((section) => <FormSection key={section.key} section={section} renderField={renderField}
+            control={form.control} requestedFocusPath={requestedFocusPath} />)}
       </div>
       {layout !== "tabs" && editableLines ? (
         <section className="grid gap-3">
