@@ -61,6 +61,19 @@ class TaskActionTests(WorkCase):
                 self.assertNotIn("accept", self.offered(self.task(name)))
         self.assertEqual(self.offered(self.task("Declined")) & {"reopen", "drop"}, {"reopen", "drop"})
 
+    def test_only_closed_work_is_offered_reopen_and_open_work_refuses_it(self):
+        for name in ("Triage", "Ready", "Doing"):
+            task = self.task(name)
+            with self.subTest(stage=name):
+                self.assertNotIn("reopen", self.offered(task))
+                with actor_context(self.owner), self.assertRaisesMessage(
+                    ValidationError, "Only a closed task can be reopened."
+                ):
+                    self.as_user(task).reopen()
+        for name in ("Completed", "Declined"):
+            with self.subTest(stage=name):
+                self.assertIn("reopen", self.offered(self.task(name)))
+
     def test_a_promoted_task_is_not_offered_removal_and_its_verb_refuses(self):
         task = self.task()
         self.assertIn("remove", self.offered(task))
