@@ -5,7 +5,7 @@ import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { ActionMenu, ModalsHost, RecordChromeProvider, ToastProvider } from "@angee/ui";
-import { defaultWidgets } from "@angee/ui/widgets";
+import { defaultWidgets } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 
 import { RunWorkflowRecordActions } from "./run-workflow-actions";
@@ -81,7 +81,8 @@ test("starts a workflow without required input at once and settles its outcome o
     subject: { model: "notes.Note", id: "nte_7" }, input: {},
     request_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
   }));
-  expect(screen.queryByRole("dialog")).toBeNull();
+  // The success toast is itself a dialog role; the input form is the named one.
+  expect(screen.queryByRole("dialog", { name: "Quiet" })).toBeNull();
   expect(await screen.findAllByText("Quiet started")).toHaveLength(1);
 });
 
@@ -95,7 +96,7 @@ test("required input opens the shared schema form before starting", async () => 
   await waitFor(() => expect(mocks.start).toHaveBeenCalledExactlyOnceWith("wfl_review", {
     subject: { model: "notes.Note", id: "nte_7" }, input: { reason: "Check record" }, request_key: expect.any(String),
   }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
   expect(await screen.findAllByText("Review started")).toHaveLength(1);
 });
 
@@ -119,7 +120,9 @@ test("relation annotations render the standard record picker", async () => {
   mount(relation); await openWorkflows();
   fireEvent.click(await screen.findByRole("menuitem", { name: "Use source" }));
   const dialog = await screen.findByRole("dialog", { name: "Use source" });
-  expect(await within(dialog).findByRole("combobox", { name: "Source" })).toBeTruthy();
+  // The standard record picker is a trigger that opens the picker dialog.
+  const picker = await within(dialog).findByRole("button", { name: "Source" });
+  expect(picker.getAttribute("aria-haspopup")).toBe("dialog");
   expect(mocks.start).not.toHaveBeenCalled();
 });
 
