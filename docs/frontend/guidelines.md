@@ -664,6 +664,11 @@ shared UI copy through an addon bundle.
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
+- **An MTI parent's inline create chooses a kind.** A picker on a model whose
+  metadata lists `concreteKinds` creates through one dialog with a kind switcher,
+  and selects the new row under the parent. The switcher decides only what is
+  created now; consumers declare nothing. See
+  [`useRelationForms`](../../packages/ui/src/views/relation/RelationRecordDialog.tsx).
 - Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
   Contributions use `ActionTrigger` to adapt between a toolbar button and a native
   menu item and report pending state to the menu trigger. Render menu-opened

@@ -363,6 +363,7 @@ class DataResourceMetadata:
         repr=False,
     )
     canonical_label: str | None = None
+    concrete_kinds: tuple[str, ...] = ()
     row_model: str = "server"
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] = ()

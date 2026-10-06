@@ -73,6 +73,7 @@ export {
   RelationPicker,
   type RelationPickerProps,
   type RelationCreateConfig,
+  type RelationCreateKind,
 } from "./relation/RelationPicker";
 export {
   MutationDialog,

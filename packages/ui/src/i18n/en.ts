@@ -700,6 +700,7 @@ export const enUiMessages: Record<string, string> = {
   "relation.follow": "Open record",
   "relation.edit": "Edit record",
   "relation.createTitle": "New {model}",
+  "relation.kind": "Kind",
   "relation.editTitle": "Edit {model}",
   "preview.loading": "Loading preview…",
   "preview.loadError": "Could not load file",

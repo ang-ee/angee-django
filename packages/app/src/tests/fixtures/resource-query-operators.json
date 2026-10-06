@@ -543,6 +543,7 @@
         "revision": null
       },
       "canonicalLabel": null,
+      "concreteKinds": [],
       "rowModel": "server",
       "recordRepresentation": null,
       "recordSearchFields": [],
@@ -1069,6 +1070,7 @@
         "revision": null
       },
       "canonicalLabel": null,
+      "concreteKinds": [],
       "rowModel": "server",
       "recordRepresentation": null,
       "recordSearchFields": [],

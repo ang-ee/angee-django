@@ -1,11 +1,11 @@
 import * as React from "react";
-import { holdsPermission, modelLabelSegment, rowPublicId, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
+import { holdsPermission, rowPublicId, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
 import { useInvalidate } from "@refinedev/core";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { Workbench } from "../../../layouts/Workbench";
 import { cn } from "../../../lib/cn";
-import { titleCase } from "../../../lib/titleCase";
+import { modelDisplayLabel } from "../../../lib/labels";
 import { Dialog, DialogBackdrop, DialogPortal, DialogRoot } from "../../../ui/dialog";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { ListView } from "../ListView";
@@ -369,7 +369,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           <DialogPortal>
             <DialogBackdrop />
             <Dialog.Content size="md">
-              <Dialog.Title className="sr-only">{modelMetadata?.label ?? titleCase(modelLabelSegment(resource))}</Dialog.Title>
+              <Dialog.Title className="sr-only">{modelDisplayLabel(modelMetadata, resource)}</Dialog.Title>
               <Dialog.Header className="flex justify-end px-3 pt-3">
                 <Dialog.Close />
               </Dialog.Header>
