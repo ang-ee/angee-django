@@ -26,6 +26,12 @@ from tests.conftest import addon_schema, create_platform_admin, create_user, exe
 from tests.linesdemo.models import Document, DocumentLine, Tag
 
 
+def linked_tags(line):
+    """The line's tags, read with system authority: the test asserts state, not access."""
+    with system_context(reason="test.decision_many_to_many.read"):
+        return list(line.tags.order_by("pk"))
+
+
 @pytest.fixture
 def many_to_many(composed_tables, monkeypatch):
     actor = create_platform_admin("relation-answerer")
@@ -88,7 +94,7 @@ def test_many_to_many_proposals_replace_or_clear_after_the_scalar_save(many_to_m
         models.signals.m2m_changed.disconnect(relation_changed, sender=DocumentLine.tags.through)
     line.refresh_from_db()
     assert line.label == "After"
-    assert set(line.tags.all()) == (set() if clear else set(tags[1:]))
+    assert set(linked_tags(line)) == (set() if clear else set(tags[1:]))
     ctx.record.assert_called_once_with(line, operation="changed")
 
 
@@ -128,7 +134,7 @@ def test_many_to_many_refuses_an_unreadable_related_id(many_to_many, monkeypatch
     with pytest.raises(ValueError, match="absent or unreadable"):
         actions.resolve(line, context={"actor": actor}, values={"tags": identities} if choose else None)
     assert actors == [actor]
-    assert list(line.tags.all()) == [tags[0]]
+    assert linked_tags(line) == [tags[0]]
 
 
 @pytest.mark.parametrize("choose", [False, True])
@@ -162,7 +168,7 @@ def test_many_to_many_is_not_written_when_scalar_full_clean_fails(many_to_many):
     ctx = Mock()
     with pytest.raises(ValidationError, match="label"):
         apply_proposals(decision, actor=actor, ctx=ctx)
-    assert list(line.tags.all()) == [tags[0]]
+    assert linked_tags(line) == [tags[0]]
     ctx.record.assert_not_called()
 
 
