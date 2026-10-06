@@ -336,7 +336,11 @@ describe("compileMenus", () => {
     expect(() => compileMenus(desk({ "desk.people": { parent: "desk", route: "iam.users", path: "people" } })))
       .toThrow(/sets path, which only an app or a mount has/);
     expect(() => compileMenus(desk({ "desk.people": { ...people, recordMatch: { field: "kind" } } } as unknown as MenuDeclarations)))
-      .toThrow(/recordMatch must be \{ field, equals \} strings/);
+      .toThrow(/recordMatch must be \{ field, equals \} with a string or a non-empty list of strings/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, recordMatch: { field: "kind", equals: [] } } } as unknown as MenuDeclarations)))
+      .toThrow(/a non-empty list of strings/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, recordMatch: { field: "kind", equals: ["staff", "admin"] } } })))
+      .not.toThrow();
     expect(() => compileMenus(desk({ "desk.people": { mount: "iam.users", path: "people" } }))).toThrow(/outside an app/);
     expect(() => compileMenus(desk({ "desk.people": { ...people, mount: "iam.ghost" } }))).toThrow(/mounts unknown route "iam.ghost"/);
     expect(() => compileMenus(desk({ "desk.people": people }, [])))
