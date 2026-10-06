@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 22
+// @rebac_schema_revision: 23
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -10,12 +10,32 @@ definition auth/user {
     // Django's is_superuser flag does not define membership.
     relation admin: angee/role // rebac:const=admin
     relation directory: iam/directory // rebac:const=main
-    relation directory_reader: auth/user | auth/user:*
+    relation directory_reader: auth/user
+    // Each account's own person, live from its primary key: no tuple.
+    relation self: auth/user // rebac:attribute={"field":"id"}
 
     permission create = admin->member
     permission view_as = admin->member
-    permission read = directory_reader + directory->reader + admin->member
-    permission read__last_login = admin->member
+    // Everyone signed in reads a person's name wherever a record embeds the
+    // account; the restricted fields below keep everything else.
+    permission read = authenticated
+    // People managers: platform admins, the named readers of the whole
+    // directory or of one account, and the roles a consumer unions in from its
+    // fragment. They list every account and read its restricted fields.
+    permission list = directory_reader + directory->reader + admin->member
+    // The people a member is offered in pickers: their own account, every
+    // account for people managers, and the colleagues identity owners union in
+    // from their fragments.
+    permission colleague = self + list
+    // Restricted fields: the sign-in identity, last sign-in, access state and
+    // UI preferences, for people managers and the person.
+    permission read_private = self + list
+    permission read__username = read_private
+    permission read__email = read_private
+    permission read__last_login = read_private
+    permission read__is_active = read_private
+    permission read__is_staff = read_private
+    permission read__preferences = read_private
     permission write = admin->member
     permission delete = admin->member
 
@@ -44,8 +64,10 @@ definition auth/user {
     permission administer = admin->member
 }
 
+// The whole people directory's named readers. No wildcard: the full user list
+// is never everyone's.
 definition iam/directory {
-    relation reader: auth/user | auth/user:*
+    relation reader: auth/user
 }
 
 // Accounts whose authority account verbs, non-administrator updates and

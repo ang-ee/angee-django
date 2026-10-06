@@ -2629,6 +2629,35 @@ def test_record_thread_returns_suggested_recipients(composed_tables: None) -> No
     }
 
 
+def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(composed_tables: None) -> None:
+    """A suggestion is read as the viewer reads it: its name, never its sign-in name or email."""
+
+    poster = User.objects.create_user(username="msg-suggest-plain-poster")
+    assignee = User.objects.create_user(
+        username="msg-suggest-plain-assignee", email="assignee@example.com", first_name="Avery",
+    )
+    former = User.objects.create_user(username="msg-suggest-plain-former", is_active=False)
+    with actor_context(poster):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case 910", assigned_user=assignee)
+        ticket.message_post("Hello.", recipient_user_ids=(former.pk,))
+
+    suggestions = _data(execute_schema(
+        _schema(),
+        """query($model: String!, $id: ID!) {
+          record_thread(input: {model_label: $model, record_id: $id}) {
+            suggested_recipients { source user { display_name username email is_active } }
+          }
+        }""",
+        {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
+        request=_request(poster),
+    ))["record_thread"]["suggested_recipients"]
+
+    assert suggestions == [{
+        "source": "assigned_user",
+        "user": {"display_name": "Avery", "username": None, "email": None, "is_active": None},
+    }]
+
+
 def test_record_chatter_reports_author_delivery_errors(composed_tables: None) -> None:
     """The record chatter query reports Odoo-style delivery-error counters."""
 
@@ -3103,7 +3132,8 @@ def test_record_activity_window_search_and_identity_query_budget(composed_tables
         with CaptureQueriesContext(connection) as captured:
             rows = read()
         assert len(rows) == size
-        assert all(row["user"] is None and row["created_by"] is None for row in rows)
+        # Everyone signed in reads the people a record embeds; their sign-in names stay withheld.
+        assert all(row["user"] == row["created_by"] == {"username": None} for row in rows)
         counts.append(len(captured))
     assert counts[1] <= counts[0] + 2, counts
     with system_context(reason="tests.messaging.activity_identity_read"):
@@ -3187,8 +3217,8 @@ def test_activity_agenda_bare_assignee_gets_pointer_not_parent(
         # The subject reads its own assignments across both records, due-date ordered, and
         # nothing of the owner's own task — the assignee arm never crosses to a non-assignee.
         assert [row["summary"] for row in rows] == ["Email Alpha", "Call Beta"]
-        # Activity assignment does not grant directory access to the user projection.
-        assert rows[0]["user"] is None
+        # The assignee reads their own account; assignment grants no other directory access.
+        assert rows[0]["user"] == {"username": assignee.username}
         assert rows[0]["attachment"] == {
             "label": "Alpha",
             "model_label": "messaging.ThreadedTicket",

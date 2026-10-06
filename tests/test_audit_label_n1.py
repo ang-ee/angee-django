@@ -109,9 +109,10 @@ def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selec
     assert query_counts == [label_queries, label_queries]
     assert audits.count() - before_audits == 2 * label_queries
 
-    # Scalar labels intentionally remain available where guarded User rows do not.
+    # Scalar labels stay available to a reader who cannot read the authors' sign-in names.
     with actor_context(alice):
-        assert not get_user_model().objects.filter(pk__in=[author.pk for author in authors]).exists()
+        rows = list(get_user_model().objects.filter(pk__in=[author.pk for author in authors]))
+    assert rows and all(row.username is None for row in rows)
 
 
 def test_audited_label_prefetch_preserves_missing_authors(composed_tables: None) -> None:
@@ -163,7 +164,8 @@ def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None
     assert counts == [1, 1]
     assert vault_counts[0] == vault_counts[1], "Vault labels must not refetch each deferred name"
     with actor_context(reader):
-        assert not get_user_model().objects.filter(pk__in=[owner.pk for owner in owners]).exists()
+        rows = list(get_user_model().objects.filter(pk__in=[owner.pk for owner in owners]))
+    assert rows and all(row.username is None for row in rows)
 
 
 def test_user_display_labels_batches_and_primes_request_memo(transactional_db: Any) -> None:

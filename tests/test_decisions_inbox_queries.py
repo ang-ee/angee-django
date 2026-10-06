@@ -119,8 +119,8 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
         assert max(counts[name]) <= budget, counts
 
 
-def test_inbox_user_relations_redact_unreadable_people(inbox):
-    """Directory restrictions redact nullable people without losing visible decisions."""
+def test_inbox_user_relations_embed_names_and_withhold_restricted_fields(inbox):
+    """Embedded people show their name to every reader; their restricted fields follow IAM's gates."""
     requester, reviewer, _outsider, _subject, decision = inbox
     issuer = requester
     Decision.objects.decide(
@@ -128,21 +128,23 @@ def test_inbox_user_relations_redact_unreadable_people(inbox):
     )
     schema = addon_schema(decision_schema.schemas, "console")
     document = """query($id: String!) {
-      decisions { id requester { display_name } answered_by { display_name } }
-      decisions_by_pk(id: $id) { id requester { display_name } answered_by { display_name } }
+      decisions { id requester { display_name username } answered_by { display_name username } }
+      decisions_by_pk(id: $id) { id requester { display_name username } answered_by { display_name username } }
     }"""
-    expected = {"id": str(decision.sqid), "requester": None, "answered_by": None}
-    for person in (reviewer,):
-        assert not person.with_actor(issuer).has_access("read")
+    # The issuer reads their own sign-in name, not the reviewer's; an unnamed account's
+    # label is IAM's, the one every record carries.
+    expected = {
+        "id": str(decision.sqid),
+        "requester": {"display_name": requester.username, "username": requester.username},
+        "answered_by": {"display_name": reviewer.username, "username": None},
+    }
+    assert reviewer.with_actor(issuer).has_access("read")
+    assert not reviewer.with_actor(issuer).has_access("read__username")
     assert result_data(execute_schema(schema, document, {"id": str(decision.sqid)}, user=issuer)) == {
         "decisions": [expected], "decisions_by_pk": expected,
     }
-    write_relationships([
-        RelationshipTuple(resource=to_object_ref(person), relation="directory_reader", subject=to_subject_ref(issuer))
-        for person in (requester, reviewer)
-    ])
-    expected = {"id": str(decision.sqid), "requester": {"display_name": requester.username},
-                "answered_by": {"display_name": reviewer.username}}
+    write_relationships([RelationshipTuple(to_object_ref(reviewer), "directory_reader", to_subject_ref(issuer))])
+    expected["answered_by"] = {"display_name": reviewer.username, "username": reviewer.username}
     assert result_data(execute_schema(schema, document, {"id": str(decision.sqid)}, user=issuer)) == {
         "decisions": [expected], "decisions_by_pk": expected,
     }

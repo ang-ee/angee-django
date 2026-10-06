@@ -20,6 +20,5 @@ compatible_source_sha256 = ["7da79f37fc8a1b17f705391aa1921ab7f1c129b356d54fe3a46
 [resources]
 demo = [
   { path = "resources/demo/010_iam.user.yaml", adopt = "username" },
-  { path = "resources/demo/020_iam.directory_wildcard_reader.yaml", kind = "grants" },
   { path = "resources/demo/030_iam.admin_grant.yaml", kind = "grants" },
 ]

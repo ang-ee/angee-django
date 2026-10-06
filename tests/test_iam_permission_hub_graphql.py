@@ -59,7 +59,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
 
         def can_read_unrelated() -> bool:
             return backend().check_access(
-                subject=to_subject_ref(recipient), action="read", resource=to_object_ref(unrelated),
+                subject=to_subject_ref(recipient), action="list", resource=to_object_ref(unrelated),
             ).allowed
 
         assert not recipient.is_superuser
@@ -974,12 +974,21 @@ def test_recipient_resources_follow_user_and_group_read_permissions(
             }}
         """
         data = _data(_execute(schema, query, user=actor))
-        assert data["users"] == [{
-            "id": service.sqid,
-            "username": service.username,
-            "first_name": "Research agent",
-            user_subject_field: f"auth/user:{service.sqid}",
-        }]
+        # The sharer is offered their own account and the account named to them.
+        assert sorted(data["users"], key=lambda row: row["username"]) == [
+            {
+                "id": actor.sqid,
+                "username": actor.username,
+                "first_name": "",
+                user_subject_field: f"auth/user:{actor.sqid}",
+            },
+            {
+                "id": service.sqid,
+                "username": service.username,
+                "first_name": "Research agent",
+                user_subject_field: f"auth/user:{service.sqid}",
+            },
+        ]
         assert data["groups"] == [{
             "id": group_id,
             "name": group.name,
@@ -1055,7 +1064,7 @@ def _type_block(sdl: str, type_name: str) -> str:
     return sdl[start:end]
 
 def test_stored_assignment_subject_labels_ignore_activity_and_option_pagination(composed_tables: None) -> None:
-    """Stored user/group aliases retain names; unreadable identities do not leak."""
+    """Stored user/group aliases retain names; people's names resolve for everyone, unreadable groups never."""
     admin = _platform_admin("subject-label-admin")
     reader = User.objects.create_user(username="subject-label-reader", first_name="Reader")
     inactive = User.objects.create_user(username="subject-label-inactive", first_name="Former", is_active=False)
@@ -1064,7 +1073,7 @@ def test_stored_assignment_subject_labels_ignore_activity_and_option_pagination(
     subjects = [str(to_subject_ref(inactive)), f"auth/user:{inactive.sqid}",
                 f"auth/group:{group.sqid}#member", f"auth/user:{reader.sqid}", "invalid", "auth/user:999999"]
     query = """query($subjects: [String!]!) {
-      users(limit: 1, order_by: [{username: asc}]) { assignment_subject }
+      users(limit: 1, order_by: [{first_name: asc}]) { assignment_subject }
       iam_assignment_subject_labels(subjects: $subjects) { subject label }
     }"""
     result = _data(_execute(_schema("console"), query, {"subjects": subjects}, user=admin))
@@ -1074,4 +1083,9 @@ def test_stored_assignment_subject_labels_ignore_activity_and_option_pagination(
     visible = _data(_execute(_schema("console"), """query($subjects: [String!]!) {
       iam_assignment_subject_labels(subjects: $subjects) { subject label }
     }""", {"subjects": subjects}, user=reader))
-    assert visible["iam_assignment_subject_labels"] == []
+    # Everyone signed in reads a person's name; a group the reader cannot read stays unlabelled.
+    assert visible["iam_assignment_subject_labels"] == [
+        {"subject": subjects[0], "label": "Former"},
+        {"subject": subjects[1], "label": "Former"},
+        {"subject": subjects[3], "label": "Reader"},
+    ]

@@ -43,8 +43,9 @@ export function assignmentSubjectOptions(
   labels: { users: string; groups: string },
   kinds?: readonly AssignmentSubjectKind[],
 ): readonly AssignmentSubjectOption[] {
+  // Activity is a restricted field: unknown to a viewer who cannot read it, whose colleagues are active already.
   const users = (data?.users ?? [])
-    .filter((user) => user.is_active)
+    .filter((user) => user.is_active !== false)
     .map((user) => ({
       value: user.assignment_subject,
       label: userDisplayName(user, user.id),

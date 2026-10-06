@@ -428,7 +428,7 @@ def test_deletion_preview_hides_rebac_child_leaves_without_read_access(composed_
             """Django model options for the test model."""
 
             app_label = "auth"
-            rebac_resource_type = "auth/user"
+            rebac_resource_type = "auth/group"
 
         def __str__(self) -> str:
             """Return the child name for preview display labels."""

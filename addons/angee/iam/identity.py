@@ -22,9 +22,13 @@ from angee.base.identity import instance_from_public_id, public_id_for
 
 
 def user_label(user: Any) -> str:
-    """Return any user model's human label from the Django auth contract."""
+    """Return any user model's human label from the Django auth contract.
 
-    return str(user.get_full_name() or user.username)
+    A row loaded for a viewer who cannot read the sign-in name carries it as
+    None; such a row's label is its full name alone.
+    """
+
+    return str(user.get_full_name() or user.username or "")
 
 
 def user_label_queryset() -> QuerySet[Any]:

@@ -54,7 +54,7 @@ def test_directory_read_does_not_grant_view_as(iam_admin):
             ),
         ]
     )
-    assert User.objects.visible_people(actor) == [target]
+    assert User.objects.visible_people(actor) == [actor, target]
     assert User.objects.viewable_people(actor) == []
     with actor_context(actor):
         assert not target.with_actor(actor).has_access("view_as")

@@ -176,10 +176,6 @@ def test_iam_config_owns_shared_demo_users() -> None:
     assert manifest["demo"] == (
         {"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},
         {
-            "path": "resources/demo/020_iam.directory_wildcard_reader.yaml",
-            "kind": "grants",
-        },
-        {
             "path": "resources/demo/030_iam.admin_grant.yaml",
             "kind": "grants",
         },
@@ -187,11 +183,12 @@ def test_iam_config_owns_shared_demo_users() -> None:
     rows = _resource_rows(config, "demo", "resources/demo/010_iam.user.yaml")
     assert set(rows) == {"user_admin", "user_alice", "user_bob"}
     assert rows["user_admin"]["username"] == "admin"
-    wildcard_entry = ResourceEntry.from_declaration(config, "demo", manifest["demo"][1])
-    (wildcard_grant,) = wildcard_entry.read_grant_rows()
-    assert wildcard_grant.resource == "iam/directory:main"
-    assert wildcard_grant.relation == "reader"
-    assert wildcard_grant.subject == "auth/user:*"
+    # The people directory is for people managers: the demo names only its administrator.
+    admin_entry = ResourceEntry.from_declaration(config, "demo", manifest["demo"][1])
+    (admin_grant,) = admin_entry.read_grant_rows()
+    assert admin_grant.resource == "angee/role:admin"
+    assert admin_grant.relation == "member"
+    assert admin_grant.subject == "angee.iam.user_admin"
 
 
 def test_agents_config_owns_builtin_mcp_demo_seed() -> None:

@@ -57,4 +57,24 @@ describe("assignment subjects", () => {
       .toEqual(["auth/group:7#member"]);
     expect(assignmentSubjectOptions(data, { users: "Users", groups: "Groups" }, [])).toEqual([]);
   });
+
+  test("offers a colleague whose restricted fields are withheld, by name", () => {
+    const data = {
+      users: [{
+        id: "usr_colleague",
+        username: null,
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: null,
+        display_name: "Ada Lovelace",
+        is_active: null,
+        assignment_subject: "auth/user:44",
+      }],
+      groups: [],
+    } as unknown as IAMAssignmentSubjectsData;
+
+    expect(assignmentSubjectOptions(data, { users: "Users", groups: "Groups" })).toEqual([{
+      value: "auth/user:44", label: "Ada Lovelace", group: "Users", kind: "user", id: "usr_colleague",
+    }]);
+  });
 });

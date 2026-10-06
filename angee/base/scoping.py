@@ -97,6 +97,29 @@ def read_scoped_queryset(
     return cast(models.QuerySet[_ModelT], with_action(action) if callable(with_action) else queryset)
 
 
+def gated_field_expression(queryset: models.QuerySet[Any], field_name: str) -> models.Expression:
+    """Project a ``read__<field>``-gated column as a filter or sort operand that reveals nothing.
+
+    The value is the column's on rows whose effective actor holds the gate and
+    NULL elsewhere, so a predicate or an ordering over it discloses no value the
+    actor cannot read. An unscoped (system) queryset projects the column itself.
+    """
+
+    field = queryset.model._meta.get_field(field_name)
+    output_field = cast("models.Field[Any, Any]", field).clone()
+    output_field.null = True
+    effective_actor = getattr(queryset, "effective_actor", None)
+    actor, unscoped = effective_actor() if callable(effective_actor) else (None, True)
+    if unscoped:
+        return models.ExpressionWrapper(models.F(field_name), output_field=output_field)
+    readers = aggregate_scoped_queryset(read_scoped_queryset(queryset.model, actor, action=f"read__{field_name}"))
+    return models.Case(
+        models.When(models.Exists(readers.filter(pk=models.OuterRef("pk"))), then=models.F(field_name)),
+        default=models.Value(None),
+        output_field=output_field,
+    )
+
+
 def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
     """Return a write-target queryset with REBAC row scope and unredacted fields."""
 

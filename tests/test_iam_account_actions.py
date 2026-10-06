@@ -50,7 +50,7 @@ RESET = """mutation($id: ID!, $confirmed: Boolean!, $revision: Int!) {
   reset_user_password(id: $id, confirmed: $confirmed, expected_revision: $revision) { username password }
 }"""
 ISSUE = "mutation($id: ID!) { issue_user_password(id: $id) { username password } }"
-LIST = "{ users(limit: 100, order_by: [{username: asc}]) { username account_actions last_login revision } }"
+LIST = "{ users(limit: 100) { username account_actions last_login revision } }"
 
 
 def _manager(username: str) -> Any:
@@ -329,9 +329,10 @@ def test_last_login_reads_through_its_field_gate(spaces_tables):
     admin = create_platform_admin("login-admin", password=None)
     manager = _manager("login-manager")
     reader = User.objects.create_user("directory-reader")
+    plain = User.objects.create_user("plain-person")
     signed_in = User.objects.create_user("signed-in")
     never = User.objects.create_user("never-signed-in")
-    User._base_manager.filter(pk=signed_in.pk).update(last_login=timezone.now())
+    User._base_manager.filter(pk__in=[signed_in.pk, plain.pk]).update(last_login=timezone.now())
     write_relationships([
         RelationshipTuple(resource=to_object_ref(target), relation="directory_reader", subject=to_subject_ref(reader))
         for target in (signed_in, never)
@@ -342,12 +343,16 @@ def test_last_login_reads_through_its_field_gate(spaces_tables):
         rows = result_data(execute_schema(schema, LIST, user=viewer))["users"]
         return {row["username"]: row["last_login"] for row in rows}
 
-    for viewer in (admin, manager):
+    # People managers, of every account or of the accounts named to them, read last sign-in.
+    for viewer in (admin, manager, reader):
         seen = last_logins(viewer)
         assert seen["signed-in"] is not None and seen["never-signed-in"] is None
-    seen_by_reader = last_logins(reader)
-    assert set(seen_by_reader) == {"signed-in", "never-signed-in"}
-    assert seen_by_reader["signed-in"] is None
+    assert set(last_logins(reader)) == {"directory-reader", "signed-in", "never-signed-in"}
+    # Anyone else is offered only their own account and reads only their own last sign-in.
+    assert set(last_logins(plain)) == {"plain-person"} and last_logins(plain)["plain-person"] is not None
+    with actor_context(plain):
+        assert User.objects.with_actor(plain).get(pk=plain.pk).last_login is not None
+        assert not signed_in.with_actor(plain).has_access("read__last_login")
 
 
 def test_verbs_require_their_permission_and_an_actor(iam_admin):

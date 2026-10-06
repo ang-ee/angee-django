@@ -18,10 +18,16 @@ export const USER_LIST_COLUMNS = {
   "iam.last-login": { sequence: 50, requires: "iam.User#read__last_login", content: <Column field="last_login" /> },
 };
 
-/** Shipped users-list presets, by activity. */
+/**
+ * Shipped users-list presets, by activity. Activity is a restricted field, so they filter on the
+ * resource's `active` expression, which matches only rows whose viewer may read it.
+ */
 export const USER_LIST_PRESETS: readonly ResourceViewPreset[] = [
-  { id: "iam.users.active", label: "Active", resource: USER_MODEL, filter: { is_active: { exact: true } } },
-  { id: "iam.users.deactivated", label: "Deactivated", resource: USER_MODEL, filter: { is_active: { exact: false } } },
+  { id: "iam.users.active", label: "Active", resource: USER_MODEL, filter: { active: { exact: true } } },
+  { id: "iam.users.deactivated", label: "Deactivated", resource: USER_MODEL, filter: { active: { exact: false } } },
 ];
+
+/** The managed people list's rows: the viewer's people directory, empty for anyone who manages no one. */
+export const USER_DIRECTORY_FILTER = { directory: { exact: true } } as const;
 
 export const USER_LIST_PRESET_IDS = USER_LIST_PRESETS.map((preset) => preset.id);
