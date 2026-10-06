@@ -296,6 +296,29 @@ describe("createApp selection", () => {
     expect(() => createApp({ ...input, location: { search: "?app=requests" } })).not.toThrow();
   });
 
+  test("a dependent's own page of a model boots beside its base's, selected or not; unrelated claimants fail", () => {
+    const tasks: BaseAddon = {
+      id: "tasks",
+      routes: resourcePageRoutes("tasks.all", "/tasks", EmptyPage, "tasks.Task"),
+      menus: [{ id: "tasks", route: "tasks.all" }],
+    };
+    const desk: BaseAddon = {
+      id: "desk",
+      dependsOn: ["tasks"],
+      routes: resourcePageRoutes("desk.tasks", "/desk/tasks", EmptyPage, "tasks.Task"),
+      menus: [{ id: "desk", children: [{ id: "desk.tasks", route: "desk.tasks" }] }],
+    };
+    const input = (addons: readonly BaseAddon[]): CreateAppInput => ({
+      ...testAppInput(addons, { console: { requireAuth: false } }),
+      schemas: testSchemasWithConsoleResources([testDataResource("tasks.Task")]),
+    });
+    for (const search of ["", "?app=desk", "?app=tasks"]) {
+      expect(() => createApp({ ...input([tasks, desk]), location: { search } })).not.toThrow();
+    }
+    expect(() => createApp(input([tasks, { ...desk, dependsOn: [] }])))
+      .toThrow(/claim resource "tasks.Task" from addons that do not depend on one another/);
+  });
+
   test("a route two roots reference has no owner unless route.menu anchors it, selected or not", () => {
     const shared: BaseAddon = {
       id: "requests",

@@ -4,7 +4,7 @@ import type { HiddenMenuItem, MenuItem, RemovedMenuItem, RuntimeBrand } from "@a
 import { positionSiblings } from "@angee/ui/lib/position";
 
 import type { AddonRoute } from "./define-addon";
-import { DEPLOYMENT_LAYER_ID, assertMayAlter, layerAncestry, overridesField, type Layer } from "./layers";
+import { DEPLOYMENT_LAYER_ID, assertMayAlter, layerAncestry, overridesField, routeOwners, type Layer } from "./layers";
 import { normalizeRoutePath } from "./route-paths";
 
 /** An included node, optionally rendered flat into the including node. */
@@ -211,9 +211,9 @@ export function compileMenus(
   }
   const compiled = resolve(nodes, ancestors, diagnostics);
   // An addon borrows only pages of the addons it depends on, like any alteration.
-  const routeOwners = new Map(layers.flatMap((layer) => (layer.routes ?? []).map((route) => [route.name, layer.id] as const)));
+  const owners = routeOwners(layers);
   for (const mount of compiled.mounts) {
-    const owner = routeOwners.get(mount.route);
+    const owner = owners[mount.route];
     if (owner === undefined) throw new Error(`Menu item "${mount.id}" mounts unknown route "${mount.route}".`);
     assertMayAlter(ancestors, mount.by, owner, `route "${mount.route}"`, "mounts");
   }

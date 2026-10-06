@@ -15,6 +15,7 @@ import {
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
+import { commonBase } from "./layers";
 import { absentMenuNodes } from "./presence";
 import {
   childRoutesByParentName,
@@ -157,6 +158,29 @@ export function resourceRouteIndex(
   return byResource;
 }
 
+/**
+ * The canonical claim per resource among the roots' claimants: the one route, or
+ * those of the addon every other claimant depends on, as a dependent's page of a
+ * model is its own app's. Addons that do not depend on one another cannot both
+ * claim a resource.
+ */
+function canonicalClaims(
+  claimants: ReadonlyMap<string, readonly BaseAddonRoute[]>,
+  owners: Readonly<Record<string, string>>,
+  ancestors: ReadonlyMap<string, ReadonlySet<string>>,
+): BaseAddonRoute[] {
+  return [...claimants].flatMap(([resource, routes]) => {
+    if (routes.length === 1) return routes;
+    const ownerOf = (route: BaseAddonRoute): string => owners[route.name] ?? route.name;
+    const base = commonBase(routes.map(ownerOf), ancestors);
+    if (base === undefined) {
+      const named = routes.map((route) => `"${route.name}" of "${ownerOf(route)}"`).join(", ");
+      throw new Error(`Routes ${named} claim resource "${resource}" from addons that do not depend on one another; one must depend on the other.`);
+    }
+    return routes.filter((route) => ownerOf(route) === base);
+  });
+}
+
 /** One projection for app resource claims, navigation membership and route availability. */
 export class AppRouteProjection {
   readonly navigationTree: MenuTree;
@@ -178,13 +202,21 @@ export class AppRouteProjection {
    * selected app's rail and home route, without which every root shows;
    * `navigation` is what the chrome shows (defaults to the logical tree);
    * `removed` lists the menu nodes composition removed, which decides route
-   * availability. Each rail root claims its own resource routes.
+   * availability. Every root claims its own resource routes, whatever the
+   * selection; `owners` (each route's addon) and `ancestors` (each addon's
+   * dependencies) decide which claim is canonical, so links are the same on
+   * every host.
    */
   constructor(
     readonly routes: readonly BaseAddonRoute[],
     readonly menuTree: MenuTree,
     readonly selection?: { rail: readonly string[]; home?: string },
-    options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
+    options: {
+      navigation?: MenuTree;
+      removed?: readonly { id: string; route?: string }[];
+      owners?: Readonly<Record<string, string>>;
+      ancestors?: ReadonlyMap<string, ReadonlySet<string>>;
+    } = {},
   ) {
     const navigation = options.navigation ?? menuTree;
     this.navigationTree = selection === undefined ? navigation.withSettingsPlace() : navigation.confineTo(selection.rail);
@@ -192,8 +224,8 @@ export class AppRouteProjection {
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
     const home = selection?.home !== undefined ? this.routesByName.get(selection.home) : undefined;
     this.homeApp = selection && ((home && this.rootFor(home)) ?? selection.rail[0]);
-    const appIds = new Set(selection?.rail ?? []);
     const canonical: BaseAddonRoute[] = [];
+    const claimants = new Map<string, BaseAddonRoute[]>();
     // Menu order selects the app's fallback when it has several views of a model.
     const order = [...menuTree.byId.values()].map((item) => item.route);
     const ordered = [...routes].sort((a, b) => {
@@ -221,7 +253,7 @@ export class AppRouteProjection {
         }
         this.recordDestinations.set(resource, [...destinations, { record, match }]);
       }
-      if (!resource || !root || !appIds.has(root)) {
+      if (!resource || !root) {
         canonical.push(route);
         continue;
       }
@@ -233,8 +265,13 @@ export class AppRouteProjection {
       const resources = this.claims.get(root) ?? new Map<string, RuntimeResourceRoutes[]>();
       resources.set(resource, [...(resources.get(resource) ?? []), claim]);
       this.claims.set(root, resources);
+      // A borrowed model (`recordModel`, as a mount's alias) never claims canonically.
+      if (route.resource) claimants.set(route.resource, [...(claimants.get(route.resource) ?? []), route]);
     }
-    this.canonical = resourceRouteIndex(canonical);
+    this.canonical = resourceRouteIndex([
+      ...canonical,
+      ...canonicalClaims(claimants, options.owners ?? {}, options.ancestors ?? new Map()),
+    ]);
   }
 
   rootFor(route: BaseAddonRoute, visited = new Set<string>()): string | undefined {

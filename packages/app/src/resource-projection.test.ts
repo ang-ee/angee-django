@@ -10,6 +10,7 @@ import { explainComposition } from "./explain";
 import { chatterRouteIndex } from "./chatter-routes";
 import { testDataResource } from "@angee/metadata/testing";
 import { resolveRoutePaths } from "./route-paths";
+import { layerAncestry } from "./layers";
 
 const Page = () => null;
 const routes: readonly BaseAddonRoute[] = [
@@ -37,6 +38,11 @@ const menus: readonly ChromeMenuItem[] = [
   { id: "platform", group: "platform", route: "platform" },
 ];
 const menuTree = MenuTree.from(resolveMenuRouteTargets(menus, createRouteHref(routes)) as readonly ChromeMenuItem[]);
+// desk depends on records and teams, so where desk and records both claim a resource, records' route is canonical.
+const ownership = {
+  owners: { "records.all": "records", "teams.all": "teams", "desk.incoming": "desk", "desk.review": "desk" },
+  ancestors: layerAncestry([{ id: "records" }, { id: "teams" }, { id: "desk", dependsOn: ["records", "teams"] }]),
+};
 
 describe("app resource projection", () => {
   test("the refine bridge preserves a route-less Settings group and its single child's own target", () => {
@@ -119,7 +125,7 @@ describe("app resource projection", () => {
     expect(() => resolveRoutePaths([{ name: "cycle", path: "/cycle", parent: "cycle" }])).toThrow(/cycle/);
   });
   test("retains canonical routes and selects the active collection within an app", () => {
-    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"] });
+    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"] }, ownership);
     expect(projection.resourceRoutes()["records.Record"]?.collection).toBe("records.all");
     expect(projection.resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
     const selected = projection.resourceRoutes("desk", "desk.review.record");
@@ -133,7 +139,7 @@ describe("app resource projection", () => {
   });
 
   test("a record match claims its rows from every app; the app's own claim, then the canonical route, takes the rest", () => {
-    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"] });
+    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"] }, ownership);
     const destinations = [{ record: { name: "desk.review.record", param: "recordId" }, match: { field: "queue.id", equals: "queue-a" } }];
     expect(projection.resourceRoutes()["records.Record"]).toEqual({
       collection: "records.all", record: { name: "records.all.record", param: "id" },
@@ -153,17 +159,17 @@ describe("app resource projection", () => {
     const tree = (extra: readonly ChromeMenuItem[]) =>
       MenuTree.from(resolveMenuRouteTargets([...menus, ...extra], createRouteHref(claimed)) as readonly ChromeMenuItem[]);
     // "mine" is off the rail and "desk" on it: a match claims globally either way.
-    expect(() => new AppRouteProjection(claimed, tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] }))
+    expect(() => new AppRouteProjection(claimed, tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] }, ownership))
       .toThrow(/Resource "records.Record" has duplicate record match "queue.id=queue-a"/);
     const other = claimed.map((route) => route.name === "mine.records" ? { ...route, recordMatch: { field: "queue.id", equals: "queue-b" } } : route);
-    expect(() => new AppRouteProjection(other, tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] })).not.toThrow();
+    expect(() => new AppRouteProjection(other, tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] }, ownership)).not.toThrow();
     expect(() => new AppRouteProjection([
       { name: "mine.records", path: "/mine", recordModel: "records.Record", recordMatch: { field: "queue.id", equals: "queue-a" } },
     ], MenuTree.from([]))).toThrow(/declares recordMatch without a record child/);
   });
 
   test("confines the menu to the rail; a page outside it sits in the home app, a page inside in its own root", () => {
-    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"], home: "desk.incoming" });
+    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"], home: "desk.incoming" }, ownership);
     expect(projection.homeApp).toBe("desk");
     expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["desk"]);
     expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");
@@ -176,7 +182,7 @@ describe("app resource projection", () => {
     expect(projection.activeApp("/settings/platform")).toBe("desk");
     expect(projection.appTrail("/records/r1")).toEqual(["desk"]);
     // A rail of several roots: each keeps its own pages; the home app is its first root without a home.
-    const both = new AppRouteProjection(routes, menuTree, { rail: ["records", "desk"] });
+    const both = new AppRouteProjection(routes, menuTree, { rail: ["records", "desk"] }, ownership);
     expect(both.homeApp).toBe("records");
     expect(both.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["records", "desk"]);
     expect(both.activeApp("/records/r1")).toBe("records");
@@ -212,10 +218,20 @@ describe("app resource projection", () => {
     expect(tree.appIds()).toEqual(new Set(["projects", "messaging", "pm"]));
   });
 
-  test("only rail roots claim their own resource routes; elsewhere two routes of one resource collide", () => {
-    expect(new AppRouteProjection(routes, menuTree, { rail: ["desk"] }).resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
-    expect(() => new AppRouteProjection(routes, menuTree, { rail: ["teams"] })).toThrow(/claims resource "records.Record" already claimed/);
-    expect(() => new AppRouteProjection(routes, menuTree)).toThrow(/claims resource "records.Record" already claimed/);
+  test("every root claims its own resource routes; the addon the others depend on owns the canonical one, on every host", () => {
+    for (const selection of [undefined, { rail: ["desk"] }, { rail: ["teams"] }]) {
+      const projection = new AppRouteProjection(routes, menuTree, selection, ownership);
+      expect(projection.resourceRoutes()["records.Record"]?.collection).toBe("records.all");
+      expect(projection.resourceRoutes("teams")["records.Record"]?.collection).toBe("records.all");
+      expect(projection.resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
+    }
+    // Claimants of addons that do not depend on one another, or of unknown addons, fail at boot.
+    const unrelated = /Routes "records.all" of "records", "desk.incoming" of "desk" claim resource "records.Record" from addons that do not depend on one another/;
+    expect(() => new AppRouteProjection(routes, menuTree, undefined, { ...ownership, ancestors: new Map() })).toThrow(unrelated);
+    expect(() => new AppRouteProjection(routes, menuTree)).toThrow(/claim resource "records.Record" from addons that do not depend on one another/);
+    // One addon's two routes of a resource still collide.
+    expect(() => new AppRouteProjection(routes, menuTree, undefined, { ...ownership, owners: { ...ownership.owners, "desk.incoming": "records" } }))
+      .toThrow(/claims resource "records.Record" already claimed/);
   });
 
   test("a collection-only app projection retains canonical record fallback", () => {
@@ -230,6 +246,10 @@ describe("app resource projection", () => {
     const selected = new AppRouteProjection(collectionRoutes, tree, { rail: ["desk"] }).resourceRoutes("desk");
     expect(selected["records.Record"]?.collection).toBe("desk.all");
     expect(selected["records.Record"]?.record?.name).toBe("records.all.record");
+    // A borrowed model (a mount's alias) is its app's claim and never canonical, selected or not.
+    const unselected = new AppRouteProjection(collectionRoutes, tree);
+    expect(unselected.resourceRoutes()["records.Record"]?.collection).toBe("records.all");
+    expect(unselected.resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.all");
   });
 
   test("rejects duplicate canonical claims and ambiguous record children", () => {
@@ -290,7 +310,7 @@ describe("menu alterations in the route projection", () => {
   });
 
   test("claims and record destinations skip removed pages; hidden pages keep their claims", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, { rail: ["suite"] }, { navigation, removed: compiled.removed });
+    const projection = new AppRouteProjection(deskRoutes, logical, { rail: ["suite"] }, { navigation, removed: compiled.removed, owners: ownership.owners, ancestors: layerAncestry(layers) });
     expect(projection.rootFor(route("desk.incoming"))).toBe("suite");
     const selected = projection.resourceRoutes("suite");
     expect(selected["records.Record"]?.collection).toBe("desk.incoming");
@@ -299,7 +319,7 @@ describe("menu alterations in the route projection", () => {
   });
 
   test("navigation flattens the included app and drops hidden items; the logical tree keeps them", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, { rail: ["suite"] }, { navigation, removed: compiled.removed });
+    const projection = new AppRouteProjection(deskRoutes, logical, { rail: ["suite"] }, { navigation, removed: compiled.removed, owners: ownership.owners, ancestors: layerAncestry(layers) });
     expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["suite"]);
     expect(projection.navigationTree.byId.get("suite")?.targetedChildren.map((item) => item.id)).toEqual(["desk.home", "records"]);
     expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");

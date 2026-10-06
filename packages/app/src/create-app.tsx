@@ -318,6 +318,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
   } : undefined, {
     navigation: MenuTree.from(resolveMenuRouteTargets(composed.menuComposition.navigation, routeHref)),
     removed: composed.menuComposition.removed,
+    owners: composed.routeOwners,
+    ancestors: composed.ancestors,
   });
   const unavailable = projection.unavailable;
   validateSelections(shell, menuTree.roots, {

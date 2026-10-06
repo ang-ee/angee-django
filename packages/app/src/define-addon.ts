@@ -36,7 +36,7 @@ import { RECORD_SEARCH_KEYS } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
 import { optionToken } from "@angee/ui/widgets/types";
 import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
-import { DEPLOYMENT_LAYER_ID, layerAncestry } from "./layers";
+import { DEPLOYMENT_LAYER_ID, layerAncestry, routeOwners } from "./layers";
 import { compileContainers } from "./containers";
 import { CORE_CONTAINERS } from "./core-containers";
 import {
@@ -195,6 +195,10 @@ export interface ComposedAddons {
   /** The deployment's `ANGEE_UI.shell`, which selects the app; see `selectApp`. */
   shell?: ShellSettings;
   routes: readonly AddonRoute[];
+  /** Each route's declaring addon, by route name; with `ancestors` it decides a resource's canonical claim. */
+  routeOwners: Readonly<Record<string, string>>;
+  /** Each addon's transitive dependencies. */
+  ancestors: ReadonlyMap<string, ReadonlySet<string>>;
   /** The logical menu tree: owns routes, trails and the active app. */
   menus: readonly ComposedMenuItem[];
   /** The compiled menu layers: navigation projection, removals, hidden nodes, provenance. */
@@ -412,6 +416,8 @@ export function composeAddons(
   return {
     ...(shell ? { shell } : {}),
     routes,
+    routeOwners: routeOwners(addons),
+    ancestors,
     menus: compiledMenus.logical,
     menuComposition: compiledMenus,
     widgets,
