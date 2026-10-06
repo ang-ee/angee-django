@@ -181,6 +181,7 @@ function RoundProposalsPanel({ recordId }: RecordPanelContext): React.ReactEleme
   return (
     <DrawerResourceList
       resource={PROPOSAL_MODEL}
+      presentation="embedded"
       baseFilter={{ round: { exact: recordId } }}
       createDefaults={{ round: recordId }}
     >
