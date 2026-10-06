@@ -10,13 +10,13 @@ from django.db import models
 from pydantic import BaseModel, ConfigDict, Field, InstanceOf, JsonValue, TypeAdapter, ValidationInfo, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
 from rebac import current_actor
+from rebac.field_backing import canonical_model
 from rebac.schema.walker import field_gated_actions
 
 from angee.base.evidence import EvidenceFact, EvidenceReference
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import canonical_record_model
 from angee.graphql.data.metadata import data_resource_contributions
 from angee.graphql.schema import schema_parts_for
 
@@ -75,12 +75,12 @@ class RecordActions(BaseModel):
 
     def target_model(self, record: models.Model) -> type[models.Model]:
         """Keep canonical identity while naming a concrete action owner."""
-        canonical = canonical_record_model(type(record))
+        canonical = canonical_model(type(record)) or type(record)
         try:
             target = apps.get_model(self.model) if self.model else canonical
         except (LookupError, ValueError) as error:
             raise ValueError("Unknown action model.") from error
-        if target._meta.abstract or canonical_record_model(target) is not canonical:
+        if target._meta.abstract or (canonical_model(target) or target) is not canonical:
             raise ValueError("The action model must share the concerned record's canonical identity.")
         return target
 
@@ -189,7 +189,7 @@ class DecisionProposal(BaseModel):
         if info.context is None:
             return self
         records = {
-            public_id_for(canonical_record_model(type(record)), record.pk): record
+            public_id_for(canonical_model(type(record)) or type(record), record.pk): record
             for record in info.context["records"]
         }
         for alternative in self.alternatives:

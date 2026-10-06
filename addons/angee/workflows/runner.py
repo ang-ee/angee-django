@@ -19,11 +19,10 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from django.db import OperationalError, connection, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
-from rebac import actor_context, system_context
+from rebac import actor_context, generic_target, system_context
 from rebac.actors import is_sudo
 
 from angee.base.errors import exception_text
-from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
@@ -355,7 +354,7 @@ class Runner:
         readable = read_scoped_queryset(type(record), actor)
         if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the step record is required.")
-        target = canonical_record_target(record)
+        target = generic_target(record)
         if operation not in RecordOperation.values:
             raise ValidationError("Unknown step record operation.")
         with self._fenced(step_run) as current:

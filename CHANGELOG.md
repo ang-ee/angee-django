@@ -31,6 +31,12 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Workflow subjects, step records, step watches, decision records and extraction
+  sources stay owner-authorized evidence edges: their access follows the run,
+  decision or extraction, and the owner's admission gate (`readable_records`,
+  the read-scoped lookup) checks the record at write time, so they take no
+  per-type target relations. They now store `rebac.generic_target` and refuse an
+  untyped record with `ValueError`.
 - Messaging thread attachments authorize their record in the REBAC schema: the
   app that owns an attachable record type declares one `target`-backed relation
   for it and unions its write into `messaging/thread_attachment`'s `target_write`

@@ -5,9 +5,8 @@ from datetime import timedelta
 import pytest
 import strawberry_django
 from django.db.models.functions import Now
-from rebac import actor_context, system_context
+from rebac import actor_context, generic_target, system_context
 
-from angee.base.refs import canonical_record_target
 from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
@@ -48,7 +47,7 @@ def test_trigger_and_manual_mti_subjects_share_identity_through_retention(execut
     actor, _sent = execution
     with system_context(reason="tests workflow trigger child subject"):
         subject = MtiChild.objects.create(title="Canonical subject", detail="Ready")
-    target = canonical_record_target(subject)
+    target = generic_target(subject)
     assert target.content_type.model_class() is MtiParent
     workflow = load_workflow(
         document("entry"), actor=actor, key="child-subject-trigger", subject_model=MtiChild._meta.label_lower,
@@ -90,7 +89,7 @@ def test_awaited_child_run_keeps_its_canonical_subject(child_graph):
     parent, _workflow = build(subject=subject, subject_model=MtiChild._meta.label_lower)
     run_until(parent)
     child = admitted[0]
-    target = canonical_record_target(subject)
+    target = generic_target(subject)
     assert (child.subject_content_type_id, child.subject_object_id) == (target.content_type.pk, target.object_id)
     waiter = system_queryset(StepRun).get(run=parent, node_key="await")
     assert waiter.waiting_kind == "run" and waiter.awaited_run_id == child.pk
