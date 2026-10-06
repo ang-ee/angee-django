@@ -795,7 +795,7 @@ export function useFormViewSurface({
   const overviewShown = bodyTabSections.length === 0 && !(overviewTab?.hidden && recordTabList.length > 0);
   const tabs: readonly FormViewTab[] = [
     ...bodyTabSections.map(({ key, label, icon, badge }) => ({ id: key, label, icon, badge })),
-    ...(overviewShown ? [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: t("form.tabOverview") }] : []),
+    ...(overviewShown ? [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: modelMetadata?.overviewLabel ?? t("form.tabOverview") }] : []),
     ...recordTabList,
   ];
   // A routed, chosen or default tab that is not visible (dropped by `visibleWhen`, a permission,

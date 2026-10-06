@@ -55,16 +55,16 @@ from django.utils import timezone
 from django.utils.text import get_valid_filename
 from rebac import (
     ActorLike,
+    GenericTarget,
     NoActorResolvedError,
-    ObjectRef,
     PermissionDenied,
     current_actor,
+    generic_target,
     require_permission,
     system_context,
     to_object_ref,
     to_subject_ref,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend as rebac_backend
 from rebac.field_backing import resolve_field_backing
 from rebac.managers import RebacManager
@@ -86,7 +86,7 @@ from angee.base.mixins import (
     TrashQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
-from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
+from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
@@ -683,9 +683,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         returned (restored if trashed) and nothing needs writing — callers
         branch on ``upload_state``. New drafts use a unique reservation key,
         so unverified bytes never overwrite an existing file's backend object.
-        The actor must hold ``write`` on the drive and any named record. A record
-        upload requires a contributed attachment read/write arm and inserts its
-        edge in the same transaction. It never returns an existing dedup row.
+        The actor must hold ``write`` on the drive, and the record edge's
+        ``create`` (write on the record) admits its insert in the same
+        transaction; a missing, unwritable or undeclared record is one uniform
+        denial. A record-visibility upload then requires a contributed attachment
+        read/write arm. It never returns an existing dedup row.
         """
 
         drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug, folder_id=folder_id)
@@ -703,11 +705,9 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             raise exceptions.UploadError("record visibility requires an attachment record")
         attachments = self.model._meta.get_field("attachments").related_model._default_manager
         try:
-            target = attachments.authorized_target(record) if record is not None else None
-        except (PermissionDenied, ObjectDoesNotExist, ValueError) as error:
+            target = generic_target(record) if record is not None else None
+        except ValueError as error:
             raise exceptions.UploadRecordDenied() from error
-        if visibility == FileVisibility.RECORD and target is not None:
-            attachments.require_record_arm(target)
 
         digest = _normalized_hash(content_hash) if content_hash else ""
         actor = current_actor()
@@ -727,7 +727,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 ).first()
                 if existing is not None:
                     if target is not None:
-                        attachments._attach_authorized(existing, target)
+                        self._attach_record(attachments, existing, target)
                     if existing.is_trashed:
                         existing.restore()
                     return existing
@@ -751,10 +751,22 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 raise exceptions.UploadError(f"invalid file request: {error}") from error
             row.sudo(reason="storage.file.draft").save()
             if target is not None:
-                attachments._attach_authorized(row, target)
+                self._attach_record(attachments, row, target)
+                # After the edge authorized the record, so the arm reveals nothing.
+                if visibility == FileVisibility.RECORD:
+                    attachments.require_record_arm(target)
         if actor is not None:
             row.with_actor(actor)
         return row
+
+    @staticmethod
+    def _attach_record(attachments: Any, file: Any, target: GenericTarget) -> None:
+        """Insert the upload's record edge under the actor; a refused edge denies the upload."""
+
+        try:
+            attachments._attach(file, target)
+        except PermissionDenied as error:
+            raise exceptions.UploadRecordDenied() from error
 
     def ingest_bytes(
         self,
@@ -1679,71 +1691,46 @@ class File(TrashMixin, OwnerMixin, AngeeDataModel):
 
 
 class FileAttachmentManager(AngeeManager):
-    """Owns the polymorphic file edge — the canonical-target attach write.
+    """Owns the polymorphic file edge, stored at :func:`rebac.generic_target`.
 
-    Mirrors :meth:`angee.tags.models.TagAssignmentManager.attach`: the edge keys on the
-    target's canonical record target (:func:`angee.base.refs.canonical_record_target`), so
-    a record and each of its REBAC-typed MTI ancestors share one attachment set instead of
-    splitting it. Only the canonical target/file locks and ``get_or_create`` run
-    elevated, after ``attach`` checks target write and file read for the ambient
-    actor. ``storage/file_attachment`` declares no ``create`` permission because
-    a pre-insert check has no edge id. Elevation preserves the actor for
-    ``created_by``; the returned edge is rebound to that actor.
+    A record and each of its REBAC-typed MTI ancestors share one attachment set.
+    The edge's ``create`` in ``permissions.zed`` requires write on the target
+    through the relation its owning app declares; edges are inserted under the
+    actor, so a target type without a relation is refused.
     """
 
     @require_permission("read", resource_arg="file")
     def attach(self, file: Any, record: models.Model, *, label: str = "") -> Any:
         """Attach a readable file to a writable record, idempotently per edge.
 
-        Target write checks the canonical identity used by the edge. Both
-        permissions use the ambient actor, regardless of how the supplied rows
-        were loaded. System context bypasses these checks. Outside system
-        context, a target without a REBAC identity raises ``PermissionDenied``.
+        The ambient actor needs ``read`` on the file and the edge's ``create``
+        (write on the record). Where ``storage/file`` reads record files through
+        their attachments, a new edge changes the file's own relation, so the
+        library's backed-edge gate also requires ``write`` on the file.
+        ``ValueError`` for a record without a REBAC type.
         """
 
-        target = self.authorized_target(record)
+        target = generic_target(record)
         with transaction.atomic():
             self._lock_target(target)
             file = system_queryset(type(file), lock=("self",)).get(pk=file.pk)
-            return self._attach_authorized(file, target, label=label)
-
-    def authorized_target(self, record: models.Model) -> CanonicalRecordTarget:
-        """Resolve and authorize the canonical target before an attachment write."""
-
-        actor = current_actor()
-        target = canonical_record_target(record)
-        target_model = target.content_type.model_class()
-        if target_model is None:
-            raise ValueError("File attachment target model is unavailable.")
-        if not is_sudo():
-            resource_type = model_resource_type(target_model)
-            if resource_type is None:
-                raise PermissionDenied("File attachments require a REBAC-typed target.")
-            if actor is None or not rebac_backend().check_access(
-                subject=actor,
-                action="write",
-                resource=ObjectRef(resource_type, str(target.object_id)),
-            ).allowed:
-                raise PermissionDenied("write access to the attachment target is required")
-        return target
+            return self._attach(file, target, label=label)
 
     def for_record(self, record: models.Model) -> models.QuerySet[Any]:
         """Return actor-readable file edges for a canonical record."""
 
-        target = canonical_record_target(record)
         return self.get_queryset().filter(
-            content_type=target.content_type, object_id=target.object_id, file__is_trashed=False,
+            **generic_target(record).lookups(self.model, "target"), file__is_trashed=False,
         ).select_related("file")
 
     def with_same_content(self, file: Any, record: models.Model) -> models.QuerySet[Any]:
         """Readable edges of this record type carrying the same verified bytes."""
-        target = canonical_record_target(record)
         return self.get_queryset().filter(
-            content_type=target.content_type, file__content_hash=file.content_hash,
+            content_type=generic_target(record).content_type, file__content_hash=file.content_hash,
             file__upload_state=UploadState.READY, file__is_trashed=False,
         ) if file.content_hash and file.upload_state == UploadState.READY else self.none()
 
-    def has_record_arm(self, target: CanonicalRecordTarget) -> bool:
+    def has_record_arm(self, target: GenericTarget) -> bool:
         """Read the effective REBAC schema's storage attachment capability."""
 
         schema = rebac_backend().schema()
@@ -1766,13 +1753,13 @@ class FileAttachmentManager(AngeeManager):
                 return True
         return False
 
-    def require_record_arm(self, target: CanonicalRecordTarget) -> None:
+    def require_record_arm(self, target: GenericTarget) -> None:
         """Reject record-scoped uploads without the declared read/write arm."""
 
         if not self.has_record_arm(target):
             raise exceptions.UploadError("record model has no file attachment read/write arm")
 
-    def _lock_target(self, target: CanonicalRecordTarget) -> None:
+    def _lock_target(self, target: GenericTarget) -> None:
         """Lock the canonical target before a file insert or attachment write."""
 
         target_model = target.content_type.model_class()
@@ -1780,38 +1767,30 @@ class FileAttachmentManager(AngeeManager):
             raise ValueError("File attachment target model is unavailable.")
         system_queryset(target_model, lock=("self",)).get(pk=target.object_id)
 
-    def _attach_authorized(self, file: Any, target: CanonicalRecordTarget, *, label: str = "") -> Any:
-        """Persist an edge after its owning verb has authorized both ends.
+    def _attach(self, file: Any, target: GenericTarget, *, label: str = "") -> Any:
+        """Get or insert one edge under the ambient actor, after its verb locked the target.
 
-        Protected write seam: ``attach`` checks file read and target write;
-        ``draft`` checks drive write and target write before creating the file.
-        The latter encloses the file and edge in one transaction.
+        ``attach`` also requires file read; ``draft`` encloses the new file and
+        its edge in one transaction.
         """
 
-        actor = current_actor()
-        with system_context(reason="storage.file_attachment.attach"):
-            attachment, _created = self.get_or_create(
-                file_id=file.pk,
-                content_type_id=target.content_type.pk,
-                object_id=target.object_id,
-                defaults={"label": label},
-            )
-        if actor is not None:
-            attachment.with_actor(actor)
+        attachment, _created = self.get_or_create(
+            file_id=file.pk, **target.lookups(self.model, "target"), defaults={"label": label},
+        )
         return attachment
 
 
 class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
-    Consumers attach explicitly through :meth:`FileAttachmentManager.attach` (which keys
-    the edge on the target's canonical record target) or declare a
-    ``GenericRelation("storage.FileAttachment")`` on the target for an ergonomic reverse
-    accessor. Declare that reverse relation on the same topmost REBAC-typed MTI ancestor
-    the canonical write keys on (:func:`angee.base.refs.canonical_record_target`), so the
-    delete collector filters at the write content type — the placement invariant in
-    :mod:`angee.base.refs`. Existing-edge access follows the file parent in
-    ``permissions.zed``; :meth:`FileAttachmentManager.attach` owns the creation gate.
+    Consumers attach explicitly through :meth:`FileAttachmentManager.attach` or
+    declare a ``GenericRelation("storage.FileAttachment")`` on the target for an
+    ergonomic reverse accessor. Declare that reverse relation on the topmost
+    REBAC-typed MTI ancestor that :func:`rebac.generic_target` keys the edge on,
+    so the delete collector filters at the write content type (the placement
+    invariant in :mod:`angee.base.refs`). Existing-edge access follows the file
+    parent; creation follows the target relation the target's app declares in
+    ``permissions.zed``.
     """
 
     runtime = True

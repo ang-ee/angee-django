@@ -251,9 +251,11 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   }
   if (value.brand !== undefined) assertBrand(where, value.brand);
   const match = value.recordMatch as { field?: unknown; equals?: unknown } | null | undefined;
-  if (match !== undefined && (typeof match !== "object" || match === null
-    || typeof match.field !== "string" || typeof match.equals !== "string")) {
-    throw new Error(`${where}: recordMatch must be { field, equals } strings.`);
+  const equals = match?.equals;
+  if (match !== undefined && (typeof match !== "object" || match === null || typeof match.field !== "string"
+    || !(typeof equals === "string" || (Array.isArray(equals) && equals.length > 0
+      && equals.every((item) => typeof item === "string"))))) {
+    throw new Error(`${where}: recordMatch must be { field, equals } with a string or a non-empty list of strings.`);
   }
   if (value.parent !== undefined && value.parent !== null && typeof value.parent !== "string") {
     throw new Error(`${where}: parent must be a menu id or null.`);

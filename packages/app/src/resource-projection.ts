@@ -12,7 +12,7 @@ import {
   type ChromeMenuNode,
   type MenuMatch,
 } from "@angee/ui/chrome/menu-tree";
-import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
+import { recordMatchValues, type RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
 import { commonBase } from "./layers";
@@ -250,8 +250,12 @@ export class AppRouteProjection {
         const { record } = claimOf(resource);
         if (!record) throw new Error(`Route "${route.name}" declares recordMatch without a record child.`);
         const destinations = this.recordDestinations.get(resource) ?? [];
-        if (destinations.some((item) => item.match.field === match.field && item.match.equals === match.equals)) {
-          throw new Error(`Resource "${resource}" has duplicate record match "${match.field}=${match.equals}".`);
+        const values = recordMatchValues(match);
+        const taken = destinations.find((item) => item.match.field === match.field
+          && recordMatchValues(item.match).some((value) => values.includes(value)));
+        if (taken) {
+          const shared = recordMatchValues(taken.match).find((value) => values.includes(value));
+          throw new Error(`Resource "${resource}" has duplicate record match "${match.field}=${shared}".`);
         }
         this.recordDestinations.set(resource, [...destinations, { record, match }]);
       }

@@ -463,7 +463,6 @@ class Project(
         object_id_field="object_id",
         related_query_name="project",
     )
-    knowledge_bindings = GenericRelation("knowledge.RecordBinding", related_query_name="project")
 
     objects = ProjectManager()
 
@@ -927,7 +926,6 @@ class Task(
         related_query_name="task",
     )
     file_attachments = GenericRelation("storage.FileAttachment", related_query_name="task")
-    knowledge_bindings = GenericRelation("knowledge.RecordBinding", related_query_name="task")
 
     objects = TaskManager()
 

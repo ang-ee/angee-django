@@ -537,6 +537,15 @@ describe("FormView", () => {
     expect(screen.getByRole("tab", { name: "Schedule" }).getAttribute("aria-selected")).toBe("true");
   });
 
+  test("an app's vocabulary renames the record's Overview tab", async () => {
+    const tabs = [{ id: "activity", label: "Activity", render: () => <p>Activity pane</p> }];
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" recordTabs={tabs}>
+      <Field name="title" title />
+    </FormView>, { types: { NoteType: { ...defaultModel("NoteType", "notes.Note"), overviewLabel: "Summary" } } });
+    expect(await screen.findByRole("tab", { name: "Summary" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+  });
+
   test("a default-tab rule chooses from the loaded record once; the viewer's choice and a routed tab win", async () => {
     const rule = vi.fn((record: Row) => record.wordCount === 3 ? "activity" : undefined);
     // Counted in a component body, which runs only when the panel actually mounts.

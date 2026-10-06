@@ -530,10 +530,10 @@ def _rename(vault: Any, name: str) -> None:
 @pytest.mark.django_db
 @isolate_apps()
 def test_binding_teardown_ignores_string_pk_rows() -> None:
-    """A record whose canonical pk is not an integer is a no-op, not an error.
+    """A row no binding can name (untyped, such as django's Session) is a no-op, not an error.
 
-    The global pre_delete receiver runs for every model — django Session's
-    string key crashed logout by coercing into the integer object_id filter.
+    Coercing Session's string key into the integer object_id filter once crashed
+    logout; typed rows with non-integer keys are skipped the same way.
     """
 
     class Session(AbstractBaseSession):

@@ -95,6 +95,8 @@ export {
   type RouteHrefSearch,
   type RouteHrefSearchValue,
   type RuntimeRouteDescriptor,
+  type RecordMatch,
+  recordMatchValues,
 } from "./route-href";
 export { type RuntimeFormRegistration } from "./contracts";
 export type {

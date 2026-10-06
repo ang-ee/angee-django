@@ -69,6 +69,7 @@ import {
   DEFAULT_LOGIN_PATH,
   aliasRouteHref,
   createRouteHref,
+  recordMatchValues,
   sessionPermitted,
   type AppRuntime,
   type ComposedContainers,
@@ -294,8 +295,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   for (const route of routes) {
     if (!route.recordMatch) continue;
     const model = route.recordModel ?? route.resource;
-    const { field, equals } = route.recordMatch;
-    if (!model || !field || !equals || !modelLabelInventory.some((resource) =>
+    const { field } = route.recordMatch;
+    const values = recordMatchValues(route.recordMatch);
+    if (!model || !field || values.length === 0 || values.some((value) => !value) || !modelLabelInventory.some((resource) =>
       resource.modelLabel === model && Object.values(resource.query.fields).some((entry) => entry.row?.paths.includes(field)))) {
       throw new Error(`Route "${route.name}" has an unreadable record match "${field}" on "${model ?? "unknown"}".`);
     }

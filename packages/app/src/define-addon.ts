@@ -32,7 +32,7 @@ import type {
   DockedDrawerContent,
   WidgetMap,
 } from "@angee/ui/runtime";
-import { RECORD_SEARCH_KEYS } from "@angee/ui/runtime";
+import { RECORD_SEARCH_KEYS, type RecordMatch } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
 import { optionToken } from "@angee/ui/widgets/types";
 import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
@@ -87,8 +87,8 @@ export interface AddonRoute {
   recordModel?: string;
   /** Named shipped view selected by this collection route. */
   defaultResourceView?: string;
-  /** This collection's record route owns records with the declared field value. */
-  recordMatch?: { field: string; equals: string };
+  /** This collection's record route owns records whose field equals the value, or one of the values. */
+  recordMatch?: RecordMatch;
 }
 
 /** A provider mounted once around one layout's chrome and routed content. */

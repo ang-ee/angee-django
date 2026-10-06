@@ -166,6 +166,13 @@ describe("app resource projection", () => {
     expect(() => new AppRouteProjection([
       { name: "mine.records", path: "/mine", recordModel: "records.Record", recordMatch: { field: "queue.id", equals: "queue-a" } },
     ], MenuTree.from([]))).toThrow(/declares recordMatch without a record child/);
+    // A list claims each of its values: an overlap with another claim collides, disjoint values do not.
+    const listed = (equals: readonly string[]) => claimed.map((route) => route.name === "mine.records"
+      ? { ...route, recordMatch: { field: "queue.id", equals } } : route);
+    expect(() => new AppRouteProjection(listed(["queue-b", "queue-a"]), tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] }, ownership))
+      .toThrow(/duplicate record match "queue.id=queue-a"/);
+    expect(() => new AppRouteProjection(listed(["queue-b", "queue-c"]), tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] }, ownership))
+      .not.toThrow();
   });
 
   test("confines the menu to the rail; a page outside it sits in the home app, a page inside in its own root", () => {

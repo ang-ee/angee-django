@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 9
+// @rebac_schema_revision: 10
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -99,13 +99,24 @@ definition storage/file {
     permission delete = owner + inherited_drive->write + admin->member
 }
 
-// The attachment target is polymorphic (GenericForeignKey to any row), so no
-// single zed type can cover it; existing-edge access rides on the file parent.
-// FileAttachmentManager.attach gates creation on target write and file read.
+// The attachment target is a GenericForeignKey to any record. The app that owns
+// an attachable record type declares it from its permissions.extends.zed: one
+// relation over the type's canonical model, backed by `target`, unioned into
+// `target_write`:
+//
+//     relation task: projects/task // rebac:field=target
+//     permission target_write = task->write
+//
+// Creating an attachment requires write on its target, so a target type no
+// relation names has no arm and is refused under an actor. Existing-edge access
+// rides on the file parent; FileAttachmentManager.attach also requires file read.
 definition storage/file_attachment {
     relation file:  storage/file // rebac:field=file
     relation admin: angee/role // rebac:const=admin
 
+    permission target_write = nil
+
+    permission create = target_write
     permission read   = file->read + admin->member
     permission write  = file->write + admin->member
     permission delete = file->write + admin->member

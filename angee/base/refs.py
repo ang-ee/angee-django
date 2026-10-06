@@ -1,15 +1,18 @@
 """Generic record references backed by Django contenttypes.
 
-Also the owner of the **record-target-across-MTI policy**: a polymorphic edge and a
-REBAC grant see a multi-table-inheritance row from different sides.
-:func:`canonical_record_model` and :func:`canonical_record_target` own the write
-identity; :func:`ancestor_object_refs` owns the read/grant fan-out.
+A polymorphic edge and a REBAC grant see a multi-table-inheritance row from
+different sides. An edge whose target relations are backed by its
+``GenericForeignKey`` (``storage.FileAttachment``, ``knowledge.RecordBinding``)
+stores :func:`rebac.generic_target`, which owns the canonical write identity for
+typed rows. :func:`canonical_record_model` and :func:`canonical_record_target`
+key the edges that do not authorize their target through such relations yet, and
+also map untyped rows to their concrete model. :func:`ancestor_object_refs` owns
+the read/grant fan-out.
 
-**Placement invariant.** A polymorphic edge that keys on
-:func:`canonical_record_target` — ``storage.FileAttachment``, ``tags.TagAssignment``,
-``messaging.ThreadAttachment``, ``knowledge.RecordBinding``, and every reverse
-``GenericRelation`` onto such an edge (``messaging.ThreadedModelMixin.thread_attachments``,
-a future ``tags`` relation on ``Party``) — must be declared on, and any mixin owning it
+**Placement invariant.** Every polymorphic edge keyed on the canonical target —
+the two above, ``tags.TagAssignment``, ``messaging.ThreadAttachment`` — and every
+reverse ``GenericRelation`` onto such an edge (``messaging.ThreadedModelMixin.thread_attachments``,
+a future ``tags`` relation on ``Party``) must be declared on, and any mixin owning it
 composed onto, the *same* topmost REBAC-typed MTI ancestor the canonical write keys on. A reverse
 ``GenericRelation`` filters at its declaring model's own content type, so composing the
 mixin on a child while its canonical ancestor does not splits the write content type

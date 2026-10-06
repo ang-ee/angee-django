@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 9
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -95,19 +95,28 @@ definition knowledge/link {
     permission delete = source_page->write
 }
 
-// A RecordBinding target is a GenericForeignKey to any current or future REBAC
-// type, which Zed cannot express as one field-backed relation without hardcoding
-// downstream addons. Each record owner contributes a reverse generic relation
-// and intersects its read permission with (page->read + vault->read). Both manager
-// read directions and live-row change events use the binding's own permission.
-// Without a contributed arm the binding remains unreadable, including by admins.
+// A RecordBinding target is a GenericForeignKey to any record. The app that owns
+// a bindable record type declares it from its permissions.extends.zed: one
+// relation over the type's canonical model, backed by `target`, unioned into
+// `target_read` and `target_write`:
+//
+//     relation task: projects/task // rebac:field=target
+//     permission target_read = task->read
+//     permission target_write = task->write
+//
+// A binding is read with read on both ends and created or deleted with write on
+// both. A target type no relation names has no arm: its bindings are refused
+// under an actor and unreadable, including by admins. Both manager read
+// directions and live-row change events use the binding's own permission.
 definition knowledge/record_binding {
-    // Record-owner fragments compose this knowledge end of the read boundary.
     relation page: knowledge/page // rebac:field=page
     relation vault: knowledge/vault // rebac:field=vault
 
-    permission create = nil
-    permission read   = nil
+    permission target_read  = nil
+    permission target_write = nil
+
+    permission create = (page->write + vault->write) & target_write
+    permission read   = (page->read + vault->read) & target_read
     permission write  = nil
-    permission delete = nil
+    permission delete = (page->write + vault->write) & target_write
 }
