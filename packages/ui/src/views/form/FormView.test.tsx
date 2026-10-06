@@ -3304,7 +3304,8 @@ describe("FormView", () => {
 
   test("an untabbed record's form is the sheet that fills the content area", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} />);
-    expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
+    expect(await screen.findByRole("textbox", { name: "Title" })).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
     expect(document.querySelector("form")?.className).toContain("min-h-full");
   });
 
