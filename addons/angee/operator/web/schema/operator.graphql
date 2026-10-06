@@ -256,6 +256,7 @@ type Mutation {
   delete_workspaces_by_pk(id: String!): WorkspaceRef
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!
+  workspaceRepair(name: String!): WorkspaceRepairResult!
   workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
@@ -706,6 +707,30 @@ type WorkspaceRef {
   playwrightMcpUrl: String
   ttl: String
   ttlExpiresAt: String
+}
+
+"""
+The outcome of workspaceRepair, one entry per declared slot. ok is false when
+any slot failed to materialize; the mutation then also reports an error.
+"""
+type WorkspaceRepairResult {
+  workspace: String!
+  path: String!
+  ok: Boolean!
+  slots: [WorkspaceRepairSlot!]!
+}
+
+"""
+What workspaceRepair did with one source slot. action is created, ok,
+needs-attention or failed; status is the slot's state after the repair.
+"""
+type WorkspaceRepairSlot {
+  slot: String!
+  source: String!
+  path: String!
+  action: String!
+  reason: String
+  status: WorkspaceSourceStatus
 }
 
 type WorkspaceSourceStatus {

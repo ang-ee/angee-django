@@ -60,9 +60,9 @@ function TagInputEdit({
   return (
     <div
       className={tagInputVariants({
-        focus: "within",
         ...widgetControlPresentationProps(presentation),
-        invalid: controlProps["aria-invalid"],
+        focus: "within" as const,
+        invalid: Boolean(controlProps["aria-invalid"]),
       })}
     >
       {/* `contents` lets the chips and the draft input share one wrapping row. */}
