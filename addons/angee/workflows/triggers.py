@@ -20,6 +20,7 @@ from rebac import (
     ObjectRef,
     RelationshipTuple,
     actor_context,
+    generic_target,
     resolve_subjects,
     system_context,
     to_object_ref,
@@ -36,7 +37,6 @@ from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase, resolve_all_impl_classes
 from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label
 from angee.base.permissions import rebac_relation_label
-from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.iam.identity import user_label
 from angee.iam.service_users import sync_service_user
@@ -234,7 +234,7 @@ class TriggerSource(ImplBase):
         try:
             with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
                 cls.validate_model(model)
-                target = canonical_record_target(record)
+                target = generic_target(record)
                 records = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
                 if lock_if_supported(records, no_key=True).first() is None:
                     return

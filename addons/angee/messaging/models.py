@@ -59,7 +59,7 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
-from angee.base.refs import RecordRefMixin, canonical_record_model
+from angee.base.refs import RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
@@ -175,7 +175,7 @@ class ThreadedModelMixin(models.Model):
     message write path.
 
     **Placement across MTI.** The chatter edge keys on the record's canonical target —
-    its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.canonical_record_target`)
+    its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.generic_pointer_target`)
     — while the reverse :attr:`thread_attachments` GenericRelation and the ``pre_delete``
     teardown filter at the model that composes this mixin. Compose the mixin on that same
     topmost REBAC-typed ancestor (``parties.Party``, not ``parties.Person``), so the write
@@ -204,7 +204,7 @@ class ThreadedModelMixin(models.Model):
         authorization of the information derived from these message rows.
         """
 
-        owner = canonical_record_model(cls)
+        owner = generic_pointer_model(cls)
         content_type = ContentType.objects.filter(
             app_label=owner._meta.app_label,
             model=owner._meta.model_name,

@@ -32,11 +32,12 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
+from rebac import GenericTarget, generic_target
 
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
-from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_model
+from angee.base.refs import RecordRefMixin
 from angee.money.rounding import RoundingMode, rounding_constant
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
@@ -275,14 +276,16 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         return context_ref
 
     @staticmethod
-    def _canonical_context(context: models.Model) -> CanonicalRecordTarget:
-        if context.pk is None:
-            raise ValidationError("A contextual currency rate requires one saved context.")
-        model = canonical_record_model(type(context))
+    def _canonical_context(context: models.Model) -> GenericTarget:
+        """Return the saved, REBAC-typed context a rate is keyed on."""
+
+        try:
+            canonical = generic_target(context)
+        except ValueError as error:
+            raise ValidationError("A contextual currency rate requires one saved, typed context.") from error
+        model = canonical.content_type.model_class()
         if not hasattr(model, "system_queryset"):
             raise ValidationError("The currency-rate context is not a canonical resource.")
-        content_type = ContentType.objects.get_for_model(model)
-        canonical = CanonicalRecordTarget(content_type, context.pk)
         if not model.system_queryset().filter(pk=canonical.object_id).exists():
             raise ValidationError("The currency-rate context is unavailable.")
         return canonical

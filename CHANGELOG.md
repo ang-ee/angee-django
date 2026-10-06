@@ -31,6 +31,57 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- `angee.base.refs.canonical_record_target`, `canonical_record_model` and
+  `CanonicalRecordTarget` are removed: a polymorphic edge stores
+  `rebac.generic_target`, and model-level canonical projections read
+  `rebac.field_backing.canonical_model`. Currency-rate contexts, resource
+  `RecordRefField` imports and tag assignments key their target the same way and
+  refuse an untyped row with `ValueError` (a currency-rate context reports it as
+  a `ValidationError`). The two edges that name rows outside REBAC — a chatter
+  thread on an ungated host and an import record link to a plain domain sink —
+  store `angee.base.refs.generic_pointer_target`, the library's identity for a
+  gated row and Django's own for an ungated one. Consumers that imported the removed
+  helpers move to `rebac.generic_target` (an instance's stored content type and
+  id) or `rebac.field_backing.canonical_model` (a model's canonical class,
+  `None` when untyped).
+- Workflow subjects, step records, step watches, decision records and extraction
+  sources stay owner-authorized evidence edges: their access follows the run,
+  decision or extraction, and the owner's admission gate (`readable_records`,
+  the read-scoped lookup) checks the record at write time, so they take no
+  per-type target relations. They now store `rebac.generic_target` and refuse an
+  untyped record with `ValueError`.
+- Messaging thread attachments authorize their record in the REBAC schema: the
+  app that owns an attachable record type declares one `target`-backed relation
+  for it and unions its write into `messaging/thread_attachment`'s `target_write`
+  (projects: tasks and projects; proposals: rounds; messaging itself: files; the
+  notes example: notes). A source conversation is bound to a record under the
+  actor with write on the record and, through the library's backed-edge gate,
+  write on the thread, and unbound by the record's or the conversation's
+  writers; a record type no relation names is refused, and an untyped record
+  raises `ValueError`. The target arms reach source edges only (a const relation
+  on the row's role): the chatter edge remains the record's own thread,
+  materialized by its verbs under system context, with access riding on the
+  thread as before, and an ungated host keeps its own concrete content type
+  (`angee.base.refs.generic_pointer_target`). The edge's `create` no longer
+  admits every authenticated actor.
+- Project links, project resource bindings and portfolio health reports
+  authorize their target in the REBAC schema: each edge's per-type relations are
+  backed by its `GenericForeignKey`, rows are stored at `rebac.generic_target`
+  and created, written and deleted under the actor. The three edges derive
+  their accepted target types from the schema
+  (`RecordRefMixin.declared_target_models` / `validate_target`) instead of
+  listing them; a binding requires share on the project and the resource type's
+  own grant authority on both create and delete, stores a channel as its
+  integration (still the only integration kind a project binds), and is never
+  retargeted; a report's target stays immutable. `ProjectBinding.objects.bind`
+  and `unbind` replace `angee.projects.access.bind`/`unbind`. Removed:
+  `LinkManager.TARGET_RELATIONS`/`target_relation`/`target_model`
+  (`Link.declared_target_model` replaces the last), `UpdateManager
+  .TARGET_RELATIONS`/`target_relation`/`target_model`, the update's stored
+  relationship tuples, `ProjectBinding.allowed_target_models`, its
+  `ProjectBindingQuerySet` and the hand-rolled binding save/delete gates;
+  `projects.access.require_binding_access` now guards only the project's home
+  folder.
 - File attachments and knowledge record bindings authorize their target in the
   REBAC schema (django-zed-rebac 0.26.0 relations backed by the edge's
   `GenericForeignKey`) and are created and deleted under the actor. The app that

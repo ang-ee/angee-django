@@ -1,6 +1,6 @@
 // Project-owned container access contributed to upstream resource definitions.
 // @rebac_package: projects
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 definition storage/drive {
     relation project: projects/project // rebac:field=project_bindings__project
@@ -53,12 +53,19 @@ definition knowledge/vault {
     permission share = project->share
 }
 
-// Tasks carry files, and tasks and projects carry knowledge bindings: each edge's
-// target arm follows the record.
+// Tasks carry files, and tasks and projects carry knowledge bindings and source
+// conversations: each edge's target arm follows the record.
 definition storage/file_attachment {
     relation task: projects/task // rebac:field=target
 
     permission target_write = task->write
+}
+
+definition messaging/thread_attachment {
+    relation task: projects/task // rebac:field=target
+    relation project: projects/project // rebac:field=target
+
+    permission target_write = task->write + project->write
 }
 
 definition knowledge/record_binding {

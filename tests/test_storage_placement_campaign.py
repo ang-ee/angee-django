@@ -6,8 +6,7 @@ from typing import Any
 import pytest
 from rebac import actor_context, system_context
 
-from angee.projects.access import bind
-from angee.projects.testing.models import Project
+from angee.projects.testing.models import Project, ProjectBinding
 from tests.conftest import Drive, File, Folder, create_user
 from tests.storage_campaign import relationship_storage as relationship_storage
 from tests.test_project_access import project_access_schema as project_access_schema
@@ -22,7 +21,7 @@ def test_shared_drive_folder_does_not_narrow_files_to_project_readers(drive: Any
     with actor_context(drive.alice):
         project = Project.objects.create(title="Folder project")
         folder = Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Project files")
-        bind(project=project, target=folder)
+        ProjectBinding.objects.bind(project=project, target=folder)
         project.grant_record_access("reader", reader)
         drive.with_actor(drive.alice).grant_record_access("viewer", outsider)
         row = File.objects.draft(filename="shared.txt", drive_id=str(drive.sqid), folder_id=str(folder.sqid))
@@ -36,7 +35,7 @@ def test_bound_owning_drive_revokes_upload_access_with_project_membership(drive:
         drive.with_actor(drive.alice).owns_items = True
         drive.save(update_fields=["owns_items"])
         project = Project.objects.create(title="Bound project")
-        bind(project=project, target=drive)
+        ProjectBinding.objects.bind(project=project, target=drive)
         project.grant_record_access("reader", reader)
         project.grant_record_access("editor", editor)
     with actor_context(editor):
@@ -63,7 +62,7 @@ def test_identical_bytes_in_separate_bound_drives_keep_distinct_rows(drive: Any)
     with actor_context(drive.alice):
         for index, target in enumerate((drive, second)):
             project = Project.objects.create(title=f"Project {index}")
-            bind(project=project, target=target.with_actor(drive.alice))
+            ProjectBinding.objects.bind(project=project, target=target.with_actor(drive.alice))
             rows.append(File.objects.ingest_bytes(
                 PNG_BYTES, filename="same.png", drive_id=str(target.sqid), owner_id=drive.alice.pk,
             ))

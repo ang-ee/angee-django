@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from rebac import system_context, to_subject_ref
+from rebac import generic_target, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
@@ -18,7 +18,7 @@ from angee.base.identity import public_id_of
 from angee.base.jsonschema import validate
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target, record_ref_for
+from angee.base.refs import record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
@@ -201,7 +201,7 @@ class ExtractionManager(EvidenceManager):
                     raise ValidationError("A text claim requires a valid retained span.")
         source_values = []
         for source in sources:
-            target_ref = canonical_record_target(source.record)
+            target_ref = generic_target(source.record)
             source_values.append({
                 "position": source.source_position,
                 "file_id": source.file.pk if source.file is not None else None,
@@ -670,16 +670,11 @@ class ExtractionManager(EvidenceManager):
         if original is None or parent is None:
             raise ValidationError("The correction names an absent or inaccessible extraction revision.")
         self._require_correction_parent(original, parent)
-        revision_target = canonical_record_target(original)
-        if not decision.records.with_actor(actor).filter(
-            content_type=revision_target.content_type, object_id=revision_target.object_id,
-        ).exists():
+        records = decision.records.with_actor(actor)
+        if not records.filter(**generic_target(original).lookups(records.model, "record")).exists():
             raise ValidationError("The decision concerns another extraction revision.")
         target = original.target
-        canonical = canonical_record_target(target) if target is not None else None
-        if canonical is None or not decision.records.with_actor(actor).filter(
-            content_type=canonical.content_type, object_id=canonical.object_id,
-        ).exists():
+        if target is None or not records.filter(**generic_target(target).lookups(records.model, "record")).exists():
             raise ValidationError("The correction decision names another target.")
         if not target.with_actor(actor).has_access("read"):
             raise PermissionDenied("The correction target must remain readable.")

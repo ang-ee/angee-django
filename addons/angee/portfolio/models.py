@@ -18,13 +18,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import (
-    PermissionDenied,
-    RelationshipTuple,
-    SubjectRef,
     current_actor,
+    generic_target,
     system_context,
-    to_object_ref,
-    write_relationships,
 )
 
 from angee.base.fields import FractionalRankField, StateField
@@ -34,8 +30,8 @@ from angee.base.models import (
     AngeeManager,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin, canonical_record_target
-from angee.base.scoping import bind_actor
+from angee.base.refs import RecordRefMixin
+from angee.base.scoping import bind_actor, system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 
 
@@ -388,11 +384,8 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 ),
             )
             for target, health, body in targets:
-                canonical = canonical_record_target(target)
                 if update_model._base_manager.filter(
-                    content_type=canonical.content_type,
-                    object_id=canonical.object_id,
-                    body=body,
+                    **generic_target(target).lookups(update_model, "target"), body=body,
                 ).exists():
                     continue
                 report = update_model(
@@ -406,30 +399,13 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
 
 
 class UpdateManager(AngeeManager):
-    """Own target validation, authorization, and health-report creation."""
+    """Own target validation and health-report creation.
 
-    TARGET_RELATIONS = {
-        "projects.project": "project",
-        "portfolio.initiative": "initiative",
-    }
-
-    @classmethod
-    def target_relation(cls, target: models.Model) -> str:
-        """Return the Update relation for one allowed teleological target."""
-
-        try:
-            return cls.TARGET_RELATIONS[target._meta.label_lower]
-        except KeyError as error:
-            raise ValidationError({"target": "Portfolio updates may target only projects or initiatives."}) from error
-
-    @classmethod
-    def target_model(cls, model_label: str) -> type[models.Model]:
-        """Return the installed model for one allowed target label."""
-
-        normalized = str(model_label).strip().lower()
-        if normalized not in cls.TARGET_RELATIONS:
-            raise ValidationError({"target": "Portfolio updates may target only projects or initiatives."})
-        return apps.get_model(normalized)
+    ``permissions.zed`` backs the update's ``project`` and ``initiative``
+    relations with its ``GenericForeignKey``, so a report is created with write
+    on its target; reports are stored at :func:`rebac.generic_target` and
+    written under the actor.
+    """
 
     def report(
         self,
@@ -438,23 +414,16 @@ class UpdateManager(AngeeManager):
         health: str | UpdateHealth,
         body: str = "",
     ) -> models.Model:
-        """Create one report on a writable Project or Initiative."""
+        """Create one report on a Project or Initiative; its ``create`` requires write on the target."""
 
         if target.pk is None:
             raise ValidationError({"target": "A saved project or initiative is required."})
-        relation = self.target_relation(target)
-        if not target.has_access("write"):
-            raise PermissionDenied("Write access to the update target is required.")
-        actor = current_actor()
+        self.model.validate_target(target)
         with transaction.atomic():
-            with system_context(reason="portfolio.update.report.target"):
-                locked_target = type(target).objects.lock_if_supported().get(pk=target.pk)
-            verified_actor = self.check_create({relation: (locked_target,)})
-            report = self.model(target=locked_target, health=health, body=body)
+            locked_target = system_queryset(type(target), lock=("self",)).get(pk=target.pk)
+            report = self.model(health=health, body=body, **generic_target(locked_target).lookups(self.model, "target"))
             report.full_clean(validate_unique=False, validate_constraints=False)
-            report.sudo(reason="portfolio.update.report").save()
-            bind_actor(report, verified_actor or actor)
-            return report
+            return self.insert(report)
 
 
 class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
@@ -487,42 +456,38 @@ class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
             raise ValidationError({"health": "A portfolio update must assert health."})
         if self.target is None:
             raise ValidationError({"target": "A project or initiative target is required."})
-        UpdateManager.target_relation(self.target)
+        self.validate_target(self.target)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the report, its target relation, and the latest-health denorm."""
+        """Persist the report and the target's latest-health denorm.
+
+        The target is stored at :func:`rebac.generic_target` and is immutable:
+        the denormalized health belongs to the target the report was made on.
+        """
 
         if self.health in (None, ""):
             raise ValidationError({"health": "A portfolio update must assert health."})
-        if self.target is None:
+        target = self.target
+        if target is None:
             raise ValidationError({"target": "A project or initiative target is required."})
-        relation = UpdateManager.target_relation(self.target)
-        if self.pk is not None and not self._state.adding:
-            with system_context(reason="portfolio.update.immutable_target"):
-                persisted = type(self)._base_manager.filter(pk=self.pk).values("content_type_id", "object_id").first()
-            if persisted is not None and (
-                persisted["content_type_id"] != self.content_type_id or persisted["object_id"] != self.object_id
-            ):
+        self.validate_target(target)
+        canonical = generic_target(target)
+        self.content_type = canonical.content_type
+        self.object_id = canonical.object_id
+        if not self._state.adding:
+            persisted = type(self)._base_manager.filter(pk=self.pk).values_list("content_type_id", "object_id").first()
+            if persisted is not None and persisted != (self.content_type_id, self.object_id):
                 raise ValidationError({"target": "An update's target is immutable."})
         with transaction.atomic():
             super().save(*args, **kwargs)
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=to_object_ref(self),
-                        relation=relation,
-                        subject=SubjectRef(to_object_ref(self.target)),
-                    )
-                ]
-            )
             # Django QuerySet.update() bypasses save-path re-denormalization by nature;
             # the API routes through instance saves, and internal bulk writers are on their honor.
-            type(self.target)._base_manager.filter(pk=self.target.pk).update(
+            type(target)._base_manager.filter(pk=target.pk).update(
                 health=self.health,
                 health_updated_at=self.updated_at,
             )
-        self.target.health = self.health
-        self.target.health_updated_at = self.updated_at
+        target.health = self.health
+        target.health_updated_at = self.updated_at
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete the report and restore its target's surviving latest health."""

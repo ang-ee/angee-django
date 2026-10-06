@@ -41,7 +41,7 @@ from rebac import PermissionDenied, actor_context, current_actor, system_context
 from angee.base.identity import public_id_for
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_model
+from angee.base.refs import generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
@@ -793,7 +793,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         party.require_access("write", actor)
         if not 0 < confidence < 0.5:
             raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
-        evidence_model = canonical_record_model(type(evidence))
+        evidence_model = generic_pointer_model(type(evidence))
         evidence_ref = {
             "model": evidence_model._meta.label,
             "id": public_id_for(evidence_model, evidence.pk),

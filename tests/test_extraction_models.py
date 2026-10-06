@@ -16,11 +16,10 @@ from django.db import close_old_connections, connection, connections
 from django.db.models import CharField
 from django.db.models.deletion import PROTECT
 from django.test import override_settings
-from rebac import actor_context, system_context
+from rebac import actor_context, generic_target, system_context
 
 from angee.base.evidence import DerivedFrom, FactAuthority
 from angee.base.fields import StateField
-from angee.base.refs import canonical_record_target
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
@@ -155,7 +154,8 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     assert row.fact_correction("/documents/0/title") is None
     source = row.sources.get()
     assert isinstance(source, DerivedFrom)
-    assert (source.content_type, source.object_id) == canonical_record_target(values["target"])
+    target = generic_target(values["target"])
+    assert (source.content_type, source.object_id) == (target.content_type, target.object_id)
     assert source.record == values["target"]
     with pytest.raises(KeyError):
         row.fact("/documents/0/absent")

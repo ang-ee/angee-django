@@ -11,8 +11,7 @@ from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 
 from angee.messaging.testing.models import Person
-from angee.projects.access import bind, unbind
-from angee.projects.testing.models import Milestone, Project, Task
+from angee.projects.testing.models import Milestone, Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
 from angee.storage.exceptions import UploadDenied
 from angee.testing.permissions import install_permission_schema
@@ -176,19 +175,19 @@ def test_project_vault_binding_needs_share_and_drive_inherits_share(project_case
         vault = Vault.objects.create(name="Bound vault", owner=owner)
         backend_row = Backend.objects.create(slug="bound-drive", label="Drive", backend_class="local")
         drive = Drive.objects.create(backend=backend_row, slug="bound-drive", name="Bound drive", owner=None)
-        bind(project=project, target=vault)
-        bind(project=project, target=drive)
+        ProjectBinding.objects.bind(project=project, target=vault)
+        ProjectBinding.objects.bind(project=project, target=drive)
     assert vault.with_actor(writer).has_access("write")
     assert not vault.with_actor(writer).has_access("share")
     before = relationship_snapshot()
     with actor_context(writer), pytest.raises(PermissionDenied):
-        bind(project=destination.with_actor(writer), target=vault.with_actor(writer))
+        ProjectBinding.objects.bind(project=destination.with_actor(writer), target=vault.with_actor(writer))
     for row in (vault, drive):
         assert row.with_actor(owner).has_access("share")
         assert row.with_actor(reader).has_access("read")
         assert not row.with_actor(reader).has_access("share")
         with actor_context(owner):
-            unbind(project=project.with_actor(owner), target=row.with_actor(owner))
+            ProjectBinding.objects.unbind(project=project.with_actor(owner), target=row.with_actor(owner))
         assert not row.with_actor(reader).has_access("read")
     assert not drive.with_actor(owner).has_access("share")
     assert relationship_snapshot() == before

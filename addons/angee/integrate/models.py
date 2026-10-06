@@ -56,10 +56,10 @@ from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     RecordRefMixin,
-    canonical_record_target,
     concrete_child,
     concrete_child_accessor,
     concrete_child_models,
+    generic_pointer_target,
 )
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -3220,9 +3220,9 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         else:
             if target.pk is None:
                 raise ValidationError("A record target must be saved.")
-            canonical = canonical_record_target(target)
-            link.target_content_type = canonical.content_type
-            link.target_object_id = str(canonical.object_id)
+            # Provenance names any applied row, a plain domain sink included.
+            link.target_content_type, object_id = generic_pointer_target(target)
+            link.target_object_id = str(object_id)
 
     def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
         """Count a bounded batch of missing keys, retaining tombstones.

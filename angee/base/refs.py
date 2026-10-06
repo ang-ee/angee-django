@@ -1,39 +1,44 @@
 """Generic record references backed by Django contenttypes.
 
 A polymorphic edge and a REBAC grant see a multi-table-inheritance row from
-different sides. An edge whose target relations are backed by its
-``GenericForeignKey`` (``storage.FileAttachment``, ``knowledge.RecordBinding``)
-stores :func:`rebac.generic_target`, which owns the canonical write identity for
-typed rows. :func:`canonical_record_model` and :func:`canonical_record_target`
-key the edges that do not authorize their target through such relations yet, and
-also map untyped rows to their concrete model. :func:`ancestor_object_refs` owns
-the read/grant fan-out.
+different sides. An edge stores :func:`rebac.generic_target`, which owns the
+canonical write identity: a row is named by its topmost REBAC-typed MTI
+ancestor, and a row without a REBAC type cannot be named at all. The two edges
+that also name rows outside REBAC — a chatter thread on an ungated host, an
+import record link to a plain sink — store :func:`generic_pointer_target`, which falls
+back to Django's own generic-pointer identity for such a row.
+:func:`ancestor_object_refs` owns the read/grant fan-out, and
+:meth:`RecordRefMixin.declared_target_models` reads the target types an edge's schema declares.
 
-**Placement invariant.** Every polymorphic edge keyed on the canonical target —
-the two above, ``tags.TagAssignment``, ``messaging.ThreadAttachment`` — and every
-reverse ``GenericRelation`` onto such an edge (``messaging.ThreadedModelMixin.thread_attachments``,
-a future ``tags`` relation on ``Party``) must be declared on, and any mixin owning it
-composed onto, the *same* topmost REBAC-typed MTI ancestor the canonical write keys on. A reverse
-``GenericRelation`` filters at its declaring model's own content type, so composing the
-mixin on a child while its canonical ancestor does not splits the write content type
-from the collect content type and orphans edge rows on delete.
+**Placement invariant.** Every polymorphic edge and every reverse
+``GenericRelation`` onto one (``messaging.ThreadedModelMixin.thread_attachments``,
+``projects.ProjectBindingsMixin.project_bindings``) must be declared on, and any
+mixin owning it composed onto, the *same* topmost REBAC-typed MTI ancestor the
+canonical write keys on. A reverse ``GenericRelation`` filters at its declaring
+model's own content type, so composing the mixin on a child while its canonical
+ancestor does not splits the write content type from the collect content type
+and orphans edge rows on delete.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
+from django.utils.text import capfirst
 from rebac import ObjectRef, to_object_ref
-from rebac.resources import model_resource_type
+from rebac.field_backing import canonical_model
+from rebac.resources import model_for_resource_type, model_resource_type
+from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
+from angee.base.permissions import effective_rebac_definition
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,39 +58,10 @@ def record_ref_for(instance: models.Model) -> RecordRef:
     return _record_ref_from_model(model, instance.pk)
 
 
-class CanonicalRecordTarget(NamedTuple):
-    """The content type and id a polymorphic edge must store for a target row."""
-
-    content_type: ContentType
-    object_id: Any
-
-
-def canonical_record_target(obj: models.Model) -> CanonicalRecordTarget:
-    """Return the content type and id a polymorphic edge must store for ``obj``.
-
-    The **write rule** for a generic foreign key across multi-table inheritance:
-    resolve ``obj`` to its concrete model first (unwrapping any proxy), then
-    canonicalize to the *topmost* concrete MTI ancestor that declares a
-    ``rebac_resource_type`` — a ``parties.Person`` row canonicalizes to its
-    ``parties.Party`` ancestor — so a child and its parent share one edge set instead
-    of splitting it across their two content types. Resolving the proxy first means an
-    untyped proxy over a typed concrete row keys on the typed concrete ancestor, never
-    the proxy's own content type: a proxy is a presentation of its concrete row, not a
-    distinct target (this replaces the earlier "keep the proxy's own content type"
-    behavior). A row with no REBAC-typed ancestor keys on its concrete content type.
-    MTI shares one primary key down the pk-link chain, so ``obj.pk`` addresses the row
-    at whichever ancestor owns the edge; :func:`ancestor_object_refs` is the dual that
-    reads every level back.
-    """
-
-    model = canonical_record_model(type(obj))
-    return CanonicalRecordTarget(ContentType.objects.get_for_model(model), obj.pk)
-
-
 def ancestor_object_refs(obj: models.Model) -> tuple[ObjectRef, ...]:
     """Return every REBAC identity ``obj`` IS-A, nearest identity first.
 
-    The **read/grant fan-out** dual of :func:`canonical_record_target`: ``obj``'s own
+    The **read/grant fan-out** dual of :func:`rebac.generic_target`: ``obj``'s own
     identity first (raises :class:`TypeError` if its model declares no
     ``rebac_resource_type``), then each REBAC-registered concrete MTI ancestor it shares
     a primary key with (``parties.Person`` IS-A ``parties.Party``). Every identity shares
@@ -105,33 +81,40 @@ def ancestor_object_refs(obj: models.Model) -> tuple[ObjectRef, ...]:
     return tuple(refs)
 
 
-def canonical_record_model(model: type[models.Model]) -> type[models.Model]:
-    """Return the topmost concrete MTI ancestor of ``model`` with a REBAC type.
+def generic_pointer_model(model: type[models.Model]) -> type[models.Model]:
+    """Return the model a generic pointer stores for rows of ``model``.
 
-    This is the model-class projection of :func:`canonical_record_target`, for
-    callers such as resource metadata that need the canonical label without an
-    instance or a contenttypes query. Proxies unwrap first; untyped rows fall back
-    to their concrete model.
+    A gated row is named by its canonical REBAC model
+    (:func:`rebac.field_backing.canonical_model`), so a multi-table child shares
+    its typed parent's edges and the schema's target relations reach it. An
+    ungated row, which no schema relation can name, keeps its own concrete
+    model: Django's generic-pointer default. Only an edge that admits ungated
+    rows (a chatter thread, an import record link) uses this; an edge whose
+    schema authorizes its target stores :func:`rebac.generic_target` directly.
     """
 
-    concrete = model._meta.concrete_model or model
-    typed = [c for c in _pk_ancestor_chain(concrete) if model_resource_type(c) is not None]
-    return typed[-1] if typed else concrete
+    return canonical_model(model) or model._meta.concrete_model or model
+
+
+def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
+    """Return the content type and id a generic pointer stores for ``record``.
+
+    :func:`rebac.generic_target`'s identity for a gated row, Django's own for an
+    ungated one; see :func:`generic_pointer_model`.
+    """
+
+    return ContentType.objects.get_for_model(generic_pointer_model(type(record))), record.pk
 
 
 def is_record_target_model(model: type[models.Model]) -> bool:
     """Whether rows of ``model`` can be targets of a polymorphic record edge.
 
-    Edges that name a record by canonical target (knowledge bindings, decision
-    evidence) admit only records with a REBAC type, so only such models — and their
-    MTI children and proxies — need delete-time care for those edges. A model with
-    several concrete MTI parents has no canonical target, so it carries none.
+    :func:`rebac.generic_target` names only rows with a REBAC-typed canonical
+    model, so only such models — and their MTI children and proxies — need
+    delete-time care for the edges that name them.
     """
 
-    try:
-        return model_resource_type(canonical_record_model(model)) is not None
-    except ValueError:
-        return False
+    return canonical_model(model) is not None
 
 
 def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models.Model], ...]:
@@ -263,6 +246,54 @@ class RecordRefMixin(models.Model):
         if len(references) != 1:
             raise ImproperlyConfigured(f"{cls._meta.label} must declare exactly one GenericForeignKey.")
         return references[0]
+
+    @classmethod
+    def declared_target_models(cls) -> dict[str, type[models.Model]]:
+        """Return the target models this edge's effective schema declares, by ``label_lower``.
+
+        One relation per target type, backed by the generic pointer
+        (``// rebac:field=target``), names the types the edge may hold under an
+        actor. Owners derive their accepted-target sets from this one
+        declaration instead of listing the types again.
+        """
+
+        definition = effective_rebac_definition(cls)
+        if definition is None:
+            raise ImproperlyConfigured(f"{cls._meta.label} declares no REBAC definition to read target types from.")
+        pointer = cls.record_ref_field().name
+        targets: dict[str, type[models.Model]] = {}
+        for relation in definition.relations:
+            backing = relation.backing
+            if not isinstance(backing, FieldBinding) or backing.path != pointer:
+                continue
+            model = model_for_resource_type(relation.allowed_subjects[0].type)
+            if model is not None:
+                targets[model._meta.label_lower] = model
+        return targets
+
+    @classmethod
+    def declared_target_model(cls, model_label: str) -> type[models.Model]:
+        """Return the declared target model for a ``app_label.model`` label, or a ``ValidationError``."""
+
+        declared = cls.declared_target_models()
+        try:
+            return declared[str(model_label).strip().lower()]
+        except KeyError as error:
+            raise cls._undeclared_target(declared) from error
+
+    @classmethod
+    def validate_target(cls, target: models.Model) -> None:
+        """Reject a target whose canonical model the edge's schema does not declare."""
+
+        model = canonical_model(type(target))
+        declared = cls.declared_target_models()
+        if model is None or model._meta.label_lower not in declared:
+            raise cls._undeclared_target(declared)
+
+    @classmethod
+    def _undeclared_target(cls, declared: dict[str, type[models.Model]]) -> ValidationError:
+        names = ", ".join(sorted(str(model._meta.verbose_name) for model in declared.values()))
+        return ValidationError({"target": f"{capfirst(str(cls._meta.verbose_name))} may target only: {names}."})
 
     @classmethod
     def record_public_id_operand(cls, value: str) -> models.Case:

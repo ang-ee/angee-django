@@ -10,7 +10,7 @@ from django.db import models, transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, F, OuterRef, Q
 from django.db.models.functions import Now
 from pydantic import JsonValue, TypeAdapter
-from rebac import actor_context, current_actor, system_context, to_subject_ref
+from rebac import actor_context, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
@@ -18,7 +18,7 @@ from angee.base.evidence import readable_records
 from angee.base.identity import public_id_of
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_model, canonical_record_target
+from angee.base.refs import generic_pointer_model
 from angee.base.scoping import lock_if_supported, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_answered
@@ -44,12 +44,12 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
     def open_for(self, *records: Any) -> Any:
         concerns = Q(pk__in=[])
         for record in records:
-            content_type, object_id = canonical_record_target(record)
-            concerns |= Q(records__content_type=content_type, records__object_id=object_id)
+            target = generic_target(record)
+            concerns |= Q(records__content_type=target.content_type, records__object_id=target.object_id)
         return self.open().filter(concerns).distinct()
 
     def attention_expression(self, queryset: Any) -> Exists:
-        model = canonical_record_model(queryset.model)
+        model = generic_pointer_model(queryset.model)
         # Attention belongs to the readable record, regardless of who can answer
         # or read the question. Only the boolean crosses that permission boundary.
         return Exists(system_queryset(self.model).open().filter(
@@ -110,7 +110,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             for record in (*request.records, *related_records)
         ))
         readable_records(references, participants)
-        targets = {canonical_record_target(record) for record in request.records}
+        targets = {generic_target(record) for record in request.records}
         with transaction.atomic(), system_context(reason="decisions.ask"):
             # Capture admission only after its immutable concern links exist.
             with mute_changes():
@@ -122,8 +122,8 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             decision.assignees.set(assignees)
             link = apps.get_model("decisions", "DecisionRecord")
             link.objects.bulk_create([
-                link(decision=decision, content_type=ct, object_id=pk)
-                for ct, pk in sorted(targets, key=lambda target: (target[0].pk, target[1]))
+                link(decision=decision, **target.lookups(link, "record"))
+                for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
             ])
             if assignees and not any(decision.with_actor(person).has_access("act") for person in assignees):
                 raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})

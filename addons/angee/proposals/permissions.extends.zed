@@ -1,6 +1,6 @@
 // Proposal access through live planning and identity relations.
 // @rebac_package: proposals
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 definition projects/project {
     relation proposal_viewer: auth/user | auth/group#member
@@ -40,4 +40,12 @@ definition projects/task {
 definition auth/user {
     relation responding_round: proposals/round // rebac:field={"path":"proposal_responses__round","filters":{"proposal_responses__retired_at__isnull":true}}
     permission view_as = responding_round->manage
+}
+
+// A round carries source conversations under its writers: the thread attachment
+// edge reaches the round through its GenericForeignKey.
+definition messaging/thread_attachment {
+    relation round: proposals/round // rebac:field=target
+
+    permission target_write = round->write
 }

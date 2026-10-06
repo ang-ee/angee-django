@@ -19,7 +19,6 @@ from typing import Any, Self, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models.functions import JSONObject, Lower
@@ -30,6 +29,7 @@ from rebac import (
     PermissionDenied,
     actor_context,
     current_actor,
+    generic_target,
     system_context,
     to_object_ref,
 )
@@ -44,14 +44,12 @@ from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, CreationKeyConflict, ImmutableFieldsMixin, OptimisticLockMixin, OwnerQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.refs import canonical_record_model
 from angee.base.scoping import bind_actor, system_queryset
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.base.validation import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
-from angee.projects.access import bind
 from angee.proposals.inputs import RoundTemplate
 
 _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
@@ -2074,7 +2072,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                             owns_items=True,
                         )
                     drive = system_queryset(drive_model).get(pk=drive.pk)
-                    bind(project=track, target=drive)
+                    apps.get_model("projects", "ProjectBinding").objects.bind(project=track, target=drive)
         bind_actor(track, actor)
         _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
         self._state.fields_cache["track"] = track
@@ -2616,9 +2614,7 @@ class DriveProposalAccess(models.Model):
             rounds = (
                 apps.get_model("proposals", "Round")
                 ._base_manager.filter(
-                    proposals__track__resource_bindings__content_type=ContentType.objects.get_for_model(
-                        canonical_record_model(type(self)),
-                    ),
+                    proposals__track__resource_bindings__content_type=generic_target(self).content_type,
                     proposals__track__resource_bindings__object_id=self.pk,
                 )
                 .distinct()

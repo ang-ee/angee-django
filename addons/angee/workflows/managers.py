@@ -21,7 +21,7 @@ from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import actor_context, generic_target, system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
@@ -29,7 +29,6 @@ from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
 from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.events import ChangeRelatedRecord
@@ -340,8 +339,7 @@ class WorkflowRunQuerySet(AngeeQuerySet):
 
     def for_subject(self, record: Any) -> Any:
         """Select the canonical subject without changing this queryset's read scope."""
-        target = canonical_record_target(record)
-        return self.filter(subject_content_type=target.content_type, subject_object_id=target.object_id)
+        return self.filter(**generic_target(record).lookups(self.model, "subject"))
 
     def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
               limit: int | None = None) -> Any:
@@ -350,11 +348,12 @@ class WorkflowRunQuerySet(AngeeQuerySet):
             records = (records,)
         subjects = Q(pk__in=[])
         targets = Q(pk__in=[])
+        evidence_model = apps.get_model("workflows", "StepRecord")
         for record in records:
-            target = canonical_record_target(record)
-            targets |= Q(content_type=target.content_type, object_id=target.object_id)
-            subjects |= Q(subject_content_type=target.content_type, subject_object_id=target.object_id)
-        links = system_queryset(apps.get_model("workflows", "StepRecord")).filter(targets)
+            target = generic_target(record)
+            targets |= Q(**target.lookups(evidence_model, "record"))
+            subjects |= Q(**target.lookups(self.model, "subject"))
+        links = system_queryset(evidence_model).filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
         subjects = self.filter(subjects)
@@ -503,7 +502,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     request_key = f"child:{parent_step.sqid}:{parent_step.page_index}"
             workflow.refresh_from_db()
             workflow.validate_subject(subject)
-            target = canonical_record_target(subject) if subject is not None else None
+            target = generic_target(subject) if subject is not None else None
             identity = dict(
                 run_as_id=actor_user_id(to_subject_ref(actor)),
                 subject_content_type_id=target.content_type.pk if target is not None else None,
@@ -549,7 +548,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if subject is not None:
                 references.append(EvidenceReference(model=subject._meta.label, id=public_id_of(subject)))
             records = readable_records(references, (actor,))
-            targets = {canonical_record_target(record) for record in records}
+            targets = {generic_target(record) for record in records}
             try:
                 with transaction.atomic():
                     run = self.create(
@@ -745,7 +744,7 @@ class StepWatchManager(AngeeManager):
             TriggerSource.check_watch_model(type(record))
             if record.pk is None:
                 raise PermissionDenied("Read access to a saved watched record is required.")
-            target = canonical_record_target(record)
+            target = generic_target(record)
             targets[(target.content_type.pk, target.object_id)] = target
         with system_context(reason="workflows.watch_register"):
             for _, target in sorted(targets.items()):
@@ -769,9 +768,9 @@ class StepWatchManager(AngeeManager):
 
     def record_change(self, record: Any) -> None:
         """Mark committed observation obligations while shared dispatch holds the record lock."""
-        target = canonical_record_target(record)
+        target = generic_target(record)
         with system_context(reason="workflows.watch_capture"):
-            if self.filter(content_type=target.content_type, object_id=target.object_id).update(pending=True):
+            if self.filter(**target.lookups(self.model, "record")).update(pending=True):
                 payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
                 enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
 

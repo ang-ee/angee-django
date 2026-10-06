@@ -11,7 +11,7 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import F, Prefetch
 from django.db.models.lookups import IsNull
-from rebac import system_context
+from rebac import generic_target, system_context
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -20,7 +20,6 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.identity import public_id_for
 from angee.base.impl import resolve_all_impl_classes
 from angee.base.models import record_display_label
-from angee.base.refs import canonical_record_model, canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
@@ -910,7 +909,7 @@ class RecordTimelineQuery:
             model = apps.get_model(reference.model)
             record = require_instance_for_id(model, str(reference.id), queryset=read_scoped_queryset(model, actor))
             concerned.append(record)
-        targets = {canonical_record_target(record): record for record in concerned}
+        targets = {generic_target(record): record for record in concerned}
         run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=20)
         runs = list(run_type_get_queryset(
             run_query.order_by("-created_at", "-pk"),
@@ -936,9 +935,10 @@ class RecordTimelineQuery:
                     if run.pk in selected:
                         break
                     selected.add(run.pk)
+            canonical = target.content_type.model_class()
             result.append(RecordTimelineType(
-                record_model=canonical_record_model(type(record))._meta.label,
-                record_id=PublicID(public_id_for(canonical_record_model(type(record)), target.object_id)),
+                record_model=canonical._meta.label,
+                record_id=PublicID(public_id_for(canonical, target.object_id)),
                 runs=list(reversed([run for run in runs if run.pk in selected][:20])),
                 decisions=[decision for decision in decisions if any(
                     (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)

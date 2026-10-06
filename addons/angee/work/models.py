@@ -23,7 +23,7 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
-from rebac import PermissionDenied, current_actor, system_context
+from rebac import PermissionDenied, current_actor, generic_target, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
@@ -31,7 +31,6 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, RowLockMixin, clean_trash_reason
 from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.refs import canonical_record_target
 from angee.base.scoping import system_queryset
 from angee.base.stages import Stage as StagePrimitive
 from angee.base.stages import StagedModelMixin
@@ -1892,23 +1891,18 @@ class TaskWork(StagedModelMixin):
         """Re-key source links to ``canonical``, deleting URL collisions."""
 
         link_model = apps.get_model("projects", "Link")
-        source_target = canonical_record_target(self)
-        canonical_target = canonical_record_target(canonical)
+        canonical_target = generic_target(canonical)
         source_links = list(
             link_model.objects.sudo(reason="work.task.mark_duplicate.links")
             .lock_if_supported()
-            .filter(
-                content_type=source_target.content_type,
-                object_id=source_target.object_id,
-            )
+            .filter(**generic_target(self).lookups(link_model, "target"))
             .order_by("pk")
         )
         if not source_links:
             return
         canonical_urls = set(
             link_model._base_manager.filter(
-                content_type=canonical_target.content_type,
-                object_id=canonical_target.object_id,
+                **canonical_target.lookups(link_model, "target"),
             ).values_list("url", flat=True)
         )
         for link in source_links:

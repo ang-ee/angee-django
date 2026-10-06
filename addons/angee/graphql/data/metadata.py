@@ -16,7 +16,7 @@ from strawberry_django_hasura import HasuraResource
 from angee.base.impl import ImplClassField
 from angee.base.models import AngeeModel
 from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import canonical_record_model, concrete_child_models
+from angee.base.refs import concrete_child_models, generic_pointer_model
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis
@@ -613,7 +613,7 @@ def _finalize_data_resource(
         roots=roots,
         type_names=type_names,
         contributors=contributors,
-        canonical_label=canonical_record_model(model)._meta.label if model is not None else None,
+        canonical_label=generic_pointer_model(model)._meta.label if model is not None else None,
         row_model=row_model,
         record_representation=active_record_representation,
         record_search_fields=active_record_search_fields,

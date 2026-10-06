@@ -504,10 +504,13 @@ data through REBAC, never a queryset bypass.
 - **Container inheritance belongs to the resource and scope owners.** A
   resource's FK relations and arrows live in its own Zed definition. A scope
   contributes additional relations and arrows through its own
-  `permissions.extends.zed`; its binding writer mirrors the persisted evidence
-  and reconciles edits and deletion. See
-  [project bindings](../../addons/angee/projects/access.py). Binding a resource
-  widens access to its contents, so the binding owner must authorize both ends.
+  `permissions.extends.zed`. Binding a resource widens access to its contents,
+  so the binding edge's own `create` and `delete` require authority over both
+  ends: [project bindings](../../addons/angee/projects/permissions.zed) take
+  share on the project and the resource type's grant authority through the
+  relation declared for that type, and
+  [`projects.access.bind`](../../addons/angee/projects/access.py) writes them
+  under the actor.
 - **Declare direct sharing once.** Models declare `rebac_grantable`; the
   [record-access API](../../addons/angee/graphql/sharing.py) dispatches bulk
   grants and revocations through the model's checked methods. Addons do not
@@ -1002,18 +1005,34 @@ and current contracts before applying a historical example to a new deployment.
   queryset `update()` bypass it; normalize before writing email through them.
 - **Polymorphic edges authorize their target in the schema.** Back one relation
   per target type with the edge's `GenericForeignKey`, contributed by the app
-  that owns the type (`relation task: projects/task // rebac:field=target`), and
+  that owns the type (`relation task: projects/task // rebac:field=target`) or
+  declared by the edge's own addon when it already depends on the type's, and
   write the edge's `create`, `read` and `delete` over them; the type's model must
   be its own canonical model and its identity its primary key (`rebac.E009`).
   Store targets with `rebac.generic_target(record)`, create and delete edges
   under the actor, and list a record's edges with the scoped edge queryset
   filtered by `generic_target(record).lookups(Edge, "target")`. Move an edge by
-  deleting and recreating it. A type without a relation is refused under an
-  actor; [file attachments](../../addons/angee/storage/permissions.zed) require
-  write on the target and [knowledge bindings](../../addons/angee/knowledge/permissions.zed)
-  both ends. Edges not yet on this backing still key on
-  `angee.base.canonical_record_target`; compose `ThreadedModelMixin` and reverse
-  `GenericRelation`s on the same canonical ancestor either way.
+  deleting and recreating it; the library refuses a retargeting save. A type
+  without a relation is refused under an actor, and an edge that accepts only
+  some types derives that set from the schema through
+  `RecordRefMixin.declared_target_models` instead of listing it again. Each
+  edge's own `permissions.zed` states its rule:
+  [storage](../../addons/angee/storage/permissions.zed),
+  [knowledge](../../addons/angee/knowledge/permissions.zed),
+  [projects](../../addons/angee/projects/permissions.zed) (a binding takes
+  share on the project and the type's grant authority),
+  [portfolio](../../addons/angee/portfolio/permissions.zed) and
+  [messaging](../../addons/angee/messaging/permissions.zed) (a const relation on
+  the row's role keeps the arms off chatter edges). Evidence and provenance edges
+  whose access follows their owner (workflow subjects, step records and watches,
+  decision records, extraction sources, integrate record links, currency-rate
+  contexts) take no target relations: the owner's admission gate checks the
+  record at write time, and the edge still stores `rebac.generic_target`. Only
+  an edge that names rows outside REBAC (a chatter thread on an ungated host, an
+  import record link to a plain sink) stores
+  `angee.base.refs.generic_pointer_target`, which keeps Django's own identity
+  for such a row. Compose `ThreadedModelMixin` and reverse `GenericRelation`s on
+  the same canonical ancestor either way.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.
