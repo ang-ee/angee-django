@@ -69,25 +69,6 @@ export const IamOverview = graphql(`
   }
 `);
 
-export const IamUsers = graphql(`
-  query IamUsers($limit: Int = 500, $offset: Int = 0) {
-    users(limit: $limit, offset: $offset, order_by: [{ username: asc }]) {
-      id
-      username
-      first_name
-      last_name
-      email
-      is_staff
-      is_active
-    }
-    users_aggregate {
-      aggregate {
-        count
-      }
-    }
-  }
-`);
-
 export const IamIssueUserPassword = graphql(`
   mutation IamIssueUserPassword($id: ID!) {
     issue_user_password(id: $id) {
@@ -109,7 +90,7 @@ export const IamResetUserPassword = graphql(`
 export const IamAssignmentSubjects = graphql(`
   query IamAssignmentSubjects($limit: Int = 500, $subjects: [String!]! = []) {
     iam_assignment_subject_labels(subjects: $subjects) { subject label }
-    users(limit: $limit, order_by: [{ username: asc }]) {
+    users(limit: $limit, order_by: [{ first_name: asc }, { last_name: asc }]) {
       id
       username
       first_name
@@ -239,8 +220,6 @@ export type IAMPrincipalPermission = IAMPrincipalAccess["permissions"][number];
 
 export type IAMOverviewVariables = DocumentVariables<typeof IamOverview>;
 export type IAMRole = DocumentType<typeof IamOverview>["iam_roles"][number];
-
-export type IAMUsersVariables = DocumentVariables<typeof IamUsers>;
 
 export type IAMAssignmentSubjectsVariables = DocumentVariables<typeof IamAssignmentSubjects>;
 

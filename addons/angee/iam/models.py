@@ -3,9 +3,11 @@
 Pure identity: the swappable ``User`` and its manager. The OAuth connection
 substrate (``OAuthClient``/``ExternalAccount``/``Credential``) is owned by
 ``integrate``; OIDC login fields are contributed onto that OAuth client by
-``iam_integrate_oidc``. IAM's member-facing people directory is an
-actor-scoped user queryset: REBAC read arms authorize rows, while the user
-collection owns active-human filtering, search, ordering, and limits.
+``iam_integrate_oidc``. Everyone signed in reads a person's name; restricted
+fields are ``read__<field>`` gates for people managers and the person. IAM's
+people directory (``list``) and pickers (``colleague``) are actor-scoped user
+querysets: REBAC arms authorize rows, while the user collection owns
+active-human filtering, search, ordering, and limits.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.db.models import Exists, OuterRef, Q, TextField
+from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
 from rebac import (
@@ -43,6 +45,7 @@ from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.mixins import OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
+from angee.base.scoping import gated_field_expression
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders
@@ -189,33 +192,37 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(Self, self.people().filter(is_active=True))
 
     def search_users(self, search: str) -> Self:
-        """Filter users by the fields exposed by IAM identity pickers."""
+        """Filter users by the fields exposed by IAM identity pickers.
+
+        The restricted sign-in name and email match only where the actor reads
+        them, so a search never probes a field the actor cannot see.
+        """
 
         term = search.strip()
         if not term:
             return cast(Self, self)
         return cast(
             Self,
-            self.filter(
-                Q(username__icontains=term)
+            self.alias(
+                _iam_search_username=gated_field_expression(self, "username"),
+                _iam_search_email=gated_field_expression(self, "email"),
+            ).filter(
+                Q(_iam_search_username__icontains=term)
                 | Q(first_name__icontains=term)
                 | Q(last_name__icontains=term)
-                | Q(email__icontains=term)
+                | Q(_iam_search_email__icontains=term)
             ),
         )
 
     def ordered_users(self) -> Self:
-        """Apply deterministic ordering using the swappable user's native fields."""
+        """Order by sign-in name where the actor reads it, then by name and primary key."""
 
-        concrete_fields = {field.name for field in self.model._meta.fields}
-        fields: list[str] = []
-        username_field = str(getattr(self.model, "USERNAME_FIELD", ""))
-        if username_field in concrete_fields:
-            fields.append(username_field)
-        pk = self.model._meta.pk
-        if pk is not None and pk.name not in fields:
-            fields.append(pk.name)
-        return cast(Self, self.order_by(*(fields or ["pk"])))
+        return cast(
+            Self,
+            self.alias(_iam_order_username=gated_field_expression(self, "username")).order_by(
+                F("_iam_order_username").asc(nulls_last=True), "first_name", "last_name", "pk",
+            ),
+        )
 
     def picker(self, search: str) -> Self:
         """Apply the common active-person search and ordering pipeline."""
@@ -486,6 +493,24 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             user.unsudo()
         return user
 
+    def directory(self, actor: Any) -> UserQuerySet:
+        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
+
+        People managers list every account; anyone else lists nobody.
+        """
+
+        return cast(UserQuerySet, self.with_actor(actor).with_action("list"))
+
+    def colleagues(self, actor: Any) -> UserQuerySet:
+        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
+
+        People managers are offered every account; anyone else their own and
+        the arms identity owners contribute, such as the active people whose
+        identity they read through records.
+        """
+
+        return cast(UserQuerySet, self.with_actor(actor).with_action("colleague"))
+
     def visible_people(
         self,
         actor: Any,
@@ -493,14 +518,14 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         search: str = "",
         limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
     ) -> list[Any]:
-        """Return actor-readable active people after search, ordering, and cap."""
+        """Return ``actor``'s active colleagues after search, ordering, and cap."""
 
-        return list(self.with_actor(actor).picker(search)[:bounded_limit(limit)])
+        return list(self.colleagues(actor).picker(search)[:bounded_limit(limit)])
 
     def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
-        """Resolve one public user id against the same actor-scoped rows as the picker."""
+        """Resolve one public user id against the same colleague rows as the picker."""
 
-        return instance_from_public_id(self.model, str(public_id), queryset=self.with_actor(actor).active_people())
+        return instance_from_public_id(self.model, str(public_id), queryset=self.colleagues(actor).active_people())
 
     def viewable_people(
         self,

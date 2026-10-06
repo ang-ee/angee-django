@@ -55,6 +55,7 @@ from angee.graphql.schema import (
     GraphQLSchemas,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.permissions import session_user
 from tests.conftest import make_addon
 from tests.hierdemo.models import HierNode
 
@@ -79,9 +80,11 @@ def test_generated_read_root_conceals_missing_and_hidden_ids(composed_tables: No
     class PersonNode(AngeeNode):
         username: strawberry.auto
 
+    # Every signed-in user reads a name; the directory is the row scope that hides people.
     resource = hasura_data.hasura_model_resource(
         PersonNode, model=user_model, name="people", filterable=[], sortable=["id"], aggregatable=[],
         insert=False, update=False, delete=False,
+        get_queryset=lambda info: user_model.objects.directory(session_user(info)),
     )
     schema = GraphQLSchemas([addon(public={"query": [resource.query], "types": resource.types})]).build("public")
     endpoint = ActorMiddleware(GraphQLView.as_view(schema=schema))

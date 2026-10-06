@@ -79,8 +79,8 @@ def test_workflow_and_version_reads_follow_workflow_permission(schema, execution
     assert [(row["id"], row["number"]) for row in versions] == [(current.sqid, 2), (original.sqid, 1)]
     assert [row["content_hash"] for row in versions] == [current.content_hash, original.content_hash]
     assert all(row["created_at"] and row["workflow"] == {"id": workflow.sqid} for row in versions)
-    # An author relation does not override the user resource's own read policy.
-    assert all(row["published_by"] is None for row in versions)
+    # Everyone signed in reads the publisher the version embeds, under the user's own read policy.
+    assert all(row["published_by"] == {"id": admin.sqid} for row in versions)
     author_view = result_data(execute_schema(schema, query, variables, user=admin))
     assert all(row["published_by"] == {"id": admin.sqid} for row in author_view["workflowversion"])
     assert result_data(execute_schema(schema, query, variables, user=outsider)) == {

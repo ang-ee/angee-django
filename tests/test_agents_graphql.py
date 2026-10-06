@@ -515,6 +515,24 @@ def test_agent_delete_capability_has_constant_query_count(composed_tables: None)
     assert counts[0] == counts[1], counts
 
 
+def test_a_shared_agents_owner_shows_their_name_without_restricted_fields(composed_tables: None) -> None:
+    """The non-null owner resolves for a reader who is not a people manager, restricted fields withheld."""
+
+    owner = User.objects.create_user(username="agt-owner-name", email="agt-owner@example.com", first_name="Owen")
+    reader = User.objects.create_user(username="agt-owner-reader")
+    with system_context(reason="test.agents.owner_name.seed"):
+        agent = Agent.objects.create(name="Shared agent", owner=owner)
+    write_relationships([RelationshipTuple(to_object_ref(agent), "reader", to_subject_ref(reader))])
+
+    query = "{ agents { name owner { display_name username email is_active } } }"
+    rows = _data(_execute(_schema(), query, user=reader))
+
+    assert rows["agents"] == [{
+        "name": "Shared agent",
+        "owner": {"display_name": "Owen", "username": None, "email": None, "is_active": None},
+    }]
+
+
 def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> None:
     """Agent delete policy is enforced by the backend write owner, not only the UI."""
 

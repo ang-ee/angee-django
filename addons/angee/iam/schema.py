@@ -35,9 +35,10 @@ from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id, public_subject_ref
 from angee.base.models import AngeeModel
-from angee.base.scoping import lock_if_supported
+from angee.base.scoping import gated_field_expression, lock_if_supported
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.capabilities import permission_expression
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
@@ -46,7 +47,7 @@ from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
 from angee.graphql.writes import write_queryset
-from angee.iam.identity import user_label
+from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin, require_platform_admin, session_user
@@ -123,18 +124,27 @@ def _preference_object(user: Any) -> JSON:
     return cast(JSON, preferences if isinstance(preferences, dict) else {})
 
 
+def _display_label(user: Any, info: strawberry.Info) -> str:
+    """Return IAM's label for ``user``, the same one every record carries, whatever the viewer reads."""
+
+    if "username" in getattr(user, "_rebac_redacted_fields", ()):
+        return user.get_full_name() or user_display_label(user.pk, request=_request(info)) or ""
+    return user_label(user)
+
+
 @strawberry_django.type(User)
 class UserType(AngeeNode):
-    """GraphQL projection of an Angee user for shared/admin lists."""
+    """GraphQL projection of an Angee user: a name for everyone signed in, the rest for people managers."""
 
-    username: auto
     first_name: auto
     last_name: auto
-    email: auto
     kind: auto
-    is_staff: auto
-    is_active: auto
-    # Behind the read__last_login gate; null when never signed in or withheld.
+    # Restricted fields, behind their read__<field> gates: null for anyone but
+    # people managers and the person (and for a never-signed-in last_login).
+    username: str | None
+    email: str | None
+    is_staff: bool | None
+    is_active: bool | None
     last_login: auto
     revision: int = strawberry_django.field(field_name="account_revision")
 
@@ -158,20 +168,20 @@ class UserType(AngeeNode):
         return str(public_subject_ref(to_subject_ref(cast(Any, self))))
 
     @strawberry_django.field(only=["first_name", "last_name", "username"])
-    def display_name(self) -> str:
+    def display_name(self, info: strawberry.Info) -> str:
         """Return the user's human label, overriding the username Node default."""
 
-        return user_label(cast(Any, self))
+        return _display_label(self, info)
 
-    @strawberry_django.field
-    def full_name(self) -> str:
+    @strawberry_django.field(only=["first_name", "last_name", "username"])
+    def full_name(self, info: strawberry.Info) -> str:
         """Return the user's display name assembled by Django's auth contract."""
 
-        return user_label(cast(Any, self))
+        return _display_label(self, info)
 
     @strawberry_django.field
     def preferences(self) -> JSON:
-        """Return the user's private UI preference object."""
+        """Return the user's private UI preference object, empty where withheld."""
 
         return _preference_object(cast(Any, self))
 
@@ -599,9 +609,12 @@ def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
 
 
 def _user_queryset(info: strawberry.Info) -> QuerySet[Any]:
-    """Return readable people and service users for identity and access pickers."""
+    """Return the people and service users the viewer is offered: everyone for people managers.
 
-    return cast(QuerySet[Any], User.objects.with_actor(session_user(info)))
+    The managed people list narrows these rows with the ``directory`` filter.
+    """
+
+    return cast(QuerySet[Any], User.objects.colleagues(session_user(info)))
 
 
 def _group_queryset(info: strawberry.Info) -> QuerySet[Any]:
@@ -742,14 +755,20 @@ _GRANT_RESOURCE = hasura_pydantic_resource(
 )
 
 
+# Field-gated columns are never query axes. `active` filters on the activity
+# gate's own terms (NULL where the viewer cannot read it), and `directory` keeps
+# the rows the viewer lists in the people directory.
 _USER_RESOURCE = hasura_model_resource(
     UserType,
     model=User,
     name="users",
-    filterable=["id", "username", "email", "first_name", "last_name", "is_staff", "is_active"],
-    sortable=["username", "email", "first_name", "last_name", "is_staff", "is_active"],
+    filterable=["id", "first_name", "last_name", "active", "directory"],
+    filter_expressions={
+        "active": partial(gated_field_expression, field_name="is_active"),
+        "directory": partial(permission_expression, name="list"),
+    },
+    sortable=["first_name", "last_name"],
     aggregatable=["id"],
-    groupable=["is_staff", "is_active"],
     insertable=["username", "email", "first_name", "last_name"],
     updatable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
     get_queryset=_user_queryset,
@@ -912,11 +931,13 @@ class IAMConsoleQuery:
         search: str = "",
         limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
     ) -> list[UserType]:
-        """Return the signed-in actor's visible people for member pickers.
+        """Return the signed-in actor's active colleagues for member pickers.
 
-        REBAC read arms authorize rows; the User collection owns active-human
-        filtering, ordering, search, and limits. Access pickers use the ``users``
-        resource, which also includes readable service users.
+        REBAC ``colleague`` arms authorize rows: everyone for people managers,
+        otherwise the actor and the people whose identity they read through
+        records. The User collection owns active-human filtering, ordering,
+        search, and limits. Access pickers use the ``users`` resource, which also
+        includes service users.
         """
 
         return cast(list[UserType], User.objects.visible_people(session_user(info), search=search, limit=limit))

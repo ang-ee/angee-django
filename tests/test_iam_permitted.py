@@ -25,7 +25,7 @@ from tests.conftest import addon_schema, create_platform_admin, execute_schema, 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 PERMITTED = "query Permitted($refs: [String!]!) { current_user { username permitted(refs: $refs) } }"
-ADMIN_REFS = ["iam.User#create", "iam.User#read__last_login", "iam.User#read"]
+ADMIN_REFS = ["iam.User#create", "iam.User#read__last_login", "iam.User#list"]
 
 
 def _permitted(user: Any, refs: list[str]) -> Any:
@@ -56,7 +56,7 @@ def test_a_role_holder_holds_its_refs_and_others_do_not(composed_tables: None) -
     assert _held(through_group, ADMIN_REFS) == ADMIN_REFS
     assert _held(plain, ADMIN_REFS) == []
     # Each ref is answered once, in the order first asked.
-    assert _held(direct, ["iam.User#read", "iam.User#create", "iam.User#read"]) == ["iam.User#read", "iam.User#create"]
+    assert _held(direct, ["iam.User#list", "iam.User#create", "iam.User#list"]) == ["iam.User#list", "iam.User#create"]
 
 
 def test_anonymous_sessions_hold_no_ref(composed_tables: None) -> None:
@@ -85,7 +85,7 @@ def test_an_unknown_model_or_permission_fails_loudly(composed_tables: None) -> N
 
 
 def test_a_row_dependent_permission_is_false_at_type_level(composed_tables: None) -> None:
-    """A grant on one row reads that row; only an arm reading every row holds the ref."""
+    """A grant on one row lists that row; only an arm listing every row holds the ref."""
 
     reader = User.objects.create_user(username="permitted-reader")
     person = User.objects.create_user(username="permitted-person")
@@ -94,11 +94,11 @@ def test_a_row_dependent_permission_is_false_at_type_level(composed_tables: None
     ])
 
     assert backend().check_access(
-        subject=to_subject_ref(reader), action="read", resource=to_object_ref(person),
+        subject=to_subject_ref(reader), action="list", resource=to_object_ref(person),
     ).allowed
-    assert _held(reader, ["iam.User#read"]) == []
+    assert _held(reader, ["iam.User#list"]) == []
 
-    # The platform directory is const-backed: its readers read every person, so the ref holds.
+    # The platform directory is const-backed: its readers list every person, so the ref holds.
     directory = ObjectRef("iam/directory", "main")
     write_relationships([RelationshipTuple(resource=directory, relation="reader", subject=to_subject_ref(reader))])
-    assert _held(reader, ["iam.User#read"]) == ["iam.User#read"]
+    assert _held(reader, ["iam.User#list"]) == ["iam.User#list"]

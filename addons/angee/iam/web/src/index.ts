@@ -64,7 +64,8 @@ const identityMenu: readonly BaseMenuItem[] = [
         label: "Users",
         icon: "users",
         children: [
-          { id: "iam.users", label: "Users", route: "iam.users", icon: "users" },
+          // The full user list is for people managers; anyone else opening the route lists no one.
+          { id: "iam.users", label: "Users", route: "iam.users", icon: "users", requires: "iam.User#list" },
           { id: "iam.groups", label: "Groups", route: "iam.groups", icon: "users" },
         ],
       },

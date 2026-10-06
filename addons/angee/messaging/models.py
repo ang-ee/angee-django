@@ -60,7 +60,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin, canonical_record_model
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
@@ -772,7 +772,9 @@ class ThreadedModelMixin(models.Model):
         Suggestions come from fields the record declares as recipient owners and,
         when there is a discussion, from the latest user-facing comment's direct
         notification recipients. Existing followers and the current user are
-        omitted so the composer suggests only additional recipients.
+        omitted so the composer suggests only additional recipients. Candidates
+        are chosen on stored facts; each suggested account is then read as
+        ``user`` reads it, so restricted account fields stay behind IAM's gates.
         """
 
         if not self._message_read_allowed():
@@ -796,8 +798,6 @@ class ThreadedModelMixin(models.Model):
                 return
             key = str(candidate.pk)
             if key in seen or key in follower_ids or key == str(current_user_id):
-                return
-            if getattr(candidate, "is_active", True) is False:
                 return
             seen.add(key)
             suggestions.append({"user": candidate, "reason": reason, "source": source})
@@ -835,7 +835,13 @@ class ThreadedModelMixin(models.Model):
                 ):
                     add(notification.user, reason="Recent message recipient", source="recent_message_recipient")
 
-        return tuple(suggestions)
+        user_model = get_user_model()
+        active = user_model._base_manager.filter(pk__in=[item["user"].pk for item in suggestions], is_active=True)
+        viewer = user if user is not None else current_actor()
+        readable = read_scoped_queryset(user_model, viewer).in_bulk(list(active.values_list("pk", flat=True)))
+        return tuple(
+            {**item, "user": readable[item["user"].pk]} for item in suggestions if item["user"].pk in readable
+        )
 
     def activity_schedule(
         self,

@@ -77,6 +77,8 @@ describe("iam addon manifest", () => {
       "iam.users",
       "iam.groups",
     ]);
+    // Only people managers list people, so only they are offered the Users entry.
+    expect(usersGroup?.children?.map((item) => item.requires)).toEqual(["iam.User#list", undefined]);
     const rolesGroup = menu?.children?.find((item) => item.id === "iam.roles.group");
     expect(rolesGroup?.route).toBeUndefined();
     expect(rolesGroup?.children?.map((item) => item.route)).toEqual([
@@ -123,9 +125,10 @@ describe("iam addon manifest", () => {
     // Last sign-in is present only for viewers reading it on every row; the field gate still decides each value.
     expect(Object.entries(columns).flatMap(([id, child]) => child.requires ? [[id, child.requires]] : []))
       .toEqual([["iam.last-login", "iam.User#read__last_login"]]);
+    // Activity is gated, so the presets filter on the resource's gate-aware `active` expression.
     expect(iam.resourceViews?.map((preset) => [preset.id, preset.label, preset.filter])).toEqual([
-      ["iam.users.active", "Active", { is_active: { exact: true } }],
-      ["iam.users.deactivated", "Deactivated", { is_active: { exact: false } }],
+      ["iam.users.active", "Active", { active: { exact: true } }],
+      ["iam.users.deactivated", "Deactivated", { active: { exact: false } }],
     ]);
   });
 

@@ -518,9 +518,17 @@ data through REBAC, never a queryset bypass.
   delegates to native REBAC checks. An explicit actor stays bound to the instance;
   omitting it preserves native instance and ambient scope precedence. Verbs resolve
   attribution separately when they need to record a requesting actor.
-- **Recipient discovery follows identity read policy.** IAM's user resource
-  includes readable people and service users; human-only membership pickers
-  use its people collection. IAM owns the group model and declares its native
+- **Names for everyone; the directory for people managers.** Every signed-in
+  subject reads an account's name (`auth/user#read` is `authenticated`), so
+  records embed people freely. The sign-in name, email, last sign-in, staff and
+  active state and preferences are field gates for the person and people
+  managers (`read_private`). The full list follows `auth/user#list`: platform
+  admins, named directory readers and the roles a consumer unions in. Pickers
+  follow `auth/user#colleague`: the person, people managers' full directory,
+  and the identity arms owners contribute from their fragments. An arm is a
+  relation on `auth/user`, so its backing rows' writers need `write` on the
+  account; keep it to rows only identity flows write.
+  Human-only membership pickers use the user collection's people. IAM owns the group model and declares its native
   default subject relation as `member`; `to_subject_ref(group)` supplies the
   canonical subject set. Group membership accepts people and service users.
   Members can discover their groups and inspect their membership and bindings;
@@ -613,7 +621,10 @@ data through REBAC, never a queryset bypass.
   filter. Scope roles live on the scope definition, and scoped models derive
   arms from them (`scope->viewer` for read, `scope->editor` for write).
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.
-  A field gate is not creation policy: the library enforces `write__<field>` on
+  Filter or order on its gate's terms instead: a named filter expression or
+  queryset alias built with
+  [`gated_field_expression`](../../angee/base/scoping.py) is NULL wherever the
+  actor lacks the gate, as IAM's `active` filter is. A field gate is not creation policy: the library enforces `write__<field>` on
   update only, so keep a protected creation value out of generated insert inputs
   and let its owning verb supply it.
 - **Following is notification state, never access.** Messaging's
@@ -634,9 +645,9 @@ data through REBAC, never a queryset bypass.
   permission arms and add no permission other than an owned field gate, so
   narrowable defaults ship as seeded tuples. Platform-wide tuple-driven visibility
   uses a const-backed singleton relation on each row (for example,
-  `auth/user#directory` → `iam/directory:main`) plus a seed on that singleton
-  (`iam/directory:main#reader`), never base schema arms or per-row fan-out a
-  deployment cannot omit.
+  `auth/user#directory` → `iam/directory:main`) plus grants on that singleton
+  (`iam/directory:main#reader` names people managers), never base schema arms or
+  per-row fan-out a deployment cannot omit.
 - **Row-dependent shared visibility uses a filtered constant.** Filter the
   resource's own columns and target its own resource type at sentinel ID
   `shared`, then arrow to `shared_reader = authenticated`; see

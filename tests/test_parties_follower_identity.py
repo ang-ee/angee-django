@@ -613,7 +613,7 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
             identity_graphql,
             f"""query Followers($id: ID!) {{
       record_thread(input: {{model_label: "messaging.ThreadedTicket", record_id: $id}}) {{
-        error_code follower_count followers {{ party {{ {PARTY_SELECTION} }} user {{ id }} }}
+        error_code follower_count followers {{ party {{ {PARTY_SELECTION} }} user {{ id username }} }}
       }}
     }}""",
             {"id": ticket.sqid},
@@ -628,4 +628,5 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
         assert row["party"]["notes"] is None
         assert row["party"]["first_met_note"] is None
         assert row["party"]["handle_count"] is None
-        assert row["user"] is None, "Follower identity must not grant account-directory access"
+        # Every reader sees an account's name; following grants none of its restricted fields.
+        assert row["user"] is None or row["user"]["username"] is None, "Following grants no directory access"

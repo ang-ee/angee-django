@@ -14,7 +14,6 @@ from django.core.management import call_command
 from rebac import (
     ObjectRef,
     RelationshipTuple,
-    SubjectRef,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -29,7 +28,6 @@ from tests.tables import model_tables
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 
-_EVERYONE = SubjectRef.of("auth/user", "*")
 _DIRECTORY = ObjectRef("iam/directory", "main")
 _COLLEAGUES = """
     query Colleagues($search: String, $limit: Int) {
@@ -64,39 +62,37 @@ def _colleagues(actor: Any, *, search: str = "", limit: int = 20) -> list[dict[s
     return list(data["colleagues"])
 
 
-def _grant_directory_reader(resource: Any, subject: Any = _EVERYONE) -> None:
-    """Grant ``subject`` IAM directory-read reach on ``resource``."""
+def _grant_directory_reader(resource: Any, subject: Any) -> None:
+    """Name ``subject`` a directory reader of the one account ``resource``."""
 
-    subject_ref = subject if isinstance(subject, SubjectRef) else to_subject_ref(subject)
     write_relationships(
         [
             RelationshipTuple(
                 resource=to_object_ref(resource),
                 relation="directory_reader",
-                subject=subject_ref,
+                subject=to_subject_ref(subject),
             )
         ]
     )
 
 
-def _grant_directory(subject: Any = _EVERYONE) -> None:
-    """Grant ``subject`` platform-wide IAM directory reach."""
+def _grant_directory(subject: Any) -> None:
+    """Name ``subject`` a reader of the whole people directory."""
 
-    subject_ref = subject if isinstance(subject, SubjectRef) else to_subject_ref(subject)
     write_relationships(
         [
             RelationshipTuple(
                 resource=_DIRECTORY,
                 relation="reader",
-                subject=subject_ref,
+                subject=to_subject_ref(subject),
             )
         ]
     )
 
 
 @pytest.mark.django_db(transaction=True)
-def test_seeded_wildcard_directory_reader_exposes_active_human_directory(composed_tables: None) -> None:
-    """The shipped singleton wildcard posture opens user reads for non-admin actors."""
+def test_directory_reader_lists_the_active_human_directory(composed_tables: None) -> None:
+    """A reader of the whole directory picks among active people, never service users."""
 
     del composed_tables
     actor = User.objects.create_user(username="actor", email="actor@example.com")
@@ -111,41 +107,28 @@ def test_seeded_wildcard_directory_reader_exposes_active_human_directory(compose
         email="service@example.com",
         kind="service",
     )
-    _grant_directory()
+    assert [row["username"] for row in _colleagues(actor)] == ["actor"]
+    _grant_directory(actor)
 
     rows = _colleagues(actor)
 
     assert {row["username"] for row in rows} == {"actor", "peer"}
-    assert not active_relationship_model().objects.filter(
-        resource_type="auth/user",
-        relation="directory_reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_absent_wildcard_directory_seed_leaves_only_directly_authorized_rows(composed_tables: None) -> None:
-    """Without the wildcard seed, a member sees only rows with direct grants."""
+def test_account_directory_readers_are_offered_their_named_accounts(composed_tables: None) -> None:
+    """Without the whole directory, a member is offered themselves and the accounts named to them."""
 
     del composed_tables
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     granted = User.objects.create_user(username="granted", email="granted@example.com")
     hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
-    _grant_directory_reader(actor, actor)
     _grant_directory_reader(granted, actor)
 
     rows = _colleagues(actor)
 
     assert {row["username"] for row in rows} == {"actor", "granted"}
     assert hidden.username not in {row["username"] for row in rows}
-    assert not active_relationship_model().objects.filter(
-        resource_type="iam/directory",
-        resource_id="main",
-        relation="reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -166,7 +149,7 @@ def test_search_ordering_and_limit_are_user_collection_mechanics(composed_tables
         first_name="Alan",
         last_name="Turing",
     )
-    _grant_directory()
+    _grant_directory(actor)
 
     assert {row["username"] for row in _colleagues(actor, search="hopper")} == {"grace"}
     assert [row["username"] for row in _colleagues(actor, limit=1)] == ["alan"]
@@ -219,70 +202,34 @@ def _load_iam_demo_resources() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_iam_demo_resources_seed_directory_for_non_admin_user(iam_demo_resource_ledger: None) -> None:
-    """IAM demo resources seed a tuple-driven directory readable by fixture users."""
+def test_iam_demo_directory_is_the_platform_admins(iam_demo_resource_ledger: None) -> None:
+    """IAM's demo people seed no directory reader: only the demo admin lists them."""
 
     del iam_demo_resource_ledger
     _load_iam_demo_resources()
 
-    with system_context(reason="test.iam.demo-directory.actor"):
-        alice = User.objects.get(username="alice")
-    rows = _colleagues(alice)
+    with system_context(reason="test.iam.demo-directory.actors"):
+        admin, alice = User.objects.get(username="admin"), User.objects.get(username="alice")
 
-    assert {row["username"] for row in rows} == {"admin", "alice", "bob"}
-    assert active_relationship_model().objects.filter(
-        resource_type="iam/directory",
-        resource_id="main",
-        relation="reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
-    assert not active_relationship_model().objects.filter(
-        resource_type="auth/user",
-        relation="directory_reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_iam_demo_resource_exclusion_omits_wildcard_directory_grant(
-    iam_demo_resource_ledger: None,
-    settings: Any,
-) -> None:
-    """A project can load IAM demo users while opting out of the wildcard directory grant."""
-
-    del iam_demo_resource_ledger
-    settings.ANGEE_RESOURCE_EXCLUDED_ENTRIES = (
-        "angee.iam:resources/demo/020_iam.directory_wildcard_reader.yaml",
-    )
-
-    _load_iam_demo_resources()
-
-    with system_context(reason="test.iam.demo-directory.excluded-users"):
-        assert set(User.objects.values_list("username", flat=True)) == {"admin", "alice", "bob"}
-    assert not active_relationship_model().objects.filter(
-        resource_type="iam/directory",
-        resource_id="main",
-        relation="reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
+    assert {row["username"] for row in _colleagues(admin)} == {"admin", "alice", "bob"}
+    assert [row["username"] for row in _colleagues(alice)] == ["alice"]
+    assert not active_relationship_model().objects.filter(resource_type="iam/directory").exists()
 
 
 @pytest.mark.django_db(transaction=True)
 def test_iam_demo_directory_includes_user_created_after_resource_load(iam_demo_resource_ledger: None) -> None:
-    """A post-load user is still visible because directory reach is singleton-backed."""
+    """A post-load user is still listed because directory reach is singleton-backed."""
 
     del iam_demo_resource_ledger
     _load_iam_demo_resources()
 
     with system_context(reason="test.iam.demo-directory.post-load-user"):
         alice = User.objects.get(username="alice")
+    _grant_directory(alice)
     created_later = User.objects.create_user(username="charlie", email="charlie@example.com")
 
     assert "charlie" in {row["username"] for row in _colleagues(alice)}
-    assert {"admin", "alice", "bob", "charlie"} == {row["username"] for row in _colleagues(created_later)}
+    assert [row["username"] for row in _colleagues(created_later)] == ["charlie"]
 
 
 @pytest.mark.django_db(transaction=True)

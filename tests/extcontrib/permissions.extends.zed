@@ -21,15 +21,15 @@ definition messaging/thread {
 
 // Account actions follow the bound team's live roster. Preview authority stays
 // with the target's seat paths; this constant deliberately contributes no arm.
-// `write` reaches only the name fields: IAM's field gates keep identity,
-// credential and authority columns with administrators.
+// The role manages people: `list` admits it to the whole directory and to every
+// account's restricted fields. `write` reaches only the name fields: IAM's
+// field gates keep identity, credential and authority columns with administrators.
 definition auth/user {
     relation manager: extcontrib/role // rebac:const=manager
 
     permission create = manager->effective_member
-    permission read = manager->effective_member
+    permission list = manager->effective_member
     permission write = manager->effective_member
-    permission read__last_login = manager->effective_member
     permission issue_password = manager->effective_member
     permission reset_password = manager->effective_member
     permission set_active = manager->effective_member

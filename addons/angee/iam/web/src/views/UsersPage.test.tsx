@@ -51,6 +51,10 @@ describe("UsersPage", () => {
     expect(list.presetIds).toEqual(["iam.users.active", "iam.users.deactivated"]);
   });
 
+  test("lists the viewer's people directory, which is empty for anyone who manages no one", () => {
+    expect((UsersPage().props as { baseFilter?: unknown }).baseFilter).toEqual({ directory: { exact: true } });
+  });
+
   test("the form selects the revision and leaves account verbs to the record actions container", () => {
     const { form } = declarations();
     const fields = parsePageFields(form.children);
