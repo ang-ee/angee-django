@@ -25,22 +25,13 @@ vi.mock("@angee/ui", async () => ({
   useRouteRecordId: () => routerMocks.params.name,
 }));
 
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: () => ({
-    data: { serviceEndpoint: null },
-    fetching: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
-}));
-
 vi.mock("../../i18n", () => ({
   useOperatorT: () => (key: string) => key,
 }));
 
 vi.mock("../../data/transport", () => ({
   useOperatorSnapshot: operatorMocks.useOperatorSnapshot,
+  useOperatorQuery: () => ({ data: { serviceEndpoint: null }, fetching: false, error: null, refetch: vi.fn() }),
 }));
 
 vi.mock("./source-actions", () => ({

@@ -17,7 +17,6 @@ import {
   type RowActionDeclaration,
 } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useAuthoredQuery } from "@angee/refine";
 
 import {
   JOB_RUN_PREVIEW_QUERY,
@@ -27,9 +26,8 @@ import {
   STACK_UP_MUTATION,
 } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
-import { useOperatorAction } from "../../data/transport";
+import { useOperatorAction, useOperatorQuery } from "../../data/transport";
 import { useJobRunOperation } from "../../data/job-run";
-import { OPERATOR_PROVIDER } from "../../data/operator-provider";
 import type { JobState } from "../../data/types";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { useOperatorRows } from "../parts/operator-rows";
@@ -171,10 +169,10 @@ function useOperationActions(refetch: () => void): {
   const processingPreviewRef = useRef<number | null>(null);
   const nextPreviewIdRef = useRef(0);
   const mountedRef = useRef(true);
-  const preview = useAuthoredQuery(
+  const preview = useOperatorQuery(
     JOB_RUN_PREVIEW_QUERY,
     { name: previewRequest?.job.name ?? "", chainedRestart: true },
-    { dataProviderName: OPERATOR_PROVIDER, enabled: previewRequest !== null },
+    { enabled: previewRequest !== null },
   );
 
   const build = useOperatorAction(STACK_BUILD_MUTATION);

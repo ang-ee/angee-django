@@ -1,11 +1,9 @@
-import { useAuthoredQuery } from "@angee/refine";
 import { Code, DetailSection, DetailSurface, TextLink, useRouteRecordId } from "@angee/ui";
 import { type ReactElement } from "react";
 
 import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
-import { OPERATOR_PROVIDER } from "../../data/operator-provider";
 import { useOperatorT } from "../../i18n";
-import { useOperatorSnapshot } from "../../data/transport";
+import { useOperatorQuery, useOperatorSnapshot } from "../../data/transport";
 import { StateTag } from "../parts/StateTag";
 import { ServiceLogs } from "./logs";
 import { useServiceActions } from "./service-actions";
@@ -17,10 +15,10 @@ export function ServiceDetail(): ReactElement {
   const name = useRouteRecordId();
   const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
   const { actions, busy } = useServiceActions(refetch);
-  const endpoint = useAuthoredQuery(
+  const endpoint = useOperatorQuery(
     SERVICE_ENDPOINT_QUERY,
     { name: name ?? "" },
-    { dataProviderName: OPERATOR_PROVIDER, enabled: Boolean(name) },
+    { enabled: Boolean(name) },
   );
   const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
   const resolved = endpoint.data?.serviceEndpoint ?? null;

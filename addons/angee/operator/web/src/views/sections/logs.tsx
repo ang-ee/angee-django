@@ -1,12 +1,10 @@
 import { Alert, Badge, Card, CardContent, CardHeader, CardTitle, LogStream } from "@angee/ui";
-import {
-  isFatalGraphQLWsCloseCode, useAuthoredQuery } from "@angee/refine";
+import { isFatalGraphQLWsCloseCode } from "@angee/refine";
 import type { DocumentData } from "@angee/refine";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { OPERATOR_PROVIDER } from "../../data/operator-provider";
 import { useOperatorT } from "../../i18n";
-import { useOperatorConnection, useOperatorSubscription } from "../../data/transport";
+import { useOperatorConnection, useOperatorQuery, useOperatorSubscription } from "../../data/transport";
 import type {
   WORKSPACE_LOGS_QUERY,
   WORKSPACE_LOGS_SUBSCRIPTION,
@@ -48,10 +46,10 @@ export function useDaemonLogStream({
   streamSubscription: typeof WORKSPACE_LOGS_SUBSCRIPTION;
   streamField: keyof DocumentData<typeof WORKSPACE_LOGS_SUBSCRIPTION> & string;
 }): DaemonLogStream {
-  const history = useAuthoredQuery(
+  const history = useOperatorQuery(
     historyQuery,
     { name: name ?? "", limit: HISTORY_LIMIT },
-    { dataProviderName: OPERATOR_PROVIDER, enabled: Boolean(name) },
+    { enabled: Boolean(name) },
   );
   const [live, setLive] = useState<readonly string[]>([]);
   const stream = useOperatorSubscription(
