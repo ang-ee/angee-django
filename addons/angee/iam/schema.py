@@ -90,6 +90,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
+from angee.iam.roles import subject_permitted as _subject_permitted_owner
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
@@ -176,7 +177,7 @@ class UserType(AngeeNode):
 
 @strawberry_django.type(User)
 class CurrentUserType(AngeeNode):
-    """GraphQL identity projection, including the identity's private role refs."""
+    """GraphQL identity projection, including the identity's private role refs and permitted refs."""
 
     username: auto
     first_name: auto
@@ -208,6 +209,19 @@ class CurrentUserType(AngeeNode):
         """
 
         return sorted(str(role) for role in rebac_roles_of(cast(Any, self)))
+
+    @strawberry_django.field
+    def permitted(self, refs: list[str]) -> list[str]:
+        """Return which ``<app_label.ModelName>#<permission>`` refs this identity holds at type level.
+
+        The web shell asks once per identity load for every ``requires`` its
+        composition declares and leaves out the menu entries and container
+        children whose ref is missing. Presence only: querysets, row permissions
+        and field gates still decide. A row-dependent arm is false at type level;
+        an unknown model or permission is an error.
+        """
+
+        return _subject_permitted_owner(to_subject_ref(cast(Any, self)), refs)
 
 
 @strawberry_django.type(Group)
