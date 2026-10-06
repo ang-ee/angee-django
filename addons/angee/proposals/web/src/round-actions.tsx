@@ -174,7 +174,6 @@ export function useRoundCeremonyActions(
             argKind: "relationList",
             resource: PROPOSAL_MODEL,
             filters: submittedProposalFilters(roundId),
-            fromContext: () => [],
             optional: true,
           },
           {
@@ -183,7 +182,6 @@ export function useRoundCeremonyActions(
             argKind: "relationList",
             resource: PROPOSAL_MODEL,
             filters: submittedProposalFilters(roundId),
-            fromContext: () => [],
             optional: true,
           },
         ],

@@ -3221,6 +3221,10 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
     const activity = await screen.findByRole("tabpanel", { name: "Activity" });
     expect(activity.className).toContain("max-w-[1100px]");
+    // The panel follows the form, so the whole record fills the content area, never the form alone.
+    expect(activity.closest("form")).toBeNull();
+    expect(document.querySelector("form")?.className ?? "").not.toContain("min-h-full");
+    expect(activity.parentElement?.className).toContain("min-h-full");
     expect(recordChrome()).toEqual(chrome);
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(await screen.findByLabelText("Reminder")).toBeTruthy();
@@ -3292,6 +3296,18 @@ describe("FormView", () => {
       "Activity",
     ]);
     expect(screen.getByText("Activity panel")).toBeTruthy();
+    // The Activity panel follows the form: the record fills the content area as one sheet, so a
+    // short header never stretches over the panel and pushes it below the fold.
+    const record = screen.getByRole("tabpanel", { name: "Activity" }).parentElement!;
+    expect(record.className).toContain("min-h-full");
+    expect(record.className).toContain("bg-sheet");
+    expect(document.querySelector("form")?.className ?? "").not.toContain("min-h-full");
+  });
+
+  test("an untabbed record's form is the sheet that fills the content area", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} />);
+    expect(await screen.findByRole("textbox", { name: "Title" })).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
     expect(document.querySelector("form")?.className).toContain("min-h-full");
   });
 

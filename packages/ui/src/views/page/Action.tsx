@@ -47,7 +47,7 @@ export type ActionResult = string | void;
 export interface ActionFormContext {
   /** The open record the action targets, or `null` on a list/create surface. */
   record: Row | null;
-  /** Public ids selected on the invoking surface — a `relationList` arg's default. */
+  /** Public ids of the invoking model the action targets: the open record or the acted-on row. */
   selectedIds: readonly string[];
   /** Refetch the invoking record without replacing this action's collected draft. */
   refresh?: () => Promise<Row | null>;
@@ -116,7 +116,7 @@ export interface ActionRelationArg extends ActionArgBase {
 }
 
 /**
- * A multi relation-list arg, prefilled from the invoking context (explicit edit wins).
+ * A multi relation-list arg, empty unless `fromContext` seeds it (explicit edit wins).
  * The action form submits de-duplicated, non-empty string ids.
  */
 export interface ActionRelationListArg extends ActionArgBase {
@@ -132,8 +132,9 @@ export interface ActionRelationListArg extends ActionArgBase {
    */
   create?: RelationCreateConfig;
   /**
-   * Prefill the selected ids from the invoking context. Defaults to the invoking
-   * selection, else the open record's id. A user edit overrides the prefill.
+   * Prefill the selected ids from the invoking context; without it the list
+   * starts empty. A list of the invoking model seeds itself with
+   * `({ selectedIds }) => selectedIds`. A user edit overrides the prefill.
    */
   fromContext?: (context: ActionFormContext) => readonly string[];
 }
