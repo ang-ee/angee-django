@@ -484,6 +484,15 @@
   }
 }
 
+/* A toolbar with no leading actions (an embedded collection) has only the box
+   and the utilities to fit: they share one line well below the page width. */
+@container (min-width: 24rem) {
+  .resource-toolbar:not(:has(> .resource-toolbar-actions > *)) > .resource-toolbar-query {
+    order: 0;
+    flex: 1 1 12rem;
+  }
+}
+
 /* An inline collection toolbar may live in a narrow explorer/drawer. Its
    declared wrap mode lets whole control groups move instead of crushing their
    labels or forcing the pane to scroll horizontally. */
