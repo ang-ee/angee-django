@@ -6,7 +6,8 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./users": "./src/views/UsersPage.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
