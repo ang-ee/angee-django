@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Iterator, cast
 
-import httpx
+import httpx2
 import pytest
 import strawberry
 from django.core.cache import cache
@@ -81,10 +81,10 @@ def _daemon_answering(monkeypatch: pytest.MonkeyPatch, status: int, body: bytes)
     urls: list[str] = []
 
     class FakeHttpClient:
-        def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        def request(self, method: str, url: str, **kwargs: object) -> httpx2.Response:
             del method, kwargs
             urls.append(url)
-            return httpx.Response(status, content=body)
+            return httpx2.Response(status, content=body)
 
     monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
     daemon = OperatorDaemon(
@@ -201,7 +201,7 @@ def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytes
             body: bytes | None = None,
             allow_private: bool = False,
             timeout: int = 60,
-        ) -> httpx.Response:
+        ) -> httpx2.Response:
             calls.append(
                 {
                     "method": method,
@@ -212,7 +212,7 @@ def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytes
                     "timeout": timeout,
                 }
             )
-            return httpx.Response(200, content=b'{"ok": true}')
+            return httpx2.Response(200, content=b'{"ok": true}')
 
     monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
     daemon = OperatorDaemon(

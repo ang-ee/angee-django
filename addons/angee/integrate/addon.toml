@@ -7,12 +7,14 @@ keywords = ["integrations", "oauth", "connections"]
 category = "Integration"
 depends_on = ["angee.iam", "angee.resources", "angee.jobs", "angee.graphql"]
 dependencies = [
-  "authlib>=1.7.2",
-  # httpcore is bounded and named directly: integrate.http subclasses its SyncBackend
+  # Authlib's OAuth2Client is an httpx2 client from 1.8.0; earlier releases build it
+  # on httpx, which cannot drive integrate's httpx2 PinnedTransport.
+  "authlib>=1.8.0",
+  # httpcore2 is bounded and named directly: integrate.http subclasses its SyncBackend
   # and swaps the ConnectionPool's network backend for the SSRF pin, so the pin owns
-  # httpcore's API. httpx is bounded to the verified range for the same reason.
-  "httpcore>=1.0,<2",
-  "httpx>=0.28.1,<0.29",
+  # httpcore2's API. httpx2 is bounded to the verified range for the same reason.
+  "httpcore2>=2.10,<3",
+  "httpx2>=2.10,<3",
   "qrcode[pil]>=8.2",
 ]
 

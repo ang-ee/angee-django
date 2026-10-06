@@ -13,7 +13,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
@@ -28,9 +28,9 @@ def _patch_get(monkeypatch: pytest.MonkeyPatch, fake_http_get: Any) -> None:
 
     def get(
         self: Any, url: str, *, headers: Any = None, allow_private: bool = False, timeout: int = 15
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         status, body = fake_http_get(url, headers or {}, timeout=timeout)
-        return httpx.Response(status, content=body)
+        return httpx2.Response(status, content=body)
 
     monkeypatch.setattr(HttpClient, "get", get)
 

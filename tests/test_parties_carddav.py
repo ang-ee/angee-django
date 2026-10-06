@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 import vobject
 from django.db import connection
@@ -76,18 +76,18 @@ def _backend_with_http(http: Any) -> CardDavDirectoryBackend:
     return backend
 
 
-def test_native_httpx_multistatus_and_case_insensitive_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_native_httpx2_multistatus_and_case_insensitive_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     """DAV accepts native 207 after HttpClient follows a mixed-case Location header."""
 
     calls: list[str] = []
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         calls.append(str(request.url))
         if len(calls) == 1:
-            return httpx.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
-        return httpx.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
+            return httpx2.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
+        return httpx2.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(respond)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
     response = _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/root", "")
 
     assert response.status_code == 207
@@ -97,7 +97,7 @@ def test_native_httpx_multistatus_and_case_insensitive_redirect(monkeypatch: pyt
 def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         HttpClient, "transport_factory",
-        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(503, content=b"secret=private"))),
+        staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(503, content=b"secret=private"))),
     )
     with pytest.raises(CardDavError) as refused:
         _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/books/", "")

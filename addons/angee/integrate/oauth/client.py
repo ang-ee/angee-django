@@ -6,7 +6,7 @@ API access (Gemini, Grok, Anthropic), with no identity/login concern. OIDC login
 extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
 The OAuth2 protocol mechanism (token request, client authentication, PKCE, and
-the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx;
+the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx2;
 this module is the thin per-row adapter behind a stable seam. The authorization
 URL is still built here (a deterministic string the OIDC layer extends), and the
 small ``token_request_format == "json"`` provider quirk — a non-standard JSON
@@ -25,7 +25,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib import parse
 
-import httpx
+import httpx2
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import OAuth2Client
 
@@ -41,7 +41,7 @@ HTTP_TIMEOUT_SECONDS = 10
 # An honest, non-browser User-Agent for all outbound connection requests. Must NOT
 # spoof a browser: Anthropic's edge denylists browser/curl User-Agents with a 429
 # ``rate_limit_error`` (and blocks the HTTP client's default UA with a 403), while
-# an honest client UA passes. httpx defaults to ``python-httpx/…``, so the session
+# an honest client UA passes. httpx2 defaults to ``python-httpx2/…``, so the session
 # and the GET helper set this explicitly. See docs/backend/guidelines.md (Pitfalls).
 USER_AGENT = "Angee-Integrate/1.0"
 # Headers every outbound OAuth request carries. Angee parses only JSON bodies —
@@ -70,9 +70,9 @@ class OAuthClientProtocol:
         """Bind the protocol to one OAuth client registration row."""
 
         self.oauth_client = oauth_client
-        # Test seam: an injected httpx transport (e.g. ``httpx.MockTransport``) used
+        # Test seam: an injected httpx2 transport (e.g. ``httpx2.MockTransport``) used
         # by the per-row session and the JSON shim. ``None`` dials for real.
-        self._transport: httpx.BaseTransport | None = None
+        self._transport: httpx2.BaseTransport | None = None
         self._token_response_claims: dict[str, Any] = {}
 
     @property
@@ -163,7 +163,7 @@ class OAuthClientProtocol:
         session = self._session()
         try:
             session.revoke_token(revoke_endpoint, token=token, token_type_hint="access_token")
-        except OAuthError, httpx.HTTPError:
+        except OAuthError, httpx2.HTTPError:
             # Revocation is best-effort: a provider that rejects or omits the endpoint
             # does not block disconnect.
             pass
@@ -223,7 +223,7 @@ class OAuthClientProtocol:
             body = {"error": exc.error, "error_description": exc.description}
             self._log_token_failure(exc.error, body)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body=body) from exc
-        except httpx.HTTPStatusError as exc:
+        except httpx2.HTTPStatusError as exc:
             # Authlib raises this only for >=500 (it raise_for_status()es server errors).
             self._log_token_failure(exc.response.status_code, _response_body(exc.response))
             raise OAuthFlowError(
@@ -231,10 +231,10 @@ class OAuthClientProtocol:
                 exc.response.status_code,
                 body=_response_body(exc.response),
             ) from exc
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx2.HTTPError, ValueError) as exc:
             # Authlib parses the token body as JSON before checking the status, so a
             # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
-            # a ValueError, and a transport failure as httpx.HTTPError — both map to the
+            # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
             # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
             self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
@@ -262,19 +262,19 @@ class OAuthClientProtocol:
         client_secret = self._client_secret()
         if client_secret:
             body["client_secret"] = client_secret
-        client = self._httpx_client()
+        client = self._http_client()
         try:
             response = client.post(endpoint, json=body)
             response.raise_for_status()
             data = response.json()
-        except httpx.HTTPStatusError as exc:
+        except httpx2.HTTPStatusError as exc:
             self._log_token_failure(exc.response.status_code, _response_body(exc.response))
             raise OAuthFlowError(
                 TOKEN_EXCHANGE_FAILED,
                 exc.response.status_code,
                 body=_response_body(exc.response),
             ) from exc
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx2.HTTPError, ValueError) as exc:
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
         finally:
             client.close()
@@ -317,10 +317,10 @@ class OAuthClientProtocol:
             return ""
         return str(getattr(self.oauth_client, "client_secret", "") or "")
 
-    def _httpx_client(self) -> httpx.Client:
-        """Return a plain httpx client carrying the outbound headers (JSON-shim transport)."""
+    def _http_client(self) -> httpx2.Client:
+        """Return a plain httpx2 client carrying the outbound headers (JSON-shim transport)."""
 
-        return httpx.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs(self._transport))
+        return httpx2.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs(self._transport))
 
     def _log_token_failure(self, status: object, body: Any) -> None:
         """Log bounded token-request metadata without provider-controlled values."""
@@ -368,12 +368,14 @@ class OAuthClientProtocol:
         return value
 
 
-def _outbound_kwargs(transport: httpx.BaseTransport | None) -> dict[str, Any]:
-    """Shared outbound httpx policy: a request timeout and the transport.
+def _outbound_kwargs(transport: httpx2.BaseTransport | None) -> dict[str, Any]:
+    """Shared outbound httpx2 client policy: a request timeout and the transport.
 
-    A test injects an ``httpx.MockTransport``; a real call rides the integrate
+    A test injects an ``httpx2.MockTransport``; a real call rides the integrate
     addon's SSRF-pinned ``PinnedTransport``, so OAuth, discovery, and userinfo get
     the same address pinning and system-store TLS as every other outbound call.
+    Authlib's ``OAuth2Client`` is an ``httpx2.Client``, so the transport must be an
+    httpx2 transport too.
     ``allow_private=True`` permits operator-configured self-hosted IDPs on private
     networks while still rejecting cloud metadata and the other SSRF escapes.
     """
@@ -416,17 +418,17 @@ def _get_json(
     *,
     headers: Mapping[str, str] | None = None,
     error_code: str,
-    _transport: httpx.BaseTransport | None = None,
+    _transport: httpx2.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """GET a JSON document over httpx with the shared outbound headers."""
+    """GET a JSON document over httpx2 with the shared outbound headers."""
 
     request_headers = {**OUTBOUND_HEADERS, **dict(headers or {})}
     try:
-        with httpx.Client(**_outbound_kwargs(_transport)) as client:
+        with httpx2.Client(**_outbound_kwargs(_transport)) as client:
             response = client.get(url, headers=request_headers)
             response.raise_for_status()
             data = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx2.HTTPError, ValueError) as exc:
         raise OAuthFlowError(error_code, 400) from exc
     if not isinstance(data, dict):
         raise OAuthFlowError(error_code, 400)
@@ -450,8 +452,8 @@ def _token_response_identity_claims(response: Mapping[str, Any]) -> dict[str, An
     }
 
 
-def _response_body(response: httpx.Response) -> Any:
-    """Return a JSON or text response body from an httpx response."""
+def _response_body(response: httpx2.Response) -> Any:
+    """Return a JSON or text response body from an httpx2 response."""
 
     try:
         return response.json()

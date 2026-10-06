@@ -18,8 +18,8 @@ from typing import Any
 from urllib.parse import urljoin
 from xml.sax.saxutils import escape
 
-import httpcore
-import httpx
+import httpcore2
+import httpx2
 import pytest
 import vobject
 from django.core.exceptions import ValidationError
@@ -132,7 +132,7 @@ class FakeDav:
         self.cards.pop(href)
         self.events.append((self.version, href, True))
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         method, url = request.method, str(request.url)
         text = request.content.decode()
         headers = dict(request.headers)
@@ -140,30 +140,30 @@ class FakeDav:
         assert not connection.in_atomic_block, "DAV transport must remain outside database transactions"
         if method == "GET":
             if url in self.photos:
-                return httpx.Response(200, content=self.photos[url])
+                return httpx2.Response(200, content=self.photos[url])
             if url not in self.cards:
-                return httpx.Response(404)
+                return httpx2.Response(404)
             card, etag = self.cards[url]
-            return httpx.Response(200, content=card.encode(), headers={"ETag": etag})
+            return httpx2.Response(200, content=card.encode(), headers={"ETag": etag})
         if method in {"PUT", "DELETE"}:
             current = self.cards.get(url)
             rejected = (headers.get("if-none-match") == "*" and current is not None) or (
                 "if-match" in headers and (current is None or headers["if-match"] != current[1])
             )
             if rejected:
-                return httpx.Response(412)
+                return httpx2.Response(412)
             if method == "DELETE":
                 self.remove(url)
-                return httpx.Response(204)
+                return httpx2.Response(204)
             assert headers.get("if-match") or headers.get("if-none-match") == "*"
             etag = self.store(url, text)
-            return httpx.Response(204 if current else 201, headers={"ETag": etag})
+            return httpx2.Response(204 if current else 201, headers={"ETag": etag})
         root = ElementTree.fromstring(text)
         if method == "REPORT":
             if root.tag == "{DAV:}sync-collection":
                 token = root.findtext("d:sync-token", default="", namespaces=_NAMESPACES)
                 if token in self.invalid_tokens:
-                    return httpx.Response(403, content=b'<d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>')
+                    return httpx2.Response(403, content=b'<d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>')
                 since = int(token.rsplit("/", 1)[1]) if token else 0
                 changed = {href: removed for version, href, removed in self.events if version > since}
                 responses = "".join(self._response(href, removed=removed) for href, removed in sorted(changed.items()))
@@ -227,14 +227,14 @@ class FakeDav:
             "<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
         )
 
-    def _multistatus(self, responses: str, *, token: bool = False) -> httpx.Response:
+    def _multistatus(self, responses: str, *, token: bool = False) -> httpx2.Response:
         tail = f"<d:sync-token>{self.token}</d:sync-token>" if token else ""
         xml = (
             '<d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav" '
             'xmlns:cs="http://calendarserver.org/ns/">'
             f"{responses}{tail}</d:multistatus>"
         )
-        return httpx.Response(207, content=xml.encode())
+        return httpx2.Response(207, content=xml.encode())
 
 
 @dataclass
@@ -285,9 +285,9 @@ def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         )
         server = FakeDav()
 
-        def transport(*, allow_private: bool) -> httpx.MockTransport:
+        def transport(*, allow_private: bool) -> httpx2.MockTransport:
             server.private_access.append(allow_private)
-            return httpx.MockTransport(server.handle_request)
+            return httpx2.MockTransport(server.handle_request)
 
         monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
         backend = CardDavDirectoryBackend(directory)
@@ -436,11 +436,11 @@ def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_err
     replica.server.list_etags = unavailable != "missing_etag"
     original = replica.server.handle_request
 
-    def refuse(request: httpx.Request) -> httpx.Response:
+    def refuse(request: httpx2.Request) -> httpx2.Response:
         if request.headers["depth"] == "1" and unavailable != "missing_etag":
             if unavailable == "http_error":
-                return httpx.Response(403, content=b"private vendor payload")
-            return httpx.Response(
+                return httpx2.Response(403, content=b"private vendor payload")
+            return httpx2.Response(
                 207, content=b"invalid XML" if unavailable == "invalid_xml" else b'<d:multistatus xmlns:d="DAV:"/>',
             )
         return original(request)
@@ -1106,7 +1106,7 @@ def test_refused_xml_preserves_committed_sync_state(
     generation = replica.stream.generation
     revisions = RecordRevision.objects.filter(link=link).count()
     payload = b'<!DOCTYPE error><d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>'
-    monkeypatch.setattr(replica.server, "handle_request", lambda request: httpx.Response(status, content=payload))
+    monkeypatch.setattr(replica.server, "handle_request", lambda request: httpx2.Response(status, content=payload))
 
     with pytest.raises(ElementTree.ParseError if status == 207 else CardDavError):
         replica.pull()
@@ -1129,7 +1129,7 @@ def test_oversized_dav_response_preserves_committed_sync_state(
     reads = 0
     closed = False
 
-    class OversizedStream(httpx.SyncByteStream):
+    class OversizedStream(httpx2.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:
             nonlocal reads
             for _ in range(_DAV_RESPONSE_CAP // 65536 + 2):
@@ -1143,7 +1143,7 @@ def test_oversized_dav_response_preserves_committed_sync_state(
     headers = {"Content-Length": str(_DAV_RESPONSE_CAP + 1)} if declared_length else {}
     monkeypatch.setattr(
         replica.server, "handle_request",
-        lambda request: httpx.Response(207, headers=headers, stream=OversizedStream()),
+        lambda request: httpx2.Response(207, headers=headers, stream=OversizedStream()),
     )
     with pytest.raises(CardDavError, match="byte limit") as refused:
         replica.pull()
@@ -1166,10 +1166,10 @@ def test_discovery_falls_back_after_oversized_principal_response(
     original_request = replica.server.handle_request
     requested_urls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requested_urls.append(str(request.url))
         if str(request.url) == _BASE:
-            return httpx.Response(207, headers={"Content-Length": str(_DAV_RESPONSE_CAP + 1)})
+            return httpx2.Response(207, headers={"Content-Length": str(_DAV_RESPONSE_CAP + 1)})
         return original_request(request)
 
     monkeypatch.setattr(replica.server, "handle_request", handler)
@@ -1262,11 +1262,11 @@ def test_oversized_listing_fails_explicitly_without_advancing_or_marking_absence
     original_request = replica.server.handle_request
     listing_requests = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal listing_requests
         if request.method == "PROPFIND" and str(request.url) == _BOOK and request.headers["depth"] == "1":
             listing_requests += 1
-            return httpx.Response(207, headers={"Content-Length": str(_DAV_RESPONSE_CAP + 1)})
+            return httpx2.Response(207, headers={"Content-Length": str(_DAV_RESPONSE_CAP + 1)})
         return original_request(request)
 
     monkeypatch.setattr(replica.server, "handle_request", handler)
@@ -1309,7 +1309,7 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
         del args, kwargs
         pytest.fail("A private photo address must be rejected before opening a socket")
 
-    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", unexpected_socket)
+    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", unexpected_socket)
     monkeypatch.setattr(
         "angee.integrate.http.resolved_addresses", lambda host, port: (ipaddress.ip_address("127.0.0.1"),)
     )
@@ -1707,11 +1707,11 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
     replica: Replica,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sent: list[httpx.Request] = []
+    sent: list[httpx2.Request] = []
 
-    def redirect(request: httpx.Request) -> httpx.Response:
+    def redirect(request: httpx2.Request) -> httpx2.Response:
         sent.append(request)
-        return httpx.Response(302, headers={"Location": "https://attacker.example/collect"})
+        return httpx2.Response(302, headers={"Location": "https://attacker.example/collect"})
 
     monkeypatch.setattr(replica.server, "handle_request", redirect)
     monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
@@ -1726,11 +1726,11 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
 def test_same_origin_redirect_retains_dav_request_and_failure_translation(
     replica: Replica, monkeypatch: pytest.MonkeyPatch, status: int,
 ) -> None:
-    sent: list[httpx.Request] = []
+    sent: list[httpx2.Request] = []
 
-    def redirect(request: httpx.Request) -> httpx.Response:
+    def redirect(request: httpx2.Request) -> httpx2.Response:
         sent.append(request)
-        return httpx.Response(302, headers={"Location": "/relocated/"}) if len(sent) == 1 else httpx.Response(status)
+        return httpx2.Response(302, headers={"Location": "/relocated/"}) if len(sent) == 1 else httpx2.Response(status)
 
     monkeypatch.setattr(replica.server, "handle_request", redirect)
     headers = {"If-Match": '"version"'}

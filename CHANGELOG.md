@@ -31,6 +31,14 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Integrate's outbound HTTP (`PinnedTransport`, `HttpClient` and the OAuth
+  client) runs on httpx2/httpcore2 and requires Authlib >= 1.8.0, whose
+  `OAuth2Client` is an `httpx2.Client`; under Authlib 1.8 the httpx transport
+  failed every token exchange, refresh and revocation, including OIDC sign-in.
+  `HttpClient` responses, transport factories and transport errors are httpx2
+  types, so callers catching httpx errors or injecting `httpx.MockTransport`
+  move to httpx2, and downstream repositories regenerate their addons
+  dependency group.
 - Resource seeds apply transition-owned state only when creating a target;
   updates and adoption preserve live state. Initial state is excluded from
   content hashes, so changing it alone does not trigger re-import.
