@@ -31,6 +31,13 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Hasura input-extension values that name no model field reach their model: the
+  default write backend writes the row, then passes them to the cooperative
+  `AngeeModel.apply_input_extensions` hook in the same transaction (create is now
+  atomic too; nested line rows included). A value no consumer takes fails fast
+  instead of being silently dropped. Resource metadata marks every final
+  insert/set input field creatable/updatable, extension fields included, so
+  IAM's user `password` now reads as creatable.
 - Integrate's outbound HTTP (`PinnedTransport`, `HttpClient` and the OAuth
   client) runs on httpx2/httpcore2 and requires Authlib >= 1.8.0, whose
   `OAuth2Client` is an `httpx2.Client`; under Authlib 1.8 the httpx transport

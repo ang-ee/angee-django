@@ -11,13 +11,40 @@ adjacent ``permissions.zed``.
 
 from __future__ import annotations
 
+from typing import Any
+
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from angee.base.fields import StateField
 from angee.base.models import AngeeDataModel
 
 
-class Document(AngeeDataModel):
+class InputStampMixin(models.Model):
+    """Consume a test-only ``stamp`` input extension through the cooperative hook.
+
+    Each consumed stamp is recorded as a :class:`Tag` named
+    ``<model>:<stamp>@<row pk>``, so a test observes that the hook ran after the
+    row write and inside its transaction. The stamp ``reject`` raises after
+    recording, so a test observes the rollback of both writes.
+    """
+
+    class Meta:
+        """Abstract consumer composed onto the demo document and its lines."""
+
+        abstract = True
+
+    def apply_input_extensions(self, *, stamp: str | None = None, **values: Any) -> None:
+        """Record ``stamp`` for this saved row, then delegate the remaining values."""
+
+        if stamp is not None:
+            Tag.objects.create(name=f"{self._meta.model_name}:{stamp}@{self.pk}")
+            if stamp == "reject":
+                raise ValidationError({"stamp": "This stamp is rejected."})
+        super().apply_input_extensions(**values)
+
+
+class Document(InputStampMixin, AngeeDataModel):
     """An owner-gated document whose lines are edited transactionally."""
 
     sqid_prefix = "doc_"
@@ -77,7 +104,7 @@ class Tag(AngeeDataModel):
         db_table = "test_linesdemo_tag"
 
 
-class DocumentLine(AngeeDataModel):
+class DocumentLine(InputStampMixin, AngeeDataModel):
     """One ordered child line of a :class:`Document` (no row policy of its own)."""
 
     sqid_prefix = "dln_"

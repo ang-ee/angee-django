@@ -86,6 +86,7 @@ from angee.graphql.data.metadata import (
     resource_wire_field_names,
 )
 from angee.graphql.data.resource_fields import (
+    final_input_extension_fields,
     final_input_only_resource_fields,
     final_input_wire_fields,
     final_required_input_wire_fields,
@@ -163,6 +164,11 @@ class AngeeHasuraWriteBackend:
     owns the Angee write semantics inside that envelope: Django validation,
     REBAC row-scoped write targets, model save/delete signals, and returning a
     deleted instance in Hasura's ``delete_<res>_by_pk`` shape.
+
+    Values for input-extension fields that are not model fields never reach
+    strawberry-django, which would ignore them: each write persists the row,
+    then hands them to the row's :meth:`AngeeModel.apply_input_extensions` in
+    the same transaction.
     """
 
     def __init__(
@@ -197,18 +203,19 @@ class AngeeHasuraWriteBackend:
         return write_queryset(self.model)
 
     def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
-        """Create one row (and any declared nested child lines) atomically."""
+        """Create one row, its declared nested child lines and input extensions atomically."""
 
-        if client_creation_key is None and self.lines is None:
-            return self._create_row(info, data)
         with transaction.atomic():
             data = dict(data)
             line_rows = self._pop_line_rows(data) if self.lines is not None else None
+            extensions = _pop_input_extensions(self.model, data)
 
             def insert() -> Any:
                 instance = self._create_row(info, data)
                 if line_rows is not None:
                     self._apply_line_diff(info, instance, line_rows)
+                if extensions:
+                    instance.apply_input_extensions(**extensions)
                 return instance
 
             if client_creation_key is None:
@@ -217,7 +224,7 @@ class AngeeHasuraWriteBackend:
                 raise ValidationError({"client_creation_key": "This resource does not support creation keys."})
             decoded = self._decode_public_id_fields(data)
             scope = self.model.creation_key_actor_scope(current_actor(), decoded)
-            fingerprint = self._creation_fingerprint(decoded, line_rows)
+            fingerprint = self._creation_fingerprint({**decoded, **extensions}, line_rows)
             scope_field = self.model._meta.get_field(self.model.creation_key_scope)
             data.update({
                 scope_field.attname: scope,
@@ -273,6 +280,8 @@ class AngeeHasuraWriteBackend:
                 raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
             if expected_revision is not None:
                 instance.require_revision(expected_revision)
+            patch = dict(patch)
+            extensions = _pop_input_extensions(self.model, patch)
             if patch:
                 instance = mutation_resolvers.update(
                     info,
@@ -281,11 +290,13 @@ class AngeeHasuraWriteBackend:
                     key_attr=PUBLIC_ID_FIELD_NAME,
                     full_clean=True,
                 )
-            elif line_rows is not None and isinstance(instance, OptimisticLockMixin):
-                # A document's revision covers its child set as well as its columns.
+            elif (line_rows is not None or extensions) and isinstance(instance, OptimisticLockMixin):
+                # A document's revision covers its child set and extension values as well as its columns.
                 instance.save(update_fields={instance.REVISION_FIELD})
             if line_rows is not None:
                 self._apply_line_diff(info, instance, line_rows)
+            if extensions:
+                instance.apply_input_extensions(**extensions)
             return instance
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
@@ -326,7 +337,8 @@ class AngeeHasuraWriteBackend:
         rows are decoded first, under the **caller's** actor, so a referenced row
         the caller cannot see is rejected (never resolved by the elevation that
         follows). Only then do the child writes run under ``system_context`` —
-        the parent write is their gate (§3.4). Reached by both ``save`` and the
+        the parent write is their gate (§3.4), including for each child's
+        input-extension values, applied after its write. Reached by both ``save`` and the
         nested ``create`` path; the parent row is locked before its child set is
         read so concurrent saves cannot cross-delete each other's lines.
         """
@@ -351,6 +363,7 @@ class AngeeHasuraWriteBackend:
                 )
             kept_pks: set[Any] = set()
             for public_id, decoded in prepared:
+                extensions = _pop_input_extensions(child_model, decoded)
                 if public_id is not None:
                     child = by_public_id[public_id]
                     kept_pks.add(child.pk)
@@ -362,13 +375,15 @@ class AngeeHasuraWriteBackend:
                         full_clean=True,
                     )
                 else:
-                    mutation_resolvers.create(
+                    child = mutation_resolvers.create(
                         info,
                         child_model,
                         {**decoded, back_fk_id: parent.pk},
                         key_attr=PUBLIC_ID_FIELD_NAME,
                         full_clean=True,
                     )
+                if extensions:
+                    child.apply_input_extensions(**extensions)
             removed = set(existing) - kept_pks
             if removed:
                 child_model._base_manager.filter(pk__in=removed).delete()
@@ -391,7 +406,7 @@ class AngeeHasuraWriteBackend:
     def update(
         self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None
     ) -> Any:
-        """Patch one public-id-addressed row through the write queryset."""
+        """Patch one public-id-addressed row through the write queryset, then its input extensions."""
 
         with transaction.atomic():
             instance = require_instance_for_id(
@@ -401,13 +416,18 @@ class AngeeHasuraWriteBackend:
             )
             if expected_revision is not None:
                 instance.require_revision(expected_revision)
-            return mutation_resolvers.update(
+            data = dict(data)
+            extensions = _pop_input_extensions(self.model, data)
+            instance = mutation_resolvers.update(
                 info,
                 instance,
                 self._decode_public_id_fields(data),
                 key_attr=PUBLIC_ID_FIELD_NAME,
                 full_clean=True,
             )
+            if extensions:
+                instance.apply_input_extensions(**extensions)
+            return instance
 
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
         """Delete one public-id-addressed row and return the deleted instance."""
@@ -462,6 +482,24 @@ class AngeeHasuraWriteBackend:
             instance = _write_public_instance(related_model, value)
             out[f"{key}_id"] = None if instance is None else instance.pk
         return out
+
+
+def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> dict[str, Any]:
+    """Pop write values whose input field names no field of ``model``.
+
+    Generated insert/set inputs carry model fields, which strawberry-django
+    applies; a composed input extension may add others, which it would ignore.
+    The caller hands them to the written row's ``apply_input_extensions``.
+    """
+
+    def is_model_field(name: str) -> bool:
+        try:
+            model._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        return True
+
+    return {name: data.pop(name) for name in [name for name in data if not is_model_field(name)]}
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
@@ -1298,8 +1336,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         model, expressions,
         (set(filterable) | container_scopes) - set(filter_expressions or {}) - set(record_ref_filters or ()),
     )
-    filterable = tuple(dict.fromkeys((*filterable, *contributed_filters, *sorted(container_scopes), *model_filter_aliases,
-                                      *declared_expressions, *(record_ref_filters or ()))))
+    filterable = tuple(dict.fromkeys((
+        *filterable, *contributed_filters, *sorted(container_scopes), *model_filter_aliases,
+        *declared_expressions, *(record_ref_filters or ()),
+    )))
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
     sortable = tuple(dict.fromkeys((*sortable, *model_aliases)))
@@ -1758,7 +1798,10 @@ def _line_metadata(
     child_fields = final_input_wire_fields(
         schema,
         input_name,
-        accepted=resource_wire_field_names(line_input, exclude=("id",)),
+        accepted=(
+            *resource_wire_field_names(line_input, exclude=("id",)),
+            *final_input_extension_fields(schema, line_input),
+        ),
     )
     unknown_defaults = set(lines.defaults) - set(child_fields)
     if unknown_defaults:

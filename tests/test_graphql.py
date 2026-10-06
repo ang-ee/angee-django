@@ -351,10 +351,11 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
     }
 
 
+@pytest.mark.django_db
 def test_hasura_write_backend_create_delegates_prepared_insertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hasura only decodes public IDs before native preparation and insertion."""
+    """Hasura only decodes public IDs before native preparation and insertion, in one transaction."""
 
     related = SimpleNamespace(pk=7)
     created: dict[str, Any] = {}
