@@ -1,11 +1,11 @@
 """Tests for the SSRF-pinned outbound HTTP client (``integrate.http``).
 
-These exercise the real ``PinnedTransport`` / ``_PinnedBackend`` over httpx. The
-backend tests stub only ``socket.getaddrinfo`` (resolution) and httpcore's raw
+These exercise the real ``PinnedTransport`` / ``_PinnedBackend`` over httpx2. The
+backend tests stub only ``socket.getaddrinfo`` (resolution) and httpcore2's raw
 dial, so the address gate, the resolve-then-pin (DNS-rebind) protection, the
 dial-all fallback, and the ``OSError``-vs-``ValidationError`` distinction are
 asserted against the production path. End-to-end tests confirm those exceptions
-survive httpx. Request and download tests inject httpx's MockTransport through
+survive httpx2. Request and download tests inject httpx2's MockTransport through
 HttpClient's transport factory to assert redirect handling, byte budgets, address
 policy forwarding and the URL's Host header. No external network or database is
 used.
@@ -18,8 +18,8 @@ import socket
 from collections.abc import Iterator
 from typing import Any
 
-import httpcore
-import httpx
+import httpcore2
+import httpx2
 import pytest
 from django.core.exceptions import ValidationError
 
@@ -47,7 +47,7 @@ def _resolve_to(monkeypatch: pytest.MonkeyPatch, *addresses: str) -> None:
 
 
 def _record_dials(monkeypatch: pytest.MonkeyPatch, *, behaviors: list[Any] | None = None) -> list[str]:
-    """Stub httpcore's raw dial; record the host dialled and replay behaviors.
+    """Stub httpcore2's raw dial; record the host dialled and replay behaviors.
 
     Each call pops one behavior: an ``Exception`` is raised (connection failure),
     anything else returns a stand-in stream (tests do not perform real I/O).
@@ -63,7 +63,7 @@ def _record_dials(monkeypatch: pytest.MonkeyPatch, *, behaviors: list[Any] | Non
             raise behavior
         return object()
 
-    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", fake_connect)
+    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", fake_connect)
     return dialled
 
 
@@ -130,7 +130,7 @@ def test_dial_falls_back_to_the_next_validated_address(monkeypatch: pytest.Monke
     """When the first validated IP is unreachable, the next one is tried."""
 
     _resolve_to(monkeypatch, "93.184.216.34", "93.184.216.35")
-    dialled = _record_dials(monkeypatch, behaviors=[httpcore.ConnectError("down"), "ok"])
+    dialled = _record_dials(monkeypatch, behaviors=[httpcore2.ConnectError("down"), "ok"])
 
     _PinnedBackend(allow_private=False).connect_tcp("h", 443)
 
@@ -141,14 +141,14 @@ def test_all_addresses_unreachable_raises_os_error(monkeypatch: pytest.MonkeyPat
     """If every validated address fails, a transport ``OSError`` surfaces — not ``ValidationError``."""
 
     _resolve_to(monkeypatch, "93.184.216.34", "93.184.216.35")
-    _record_dials(monkeypatch, behaviors=[httpcore.ConnectError("a"), httpcore.ConnectError("b")])
+    _record_dials(monkeypatch, behaviors=[httpcore2.ConnectError("a"), httpcore2.ConnectError("b")])
 
     with pytest.raises(OSError):
         _PinnedBackend(allow_private=False).connect_tcp("h", 443)
 
 
 def test_httpclient_surfaces_validation_error_for_an_unsafe_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The SSRF gate's ``ValidationError`` survives httpx end-to-end."""
+    """The SSRF gate's ``ValidationError`` survives httpx2 end-to-end."""
 
     _resolve_to(monkeypatch, "169.254.169.254")
 
@@ -160,14 +160,14 @@ def test_httpclient_surfaces_os_error_when_unreachable(monkeypatch: pytest.Monke
     """A transport failure surfaces as ``OSError`` end-to-end (webhook telemetry relies on it)."""
 
     _resolve_to(monkeypatch, "93.184.216.34")
-    _record_dials(monkeypatch, behaviors=[httpcore.ConnectError("down")])
+    _record_dials(monkeypatch, behaviors=[httpcore2.ConnectError("down")])
 
     with pytest.raises(OSError):
         HttpClient().get(URL)
 
 
 def test_caller_host_header_is_stripped() -> None:
-    """A caller-supplied Host header is removed (case-insensitively) so httpx sets the URL host."""
+    """A caller-supplied Host header is removed (case-insensitively) so httpx2 sets the URL host."""
 
     assert dict(_request_headers({"Host": "evil.example.com", "X-Test": "1"}, capped=False)) == {"x-test": "1"}
     assert dict(_request_headers({"host": "evil.example.com"}, capped=False)) == {}
@@ -176,7 +176,7 @@ def test_caller_host_header_is_stripped() -> None:
 
 def test_pinned_transport_installs_the_pinned_backend() -> None:
     """The SSRF pin is actually wired into the transport — a direct guard so a future
-    httpx/httpcore rename of the private backend attribute fails the suite loudly rather
+    httpx2/httpcore2 rename of the private backend attribute fails the suite loudly rather
     than silently dialling un-pinned."""
 
     assert isinstance(PinnedTransport(allow_private=False)._pool._network_backend, _PinnedBackend)
@@ -191,7 +191,7 @@ def test_capped_read_stops_streaming_after_the_byte_cap(
     reads = 0
     closed = False
 
-    class CountingStream(httpx.SyncByteStream):
+    class CountingStream(httpx2.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:
             nonlocal reads
             for _index in range(20):
@@ -202,14 +202,14 @@ def test_capped_read_stops_streaming_after_the_byte_cap(
             nonlocal closed
             closed = True
 
-    def transport(*, allow_private: bool) -> httpx.MockTransport:
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
         assert allow_private is False
 
-        def handler(request: httpx.Request) -> httpx.Response:
+        def handler(request: httpx2.Request) -> httpx2.Response:
             assert request.headers["authorization"] == "Bearer token"
-            return httpx.Response(200, stream=CountingStream())
+            return httpx2.Response(200, stream=CountingStream())
 
-        return httpx.MockTransport(handler)
+        return httpx2.MockTransport(handler)
 
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
@@ -231,16 +231,16 @@ def test_capped_read_rejects_declared_oversize_before_reading(
 
     reads = 0
 
-    class CountingStream(httpx.SyncByteStream):
+    class CountingStream(httpx2.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:
             nonlocal reads
             reads += 1
             yield b"body"
 
-    def transport(*, allow_private: bool) -> httpx.MockTransport:
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
         assert allow_private is False
-        return httpx.MockTransport(
-            lambda _request: httpx.Response(
+        return httpx2.MockTransport(
+            lambda _request: httpx2.Response(
                 200,
                 headers={"Content-Length": "6"},
                 stream=CountingStream(),
@@ -267,10 +267,10 @@ def test_capped_request_returns_decoded_body_and_response_facts(
         headers["Content-Encoding"] = "gzip"
     monkeypatch.setattr(
         HttpClient, "transport_factory",
-        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(
+        staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(
             207,
             headers=headers,
-            stream=httpx.ByteStream(gzip.compress(body) if compressed else body),
+            stream=httpx2.ByteStream(gzip.compress(body) if compressed else body),
             extensions={"http_version": b"HTTP/1.1"},
         ))),
     )
@@ -294,17 +294,17 @@ def test_capped_read_refuses_decoded_compressed_overflow(
     wire = gzip.compress(b" " * 1000)
     assert len(wire) < 100
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["accept-encoding"] == "identity"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             headers={"Content-Encoding": "gzip", "Content-Length": str(len(wire))},
-            stream=httpx.ByteStream(wire),
+            stream=httpx2.ByteStream(wire),
         )
 
     monkeypatch.setattr(
         HttpClient, "transport_factory",
-        staticmethod(lambda **_: httpx.MockTransport(handler)),
+        staticmethod(lambda **_: httpx2.MockTransport(handler)),
     )
     if operation == "request":
         with pytest.raises(ResponseTooLargeError, match="byte limit") as refused:
@@ -324,13 +324,13 @@ def test_capped_reads_request_identity_encoding_without_changing_caller_headers(
         headers[encoding_header] = "gzip"
     original_headers = dict(headers)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["accept-encoding"] == "identity"
         assert request.headers["host"] == "dav.example.test"
         assert request.headers["x-test"] == "1"
-        return httpx.Response(200, content=b"ok")
+        return httpx2.Response(200, content=b"ok")
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(handler)))
     client = HttpClient()
     if operation == "request":
         assert client.request("REPORT", URL, max_bytes=10, headers=headers).content == b"ok"
@@ -343,11 +343,11 @@ def test_capped_reads_request_identity_encoding_without_changing_caller_headers(
 
 
 def test_uncapped_request_preserves_requested_content_encoding(monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["accept-encoding"] == "gzip"
-        return httpx.Response(200, content=b"ok")
+        return httpx2.Response(200, content=b"ok")
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(handler)))
     assert HttpClient().request("GET", URL, headers={"accept-encoding": "gzip"}).content == b"ok"
 
 
@@ -357,8 +357,8 @@ def test_capped_request_ignores_declared_length_for_bodyless_responses(
 ) -> None:
     monkeypatch.setattr(
         HttpClient, "transport_factory",
-        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(
-            status, headers={"Content-Length": "1000"}, stream=httpx.ByteStream(b""),
+        staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(
+            status, headers={"Content-Length": "1000"}, stream=httpx2.ByteStream(b""),
         ))),
     )
     response = HttpClient().request(method, URL, max_bytes=5)
@@ -372,7 +372,7 @@ def test_capped_download_retains_shared_byte_accounting(monkeypatch: pytest.Monk
     state = OutboundBudgetState(budget)
     monkeypatch.setattr(
         HttpClient, "transport_factory",
-        staticmethod(lambda **_: httpx.MockTransport(lambda request: httpx.Response(200, content=b"abc"))),
+        staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(200, content=b"abc"))),
     )
     result = HttpClient().download_bounded(URL, budget=budget, budget_state=state)
     assert result is not None and result.content == b"abc"
@@ -392,13 +392,13 @@ def test_capped_request_requires_positive_limit(max_bytes: int) -> None:
 def test_capped_request_refuses_oversized_redirect_before_next_hop(
     monkeypatch: pytest.MonkeyPatch, follow_redirects: bool,
 ) -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(302, headers={"Location": "/target"}, stream=httpx.ByteStream(b"oversized"))
+        return httpx2.Response(302, headers={"Location": "/target"}, stream=httpx2.ByteStream(b"oversized"))
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(handler)))
     with pytest.raises(ResponseTooLargeError, match="byte limit"):
         HttpClient().request(
             "REPORT", URL, max_bytes=5,
@@ -411,18 +411,18 @@ def test_capped_request_refuses_oversized_redirect_before_next_hop(
 def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Following a redirect re-enters the pinned backend, so a 30x to metadata is rejected."""
 
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def transport(*, allow_private: bool) -> httpx.MockTransport:
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
         assert allow_private is True
 
-        def handler(request: httpx.Request) -> httpx.Response:
+        def handler(request: httpx2.Request) -> httpx2.Response:
             requests.append(request)
             if len(requests) == 1:
-                return httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+                return httpx2.Response(302, headers={"Location": "http://169.254.169.254/"})
             raise ValidationError("URL host resolves to an address that is not allowed.")
 
-        return httpx.MockTransport(handler)
+        return httpx2.MockTransport(handler)
 
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
@@ -437,15 +437,15 @@ def test_redirect_not_followed_by_default_and_host_is_the_url_host(monkeypatch: 
 
     received_host = ""
 
-    def transport(*, allow_private: bool) -> httpx.MockTransport:
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
         assert allow_private is True
 
-        def handler(request: httpx.Request) -> httpx.Response:
+        def handler(request: httpx2.Request) -> httpx2.Response:
             nonlocal received_host
             received_host = request.headers["host"]
-            return httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+            return httpx2.Response(302, headers={"Location": "http://169.254.169.254/"})
 
-        return httpx.MockTransport(handler)
+        return httpx2.MockTransport(handler)
 
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
     response = HttpClient().get("http://127.0.0.1:8123/", headers={"Host": "evil.example.com"}, allow_private=True)
@@ -460,17 +460,17 @@ def test_redirect_not_followed_by_default_and_host_is_the_url_host(monkeypatch: 
 def test_same_origin_redirect_preserves_request(
     monkeypatch: pytest.MonkeyPatch, status: int, method: str, max_bytes: int | None,
 ) -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return (
-            httpx.Response(status, headers={"Location": "https://dav.example:443/target"})
+            httpx2.Response(status, headers={"Location": "https://dav.example:443/target"})
             if len(requests) == 1
-            else httpx.Response(207)
+            else httpx2.Response(207)
         )
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(handler)))
     response = HttpClient().request(
         method,
         "https://dav.example/start",
@@ -488,13 +488,13 @@ def test_same_origin_redirect_preserves_request(
 
 @pytest.mark.parametrize("destination", ["https://other.example/", "http://dav.example/", "https://dav.example:8443/"])
 def test_same_origin_redirect_rejects_changed_origin(monkeypatch: pytest.MonkeyPatch, destination: str) -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(302, headers={"Location": destination})
+        return httpx2.Response(302, headers={"Location": destination})
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(handler)))
     with pytest.raises(ValidationError, match="request origin"):
         HttpClient().request("PROPFIND", "https://dav.example/start", same_origin_redirects=3)
     assert len(requests) == 1
@@ -504,13 +504,13 @@ def test_same_origin_redirect_rejects_changed_origin(monkeypatch: pytest.MonkeyP
 def test_same_origin_redirect_stops_at_bound_or_non_preserving_status(
     monkeypatch: pytest.MonkeyPatch, status: int, location: str, count: int,
 ) -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(status, headers={"Location": location})
+        return httpx2.Response(status, headers={"Location": location})
 
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx.MockTransport(handler)))
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(handler)))
     response = HttpClient().request("REPORT", "https://dav.example/start", same_origin_redirects=3)
     assert response.status_code == status
     assert len(requests) == count

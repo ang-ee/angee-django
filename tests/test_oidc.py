@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
+from collections.abc import Iterator
 from datetime import timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import MethodType, SimpleNamespace
 from typing import Any
 from urllib import parse
 
-import httpx
+import httpx2
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -28,6 +31,7 @@ from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, Identity
 from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_account_connect
+from angee.integrate.http import _PinnedBackend
 from angee.integrate.models import AccountStatus, CredentialStatus
 from angee.integrate.oauth import client as oauth_protocol
 from angee.integrate.oauth import discovery as oauth_discovery
@@ -136,11 +140,11 @@ def test_outbound_requests_send_honest_user_agent() -> None:
 
     seen: list[str | None] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.headers.get("user-agent"))
-        return httpx.Response(200, json={"access_token": "access-token"})
+        return httpx2.Response(200, json={"access_token": "access-token"})
 
-    transport = httpx.MockTransport(handler)
+    transport = httpx2.MockTransport(handler)
 
     oauth_protocol._get_json(
         "https://idp.example/.well-known/openid-configuration",
@@ -220,11 +224,11 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
 
     captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["url"] = str(request.url)
         captured["fields"] = json.loads(request.content)
         captured["ua"] = request.headers.get("user-agent")
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "access_token": "access-token",
@@ -243,7 +247,7 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
         token_param_values={"audience": "https://api.example", "expires_in": 31536000},
     )
     protocol = OAuthClientProtocol(oauth_client)
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     tokens = protocol.exchange_code(
         code="auth-code",
@@ -279,17 +283,17 @@ def test_refresh_token_posts_refresh_grant() -> None:
 
     captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["url"] = str(request.url)
         captured["fields"] = json.loads(request.content)
-        return httpx.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200})
+        return httpx2.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200})
 
     oauth_client = _stub_oauth_client(
         token_request_format="json",
         token_param_values={"audience": "https://api.example", "expires_in": 31536000},
     )
     protocol = OAuthClientProtocol(oauth_client)
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     tokens = protocol.refresh_token(refresh_token="stored-refresh")
 
@@ -324,17 +328,17 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
         def client_secret(self) -> str:
             raise ImproperlyConfigured("encrypted secret must remain unread")
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["fields"] = (
             json.loads(request.content)
             if request_format == "json"
             else dict(parse.parse_qsl(request.content.decode()))
         )
         captured["authorization"] = request.headers.get("authorization")
-        return httpx.Response(200, json={"access_token": "synthetic-access"})
+        return httpx2.Response(200, json={"access_token": "synthetic-access"})
 
     protocol = OAuthClientProtocol(PublicClient())
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     if grant == "authorization_code":
         result = protocol.exchange_code(
@@ -386,11 +390,11 @@ def test_exchange_code_form_path_maps_non_json_error_to_oauth_flow_error() -> No
     a ``ValueError`` inside Authlib; it must map to the stable seam, not leak a 500.
     """
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(403, text="<html>403 Forbidden</html>")
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(403, text="<html>403 Forbidden</html>")
 
     protocol = OAuthClientProtocol(_stub_oauth_client())
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     with pytest.raises(OAuthFlowError) as exc_info:
         protocol.exchange_code(code="auth-code", redirect_uri="https://app.example/callback")
@@ -405,12 +409,12 @@ def test_token_transport_error_log_omits_request_url_and_client_id(
 
     canary_url = "https://issuer.example/oauth/token?code=canary-code"
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("failed " + canary_url, request=request)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("failed " + canary_url, request=request)
 
     oauth_client = _stub_oauth_client(token_endpoint=canary_url)
     protocol = OAuthClientProtocol(oauth_client)
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     with pytest.raises(OAuthFlowError):
         protocol.exchange_code(code="canary-code", redirect_uri="https://app.example/callback")
@@ -423,11 +427,11 @@ def test_token_transport_error_log_omits_request_url_and_client_id(
 def test_refresh_token_form_path_returns_renewed_material() -> None:
     """The default (form) refresh path returns the filtered token material."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600})
 
     protocol = OAuthClientProtocol(_stub_oauth_client())
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     tokens = protocol.refresh_token(refresh_token="stored-refresh")
 
@@ -440,12 +444,12 @@ def test_exchange_code_public_client_posts_client_id_and_verifier() -> None:
 
     captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = dict(parse.parse_qsl(request.content.decode()))
-        return httpx.Response(200, json={"access_token": "access-token"})
+        return httpx2.Response(200, json={"access_token": "access-token"})
 
     protocol = OAuthClientProtocol(_stub_oauth_client(client_secret="", supports_pkce=True))
-    protocol._transport = httpx.MockTransport(handler)
+    protocol._transport = httpx2.MockTransport(handler)
 
     protocol.exchange_code(
         code="auth-code",
@@ -460,6 +464,126 @@ def test_exchange_code_public_client_posts_client_id_and_verifier() -> None:
     assert body["grant_type"] == "authorization_code"
     assert "state" not in body
     assert "client_secret" not in body
+
+
+@pytest.fixture
+def loopback_provider() -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    """Serve an OAuth provider on loopback; yield its base URL and the requests it received.
+
+    The token endpoint answers form and JSON grants, userinfo answers a bearer GET and
+    revocation acknowledges. Each request is recorded with its method, path, outbound
+    headers and decoded fields.
+    """
+
+    received: list[dict[str, Any]] = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self._record({})
+            self._reply({"sub": "loopback-subject"})
+
+        def do_POST(self) -> None:
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            is_json = self.headers.get_content_type() == "application/json"
+            fields = json.loads(raw) if is_json else dict(parse.parse_qsl(raw.decode()))
+            self._record(fields)
+            if self.path == "/oauth/revoke":
+                self._reply({})
+                return
+            renewed = fields["grant_type"] == "refresh_token"
+            self._reply({
+                "access_token": "renewed-access" if renewed else "issued-access",
+                "refresh_token": "rotated-refresh" if renewed else "issued-refresh",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            })
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+        def _record(self, fields: dict[str, Any]) -> None:
+            received.append({
+                "method": self.command,
+                "path": self.path,
+                "user_agent": self.headers["User-Agent"],
+                "authorization": self.headers["Authorization"],
+                "fields": fields,
+            })
+
+        def _reply(self, document: dict[str, Any]) -> None:
+            body = json.dumps(document).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize("token_request_format", ("form", "json"))
+def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
+    loopback_provider: tuple[str, list[dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+    token_request_format: str,
+) -> None:
+    """Every OAuth call reaches a live provider through Authlib and the real SSRF pin.
+
+    Regression: Authlib builds its OAuth2 client on httpx2, and a transport from another
+    HTTP stack fails on its first request, so sign-in code exchange and refresh broke.
+    Only the provider is a test double; the Authlib session, the JSON shim, the GET
+    helper, ``PinnedTransport``, its pinned backend (``allow_private`` admits loopback)
+    and the sockets are the production path.
+    """
+
+    base_url, received = loopback_provider
+    dialled: list[str] = []
+    connect_tcp = _PinnedBackend.connect_tcp
+
+    def record_dial(self: _PinnedBackend, host: str, port: int, **kwargs: Any) -> Any:
+        dialled.append(host)
+        return connect_tcp(self, host, port, **kwargs)
+
+    monkeypatch.setattr(_PinnedBackend, "connect_tcp", record_dial)
+    protocol = OAuthClientProtocol(
+        _stub_oauth_client(
+            token_endpoint=f"{base_url}/oauth/token",
+            userinfo_endpoint=f"{base_url}/oauth/userinfo",
+            revoke_endpoint=f"{base_url}/oauth/revoke",
+            token_request_format=token_request_format,
+        )
+    )
+
+    issued = protocol.exchange_code(code="synthetic-code", redirect_uri="https://app.example/callback")
+    renewed = protocol.refresh_token(refresh_token=issued["refresh_token"])
+    claims = protocol.fetch_userinfo(renewed["access_token"])
+    protocol.revoke_token(renewed["access_token"])
+
+    assert issued == {"access_token": "issued-access", "refresh_token": "issued-refresh", "expires_in": 3600}
+    assert renewed == {"access_token": "renewed-access", "refresh_token": "rotated-refresh", "expires_in": 3600}
+    assert claims == {"sub": "loopback-subject"}
+    assert [(request["method"], request["path"]) for request in received] == [
+        ("POST", "/oauth/token"),
+        ("POST", "/oauth/token"),
+        ("GET", "/oauth/userinfo"),
+        ("POST", "/oauth/revoke"),
+    ]
+    assert received[0]["fields"]["grant_type"] == "authorization_code"
+    assert received[0]["fields"]["code"] == "synthetic-code"
+    assert received[1]["fields"]["grant_type"] == "refresh_token"
+    assert received[1]["fields"]["refresh_token"] == "issued-refresh"
+    assert received[2]["authorization"] == "Bearer renewed-access"
+    assert received[3]["fields"]["token"] == "renewed-access"
+    assert {request["user_agent"] for request in received} == {oauth_protocol.USER_AGENT}
+    assert dialled == ["127.0.0.1"] * 4
 
 
 def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -578,10 +702,10 @@ def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> 
             allow_private: bool,
             timeout: int,
             **kwargs: object,
-        ) -> httpx.Response:
+        ) -> httpx2.Response:
             del kwargs
             requests.append((url, headers, allow_private, timeout))
-            return httpx.Response(200, json={"keys": []})
+            return httpx2.Response(200, json={"keys": []})
 
     monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
 

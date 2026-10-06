@@ -14,7 +14,7 @@ from typing import Any, ClassVar, cast
 from urllib.error import HTTPError
 from urllib.request import Request
 
-import httpx
+import httpx2
 import pytest
 from django.db import connection
 from rebac import system_context
@@ -481,20 +481,20 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
 
     reads = 0
 
-    class CountingStream(httpx.SyncByteStream):
+    class CountingStream(httpx2.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:
             nonlocal reads
             for _index in range(20):
                 reads += 1
                 yield b"abcd"
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["authorization"] == "Bearer xoxp-user-token"
-        return httpx.Response(200, stream=CountingStream())
+        return httpx2.Response(200, stream=CountingStream())
 
-    def transport(*, allow_private: bool) -> httpx.MockTransport:
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
         assert allow_private is False
-        return httpx.MockTransport(handler)
+        return httpx2.MockTransport(handler)
 
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
     backend = SlackChannelBackend(_BridgeStub(config={"max_media_bytes": 5}))

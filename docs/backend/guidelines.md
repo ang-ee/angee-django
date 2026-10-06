@@ -1554,6 +1554,13 @@ validated at the driver boundary.
   default; an honest client UA passes. `angee.integrate.oauth.client` owns the value
   (`USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
   default.
+- **httpx and httpx2 objects do not mix.** An `httpx2.Client`, which Authlib's
+  `OAuth2Client` is from 1.8.0, asserts its own stream type inside the
+  transport, so an httpx transport fails on the first real request while
+  `MockTransport` tests pass. Integrate's outbound HTTP is httpx2 end to end
+  ([`angee.integrate.http`](../../addons/angee/integrate/http.py)). Cover a
+  transport or HTTP-library change with a real-socket test such as
+  `test_oauth_protocol_round_trips_over_the_real_pinned_transport`.
 - **Anthropic's JSON OAuth token exchange must echo redirect `state`.** Standard
   OAuth validates state before the token POST and does not send it, but
   Anthropic's public-client JSON token endpoint rejects that request as malformed
