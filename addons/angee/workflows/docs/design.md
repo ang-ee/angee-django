@@ -78,6 +78,14 @@ How the ontology maps to this addon.
 
 UI, in this addon's web fragment:
 
+Any saved record offers a **Run workflow** submenu listing published workflows
+for its model or canonical MTI ancestor that the actor may start. Choosing one
+starts it immediately, or opens the shared schema-driven input dialog when its
+definition requires fields; relation inputs use the standard record pickers.
+The manual-start mutation reads the subject in the actor's scope and delegates
+validation and request-key replay to run admission. Success refreshes the run
+models; the timeline's existing attention owner opens it when a question appears.
+
 - **Record timeline:** one component with one input, a record or a set of records. It is a pane beside the
   content and can be placed left or right.
   Peeks are passive and publish no pane. The eager contribution alone owns attention:

@@ -1,6 +1,7 @@
 """Native execution reads and manager-backed operator mutations under REBAC."""
 
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -66,7 +67,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     }
     fields = set(schema._schema.mutation_type.fields)
     assert fields == {
-        "cancel_workflow_run", "reprocess_workflow_run", "retry_step", "retry_step_accepting_duplicate",
+        "start_workflow_run", "cancel_workflow_run", "reprocess_workflow_run", "retry_step", "retry_step_accepting_duplicate",
         "enable_workflow_trigger", "disable_workflow_trigger", "revoke_workflow_trigger_grant",
         "insert_trigger_one", "update_trigger_by_pk", "delete_trigger_by_pk",
         "save_workflow_draft", "publish_workflow",
@@ -567,7 +568,7 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
     ]
     assert len(rows) == 5
     for row in rows:
-        assert row["permissions"] == (["monitor"] if visible else [])
+        assert row["permissions"] == (["monitor"] if visible else ["start"] if relation in {"starter", "operator"} else [])
         assert row["draft"] == (document("entry") if visible else None)
         assert row["draft_revision"] == (1 if visible else None)
         assert row["layout"] == ({} if visible else None)
@@ -850,3 +851,102 @@ def test_outcome_configuration_bound_and_entry_errors_share_the_manager_adapter(
     ]}, user=admin)
     assert result.errors[0].extensions["code"] == "VALIDATION"
     assert "100" in str(result.errors[0].extensions["validationErrors"]["configurations"])
+
+
+def start_on_record(schema, workflow, subject, actor, *, input=None, request_key=None):
+    """Use the public record verb with the client's admission identity."""
+    return result_data(execute_schema(schema, """mutation(
+      $workflow: ID!, $subject: WorkflowRunSubjectInput!, $input: JSON!, $key: String!
+    ) {
+      start_workflow_run(workflow_id: $workflow, subject: $subject, input: $input, request_key: $key) {
+        ok message id validation_errors
+      }
+    }""", {
+        "workflow": workflow.sqid, "subject": {"model": subject._meta.label, "id": subject.sqid},
+        "input": {} if input is None else input, "key": request_key or str(uuid4()),
+    }, user=actor))["start_workflow_run"]
+
+
+def test_record_start_as_starter_replays_the_same_request(schema, callers):
+    admin, actor, _ = callers
+    subject = vault_for(actor)
+    workflow = load_workflow(document("entry"), actor=admin, subject_model=subject._meta.label)
+    workflow.with_actor(admin).grant_record_access("starter", actor)
+    key = str(uuid4())
+    started = start_on_record(schema, workflow, subject, actor, request_key=key)
+    assert started["ok"] and started["message"] == f"{workflow.name} started"
+    assert start_on_record(schema, workflow, subject, actor, request_key=key) == started
+    run = WorkflowRun.objects.with_actor(actor).get()
+    assert (run.sqid, run.run_as_id, run.subject_object_id) == (started["id"], actor.pk, subject.pk)
+    refused = start_on_record(schema, workflow, subject, actor, input={"value": 1}, request_key=key)
+    assert not refused["ok"] and "different request" in refused["message"]
+    assert system_queryset(WorkflowRun).count() == 1
+
+
+@pytest.mark.parametrize("refusal", ["start", "subject", "model", "input", "publication"])
+def test_record_start_refuses_unavailable_or_invalid_admission(schema, callers, refusal):
+    admin, actor, other = callers
+    subject = vault_for(other if refusal == "subject" else actor)
+    workflow = load_workflow(document("entry"), actor=admin, subject_model=subject._meta.label,
+                             publish=refusal != "publication")
+    workflow.with_actor(admin).grant_record_access("viewer" if refusal == "start" else "starter", actor)
+    result = start_on_record(schema, workflow, workflow if refusal == "model" else subject, actor,
+                             input={"value": "invalid"} if refusal == "input" else {})
+    assert not result["ok"] and result["id"] is None
+    assert not system_queryset(WorkflowRun).exists()
+    if refusal == "input":
+        assert result["validation_errors"]["input.value"]
+
+
+def test_record_workflow_filters_list_only_published_startable_matching_workflows(schema, callers, register_step):
+    admin, actor, outsider = callers
+    subject = vault_for(actor)
+
+    class Inputs(BaseModel):
+        source_id: str = Field(json_schema_extra={"relation": {"resource": "knowledge.Vault"}})
+
+    class RecordInput(Step[Inputs, Value, None]):
+        key = "record_action_input"
+
+    register_step(RecordInput)
+    for key, model, published, grant in (
+        ("offered", subject._meta.label, True, "starter"),
+        ("unpublished", subject._meta.label, False, "starter"),
+        ("wrong_model", Workflow._meta.label, True, "starter"),
+        ("viewer_only", subject._meta.label, True, "viewer"),
+    ):
+        workflow = load_workflow(document("entry", step=RecordInput.key), key=key, actor=admin,
+                                 subject_model=model, publish=published)
+        workflow.with_actor(admin).grant_record_access(grant, actor)
+    query = """query($models: [String!]!) {
+      workflow(where: {subject_model: {_in: $models}, can_start: {_eq: true}, is_published: {_eq: true}}) {
+        id key permissions published { input_schema }
+      }
+    }"""
+    variables = {"models": [subject._meta.label]}
+    rows = result_data(execute_schema(schema, query, variables, user=actor))["workflow"]
+    assert len(rows) == 1 and rows[0]["key"] == "offered" and rows[0]["permissions"] == ["start"]
+    input_schema = rows[0]["published"]["input_schema"]
+    assert input_schema["required"] == ["source_id"]
+    assert input_schema["properties"]["source_id"]["relation"] == {"resource": "knowledge.Vault"}
+    assert result_data(execute_schema(schema, query, variables, user=outsider))["workflow"] == []
+    offered = Workflow.objects.with_actor(actor).get(key="offered")
+    assert not start_on_record(schema, offered, subject, actor)["ok"]
+    assert start_on_record(schema, offered, subject, actor, input={"source_id": subject.sqid})["ok"]
+
+
+def test_record_start_accepts_a_workflow_for_the_canonical_mti_ancestor(schema, callers):
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    admin, actor, _ = callers
+    with system_context(reason="test manual workflow MTI subject"):
+        subject = MtiChild.objects.create(title="Shared record", detail="Concrete record")
+        write_relationships([RelationshipTuple(to_object_ref(subject), "reader", to_subject_ref(actor))])
+    workflow = load_workflow(document("entry"), actor=admin, subject_model=MtiParent._meta.label)
+    workflow.with_actor(admin).grant_record_access("starter", actor)
+    rows = result_data(execute_schema(schema, """query($models: [String!]!) {
+      workflow(where: {subject_model: {_in: $models}, can_start: {_eq: true}, is_published: {_eq: true}}) { id }
+    }""", {"models": [MtiParent._meta.label, MtiChild._meta.label]}, user=actor))["workflow"]
+    assert rows == [{"id": workflow.sqid}]
+    assert start_on_record(schema, workflow, subject, actor)["ok"]
+    assert WorkflowRun.objects.with_actor(actor).get().subject_model_class is MtiParent
