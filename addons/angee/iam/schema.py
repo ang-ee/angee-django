@@ -19,6 +19,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import QuerySet
 from rebac import RebacQuerySet, current_actor, resolve_subjects, system_context, to_object_ref, to_subject_ref
@@ -221,7 +222,11 @@ class CurrentUserType(AngeeNode):
         an unknown model or permission is an error.
         """
 
-        return _subject_permitted_owner(to_subject_ref(cast(Any, self)), refs)
+        try:
+            return _subject_permitted_owner(to_subject_ref(cast(Any, self)), refs)
+        except ValueError as error:
+            # A mistyped ref is the author's error: say which, publicly, not an internal one.
+            raise ValidationError(str(error)) from error
 
 
 @strawberry_django.type(Group)
