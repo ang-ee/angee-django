@@ -45,8 +45,7 @@ export {
   PrincipalAccessTab,
   usePrincipalAccessRecordTab,
 } from "./PrincipalAccess";
-// The managed people list, for an app that mounts it on its own route.
-export { UsersPage } from "./views/UsersPage";
+// The managed people list mounts lazily from `@angee/iam/users` (UsersPage); its columns and presets:
 export { USER_LIST_COLUMNS, USER_LIST_PRESETS, USER_LIST_PRESET_IDS, USER_MODEL } from "./users-list";
 
 // IAM is a first-class app-rail destination, including the inbound OIDC sign-in
