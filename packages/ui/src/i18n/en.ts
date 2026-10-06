@@ -196,6 +196,7 @@ export const enUiMessages: Record<string, string> = {
   "alert.dismiss": "Dismiss",
   "chip.remove": "Remove {label}",
   "action.noResult": "The action returned no result.",
+  "action.confirmDanger": "Are you sure?",
   "actions.list": "List",
   "actions.create": "Create",
   "actions.edit": "Edit",

@@ -125,6 +125,24 @@ describe("composable standard project and task declarations", () => {
     expect(parsePageFields(taskProps.children).map(({ name }) => name)).toContain("revision");
   });
 
+  test("task lifecycle verbs show where they would act and the row's task_actions admit them", () => {
+    const { result } = renderHook(() => useTaskFormDeclaration());
+    const props = propsOf<FormProps>(result.current);
+    expect(parsePageFields(props.children).find(({ name }) => name === "task_actions")).toMatchObject({ hidden: true, readOnly: true });
+    const actions = parsePageActions(props.children);
+    const visible = (id: string, record: Record<string, unknown>) =>
+      actions.find((action) => action.id === id)?.visibleWhen?.({ id: "task-1", ...record });
+    // A promoted task in a rule-owned stage: open, writable, but its owner admits no hand verb.
+    expect(visible("drop", { status: "OPEN", task_actions: [] })).toBe(false);
+    expect(visible("complete", { status: "OPEN", task_actions: [] })).toBe(false);
+    expect(visible("reopen", { status: "DONE", task_actions: [] })).toBe(false);
+    expect(visible("drop", { status: "OPEN", task_actions: ["drop"] })).toBe(true);
+    expect(visible("complete", { status: "OPEN", task_actions: ["complete"] })).toBe(true);
+    expect(visible("reopen", { status: "DROPPED", task_actions: ["reopen"] })).toBe(true);
+    // Admission alone does not offer a verb that would not act.
+    expect(visible("reopen", { status: "OPEN", task_actions: ["reopen"] })).toBe(false);
+  });
+
   test("a route can select task columns and status while keeping the shared form", () => {
     const { result: list } = renderHook(() => useTaskListDeclaration({
       children: <><Column field="title" /><Column field="stage_name" /></>,

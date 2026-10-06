@@ -1073,11 +1073,48 @@ class Task(
             return
         super().save(*args, **kwargs)
 
+    @classmethod
+    def hand_actions(cls) -> tuple[str, ...]:
+        """Hand verbs whose admission ``task_actions`` reports, in offer order; contributors extend."""
+
+        return ("complete", "drop", "reopen")
+
+    @classmethod
+    def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
+        """Row conditions refusing hand verb ``action``, each with its ``ValidationError`` message.
+
+        The verbs and the batched ``task_actions`` projection share these
+        conditions, so a control is offered exactly where its verb admits it.
+        Contributors extend them through ``super()``; a verb checks them after
+        its idempotent replay, so a blocker never refuses a no-op.
+        """
+
+        return ()
+
+    @classmethod
+    def action_allowed_expression(cls, actor: Any, action: str) -> models.Expression:
+        """Batch the verb's write permission and its blockers for one actor's rows."""
+
+        if actor is None:
+            return models.Value(False)
+        rows = cls.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
+        for condition, _error in cls.action_blockers(action):
+            rows = rows.exclude(condition)
+        return models.Exists(rows.filter(pk=models.OuterRef("pk")))
+
+    def validate_action(self, action: str) -> None:
+        """Refuse ``action`` with the first declared blocker the stored row matches."""
+
+        for condition, error in self.action_blockers(action):
+            if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
+                raise ValidationError(error)
+
     def complete(self) -> Task:
         """Mark this task done, idempotently preserving its first completion time."""
 
         if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
             return self
+        self.validate_action("complete")
         cast(Any, self).status = str(self.TaskStatus.DONE)
         self.done_at = self.done_at or timezone.now()
         cast(Any, self).dropped_reason = None
@@ -1094,6 +1131,7 @@ class Task(
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
         if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
             return self
+        self.validate_action("drop")
         cast(Any, self).status = str(self.TaskStatus.DROPPED)
         cast(Any, self).dropped_reason = str(reason_member)
         self.dropped_at = self.dropped_at or timezone.now()
@@ -1111,6 +1149,7 @@ class Task(
             and self.dropped_at is None
         ):
             return self
+        self.validate_action("reopen")
         cast(Any, self).status = str(self.TaskStatus.OPEN)
         self.done_at = None
         cast(Any, self).dropped_reason = None

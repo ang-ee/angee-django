@@ -617,7 +617,11 @@ shared UI copy through an addon bundle.
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
   carries the form's dirty/pending gate to toolbar and menu verbs. `<Action>`
   and record-verb children declare a projected `permission` when their verbs
-  require one; unavailable verbs are omitted.
+  require one; unavailable verbs are omitted. A verb's `visibleWhen` reads its
+  owner's projected admission (`task_actions`, `account_actions`, `can_open`),
+  never a client copy of the server rule. RecordActionBar confirms every
+  `danger` verb that runs on click: its `confirm` copy in the danger tone, or the
+  standard copy titled by the verb. Declare `confirm` only for domain copy.
 - **Trash composes the shared owner.** A resource whose metadata marks a field
   `trashable` gets Trash and Restore from [the trash module](../../packages/ui/src/views/resource/trash.tsx):
   `useTrashActions` for record forms, `useTrashRowActions` for lists, and

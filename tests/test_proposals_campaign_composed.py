@@ -85,10 +85,22 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
         return result.data
 
     def test_reader_sees_lifted_state_and_date(self) -> None:
-        with system_context(reason="tests.proposals.campaign.lift_before_phase"):
+        lift_offer = """query($id: String!) { proposal_rounds_by_pk(id: $id) { can_open } }"""
+        with system_context(reason="tests.proposals.campaign.lift_after_phase"):
             round = self.Round.objects.get(pk=self.round.pk)
             round.opens_after = round.clarifications_shared_until
             round.save(update_fields=("opens_after",))
+            self.Project._base_manager.filter(pk=self.project.pk).update(current_milestone=round.opens_after)
+        # In its boundary phase the round is neither offered nor admitted for a lift.
+        offer = self.data(self.execute_named(lift_offer, {"id": str(self.round.sqid)}, self.manager, "console"))
+        self.assertFalse(offer["proposal_rounds_by_pk"]["can_open"])
+        with actor_context(self.manager), self.assertRaises(ValidationError):
+            self.as_user(self.round, self.manager).open()
+        with system_context(reason="tests.proposals.campaign.lift_after_phase"):
+            later = self.Milestone.objects.create(project=self.project, name="Build", sort_order=2048)
+            self.Project._base_manager.filter(pk=self.project.pk).update(current_milestone=later)
+        offer = self.data(self.execute_named(lift_offer, {"id": str(self.round.sqid)}, self.manager, "console"))
+        self.assertTrue(offer["proposal_rounds_by_pk"]["can_open"])
         with actor_context(self.manager):
             self.assertTrue(self.as_user(self.round, self.manager).can_open())
             self.as_user(self.round, self.manager).open()

@@ -402,9 +402,17 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
 
     @property
     def exit_reserved(self) -> bool:
-        """Whether only a rule may leave this stage."""
+        """Whether only a rule may leave this stage; ``exit_reserved_condition`` is its row form."""
 
         return self.rule_owned
+
+    EXIT_RESERVED_MESSAGE = "Only a rule can move a task out of a rule-owned stage."
+
+    @classmethod
+    def exit_reserved_condition(cls, path: str) -> models.Q:
+        """``exit_reserved`` as a condition on a record's relation ``path`` to its stage."""
+
+        return Q(**{f"{path}__rule_owned": True})
 
     @classmethod
     def validate_transition(
@@ -420,7 +428,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         if previous is not None and following is not None and previous.pk == following.pk:
             return
         if previous is not None and previous.exit_reserved:
-            raise ValidationError({"stage": "Only a rule can move a task out of a rule-owned stage."})
+            raise ValidationError({"stage": cls.EXIT_RESERVED_MESSAGE})
         if following is None or not following.entry_reserved:
             return
         if following.rule_owned:
@@ -1155,10 +1163,7 @@ class TaskWork(StagedModelMixin):
         category = previous.category if previous is not None else None
         if category == "started":
             return self
-        if category == "triage":
-            raise ValidationError({"stage": "Accept a task in triage before starting it."})
-        if category in {"completed", "canceled", "duplicate"}:
-            raise ValidationError({"stage": "Reopen a closed task before starting it."})
+        self.validate_action("start")
         stage = self._stage_for_category("started")
         Stage.validate_transition(previous, stage)
         self.stage = stage
@@ -1171,6 +1176,7 @@ class TaskWork(StagedModelMixin):
 
         if self.queue_id is None:
             return self._base_verb("complete")
+        self.validate_action("complete")
         stage = self._stage_for_category("completed")
         self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
         self.stage = stage
@@ -1187,6 +1193,7 @@ class TaskWork(StagedModelMixin):
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
         if self.queue_id is None:
             return self._base_verb("drop", reason_member)
+        self.validate_action("drop")
         category = "duplicate" if reason_member == self.TaskDroppedReason.DUPLICATE else "canceled"
         stage = self._stage_for_category(category)
         self._reject_reserved_stage_transition(
@@ -1208,6 +1215,7 @@ class TaskWork(StagedModelMixin):
 
         if self.queue_id is None:
             return self._base_verb("reopen")
+        self.validate_action("reopen")
         stage = self.resolve_default_stage()
         if stage is None:
             raise ValidationError({"stage": "Queue has no default stage."})
@@ -1215,6 +1223,69 @@ class TaskWork(StagedModelMixin):
         self.stage = stage
         self.save(update_fields=("stage", "updated_at"))
         return self
+
+    @classmethod
+    def hand_actions(cls) -> tuple[str, ...]:
+        """Add the queue's hand verbs to the task's projected admission."""
+
+        return (*super().hand_actions(), "accept", "start", "return_to_triage", "remove")
+
+    @classmethod
+    def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
+        """Refuse the hand verbs a queued task's stages do not admit; queue-less tasks keep the base verbs.
+
+        Drop names no missing-stage blocker: its reason picks the stage, and
+        the verb reports a missing one against the reason it was given.
+        """
+
+        stage = cast("type[Stage]", cls.stage_model())
+        queued = Q(queue__isnull=False)
+        triage = Q(stage__category=stage.StageCategory.TRIAGE)
+        reserved = (stage.exit_reserved_condition("stage"), {"stage": stage.EXIT_RESERVED_MESSAGE})
+
+        def lacks(category: str) -> models.Q:
+            return queued & ~Q(models.Exists(stage.for_manual_category(models.OuterRef("queue"), category)))
+
+        def missing(category: str) -> tuple[models.Q, Any]:
+            return lacks(category), {"stage": f"Queue has no {category} stage."}
+
+        promoted = models.Exists(
+            apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=models.OuterRef("pk"))
+        )
+        concealing = models.Exists(stage.for_container(models.OuterRef("queue")).filter(conceals=True))
+        blockers: dict[str, tuple[tuple[models.Q, Any], ...]] = {
+            "complete": (missing("completed"), reserved),
+            "drop": (reserved,),
+            "reopen": (
+                # Reopening returns closed work; open work never moves through it, and a removed
+                # task returns through restore, which keeps its pre-removal stage.
+                (queued & ~Q(stage__category__in=("completed", "canceled", "duplicate")),
+                 {"stage": "Only a closed task can be reopened."}),
+                (queued & Q(stage__conceals=True), {"stage": "Restore a removed task instead of reopening it."}),
+                (lacks("unstarted") & Q(queue__default_stage__isnull=True), {"stage": "Queue has no default stage."}),
+                reserved,
+            ),
+            "accept": (reserved, (~triage, {"stage": "Only a task in triage can be accepted."})),
+            "start": (
+                (triage, {"stage": "Accept a task in triage before starting it."}),
+                (Q(stage__category__in=("completed", "canceled", "duplicate")),
+                 {"stage": "Reopen a closed task before starting it."}),
+                missing("started"),
+                reserved,
+            ),
+            "return_to_triage": (
+                (Q(queue__isnull=True) | Q(queue__triage_enabled=False),
+                 {"queue": "Returning to triage requires a triage-enabled queue."}),
+                missing("triage"),
+                reserved,
+            ),
+            "remove": (
+                (Q(promoted), {"stage": "A promoted task cannot be removed."}),
+                (~Q(concealing), {"stage": "The queue has no concealing stage."}),
+                reserved,
+            ),
+        }
+        return (*super().action_blockers(action), *blockers.get(action, ()))
 
     def _require_work_action(self, expected_revision: int | None, *, permission: str = "write") -> None:
         """Recheck the locked, fresh row before a hand verb, including no-op replay."""
@@ -1237,8 +1308,7 @@ class TaskWork(StagedModelMixin):
 
         reason = clean_trash_reason(reason)
         self._require_work_action(expected_revision)
-        if apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=self.pk).exists():
-            raise ValidationError({"stage": "A promoted task cannot be removed."})
+        self.validate_action("remove")
         target = self.stage_model().for_container(self.queue).filter(conceals=True).first()
         if target is None:
             raise ValidationError({"stage": "The queue has no concealing stage."})
@@ -1358,9 +1428,7 @@ class TaskWork(StagedModelMixin):
             raise ValidationError({"stage": "Queue has no default stage."})
         if target.queue_id != self.queue_id:
             raise ValidationError({"stage": "Accepted stage must belong to the task's queue."})
-        previous, _following = self._reject_reserved_stage_transition(
-            target=cast(Stage, target), manual=True, lock=True
-        )
+        self._reject_reserved_stage_transition(target=cast(Stage, target), manual=True, lock=True)
         if self.stage_id == target.pk:
             if (
                 self.status == self.TaskStatus.OPEN
@@ -1371,8 +1439,7 @@ class TaskWork(StagedModelMixin):
                 return self
             self.save(update_fields=("stage", "updated_at"))
             return self
-        if previous is None or previous.category != self.stage_model().StageCategory.TRIAGE:
-            raise ValidationError({"stage": "Only a task in triage can be accepted."})
+        self.validate_action("accept")
         self.stage = target
         self.save(update_fields=("stage", "updated_at"))
         return self
@@ -1381,8 +1448,7 @@ class TaskWork(StagedModelMixin):
     def return_to_triage(self) -> Any:
         """Return work to its triage-enabled queue's triage stage, idempotently."""
 
-        if self.queue_id is None or not self.queue.triage_enabled:
-            raise ValidationError({"queue": "Returning to triage requires a triage-enabled queue."})
+        self.validate_action("return_to_triage")
         stage = self._stage_for_category("triage")
         self._reject_reserved_stage_transition(target=stage, manual=True, allow_system_entry=True, lock=True)
         if self.stage_id == stage.pk:
