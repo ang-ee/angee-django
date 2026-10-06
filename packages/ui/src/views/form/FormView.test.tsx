@@ -3204,9 +3204,8 @@ describe("FormView", () => {
     );
 
     await screen.findByLabelText("Title");
-    // The descriptor factory constructs the panel element as FormView renders;
-    // the returned component itself stays inert until its tab is activated.
-    expect(renderPanel).toHaveBeenCalled();
+    // An inactive tab's factory is not even called; its component mounts when the tab opens.
+    expect(renderPanel).not.toHaveBeenCalled();
     expect(mountPanel).not.toHaveBeenCalled();
     expect(screen.queryByText("Activity panel")).toBeNull();
 
