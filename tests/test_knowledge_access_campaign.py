@@ -2,12 +2,13 @@
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
-from angee.knowledge.models import RecordBindingManager
 from angee.knowledge.schema import schemas
 from tests.conftest import (
     MarkdownPage,
@@ -33,10 +34,7 @@ mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
 """
 
 
-def test_record_pages_projection_respects_role_and_both_write_ends(
-    composed_tables, monkeypatch,
-):
-    del composed_tables
+def test_record_pages_projection_respects_role_and_both_write_ends(composed_permissions):
     owner, reader = create_user("page-owner"), create_user("page-reader")
     vault = vault_for(owner, name="Pages")
     record = vault_for(owner, name="Record")
@@ -47,15 +45,8 @@ def test_record_pages_projection_respects_role_and_both_write_ends(
         RecordBinding.objects.upsert(page=page, target=record, role="related")
     _grant(record, "viewer", reader)
     _grant(vault, "viewer", reader)
-    # This projection test supplies the record owner's read arm. The separate
-    # no-arm regression above proves production binding reads fail closed.
-    def record_arm(self, target, *, role=None):
-        rows = self.model._base_manager.filter(
-            content_type=ContentType.objects.get_for_model(target), object_id=target.pk,
-        )
-        return rows if role is None else rows.filter(role=role)
-
-    monkeypatch.setattr(RecordBindingManager, "for_record", record_arm)
+    # The test consumer declares vaults bindable; the no-arm regression below
+    # proves binding reads fail closed for an undeclared record type.
     schema = addon_schema(schemas, "console")
     query = """query ($id: ID!, $role: String) {
       record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id, role: $role) {
@@ -92,6 +83,10 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
     record = vault_for(author, name="Record end without a contributed binding arm")
     with actor_context(author):
         page = Page.objects.create_in(knowledge, title="Bound page")
+        # Writable on both ends, but no relation names the record's type.
+        with pytest.raises(PermissionDenied):
+            RecordBinding.objects.upsert(page=page, target=record)
+    with system_context(reason="test.binding.undeclared_seed"):
         page_binding = RecordBinding.objects.upsert(page=page, target=record)
         vault_binding = RecordBinding.objects.upsert(vault=knowledge, target=record)
     if seat in {"record", "both"}:
@@ -136,27 +131,55 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
         assert reverse == {"page_record_bindings": [], "vault_record_bindings": []}
 
 
-def test_binding_writes_require_both_ends_and_are_role_keyed(composed_tables):
+def test_binding_writes_require_both_ends_and_are_role_keyed(composed_permissions):
     author, writer = create_user("binding-owner"), create_user("binding-writer")
+    record_writer, reader = create_user("binding-record-writer"), create_user("binding-reader")
     knowledge = vault_for(author, name="Knowledge")
     record = vault_for(author, name="Record")
     with actor_context(author):
         page = Page.objects.create_in(knowledge, title="Guide")
     _grant(knowledge, "editor", writer)
-    with actor_context(writer), pytest.raises(PermissionDenied):
-        RecordBinding.objects.upsert(page=page, target=record)
+    _grant(record, "editor", record_writer)
+    for actor in (writer, record_writer):
+        with actor_context(actor), pytest.raises(PermissionDenied):
+            RecordBinding.objects.upsert(page=page, target=record)
     _grant(record, "editor", writer)
     with actor_context(writer):
         first = RecordBinding.objects.upsert(page=page, target=record)
+        assert first.created_by_id == writer.pk
         assert RecordBinding.objects.upsert(page=page, target=record).pk == first.pk
         other_role = RecordBinding.objects.upsert(page=page, target=record, role="reference")
         assert other_role.pk != first.pk
+    _grant(knowledge, "viewer", reader)
+    _grant(record, "viewer", reader)
+    with actor_context(reader):
+        with CaptureQueriesContext(connection) as queries:
+            listed = set(RecordBinding.objects.for_record(record).values_list("pk", flat=True))
+        assert listed == {first.pk, other_role.pk}
+        table = connection.ops.quote_name(RecordBinding._meta.db_table)
+        assert sum(query["sql"].startswith(f"SELECT {table}.") for query in queries) == 1
+        with pytest.raises(PermissionDenied):
+            RecordBinding.objects.unbind(page=page, target=record)
+    with actor_context(writer):
         assert RecordBinding.objects.unbind(page=page, target=record) == 1
     with system_context(reason="test.binding.remaining"):
         assert list(RecordBinding.objects.values_list("pk", flat=True)) == [other_role.pk]
 
 
-def test_deleting_target_removes_bindings_without_deleting_knowledge(composed_tables):
+def test_binding_refuses_undeclared_and_untyped_targets(composed_permissions):
+    author = create_user("binding-target-owner")
+    knowledge = vault_for(author, name="Knowledge")
+    with actor_context(author):
+        page = Page.objects.create_in(knowledge, title="Writable but not bindable")
+        with pytest.raises(PermissionDenied):
+            RecordBinding.objects.upsert(vault=knowledge, target=page)
+        with pytest.raises(ValueError, match="no resource type"):
+            RecordBinding.objects.upsert(vault=knowledge, target=ContentType.objects.get_for_model(Vault))
+    with system_context(reason="test.binding.refused"):
+        assert not RecordBinding.objects.exists()
+
+
+def test_deleting_target_removes_bindings_without_deleting_knowledge(composed_permissions):
     author = create_user("binding-owner")
     knowledge = vault_for(author, name="Knowledge")
     record = vault_for(author, name="Target")

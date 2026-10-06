@@ -26,17 +26,13 @@ from django.db import models, router, transaction
 from django.db.models.signals import post_save
 from markdown_it import MarkdownIt
 from rebac import (
-    MissingActorError,
-    ObjectRef,
     PermissionDenied,
     SubjectRef,
-    current_actor,
+    generic_target,
     system_context,
     to_subject_ref,
 )
-from rebac.backends import backend as rebac_backend
 from rebac.mixins import RebacModelBase
-from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
@@ -55,7 +51,6 @@ from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import (
     RecordRef,
     RecordRefMixin,
-    canonical_record_target,
     concrete_child,
     concrete_child_accessor,
     concrete_child_models,
@@ -517,9 +512,9 @@ class Page(TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
 class RecordBindingManager(AngeeManager):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
-    Record owners contribute two-ended read permissions through reverse generic
-    relations. Both read directions use that same REBAC scope; writes separately
-    require permission on the knowledge owner and canonical target.
+    Bindings are stored at :func:`rebac.generic_target` and written under the
+    actor: ``permissions.zed`` requires both ends, through the target relation
+    the record's app declares, for reads in either direction and for writes.
     """
 
     DEFAULT_ROLE = "related"
@@ -550,25 +545,8 @@ class RecordBindingManager(AngeeManager):
     ) -> models.Model:
         """Return one binding per knowledge owner, canonical target, and role."""
 
-        knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
-        canonical = canonical_record_target(self._saved(target, "target"))
-        cast(Any, knowledge).require_access("write")
-        self._require_target_access(
-            canonical,
-            "write",
-            "Write access to the target is required to bind knowledge.",
-        )
-        actor = self._actor()
-        role = self._role(role)
-        lookup = {
-            owner_field: knowledge,
-            "content_type": canonical.content_type,
-            "object_id": canonical.object_id,
-            "role": role,
-        }
-        with system_context(reason="knowledge.record_binding.upsert"), transaction.atomic():
-            binding, _created = self.model._base_manager.get_or_create(**lookup)
-        return binding.with_actor(actor)
+        binding, _created = self.get_or_create(**self._key(target, page=page, vault=vault, role=role))
+        return binding
 
     def unbind(
         self,
@@ -578,45 +556,31 @@ class RecordBindingManager(AngeeManager):
         vault: models.Model | None = None,
         role: str = DEFAULT_ROLE,
     ) -> int:
-        """Delete one role-keyed binding after both owners authorize the write."""
+        """Delete one role-keyed binding; its ``delete`` requires write on both ends."""
 
-        knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
-        canonical = canonical_record_target(self._saved(target, "target"))
-        cast(Any, knowledge).require_access("write")
-        self._require_target_access(
-            canonical,
-            "write",
-            "Write access to the target is required to unbind knowledge.",
-        )
-        with system_context(reason="knowledge.record_binding.unbind"):
-            deleted, _by_model = self.model._base_manager.filter(
-                **{
-                    owner_field: knowledge,
-                    "content_type": canonical.content_type,
-                    "object_id": canonical.object_id,
-                    "role": self._role(role),
-                }
-            ).delete()
+        deleted, _by_model = self.filter(**self._key(target, page=page, vault=vault, role=role)).delete()
         return deleted
 
     def teardown_for_record(self, record: models.Model) -> None:
         """Delete every binding to ``record`` before the target row disappears.
 
-        Targets may omit a reverse ``GenericRelation``. The global knowledge-owned
+        Targets declare no reverse ``GenericRelation``. The global knowledge-owned
         ``pre_delete`` receiver therefore delegates here so primary-key reuse cannot
-        make an old binding resolve to a new row. Deleting the bindings normally keeps
-        their normal ``post_delete`` lifecycle intact.
+        make an old binding resolve to a new row. A binding whose target is gone
+        grants nothing and is removable only elevated, so this system cleanup runs
+        while the target still exists, keeping the normal ``post_delete`` lifecycle.
         """
 
-        if record.pk is None:
-            return
-        content_type, object_id = canonical_record_target(record)
+        try:
+            target = generic_target(record)
+        except ValueError:
+            return  # An unsaved or untyped row: no binding can name it.
         # object_id is an integer column, so a row with a non-integer primary
         # key (django Session's string key, for one) can never carry bindings —
         # and coercing its pk into the filter raises on every such delete.
-        if not isinstance(object_id, int):
+        if not isinstance(target.object_id, int):
             return
-        bindings = self.model._base_manager.filter(content_type=content_type, object_id=object_id)
+        bindings = self.model._base_manager.filter(**target.lookups(self.model, "target"))
         if not bindings.exists():
             return
         with system_context(reason="knowledge.record_binding.teardown"), transaction.atomic():
@@ -625,10 +589,8 @@ class RecordBindingManager(AngeeManager):
     def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
         """Return actor-readable bindings on one canonical record."""
 
-        canonical = canonical_record_target(self._saved(record, "record"))
-        queryset = self.get_queryset().filter(
-            content_type=canonical.content_type, object_id=canonical.object_id
-        )
+        target = generic_target(self._saved(record, "record"))
+        queryset = self.get_queryset().filter(**target.lookups(self.model, "target"))
         queryset = queryset.select_related("page", "vault")
         return queryset if role is None else queryset.filter(role=self._role(role))
 
@@ -698,34 +660,29 @@ class RecordBindingManager(AngeeManager):
         field.run_validators(value)
         return value
 
-    @staticmethod
-    def _actor() -> Any:
-        actor = current_actor()
-        if actor is None:
-            raise MissingActorError("Knowledge record bindings require an actor.")
-        return actor
+    def _key(
+        self,
+        target: models.Model,
+        *,
+        page: models.Model | None,
+        vault: models.Model | None,
+        role: str,
+    ) -> dict[str, Any]:
+        """Return a binding's unique key; ``ValueError`` for a target without a REBAC type."""
 
-    @classmethod
-    def _require_target_access(cls, canonical: Any, action: str, message: str) -> None:
-        if (
-            not rebac_backend()
-            .check_access(
-                subject=cls._actor(),
-                action=action,
-                resource=_canonical_object_ref(canonical.content_type, canonical.object_id),
-            )
-            .allowed
-        ):
-            raise PermissionDenied(message)
+        knowledge, owner_field = self._knowledge_owner(page=page, vault=vault)
+        canonical = generic_target(self._saved(target, "target"))
+        return {owner_field: knowledge, **canonical.lookups(self.model, "target"), "role": self._role(role)}
 
 
 class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
-    edge grants access to neither side. Its REBAC read permission requires both
-    the knowledge row and target to be readable. A target whose owner contributes
-    no permission arm has unreadable bindings, including for administrators.
+    edge grants access to neither side. Its REBAC permissions require both the
+    knowledge row and the target, through the relation the target's app
+    declares; a target type without one has unreadable bindings, including for
+    administrators, and cannot be bound under an actor.
     """
 
     runtime = True
@@ -779,29 +736,17 @@ class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
 
     def clean(self) -> None:
-        """Require exactly one knowledge owner and a REBAC-typed target."""
+        """Require exactly one knowledge owner."""
 
         super().clean()
         if (self.page_id is None) == (self.vault_id is None):
             raise ValidationError("Exactly one of page or vault is required.")
-        content_type = cast(ContentType, self.content_type)
-        _canonical_object_ref(content_type, self.object_id)
 
     def __str__(self) -> str:
         """Return a readable knowledge-to-record edge label."""
 
         owner = f"page:{self.page_id}" if self.page_id is not None else f"vault:{self.vault_id}"
         return f"{owner}->{self.record_model_label}:{self.record_public_id}#{self.role}"
-
-
-def _canonical_object_ref(content_type: ContentType, object_id: Any) -> ObjectRef:
-    """Return the REBAC identity stored by a canonical record pointer."""
-
-    model = content_type.model_class()
-    resource_type = None if model is None else model_resource_type(model)
-    if model is None or resource_type is None:
-        raise ValidationError("Knowledge bindings require a REBAC-typed target.")
-    return ObjectRef(resource_type, str(object_id))
 
 
 class StaleBodyError(ValueError):

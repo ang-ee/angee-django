@@ -30,6 +30,7 @@ from tests.conftest import (
     create_user,
     execute_schema,
     result_data,
+    vault_for,
 )
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.storage_campaign import relationship_storage as relationship_storage
@@ -167,7 +168,7 @@ def test_ingest_losing_to_inherited_winner_returns_winner_and_purges_reservation
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])
 def test_missing_unreadable_unknown_and_untyped_records_have_identical_in_band_denials(
-    drive: Any, schema_name: str,
+    drive: Any, composed_permissions: None, schema_name: str,
 ) -> None:
     other = create_user("private-record-owner")
     with system_context(reason="test.storage.denial.seed"):
@@ -200,20 +201,28 @@ def test_missing_unreadable_unknown_and_untyped_records_have_identical_in_band_d
         assert File.objects.count() == FileAttachment.objects.count() == 0
 
 
-@pytest.mark.parametrize("record_kind", ["absent", "no_arm", "unwritable"])
-def test_refused_record_drafts_create_neither_file_nor_attachment(drive: Any, record_kind: str) -> None:
+@pytest.mark.parametrize("record_kind", ["absent", "no_arm", "unwritable", "undeclared"])
+def test_refused_record_drafts_create_neither_file_nor_attachment(
+    drive: Any, composed_permissions: None, record_kind: str,
+) -> None:
     record = None
-    expected = exceptions.UploadError
+    expected: type[exceptions.UploadError] = exceptions.UploadError
     if record_kind == "no_arm":
+        # Attachable and writable, but storage/file has no record-visibility arm for drives.
         record = drive
     elif record_kind == "unwritable":
         with system_context(reason="test.storage.denied.target"):
             record = MtiParent.objects.create(title="Unreadable")
         expected = exceptions.UploadRecordDenied
-    with actor_context(drive.alice), pytest.raises(expected):
+    elif record_kind == "undeclared":
+        # Writable, but no relation on storage/file_attachment names vaults.
+        record = vault_for(drive.alice, name="Not attachable")
+        expected = exceptions.UploadRecordDenied
+    with actor_context(drive.alice), pytest.raises(expected) as raised:
         File.objects.draft(
             drive_id=str(drive.sqid), filename="record.png", visibility=FileVisibility.RECORD, record=record,
         )
+    assert isinstance(raised.value, exceptions.UploadDenied) == (record_kind in {"unwritable", "undeclared"})
     with system_context(reason="test.storage.record.inspect"):
         assert File.objects.count() == FileAttachment.objects.count() == 0
 
@@ -227,7 +236,7 @@ def test_target_disappearance_is_denied_but_unrelated_missing_objects_propagate(
     def disappear(*args: Any, **kwargs: Any) -> None:
         raise error
 
-    method = "_lock_target" if failure_at == "target_lock" else "_attach_authorized"
+    method = "_lock_target" if failure_at == "target_lock" else "_attach"
     monkeypatch.setattr(FileAttachmentManager, method, disappear)
     expected = exceptions.UploadRecordDenied if failure_at == "target_lock" else ObjectDoesNotExist
     with actor_context(drive.alice):
@@ -239,7 +248,9 @@ def test_target_disappearance_is_denied_but_unrelated_missing_objects_propagate(
         assert File.objects.count() == FileAttachment.objects.count() == 0
 
 
-def test_dedup_attachment_rolls_back_when_restore_fails(drive: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dedup_attachment_rolls_back_when_restore_fails(
+    drive: Any, composed_permissions: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
     with actor_context(drive.alice):
         row.delete()
@@ -260,7 +271,7 @@ def test_dedup_attachment_rolls_back_when_restore_fails(drive: Any, monkeypatch:
 
 
 def test_prune_cascades_failed_and_abandoned_edges_without_deleting_surviving_bytes(
-    drive: Any, tmp_path: Path, settings: Any,
+    drive: Any, composed_permissions: None, tmp_path: Path, settings: Any,
 ) -> None:
     survivor = _proxy_upload(drive, PNG_BYTES)
     old = timezone.now() - timedelta(hours=settings.ANGEE_STORAGE_DRAFT_TTL_HOURS + 1)
@@ -283,7 +294,7 @@ def test_prune_cascades_failed_and_abandoned_edges_without_deleting_surviving_by
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL canonical upload-target locking contract")
-def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any) -> None:
+def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, composed_permissions: None) -> None:
     admin = create_platform_admin("target-lock-admin")
     with system_context(reason="test.storage.lock.seed"):
         child = MtiChild.objects.create(title="Target", detail="Child")

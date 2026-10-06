@@ -49,7 +49,6 @@ class ProjectAccessTask(AbstractTask):
     converted_from_activity = None
     links = None
     file_attachments = None
-    knowledge_bindings = None
     thread_attachments = None
     thread_create_log = False
     thread_create_autofollow_author = False

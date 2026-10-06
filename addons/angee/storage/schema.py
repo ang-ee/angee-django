@@ -11,14 +11,13 @@ from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.urls import reverse
 from graphql import GraphQLError
-from rebac import ObjectRef, PermissionDenied, system_context
+from rebac import ObjectRef, PermissionDenied, generic_target, system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id
-from angee.base.refs import canonical_record_target
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
@@ -180,7 +179,7 @@ class StorageQuery:
         if record is None:
             return RecordFilesType(available=False, can_upload=False, attachments=[])
         manager = FileAttachment._default_manager
-        available = manager.has_record_arm(canonical_record_target(record))
+        available = manager.has_record_arm(generic_target(record))
         if not available:
             return RecordFilesType(available=False, can_upload=False, attachments=[])
         return RecordFilesType(
