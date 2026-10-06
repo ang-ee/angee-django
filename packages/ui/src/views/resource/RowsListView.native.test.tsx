@@ -177,14 +177,16 @@ test("embedded rows show search and a pager only once they outgrow a page", () =
   const view = (presentation: "embedded" | "page", list = rows) =>
     render(<ToastProvider><RowsListView scope="local" rows={list} columns={columns} presentation={presentation} /></ToastProvider>);
   view("embedded");
-  expect(screen.queryByPlaceholderText(/^Filter/)).toBeNull();
+  expect(screen.queryByLabelText("Search options")).toBeNull();
+  expect(screen.queryByLabelText(/^Records /)).toBeNull();
   cleanup();
   // Past the default page size the list is browsed, so search and the pager return.
   view("embedded", many);
-  expect(screen.getByPlaceholderText(/^Filter/)).toBeTruthy();
+  expect(screen.getByLabelText("Search options")).toBeTruthy();
+  expect(screen.getByLabelText("Records 1-50 / 60")).toBeTruthy();
   cleanup();
   view("page");
-  expect(screen.getByPlaceholderText(/^Filter/)).toBeTruthy();
+  expect(screen.getByLabelText("Search options")).toBeTruthy();
 });
 
 test("bare rows search across declared columns keeps its other filters", () => {
