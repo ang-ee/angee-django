@@ -196,6 +196,11 @@ export {
 } from "./relation/RelationFieldWidget";
 export { RecordReference, type RecordReferenceProps } from "./relation/RecordReference";
 export {
+  RelationMultiFieldWidget,
+  type RelationMultiFieldWidgetProps,
+} from "./relation/RelationMultiFieldWidget";
+export { relationFieldInfoForResource, type RelationFieldInfo } from "./resource/model-metadata-defaults";
+export {
   CollectionTreeView,
   type CollectionTreeViewProps,
 } from "./tree/CollectionTreeView";

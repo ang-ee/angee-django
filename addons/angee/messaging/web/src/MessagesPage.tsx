@@ -46,6 +46,7 @@ export function MessagesPage(): React.ReactElement {
         <Column field="channel_vendor_name" header={t("messages.channelType")} />
         <Column field="status" widget="statusBadge" />
         <Column field="sent_at" />
+        <Column field="tags" hiddenByDefault />
       </List>
     </ResourceList>
   );

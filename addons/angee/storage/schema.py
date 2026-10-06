@@ -34,6 +34,7 @@ from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
 from angee.storage.models import FileVisibility, UploadState
+from angee.tags.schema import TaggedNode
 
 Backend = apps.get_model("storage", "Backend")
 Drive = apps.get_model("storage", "Drive")
@@ -504,6 +505,11 @@ class StorageConsoleMutation:
         return True
 
 
+@strawberry_django.type(File, name="FileType", extend=True)
+class FileTags(TaggedNode):
+    """Console-only tags on a file; the public file node stays unchanged."""
+
+
 _SHARED_TYPES = [
     MimeTypeType,
     DriveType,
@@ -557,5 +563,6 @@ schemas = {
             changes(Folder, field="folderChanged"),
         ],
         "types": [*_SHARED_TYPES, BackendType, *_BACKEND_RESOURCE.types],
+        "type_extensions": [FileTags],
     },
 }

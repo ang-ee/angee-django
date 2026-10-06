@@ -1210,6 +1210,17 @@ Hard-won traps — the wise learn from others' mistakes
   (a plain string array) stays the `tagInput`. This mirrors the to-one
   `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
   relation-list control.
+- **Tags show only where an owner places them, never as a chatter tab.** An
+  owner whose console node composes the backend's `TaggedNode` places
+  `<Field name="tags" />` on its record form and `<Column field="tags"
+  hiddenByDefault />` on its list. The field's backend metadata names the
+  `angee.tags.tags` widget, so no caller spells it: the
+  [tags field](../../addons/angee/tags/web/src/TagsField.tsx) composes
+  `RelationMultiFieldWidget` over `tags.Tag` (chips, picker, inline "New tag"),
+  writes each pick and removal at once through the `tag`/`untag` verbs and
+  refreshes the record instead of joining the form's save, renders linked chips
+  on a read-only form, and a hint on a create form. The list cell keeps the
+  shared relation-list chips.
 - **Resource relation pickers support server-backed search.** Compose
   `RelationFieldWidget`; its
   [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)

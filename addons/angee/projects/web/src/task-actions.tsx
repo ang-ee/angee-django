@@ -167,6 +167,7 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
         <Field name="project" />
         <Field name="milestone" />
         <Field name="parent" />
+        <Field name="tags" />
       </Group> : null}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("assignment") ? <Group label={t("task.group.assignment")} columns={2}>
         <Field name="assignee" />

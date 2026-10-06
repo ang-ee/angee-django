@@ -5,7 +5,7 @@ name = "angee.storage"
 description = "Drives, folders, and content-addressed files with chunked uploads"
 keywords = ["storage", "files", "drives"]
 category = "Data"
-depends_on = ["angee.iam", "angee.resources", "angee.graphql", "django.contrib.contenttypes"]
+depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.tags", "django.contrib.contenttypes"]
 dependencies = [
   "python-magic>=0.4.27",
 ]

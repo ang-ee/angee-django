@@ -52,6 +52,7 @@ from angee.knowledge.models import (
     StructuredEditError,
     UnsupportedPageKindError,
 )
+from angee.tags.schema import TaggedNode
 
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
@@ -726,6 +727,11 @@ attach_delete_preview_metadata(
 )
 
 
+@strawberry_django.type(Page, name="PageType", extend=True)
+class PageTags(TaggedNode):
+    """Console-only tags on a page; the public page node stays unchanged."""
+
+
 _KNOWLEDGE_SCHEMA_BUCKET = {
     "query": [
         KnowledgeQuery,
@@ -764,5 +770,6 @@ schemas = {
             changes(MarkdownPage, field="markdownPageChanged"),
             changes(RecordBinding, field="knowledgeRecordBindingChanged"),
         ],
+        "type_extensions": [PageTags],
     },
 }

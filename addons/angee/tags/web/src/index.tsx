@@ -8,9 +8,12 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { Tag as TagIcon, Tags as TagsIcon } from "lucide-react";
 
 import { enTagsMessages } from "./i18n";
-import { RecordTagsPane } from "./RecordTagsPane";
+import { tagsWidget } from "./TagsField";
 
 const TAGS_ID = "tags";
+
+/** The field widget key the backend's `TaggedNode.tags` names in resource metadata. */
+export const TAGS_WIDGET = "angee.tags.tags";
 
 const tagsRoutes: readonly BaseAddonRoute[] = [
   ...resourcePageRoutes(
@@ -40,14 +43,11 @@ const tagsMenu: readonly BaseMenuItem[] = [
 ];
 
 /**
- * The `@angee/tags` rendered addon. It contributes the tag vocabulary page and a
- * record-scoped **Tags** chatter tab ({@link RecordTagsPane}) — the polymorphic
- * tag widget renders in every record's console aside (the party detail included)
- * without any change to the addon that owns the record, which is the whole point
- * of the polymorphic edge. The party-list tag facet lands when `angee.tags` is
- * promoted and `parties` composes it (a facet is only declarable on the list its
- * owning addon renders); until then the vocabulary page and the record pane cover
- * curation and assignment.
+ * The `@angee/tags` rendered addon: the tag vocabulary page and the `tags`
+ * field widget ({@link tagsWidget}). Tags appear only where an owner places the
+ * field — a record form's `<Field name="tags" />` or a list column — on a model
+ * whose addon composes the backend's `TaggedNode`; this addon names no other
+ * addon's model.
  */
 const tags = defineBaseAddon({
   id: TAGS_ID,
@@ -59,17 +59,12 @@ const tags = defineBaseAddon({
     "tags-tag": TagIcon,
     tag: TagIcon,
   },
+  widgets: { [TAGS_WIDGET]: tagsWidget },
   containers: {
     // Scope-specific tag addons add facets, columns and form fields to the Tags page.
     "tags.tags#facets": {},
     "tags.tags#columns": {},
     "tags.tags#fields": {},
-    "record#aside": {
-      "tags.tags": {
-        sequence: 15,
-        content: { label: "Tags", icon: "tag", aliases: ["tags"], render: (context) => <RecordTagsPane context={context} /> },
-      },
-    },
   },
 });
 

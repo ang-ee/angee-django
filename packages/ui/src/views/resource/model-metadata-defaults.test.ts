@@ -795,6 +795,29 @@ describe("relation column read expansion", () => {
       .toEqual(["id", { assignees: ["id", "display_name"] }]);
   });
 
+  test("a to-many relation with a backend form widget keeps its linked-chip column", () => {
+    const file = testDataResource("storage.File", {
+      fields: [{ name: "tags", kind: "list", scalar: null, relationModelLabel: "tags.Tag", widget: "angee.tags.tags",
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+      query: testResourceQuery({ fields: { tags: testQueryField("tags", { kind: "list", scalar: null, row: null }) } }),
+    });
+    const tag = testDataResource("tags.Tag", {
+      recordRepresentation: "name",
+      fields: [{ name: "name", kind: "scalar", scalar: "String", readable: true,
+        aggregatable: false, creatable: true, updatable: true, requiredOnCreate: true }],
+    });
+    const schema = schemaFieldMetadataFromDataResources([file, tag]);
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "tags", hiddenByDefault: true }], schema.labels["storage.File"]!, schema);
+    expect(column).toMatchObject({
+      field: "tags", widget: "angee.tags.tags", hiddenByDefault: true, interactive: true,
+      selectionPaths: ["tags.id", "tags.name"],
+      relationList: { model: "tags.Tag", identityPath: "id", labelPath: "name" },
+    });
+    // The form field routes to the backend-named widget while the cell keeps the shared chips.
+    const [field] = fieldsWithMetadataDefaults([{ name: "tags" }], schema.labels["storage.File"]!, schema);
+    expect(field?.widget).toBe("angee.tags.tags");
+  });
+
   test("an object-list column without a related resource stays a value column", () => {
     const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
       testDataResource("parties.PartyHandle"));

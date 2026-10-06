@@ -257,6 +257,8 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.agents.apps.AgentsConfig",
         "angee.agents_integrate_anthropic",
         "angee.decisions.apps.DecisionsConfig",
+        # Storage reads its files' tags, so the tags vocabulary sorts before it.
+        "angee.tags",
         "angee.storage.apps.StorageConfig",
         "angee.parties.apps.PartiesConfig",
         # OIDC login now composes parties (it claims the signed-in user's own

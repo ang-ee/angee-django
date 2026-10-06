@@ -42,7 +42,8 @@ export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActio
       <Column field="status" header={t("common.status")} widget="statusBadge" />
       <Column field="assignee" header={t("common.assignee")} />
       <Column field="priority" header={t("common.priority")} />
-      <Column field="due_date" header={t("common.dueDate")} /></>}
+      <Column field="due_date" header={t("common.dueDate")} />
+      <Column field="tags" hiddenByDefault /></>}
     </List>
   );
 }

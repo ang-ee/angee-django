@@ -8,6 +8,9 @@ authored ``tag_assignments`` query — all thin dispatchers into
 target and tags resolve under the calling actor (nobody tags a row they cannot
 read), and only the gate-less edge insert/delete elevates. The mutations are
 additionally gated on the ``tags_admin`` role.
+
+Owners of taggable models compose :class:`TaggedNode` onto their console node
+type to read a row's tags as a batched, actor-scoped relation list.
 """
 
 from __future__ import annotations
@@ -17,10 +20,15 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from rebac import ObjectRef
+from django.db import models
+from rebac import ObjectRef, current_actor
+from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.permission import BasePermission
+from strawberry_django.fields.field import StrawberryDjangoField
+from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -76,6 +84,60 @@ class TagAssignmentType(AngeeNode):
         """Return the target row's public id."""
 
         return PublicID(cast(Any, self).record_public_id)
+
+
+TAGS_WIDGET = "angee.tags.tags"
+"""The registered web widget a form's ``<Field name="tags" />`` renders through.
+
+The owning addon's ``widgets`` contribution registers the identical key, so a
+form routes the field to it from resource metadata without naming it.
+"""
+
+_TAG_EDGES_ATTR = "_angee_tag_edges"
+"""Where the batched prefetch parks each row's readable tag edges."""
+
+
+def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
+    """Prefetch each selected row's readable tag edges with their tags, once per page.
+
+    Both querysets are actor-scoped, so an edge whose tag the actor cannot read
+    never reaches the row, and the inner tag queryset carries the selected
+    ``TagType`` hints. The REBAC optimizer stamps and rescopes the outer lookup.
+    """
+
+    actor = current_actor()
+    field = cast(StrawberryDjangoField, info._field)
+    tags = optimize(run_type_get_queryset(read_scoped_queryset(Tag, actor), field.django_type, info), info)
+    edges = read_scoped_queryset(TagAssignment, actor).by_tag().prefetch_related(
+        models.Prefetch("tag", queryset=tags),
+    )
+    return models.Prefetch("tag_assignments", queryset=edges, to_attr=_TAG_EDGES_ATTR)
+
+
+@strawberry.type
+class TaggedNode:
+    """Project a model's tags as a read-only relation list on its node type.
+
+    Compose alongside the node base, e.g. ``class FileType(TaggedNode, AngeeNode)``,
+    or through a console ``type_extensions`` donor when the node type is shared
+    with another schema. The model declares the reverse accessor
+    ``tag_assignments = GenericRelation("tags.TagAssignment")`` (see
+    :mod:`angee.tags.models`). Resource metadata projects the field as a
+    readable ``list`` relation to ``tags.Tag`` that no input writes; the edge is
+    written through the ``tag`` / ``untag`` mutations.
+    """
+
+    @strawberry_django.field(prefetch_related=[_tag_edges_prefetch], metadata={"angee_widget": TAGS_WIDGET})
+    def tags(self) -> list[TagType]:
+        """Return the actor-readable tags on this row, in the tag vocabulary's order."""
+
+        row = cast(Any, self)
+        edges = getattr(row, _TAG_EDGES_ATTR, None)
+        if edges is None:
+            # An unoptimized root (a mutation payload, a hand-resolved row): one
+            # actor-scoped read for this row alone.
+            edges = TagAssignment.objects.for_record(row).by_tag().rebac_select_related("tag")
+        return cast(list[TagType], [edge.tag for edge in edges])
 
 
 _TAG_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")

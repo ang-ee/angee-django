@@ -175,6 +175,7 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
   >
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
+    <Field name="tags" />
     <Group label={t("messages.groupEnvelope")} columns={2}>
       <Field name="sender" readOnly />
       <Field name="sent_at" readOnly />
