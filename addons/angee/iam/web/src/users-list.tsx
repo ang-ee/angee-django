@@ -13,8 +13,9 @@ export const USER_LIST_COLUMNS = {
   "iam.email": { sequence: 20, content: <Column field="email" /> },
   "iam.is-staff": { sequence: 30, content: <Column field="is_staff" /> },
   "iam.is-active": { sequence: 40, content: <Column field="is_active" /> },
-  // Read through its field gate: empty for viewers without read__last_login and for never-signed-in people.
-  "iam.last-login": { sequence: 50, content: <Column field="last_login" /> },
+  // Present where the viewer reads every row's last sign-in (read__last_login at type level); the field
+  // gate still decides each value, empty for never-signed-in people.
+  "iam.last-login": { sequence: 50, requires: "iam.User#read__last_login", content: <Column field="last_login" /> },
 };
 
 /** Shipped users-list presets, by activity. */

@@ -6,7 +6,7 @@ import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
 import type { ChatterTabContent, DrawerContribution, DrawerEdge } from "./contracts";
-import { useAppRuntime } from "./runtime";
+import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
 /**
  * Container names and the content their children carry. Each container's owner
@@ -93,6 +93,11 @@ export interface ContainerChild<TContent = unknown> {
   after?: string;
   /** A projected record permission the row must hold. */
   permission?: string;
+  /**
+   * Presence: `<app_label.ModelName>#<permission>` the session's identity must
+   * hold (`current_user.permitted`), whatever the row; else the child is absent.
+   */
+  requires?: string;
   /** Readable fields the child consumes from the record. */
   requiredFields?: readonly string[];
   /** Shown only on rows whose implementation (`ImplClassField` value) is this one. */
@@ -260,6 +265,11 @@ export interface ResolveContainerOptions {
    * variants included, no permission check. A record's field projection reads it.
    */
   projection?: boolean;
+  /**
+   * The `requires` refs the session holds: a child requiring another is absent,
+   * its variants with it, in projections too. Omitted, declarations stand.
+   */
+  permitted?: readonly string[];
 }
 
 /** A record's models for a container, most general first: its MTI parent, then itself. */
@@ -281,7 +291,8 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
  * unpositioned extras trail, and `before`/`after` may anchor on composed ids.
  * Then every layer's narrowing whose condition holds applies in dependency
  * order, with variants standing in for their originals on matching rows and the row's
- * permission last. Narrowing by a variant's own id drops that variant (its
+ * permission last. A child whose `requires` the session lacks is absent, with its
+ * variants, as a hidden one is. Narrowing by a variant's own id drops that variant (its
  * original returns); narrowing by an original's id carries its variants along.
  * A deployment `only` that holds forces: its narrowing replaces the addons'.
  * `projection` keeps every candidate (impl children and all variants) for the
@@ -290,7 +301,7 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
 export function resolveContainer<TContent = unknown>(
   composed: ComposedContainers,
   address: string,
-  { models = [], scope = EMPTY_SCOPE, row, impls = [], extra = [], projection = false }: ResolveContainerOptions = {},
+  { models = [], scope = EMPTY_SCOPE, row, impls = [], extra = [], projection = false, permitted }: ResolveContainerOptions = {},
 ): readonly ComposedContainerChild<TContent>[] {
   // Composition validates every address; a runtime composed without this container
   // (a story, a bare test) has no composed children for it, only the page's own.
@@ -315,7 +326,9 @@ export function resolveContainer<TContent = unknown>(
   const forcing = rules.find((rule) => rule.force)?.layer;
   const narrowing = forcing === undefined ? rules : rules.filter((rule) => rule.layer === forcing);
   const excepted = new Set(narrowing.flatMap((rule) => rule.except ?? []));
-  const blocked = (id: string): boolean => hidden.has(id) || excepted.has(id);
+  // Presence: a child whose `requires` the session lacks is absent, as a hidden one is.
+  const absent = new Set(merged.filter((child) => !isPresent(child.requires, permitted)).map((child) => child.id));
+  const blocked = (id: string): boolean => hidden.has(id) || excepted.has(id) || absent.has(id);
 
   // A variant carries its original's admission: its id and its owner for `only`'s exemption.
   const originals = new Map(merged.map((child) => [child.id, child]));
@@ -367,22 +380,24 @@ export function resolveContainer<TContent = unknown>(
 
 /**
  * The children of one container for the current page: the app and route come
- * from the runtime, the models and row from the rendering owner. Memoize
- * `models` and `impls`; a fresh array each render recomputes the list.
+ * from the runtime, presence from the session's identity, the models and row
+ * from the rendering owner. Memoize `models` and `impls`; a fresh array each
+ * render recomputes the list.
  */
 export function useContainer<TContent = unknown>(
   address: string,
-  options: Omit<ResolveContainerOptions, "scope"> = {},
+  options: Omit<ResolveContainerOptions, "scope" | "permitted"> = {},
 ): readonly ComposedContainerChild<TContent>[] {
-  const { containers = EMPTY_CONTAINERS, containerScope } = useAppRuntime();
+  const { containers = EMPTY_CONTAINERS, containerScope, auth } = useAppRuntime();
   const { models, row, impls, extra, projection } = options;
+  const permitted = sessionPermitted(auth.user);
   if (developmentMode() && containers !== EMPTY_CONTAINERS && !containers.declared[address] && !warnedAddresses.has(address)) {
     warnedAddresses.add(address);
     console.warn(`[angee] useContainer("${address}"): no such container was composed.`);
   }
   return useMemo(
-    () => resolveContainer<TContent>(containers, address, { models, row, impls, extra, projection, ...(containerScope ? { scope: containerScope } : {}) }),
-    [address, containerScope, containers, extra, impls, models, projection, row],
+    () => resolveContainer<TContent>(containers, address, { models, row, impls, extra, projection, permitted, ...(containerScope ? { scope: containerScope } : {}) }),
+    [address, containerScope, containers, extra, impls, models, permitted, projection, row],
   );
 }
 

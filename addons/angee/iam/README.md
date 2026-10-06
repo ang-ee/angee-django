@@ -64,3 +64,18 @@ definition iam/protected {
     permission member = manager->effective_member
 }
 ```
+
+## Presence
+
+`current_user { permitted(refs: [String!]!) }` answers which
+`<app_label.ModelName>#<permission>` refs the identity (the viewed one in a
+preview) holds at type level: the engine's create-path evaluation of a
+candidate row with no proposed relationships, batched, so role- and
+const-backed arms and the administrator set decide and a row-dependent arm is
+false. An unknown model or permission is an error; anonymous sessions have no
+identity and hold none. The web shell asks once per identity load for every
+`requires` its menus and container children declare and leaves out what the
+identity lacks; the server still decides data, row verbs and field values. The
+users list's last sign-in column (`iam.last-login`) requires
+`iam.User#read__last_login`, so it shows to administrators and to the roles a
+consumer grants that gate, as above.

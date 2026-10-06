@@ -12,12 +12,14 @@ export function explainComposition(
   unavailable: ReadonlyMap<string, string>,
   home: string,
   containers?: ComposedContainers,
+  requires?: CompositionExplanation["requires"],
 ): CompositionExplanation {
   const { provenance, removed, hidden, diagnostics } = menus;
   return {
     selection,
     home,
     menus: { provenance, removed, hidden, unavailable: Object.fromEntries(unavailable), diagnostics },
+    ...(requires ? { requires } : {}),
     ...(containers ? {
       containers: {
         removed: containers.removed,

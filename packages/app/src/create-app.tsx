@@ -32,6 +32,7 @@ import {
 import {
   QueryClient,
   keepPreviousData,
+  useQuery,
   type QueryClientConfig,
 } from "@tanstack/react-query";
 import {
@@ -65,9 +66,12 @@ import {
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
+  aliasRouteHref,
   createRouteHref,
+  sessionPermitted,
   type AppRuntime,
   type ComposedContainers,
+  type RouteHref,
   type RuntimeBrand,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
@@ -130,10 +134,12 @@ import {
   menuRouteResourceIdentifier,
   resourceMutationsForSchema,
 } from "./resource-projection";
+import { presenceRefs, presenceRequirements } from "./presence";
 import { chatterRouteIndex } from "./chatter-routes";
 import { explainComposition, type CompositionExplanation } from "./explain";
 import { developmentMode } from "@angee/ui/lib/development-mode";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
+import { mountRoutes } from "./mounts";
 import {
   compareCodePoint,
   authRouteError,
@@ -281,7 +287,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
         canonicalModelLabel(modelLabelInventory, spelling),
     },
   );
-  const routes = resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]);
+  // Mounts add their alias routes before any projection reads the routes.
+  const mounted = mountRoutes(resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]), composed.menuComposition.mounts);
+  const routes = mounted.routes;
   for (const route of routes) {
     if (!route.recordMatch) continue;
     const model = route.recordModel ?? route.resource;
@@ -331,12 +339,19 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
     : routeHref;
+  // Inside a mount, the mounted route's names build its alias's: the borrowed page's own links stay in the borrowing app.
+  const mountedRouteHrefs = new Map<string, RouteHref>(mounted.families.flatMap((family) => {
+    const href = aliasRouteHref(runtimeRouteHref, family);
+    return [...family.values()].map((alias) => [alias, href] as const);
+  }));
   const navigationTree = projection.navigationTree;
   validateContainerConditions(composed.containers, {
     routes: routesByName,
     // The ids a page's app trail can hold: roots and included apps, flattened ones too.
     apps: menuTree.appIds(),
   });
+  // Presence: what the menus and container children `requires`; the identity read asks which the session holds.
+  const requirements = presenceRequirements(menuTree, composed.containers);
   for (const [address, children] of Object.entries(composed.containers.children)) {
     if (!address.endsWith("#search")) continue;
     const modelLabel = address.slice(0, -"#search".length);
@@ -406,7 +421,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     mergeI18n(enUiBundle, composed.i18n), composed.vocabulary,
     modelLabelInventory, menuTree, routes,
   );
-  const defaultVocabulary = vocabularyForRoute(projection.homeApp);
+  const defaultVocabulary = vocabularyForRoute(projection.homeApp === undefined ? [] : [projection.homeApp]);
   const i18n = defaultVocabulary.i18n;
 
   // The static composition; the session fields (auth, logoutAction,
@@ -444,9 +459,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
   function resourceRegistryFor(
     selected: Readonly<Record<string, RuntimeResourceRoutes>>,
     vocabulary: RuntimeVocabulary,
+    navigation: MenuTree = navigationTree,
   ) {
     const paths = Object.fromEntries(Object.entries(selected).map(([resource, names]) => [resource, routeHref(names.collection)]));
-    const projected = refineRouteResourceProjection(routes, menuTree, navigationTree, selected);
+    const projected = refineRouteResourceProjection(routes, menuTree, navigation, selected);
     return [...projected.resources, ...refineResourcesForSchemas(schemas, paths, projected.metadataByResource)]
       .map((resource) => {
         const model = resource.meta?.modelLabel;
@@ -480,6 +496,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       viewAs.reset();
       refineLiveProvider?.setEnabled(true);
     },
+    presenceRefs(requirements),
   );
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
@@ -498,14 +515,19 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const pathname = useRouterState({ select: (state) => state.location.pathname });
     const searchStr = useRouterState({ select: (state) => state.location.searchStr });
     const activeRoute = useActiveRoute(routes);
-    const match = projection.activeMenu(pathname, activeRoute?.name, searchStr);
+    // The rail, menus and palette show what the session's identity holds; Refine fetches it into the shared entry.
+    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider), enabled: false }, queryClient);
+    const navigation = projection.navigationFor(sessionPermitted(identity.data));
+    const match = projection.activeMenu(pathname, activeRoute?.name, searchStr, navigation);
     const activeMenuId = match?.item.id ?? null;
     const app = projection.activeApp(pathname, activeRoute?.name, searchStr);
-    const words = vocabularyForRoute(app, activeRoute?.name);
+    const trail = projection.appTrail(pathname, activeRoute?.name, searchStr);
+    // Words compose along the whole app trail, outermost first, as `when: { app }` matches it.
+    const words = vocabularyForRoute(trail, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
     // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
-    const appTrail = publicRoute ? "" : projection.appTrail(pathname, activeRoute?.name, searchStr).join("\0");
+    const appTrail = publicRoute ? "" : trail.join("\0");
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
       const menuResourceViewIds = new Set<string>();
@@ -514,6 +536,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         for (const id of menuPresetIdsByRoute.get(route.name) ?? []) menuResourceViewIds.add(id);
         route = route.parent ? routesByName.get(route.parent) : undefined;
       }
+      const routeNames = routeTrail(activeRoute);
       return {
         ...runtime,
         i18n: words.i18n.instance,
@@ -521,11 +544,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref: runtimeRouteHref,
+        routeHref: routeNames.map((name) => mountedRouteHrefs.get(name)).find((href) => href !== undefined) ?? runtimeRouteHref,
         composition: explain,
         containerScope: {
           apps: appTrail ? appTrail.split("\0") : [],
-          routes: routeTrail(activeRoute),
+          routes: routeNames,
         },
         activeRouteName: activeRoute?.name ?? null,
         activeMenuId,
@@ -539,7 +562,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
             <InAppLinkProvider navigate={navigateInApp} preload={preloadInApp}>
               <ModalsHost>
                 <ToastProvider>
-                  <RefineRoot i18nProvider={words.i18n.provider} />
+                  <RefineRoot i18nProvider={words.i18n.provider} navigation={navigation} />
                 </ToastProvider>
               </ModalsHost>
             </InAppLinkProvider>
@@ -549,9 +572,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  function RefineRoot({ i18nProvider }: { i18nProvider: I18nProvider }): ReactNode {
+  function RefineRoot({ i18nProvider, navigation }: { i18nProvider: I18nProvider; navigation: MenuTree }): ReactNode {
     const { vocabulary, routesByResource: selected, activeMenuId } = useAppRuntime();
-    const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary), [selected, vocabulary]);
+    // Refine's resources feed the rail, menus and palette.
+    const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary, navigation), [navigation, selected, vocabulary]);
     const refineNotificationProvider = useRefineNotificationProvider();
     const routerProvider = useMemo(() => createTanStackRouterProvider(activeMenuId ? menuRouteResourceIdentifier(activeMenuId) : undefined), [activeMenuId]);
     return (
@@ -649,7 +673,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   // Bound after the router exists; RootOutlet only reads them at render time.
   const navigateInApp = routerNavigator(router);
   const preloadInApp = routerPreloader(router);
-  const explain = explainComposition(selection, composed.menuComposition, unavailable, home, composed.containers);
+  const explain = explainComposition(selection, composed.menuComposition, unavailable, home, composed.containers, requirements);
   if (developmentMode()) {
     for (const diagnostic of selection.diagnostics) console.warn(`[angee] ${diagnostic}`);
     const menuFindings = composed.menuComposition.diagnostics.length;
@@ -770,6 +794,7 @@ function createAuthProviderForSchema(
   loginPath: string,
   queryClient: QueryClient,
   onAuthChange: () => void,
+  requires: readonly string[],
 ): RefineAuthProvider {
   const schema = schemas[authSchema];
   if (!schema) {
@@ -779,6 +804,7 @@ function createAuthProviderForSchema(
     ...schema,
     loginPath,
     queryClient,
+    requires,
     identityClient: schemas.console,
     // Reset observed queries so identity and mounted views see the transition;
     // clearing their entries would strand observers with the previous data.

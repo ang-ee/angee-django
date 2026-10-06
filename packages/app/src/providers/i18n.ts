@@ -65,20 +65,26 @@ function messageVars(options: unknown): MessageVars {
   );
 }
 
-/** Validate scoped overrides against the composed owners, then resolve by specificity. */
+/**
+ * Validate scoped overrides against the composed owners, then resolve by
+ * specificity: the scopes of every app on the page's trail, outermost first,
+ * then route scopes, nearer routes later and, per route, inner apps later.
+ */
 export function composeAppVocabulary(
   base: I18nResources,
   declarations: readonly AppVocabulary[],
   resources: readonly DataResourceMetadata[],
   menus: MenuTree,
   routes: readonly AddonRoute[],
-): (app?: string, route?: string) => { i18n: AngeeI18nRuntime; vocabulary: RuntimeVocabulary } {
+): (apps?: readonly string[], route?: string) => { i18n: AngeeI18nRuntime; vocabulary: RuntimeVocabulary } {
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const scopes = new Map<string, AppVocabulary>();
   const host = base;
   const languageOwner = createAngeeI18nInstance(host);
+  // Any app a page's trail can hold: a root or an included app, flattened ones too.
+  const appIds = menus.appIds();
   for (const declaration of declarations) {
-    if (!menus.roots.some((root) => root.id === declaration.app)) {
+    if (!appIds.has(declaration.app)) {
       throw new Error(`Vocabulary references unknown app "${declaration.app}".`);
     }
     if (declaration.route && !routesByName.has(declaration.route)) {
@@ -117,21 +123,17 @@ export function composeAppVocabulary(
     scopes.set(key, { ...declaration, resources: normalized });
   }
   const cache = new Map<string, { i18n: AngeeI18nRuntime; vocabulary: RuntimeVocabulary }>();
-  return (app, routeName) => {
-    const key = `${app ?? ""}\0${routeName ?? ""}`;
+  return (apps = [], routeName) => {
+    const key = `${apps.join("\0")}\0\0${routeName ?? ""}`;
     const cached = cache.get(key);
     if (cached) return cached;
-    const chain: AppVocabulary[] = [];
-    const visited = new Set<string>();
+    const routeNames: string[] = [];
     let route = routeName ? routesByName.get(routeName) : undefined;
-    while (route && !visited.has(route.name)) {
-      visited.add(route.name);
-      const scope = scopes.get(`${app}\0${route.name}`);
-      if (scope) chain.unshift(scope);
+    while (route && !routeNames.includes(route.name)) {
+      routeNames.unshift(route.name);
       route = route.parent ? routesByName.get(route.parent) : undefined;
     }
-    const appScope = scopes.get(`${app}\0`);
-    if (appScope) chain.unshift(appScope);
+    const chain = ["", ...routeNames].flatMap((name) => apps.flatMap((app) => scopes.get(`${app}\0${name}`) ?? []));
     let messages = host;
     const vocabulary: { resources: Record<string, ResourceVocabulary>; menus: Record<string, string> } = { resources: {}, menus: {} };
     for (const scope of chain) {

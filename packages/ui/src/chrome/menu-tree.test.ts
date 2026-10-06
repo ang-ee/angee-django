@@ -212,6 +212,23 @@ test.each([false, true])("lifts nested platform nodes into Settings (confined=%s
   expect(logical.byId.get("mail.settings")?.parentNode?.id).toBe("mail");
 });
 
+test("without drops nodes with their subtrees, and any node left with nowhere to go", () => {
+  const tree = MenuTree.from([
+    { id: "desk", children: [
+      { id: "desk.tools", children: [{ id: "desk.export", to: "/desk/export" }] },
+      { id: "desk.inbox", to: "/desk/inbox" },
+    ] },
+    { id: "audit", children: [{ id: "audit.log", to: "/audit/log" }] },
+  ]);
+  expect(tree.without(new Set())).toBe(tree);
+  // "desk.tools" reached only "desk.export"; the root "audit" reached only "audit.log".
+  const left = tree.without(new Set(["desk.export", "audit.log"]));
+  expect([...left.byId.keys()]).toEqual(["desk", "desk.inbox"]);
+  expect(left.railMenuItems().map((node) => node.id)).toEqual(["desk"]);
+  expect(left.byId.get("desk")?.target).toBe("/desk/inbox");
+  expect(tree.byId.size).toBe(6);
+});
+
 test("withSettingsPlace is idempotent, retaining platform descendants inside Settings roots", () => {
   const tree = MenuTree.from([{ id: "mail", children: [
     { id: "mail.settings", group: "platform", children: [

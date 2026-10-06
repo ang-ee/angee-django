@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState, type ReactElement } from "react";
 
 import { useUiT } from "../i18n";
 import {
+  isPresent,
+  sessionPermitted,
   useAppRuntime,
   useDeveloperMode,
   useDeveloperModeSwitch,
@@ -113,6 +115,11 @@ const layersOf = (fields: Readonly<Record<string, string | undefined>>): string 
 function CompositionSections({ composition }: { composition: RuntimeComposition }): ReactElement {
   const t = useUiT();
   const { selection, menus } = composition;
+  // Presence: what the session's identity lacks a `requires` for, menu nodes with their subtrees.
+  const permitted = sessionPermitted(useAppRuntime().auth.user);
+  const absent = (declared: Readonly<Record<string, string>> = {}): string[] => Object.entries(declared)
+    .filter(([, ref]) => !isPresent(ref, permitted))
+    .map(([subject, ref]) => t("developer.absentLine", { subject, ref }));
   const sections: readonly (readonly [string, readonly string[]])[] = [
     [t("developer.selection"), Object.entries(selection.sources).flatMap(([field, source]) =>
       source === undefined ? [] : [t("developer.setBy", { subject: field, layers: source })])],
@@ -120,6 +127,7 @@ function CompositionSections({ composition }: { composition: RuntimeComposition 
     [t("developer.hidden"), menus.hidden.map((node) =>
       t("developer.hiddenLine", { id: node.id, layer: node.by, reason: t(`developer.reason.${node.reason}`) }))],
     [t("developer.unavailable"), Object.entries(menus.unavailable).map(([route, reason]) => t("developer.unavailableLine", { route, reason }))],
+    [t("developer.absent"), [...absent(composition.requires?.menus), ...absent(composition.requires?.containers)]],
     // Composition findings are the app's own English diagnostics, shown as raised.
     [t("developer.diagnostics"), [...selection.diagnostics, ...menus.diagnostics, ...(composition.containers?.diagnostics ?? [])]],
     [t("developer.menus"), Object.entries(menus.provenance).map(([id, fields]) => t("developer.setBy", { subject: id, layers: layersOf(fields) }))],

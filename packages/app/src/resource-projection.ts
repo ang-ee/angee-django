@@ -15,6 +15,7 @@ import {
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
+import { absentMenuNodes } from "./presence";
 import {
   childRoutesByParentName,
   fullRoutePath,
@@ -164,8 +165,10 @@ export class AppRouteProjection {
   readonly homeApp: string | undefined;
   private readonly roots = new Map<string, string | undefined>();
   private readonly claims = new Map<string, Map<string, RuntimeResourceRoutes[]>>();
-  private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
+  /** Record match claims per resource, in every app: a matching row opens there. */
+  private readonly recordDestinations = new Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  private readonly presentNavigation = new Map<string, MenuTree>();
 
   /** Console routes removed menu nodes made unavailable, with the reason; they redirect home. */
   readonly unavailable: ReadonlyMap<string, string>;
@@ -203,6 +206,21 @@ export class AppRouteProjection {
       if (this.unavailable.has(route.name)) continue;
       const root = this.rootFor(route);
       const resource = route.resource ?? route.recordModel;
+      const claimOf = (model: string) => resourceRouteIndex([
+        { ...route, resource: model },
+        ...routes.filter((child) => child.parent === route.name),
+      ])[model]!;
+      const match = route.recordMatch;
+      if (match && resource) {
+        if (route.path.includes("$")) throw new Error(`Route "${route.name}" declares recordMatch on a parameterized path.`);
+        const { record } = claimOf(resource);
+        if (!record) throw new Error(`Route "${route.name}" declares recordMatch without a record child.`);
+        const destinations = this.recordDestinations.get(resource) ?? [];
+        if (destinations.some((item) => item.match.field === match.field && item.match.equals === match.equals)) {
+          throw new Error(`Resource "${resource}" has duplicate record match "${match.field}=${match.equals}".`);
+        }
+        this.recordDestinations.set(resource, [...destinations, { record, match }]);
+      }
       if (!resource || !root || !appIds.has(root)) {
         canonical.push(route);
         continue;
@@ -211,22 +229,7 @@ export class AppRouteProjection {
         if (route.resource) resourceRouteIndex([route]); // Same collection contract in every scope.
         continue;
       }
-      const claim = resourceRouteIndex([
-        { ...route, resource },
-        ...routes.filter((child) => child.parent === route.name),
-      ])[resource]!;
-      if (route.recordMatch && !claim.record) {
-        throw new Error(`Route "${route.name}" declares recordMatch without a record child.`);
-      }
-      if (route.recordMatch && claim.record) {
-        const byResource = this.recordDestinations.get(root) ?? new Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>();
-        const destinations = byResource.get(resource) ?? [];
-        if (destinations.some((item) => item.match.field === route.recordMatch?.field && item.match.equals === route.recordMatch?.equals)) {
-          throw new Error(`Resource "${resource}" has duplicate record match "${route.recordMatch.field}=${route.recordMatch.equals}".`);
-        }
-        byResource.set(resource, [...destinations, { record: claim.record, match: route.recordMatch }]);
-        this.recordDestinations.set(root, byResource);
-      }
+      const claim = claimOf(resource);
       const resources = this.claims.get(root) ?? new Map<string, RuntimeResourceRoutes[]>();
       resources.set(resource, [...(resources.get(resource) ?? []), claim]);
       this.claims.set(root, resources);
@@ -258,8 +261,25 @@ export class AppRouteProjection {
     return owner ? menuNodeForRoute(owner, this.menuTree) : undefined;
   }
 
-  activeMenu(pathname: string, routeName?: string, search?: string): MenuMatch | undefined {
-    return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  activeMenu(pathname: string, routeName?: string, search?: string, navigation = this.navigationTree): MenuMatch | undefined {
+    return navigation.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  }
+
+  /**
+   * The navigation a session holding `permitted` sees: a menu node whose
+   * `requires` it lacks leaves the rail, menus and palette with its subtree.
+   * Presence only: routes, trails, app scope and admission do not change.
+   * Without refs (`undefined`) the navigation stands as declared.
+   */
+  navigationFor(permitted: readonly string[] | undefined): MenuTree {
+    if (permitted === undefined) return this.navigationTree;
+    const key = [...new Set(permitted)].sort().join("\n");
+    let navigation = this.presentNavigation.get(key);
+    if (!navigation) {
+      navigation = this.navigationTree.without(absentMenuNodes(this.menuTree, permitted));
+      this.presentNavigation.set(key, navigation);
+    }
+    return navigation;
   }
 
   /**
@@ -292,22 +312,31 @@ export class AppRouteProjection {
     return route ? inheritedRouteFact(route, this.routesByName, (item) => item.defaultResourceView) : undefined;
   }
 
+  /**
+   * The resource routes on a page of `app`. A record opens, in order: at the
+   * record match claim its row matches, in every app; at the app's own claim;
+   * at the canonical route.
+   */
   resourceRoutes(app?: string, activeRoute?: string): Readonly<Record<string, RuntimeResourceRoutes>> {
     const result = { ...this.canonical };
     const route = activeRoute ? this.routesByName.get(activeRoute) : undefined;
-    for (const [resource, claims] of this.claims.get(app ?? "") ?? []) {
+    const owned = this.claims.get(app ?? "");
+    for (const [resource, claims] of owned ?? []) {
       const selected = claims.find((claim) => route && inheritedRouteFact(route, this.routesByName,
         (ancestor) => ancestor.name === claim.collection ? true : undefined)) ?? claims[0]!;
       const record = selected.record ?? claims.find((claim) => claim.record)?.record ?? this.canonical[resource]?.record;
       result[resource] = { ...selected, ...(record ? { record } : {}) };
     }
-    for (const [resource, destinations] of this.recordDestinations.get(app ?? "") ?? []) {
+    for (const [resource, destinations] of this.recordDestinations) {
       const selected = result[resource];
       if (!selected) continue;
+      // A row no match claims opens at the app's own claim, never another match's.
+      const fallback = owned?.get(resource)?.find((claim) => claim.record
+        && !this.routesByName.get(claim.collection)?.recordMatch)?.record ?? this.canonical[resource]?.record;
       result[resource] = {
         ...selected,
         recordDestinations: destinations,
-        ...(this.canonical[resource]?.record ? { recordFallback: this.canonical[resource].record } : {}),
+        ...(fallback ? { recordFallback: fallback } : {}),
       };
     }
     return result;

@@ -63,8 +63,9 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
   The shared `createAngeeI18nInstance` initializer in `@angee/ui/runtime`
   configures that instance and the provider-less binding's English defaults;
   i18next owns plural selection and interpolation in both cases.
-- App copy belongs to manifest `vocabulary` scopes: a menu root, optionally a
-  route whose descendants inherit the override. The app validates existing
+- App copy belongs to manifest `vocabulary` scopes: an app (a root or an
+  included app), optionally a route whose descendants inherit the override; a
+  page composes every app on its trail, outermost first. The app validates existing
   message, model, field and menu keys; metadata projects presentation labels
   without changing query or model identity. Use host `createApp.i18n` for global
   copy, and scoped vocabulary for another addon's copy within an app. Native
@@ -315,7 +316,7 @@ shared UI copy through an addon bundle.
   do not mount their own chatter. Its tabs are `record#aside` and
   `<model>#aside` children, narrowed by the layers for the current app and
   route before tabs mount (see [Chatter](#chatter)); a container nobody narrows
-  keeps all its children, including in a confined app. Public and sign-in
+  keeps all its children, including under a selected app. Public and sign-in
   routes belong to no app. A tab declared at `record#aside` appears only on
   record views. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
@@ -748,6 +749,17 @@ shared UI copy through an addon bundle.
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
+- **Presence reflects permissions; it never gates.** A menu entry (app roots
+  and legacy list items too; dependents and the deployment may set it like any
+  declaration field) or a container child may name `requires:
+  "<app_label.ModelName>#<permission>"`. The identity read asks
+  `current_user.permitted` about every composed ref; an entry the session
+  lacks leaves the rail, menus and palette with its subtree, a child leaves its
+  container, and routes stay reachable. Each ref is evaluated at type level,
+  where row-specific arms are false, so name a role- or const-decidable
+  permission (`iam.User#read__last_login`). A question about one row stays the
+  child's per-row `permission`; data stays with querysets and field values with
+  their gates. See [IAM presence](../../addons/angee/iam/README.md#presence).
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 
 ## Containers
@@ -806,8 +818,9 @@ containers: {
 
 A child carries `content` and, optionally, `sequence` and `before`/`after`
 (its position), `permission` (a projected record permission the row must hold,
-checked by owners rendering for one record), `requiredFields` (readable fields
-it consumes, which the form selects), `impl`, `variant` and `key`.
+checked by owners rendering for one record), `requires` (presence: a ref the
+session must hold, whatever the row; see Rules), `requiredFields` (readable
+fields it consumes, which the form selects), `impl`, `variant` and `key`.
 
 Any other key alters a child an addon this one depends on declared:
 `sequence`, `before` and `after` move it (at the address it was declared at),
@@ -1018,7 +1031,9 @@ Developer mode's composition dialog lists container narrowing (each layer's
 `only`, `except`, `hide` and `when` per address), removed children with the
 layer that removed them, and the layers behind each child's fields. The same
 facts are on `createApp(...).explain.containers`; see the
-[app package](../../packages/app/README.md).
+[app package](../../packages/app/README.md). It also lists the menu nodes and
+children absent for the session with the ref each lacks;
+`createApp(...).explain.requires` maps every declared one to its ref.
 
 ## Form save contracts
 
@@ -1293,12 +1308,13 @@ Hard-won traps — the wise learn from others' mistakes
   other addons' menus only through the `menus` dict's declared verbs (include,
   flatten, remove, hide, only, position), along their dependencies; see
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
-  another addon's items.
+  another addon's items or routes.
   `route.menu` identifies a route's owning item when references are ambiguous.
-  Multiple references within one root do not throw; without an anchor they
-  provide no menu-derived trail or metadata. References from different roots
-  leave the route without an owning root; anchor it with `route.menu`, which a
-  root's `home` on such a route requires. `useChromePlace()` shares one memoized
+  Multiple references do not throw; without an anchor they provide no
+  menu-derived trail or metadata, and references from different roots leave the
+  route with no owning root; anchor it with `route.menu`, which a root's `home`
+  on such a route requires. To give another app its own copy of a page, mount
+  it. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
   trail. Match path length and search params first, then whether the item sits at
@@ -1308,6 +1324,40 @@ Hard-won traps — the wise learn from others' mistakes
   destination for native breadcrumbs. A more specific preset or parameterized
   target wins over an anchor. Breadcrumbs occupy the
   sheet strip below the top bar; pane toggles stay in the top bar.
+- **An addon composes other addons under its own app by absorbing or
+  borrowing.** Absorb with `include`: the included app moves under the
+  composing node and leaves its place on the rail (the PM suite). Borrow with
+  `mount`: the composing addon declares its own node,
+  `"x.people": { parent: "x", mount: "iam.users", path: "people" }`, and
+  [`mountRoutes`](../../packages/app/src/mounts.ts) emits an alias route named
+  after it (`x.people`, plus `x.people.record` for the mounted route's record
+  child) at its app's `path` joined with the node's. The app is the node's
+  nearest ancestor declared at the top of the rail, so a mount keeps its path
+  when another addon includes that app; an app's `path` defaults to `/<app id>`,
+  since its own target may itself be a mount. The alias reuses the mounted route's
+  lazy page, detail page, layout and model (as `recordModel`, so the canonical
+  claim stays with its owner); the source app keeps its own page. A node targets
+  one of `route` (a link), `mount` (a borrowed page) and `to` (an external URL),
+  and an addon mounts only routes of addons it depends on. The alias is a real
+  route anchored to its node, so `useActiveRoute`, `when: { route }`, route
+  vocabulary and the menu trail are the borrowing app's. Inside the alias
+  family `useRouteHref()` composes [`aliasRouteHref`](../../packages/ui/src/runtime/route-href.ts):
+  the mounted route's names build the alias's (`iam.users` → `x.people`), so the
+  borrowed page's own links stay in the borrowing app. The node's
+  `defaultResourceView` and `recordMatch` go onto the alias.
+- **Record ownership has one order.** A record link opens at the `recordMatch`
+  claim its row matches, from every app; otherwise at the active app's own
+  claim (with an app selected, each rail root claims its own routes);
+  otherwise at the canonical route
+  ([`AppRouteProjection.resourceRoutes`](../../packages/app/src/resource-projection.ts)).
+  Two claims on one resource with the same field and value fail at boot; a row
+  two different claims match fails where it renders. Lists read every claimed
+  field (`useResourceRecordMatchFields`) so the row can choose.
+- **Words and `when: { app }` follow the whole app trail.** A page's trail
+  holds its root and every included app on the way, flattened ones too.
+  Vocabulary composes the scopes of every app on it, outermost first, then route
+  scopes, and a vocabulary `app` may name any of those apps; a container
+  condition's `app` matches any of them.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and
   temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard

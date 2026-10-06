@@ -128,7 +128,38 @@ describe("app resource projection", () => {
     expect(href(selected["teams.Team"]!.record!.name, { id: "t1" })).toBe("/teams/t1");
     expect(projection.resourceRoutes()["records.Record"]?.record?.name).toBe("records.all.record");
     expect(selected["records.Record"]?.recordDestinations).toEqual([{ record: { name: "desk.review.record", param: "recordId" }, match: { field: "queue.id", equals: "queue-a" } }]);
-    expect(selected["records.Record"]?.recordFallback?.name).toBe("records.all.record");
+    // A row no match claims opens at the app's own claim, not at the matching route the page sits under.
+    expect(selected["records.Record"]?.recordFallback?.name).toBe("desk.incoming.record");
+  });
+
+  test("a record match claims its rows from every app; the app's own claim, then the canonical route, takes the rest", () => {
+    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"] });
+    const destinations = [{ record: { name: "desk.review.record", param: "recordId" }, match: { field: "queue.id", equals: "queue-a" } }];
+    expect(projection.resourceRoutes()["records.Record"]).toEqual({
+      collection: "records.all", record: { name: "records.all.record", param: "id" },
+      recordDestinations: destinations, recordFallback: { name: "records.all.record", param: "id" },
+    });
+    expect(projection.resourceRoutes("teams")["records.Record"]).toMatchObject({ recordDestinations: destinations, recordFallback: { name: "records.all.record" } });
+    expect(projection.resourceRoutes("desk")["records.Record"]).toMatchObject({ recordDestinations: destinations, recordFallback: { name: "desk.incoming.record" } });
+    // Resources no match claims carry no destinations.
+    expect(projection.resourceRoutes()["teams.Team"]?.recordDestinations).toBeUndefined();
+  });
+
+  test("two record matches on one resource and condition fail at boot, whichever apps declare them", () => {
+    const claimed: readonly BaseAddonRoute[] = [
+      ...routes,
+      ...resourcePageRoutes("mine.records", "/mine", Page, undefined, { recordModel: "records.Record", recordMatch: { field: "queue.id", equals: "queue-a" } }),
+    ];
+    const tree = (extra: readonly ChromeMenuItem[]) =>
+      MenuTree.from(resolveMenuRouteTargets([...menus, ...extra], createRouteHref(claimed)) as readonly ChromeMenuItem[]);
+    // "mine" is off the rail and "desk" on it: a match claims globally either way.
+    expect(() => new AppRouteProjection(claimed, tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] }))
+      .toThrow(/Resource "records.Record" has duplicate record match "queue.id=queue-a"/);
+    const other = claimed.map((route) => route.name === "mine.records" ? { ...route, recordMatch: { field: "queue.id", equals: "queue-b" } } : route);
+    expect(() => new AppRouteProjection(other, tree([{ id: "mine", route: "mine.records" }]), { rail: ["desk"] })).not.toThrow();
+    expect(() => new AppRouteProjection([
+      { name: "mine.records", path: "/mine", recordModel: "records.Record", recordMatch: { field: "queue.id", equals: "queue-a" } },
+    ], MenuTree.from([]))).toThrow(/declares recordMatch without a record child/);
   });
 
   test("confines the menu to the rail; a page outside it sits in the home app, a page inside in its own root", () => {
@@ -322,5 +353,79 @@ describe("availability edge cases", () => {
     expect(unavailableRoutes(anchored.slice(1), tree, [{ id: "x", route: "pageant" }]).size).toBe(0);
     expect(() => unavailableRoutes([{ name: "lost", path: "/lost", menu: "typo" }], tree, []))
       .toThrow(/references unknown menu item "typo"/);
+  });
+});
+
+describe("presence in the navigation", () => {
+  const presenceRoutes: readonly BaseAddonRoute[] = [
+    { name: "people.directory", path: "/people" },
+    { name: "people.manage", path: "/people/manage" },
+    { name: "people.manage.record", path: "$id", parent: "people.manage" },
+    { name: "people.review", path: "/people/review" },
+    { name: "audit.log", path: "/audit/log" },
+    { name: "ledger.entries", path: "/ledger/entries" },
+    { name: "suite.home", path: "/suite" },
+  ];
+  const compiled = compileMenus([
+    { id: "people", menus: {
+      people: { label: "People" },
+      "people.directory": { parent: "people", route: "people.directory" },
+      "people.manage": { parent: "people", route: "people.manage", requires: "iam.User#create" },
+      "people.reviews": { parent: "people", requires: "iam.User#read__last_login" },
+      "people.review": { parent: "people.reviews", route: "people.review" },
+    } },
+    { id: "audit", menus: {
+      audit: { label: "Audit", requires: "iam.User#delete" },
+      "audit.log": { parent: "audit", route: "audit.log" },
+    } },
+    { id: "ledger", menus: {
+      ledger: { label: "Ledger", requires: "ledger.Entry#read" },
+      "ledger.entries": { parent: "ledger", route: "ledger.entries" },
+    } },
+    { id: "suite", dependsOn: ["ledger"], menus: {
+      suite: { label: "Suite", include: [{ id: "ledger", flatten: true }] },
+      "suite.home": { parent: "suite", route: "suite.home" },
+    } },
+  ]);
+  const href = createRouteHref(presenceRoutes);
+  const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
+  const navigation = MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href) as readonly ChromeMenuItem[]);
+  const projection = new AppRouteProjection(presenceRoutes, logical, undefined, { navigation, removed: compiled.removed });
+  const route = (name: string) => presenceRoutes.find((candidate) => candidate.name === name)!;
+  const palette = (tree: MenuTree) => tree.navigableItems().map(({ item }) => item.id).sort();
+  const menuResources = (tree: MenuTree) =>
+    refineRouteResourceProjection(presenceRoutes, logical, tree).resources.map((resource) => resource.meta?.menuId).sort();
+  const every = ["iam.User#create", "iam.User#delete", "iam.User#read__last_login", "ledger.Entry#read"];
+
+  test("without the session's refs, and holding every one, the navigation stands as declared", () => {
+    expect(projection.navigationFor(undefined)).toBe(projection.navigationTree);
+    expect(projection.navigationFor(every)).toBe(projection.navigationTree);
+    expect(palette(projection.navigationTree)).toEqual(["audit.log", "ledger.entries", "people.directory", "people.manage", "people.review", "suite.home"]);
+  });
+
+  test("a node the session lacks a ref for leaves the rail, menus and palette with its subtree; its routes stay", () => {
+    const none = projection.navigationFor([]);
+    expect(none.railMenuItems().map((item) => item.id)).toEqual(["people", "suite"]);
+    expect(palette(none)).toEqual(["people.directory", "suite.home"]);
+    // A flattened app's items leave with it, though the navigation lifts them under the suite.
+    for (const id of ["people.manage", "people.reviews", "people.review", "audit", "audit.log", "ledger.entries"]) {
+      expect(none.byId.has(id)).toBe(false);
+    }
+    expect(menuResources(none)).toEqual(["people", "people.directory", "suite", "suite.home"]);
+    // Presence only: availability, route ownership and app scope are the declared composition's.
+    expect(projection.unavailable.size).toBe(0);
+    expect(projection.rootFor(route("people.manage"))).toBe("people");
+    expect(projection.rootFor(route("people.manage.record"))).toBe("people");
+    expect(projection.activeApp("/audit/log", "audit.log")).toBe("audit");
+    // The active entry is one the session sees.
+    expect(projection.activeMenu("/people/manage/p1", "people.manage.record")?.item.id).toBe("people.manage");
+    expect(projection.activeMenu("/people/manage/p1", "people.manage.record", undefined, none)?.item.id).toBe("people.directory");
+  });
+
+  test("each ref held brings back exactly what requires it, one tree per set of refs", () => {
+    expect(palette(projection.navigationFor(["iam.User#create"]))).toEqual(["people.directory", "people.manage", "suite.home"]);
+    expect(palette(projection.navigationFor(["ledger.Entry#read"]))).toEqual(["ledger.entries", "people.directory", "suite.home"]);
+    expect(projection.navigationFor(["iam.User#delete", "iam.User#create"]))
+      .toBe(projection.navigationFor(["iam.User#create", "iam.User#delete"]));
   });
 });

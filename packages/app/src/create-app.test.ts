@@ -27,6 +27,7 @@ import {
   parseFlatSearch,
   stringifyFlatSearch,
   type BaseAddon,
+  type BaseAddonRoute,
   type CreateAppInput,
   type RefineLayoutChromeProps,
 } from "./create-app";
@@ -46,7 +47,7 @@ import {
 } from "@angee/ui/views/resource-view-model";
 import { ResourceQuery, useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
 import type { ContainersDeclaration } from "@angee/ui/runtime";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
@@ -380,6 +381,128 @@ describe("createApp selection", () => {
       root.unmount();
       host.remove();
     }
+  });
+});
+
+describe("createApp presence", () => {
+  const ALL_REFS = ["iam.User#create", "iam.User#delete", "iam.User#read", "iam.User#read__last_login"];
+  function DirectoryPage(): ReactNode {
+    const tools = useContainer("people#tools");
+    return createElement("p", null, `people.directory page [${tools.map((child) => child.id).join(",")}]`);
+  }
+  const page = (name: string, path: string): BaseAddonRoute => ({
+    name, path, component: () => createElement("p", null, `${name} page`),
+  });
+  const people: BaseAddon = {
+    id: "people",
+    routes: [
+      { name: "people.directory", path: "/people", component: DirectoryPage },
+      page("people.manage", "/people/manage"),
+      page("people.audit", "/people/audit"),
+      page("people.log", "/people/log"),
+    ],
+    menus: {
+      people: { label: "People" },
+      "people.directory": { parent: "people", route: "people.directory" },
+      "people.manage": { parent: "people", route: "people.manage", requires: "iam.User#create" },
+      "people.reviews": { parent: "people", label: "Reviews", requires: "iam.User#read__last_login" },
+      "people.audit": { parent: "people.reviews", route: "people.audit" },
+      "people.log": { label: "Log", route: "people.log", requires: "iam.User#delete" },
+    },
+    containers: {
+      "people#tools": {
+        "people.export": { content: null, requires: "iam.User#read" },
+        "people.print": { content: null },
+      },
+    },
+  };
+
+  /** Mount at `path` for a session whose identity holds `permitted`, recording the refs each identity read asks about. */
+  function mountFor(path: string, permitted: readonly string[]) {
+    let tree: MenuTree | undefined;
+    const asked: unknown[] = [];
+    function CaptureChrome({ children }: RefineLayoutChromeProps): ReactNode {
+      const menu = useChromeMenuTree();
+      useEffect(() => { tree = menu; }, [menu]);
+      return children;
+    }
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const body = typeof init?.body === "string" ? init.body : input instanceof Request ? await input.clone().text() : "";
+      const refs = body ? (JSON.parse(body) as { variables?: { refs?: unknown } }).variables?.refs : undefined;
+      if (refs !== undefined) asked.push(refs);
+      return Response.json({ data: {
+        current_user: {
+          id: "user-1", username: "user", firstName: "", lastName: "", email: "", isStaff: false, isActive: true,
+          roleRefs: [], permitted, preferences: {},
+        },
+        real_user: null,
+        viewable_people: [],
+      } });
+    };
+    history.replaceState(null, "", path);
+    const app = createApp({
+      ...testAppInput([people], { console: { chrome: CaptureChrome, requireAuth: true } }),
+      schemas: { public: { ...TEST_SCHEMAS.public, fetch }, console: { ...TEST_SCHEMAS.console, fetch } },
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    return {
+      app,
+      host,
+      asked,
+      palette: () => tree?.navigableItems().map(({ item }) => item.id).sort(),
+      rail: () => tree?.railMenuItems().map((item) => item.id),
+      has: (id: string) => tree?.byId.has(id),
+      cleanup: () => { root.unmount(); host.remove(); },
+    };
+  }
+
+  test("an entry the identity lacks a ref for is absent from the rail and palette with its subtree; its page stays reachable", async () => {
+    const mounted = mountFor("/people/manage", []);
+    try {
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.manage page"));
+      expect(mounted.app.router.state.location.pathname).toBe("/people/manage");
+      await waitFor(() => expect(mounted.palette()).toEqual(["people.directory"]));
+      expect(mounted.rail()).toEqual(["people"]);
+      for (const id of ["people.manage", "people.reviews", "people.audit", "people.log"]) expect(mounted.has(id)).toBe(false);
+      // A page whose entry and its parent are absent still opens.
+      await mounted.app.router.navigate({ to: "/people/audit" });
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.audit page"));
+      // Container children follow the same refs.
+      await mounted.app.router.navigate({ to: "/people" });
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.directory page [people.print]"));
+      // The console read, which yields the identity, asks about every composed ref; the public read about none.
+      expect(mounted.asked).toContainEqual(ALL_REFS);
+      expect(mounted.asked).toContainEqual([]);
+    } finally {
+      mounted.cleanup();
+    }
+  });
+
+  test("holding every ref, the declared navigation and children are present", async () => {
+    const mounted = mountFor("/people", ALL_REFS);
+    try {
+      await waitFor(() => expect(mounted.host.textContent).toContain("people.directory page [people.export,people.print]"));
+      await waitFor(() => expect(mounted.palette()).toEqual(["people.audit", "people.directory", "people.log", "people.manage"]));
+      expect(mounted.rail()).toEqual(["people", "people.log"]);
+      expect(mounted.app.explain.requires).toEqual({
+        menus: { "people.manage": "iam.User#create", "people.reviews": "iam.User#read__last_login", "people.log": "iam.User#delete" },
+        containers: { "people#tools/people.export": "iam.User#read" },
+      });
+    } finally {
+      mounted.cleanup();
+    }
+  });
+
+  test("a requires not shaped <app_label.ModelName>#<permission> fails at boot", () => {
+    const routes = [page("people.directory", "/people")];
+    expect(() => createApp(testAppInput([{ id: "people", routes, menus: {
+      people: { label: "People", route: "people.directory", requires: "manage people" },
+    } }]))).toThrow('Menu item "people" requires "manage people", which is not "<app_label.ModelName>#<permission>".');
+    expect(() => createApp(testAppInput([{ id: "people", routes, menus: { people: { route: "people.directory" } },
+      containers: { "people#tools": { "people.export": { content: null, requires: "iam.User" } } } }])))
+      .toThrow(/Child "people.export" of "people#tools" requires "iam.User"/);
   });
 });
 
@@ -2383,6 +2506,61 @@ test("a container's when.app matches every app on the page's trail, flattened on
   try {
     await app.router.navigate({ to: "/projects/tasks" });
     await waitFor(() => expect(seen.apps).toEqual(["pm", "projects"]));
+  } finally { root.unmount(); host.remove(); }
+});
+
+test("a mount serves the mounted page in the borrowing app, which keeps its links, words and anchor; matching records open there from every app", async () => {
+  const seen: { route?: string | null; app?: string | null; menu?: string | null; apps?: readonly string[]; list?: string;
+    record?: string; staff?: string; other?: string; label?: string } = {};
+  function Probe(): ReactNode {
+    const runtime = useAppRuntime();
+    const href = useRouteHref();
+    const lookup = useResourceRecordHrefLookup();
+    Object.assign(seen, {
+      route: runtime.activeRouteName, app: runtime.activeApp, menu: runtime.activeMenuId, apps: runtime.containerScope?.apps,
+      list: href("iam.users"), record: href("iam.users.record", { id: "u1" }),
+      staff: lookup("iam.User", "u2", { kind: "staff" }), other: lookup("iam.User", "u3", { kind: "guest" }),
+      label: runtime.vocabulary.resources["iam.User"]?.label,
+    });
+    return null;
+  }
+  const addons: BaseAddon[] = [
+    { id: "iam", routes: resourcePageRoutes("iam.users", "/iam/users", Probe, "iam.User", { menu: "iam.users" }),
+      menus: { iam: {}, "iam.users": { parent: "iam", route: "iam.users" } } },
+    { id: "desk", dependsOn: ["iam"],
+      routes: [{ name: "desk.home", path: "/desk/home", component: EmptyPage }],
+      menus: {
+        desk: { route: "desk.home" },
+        "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People" },
+        "desk.staff": { parent: "desk", mount: "iam.users", path: "staff", recordMatch: { field: "kind", equals: "staff" } },
+      },
+      vocabulary: [{ app: "desk", resources: { "iam.User": { label: "Colleague" } } }] },
+  ];
+  const input: CreateAppInput = {
+    ...testAppInput(addons, { console: { requireAuth: false } }),
+    schemas: testSchemasWithConsoleResources([
+      testDataResource("iam.User", { query: testResourceQuery({ fields: { kind: testQueryField("kind") } }) }),
+    ]),
+  };
+  // Only an addon depending on the route's owner may mount it.
+  expect(() => createApp({ ...input, addons: [addons[0]!, { ...addons[1]!, dependsOn: [] }] }))
+    .toThrow(/Addon "desk" mounts route "iam.users" of "iam", which it does not depend on/);
+  history.replaceState(null, "", "/desk/people");
+  const app = createApp(input);
+  expect(routesByFullPath(app.router).has("/desk/people/$id")).toBe(true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await waitFor(() => expect(seen).toMatchObject({
+      route: "desk.people", app: "desk", menu: "desk.people", apps: ["desk"], label: "Colleague",
+      list: "/desk/people", record: "/desk/people/u1", staff: "/desk/staff/u2", other: "/desk/people/u3",
+    }));
+    await app.router.navigate({ to: "/iam/users" });
+    await waitFor(() => expect(seen).toMatchObject({
+      route: "iam.users", app: "iam", menu: "iam.users", apps: ["iam"], label: undefined,
+      list: "/iam/users", record: "/iam/users/u1", staff: "/desk/staff/u2", other: "/iam/users/u3",
+    }));
   } finally { root.unmount(); host.remove(); }
 });
 

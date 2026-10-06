@@ -36,8 +36,19 @@ the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
 alters a node of an addon it depends on, and the deployment's `ANGEE_UI.menus`
 may alter any node last. `include: [id | { id, flatten }]` places other apps
 under a node (an aggregator); a flattened app keeps its routes and trail but
-shows its items as the aggregator's own. `remove: true` takes a node and its
-subtree out and makes the pages only it reached unavailable: they stay
+shows its items as the aggregator's own. `include` absorbs: the app leaves its
+place on the rail. `mount` borrows: a node `{ parent, mount: "<route>", path }`
+gets an alias of that route under its app, named after the node (`<id>`, and
+`<id>.record` for the route's record child), while the source app keeps its
+page. The alias reuses the route's page, detail page and model, so nothing is
+exported or re-declared; its path is the app's `path` (`/<app id>` by default,
+since an app's own target may itself be a mount) joined with the node's. A
+node targets one of `route`, `mount` and `to`; an addon mounts only routes of
+addons it depends on. The node's `defaultResourceView` and `recordMatch` go onto
+the alias, and inside it `useRouteHref()` builds the mounted route's names as
+the alias's, so the page's own links stay in the borrowing app. `remove: true`
+takes a node and its subtree out and makes the pages only it reached
+unavailable: they stay
 registered, redirect home, and drop out of record links and claims (a
 `route.menu` anchor counts as a reference; a surviving reference keeps a page
 available, and `routeHref.maybe` returns nothing for unavailable pages).
@@ -59,8 +70,8 @@ turns it off). The session choice, from the URL or the menu, wins over the
 stored preference until the tab closes. A debug button then sits beside the
 avatar: hovering it gives the page's route and app, the selected app and home,
 and clicking it opens the composition (where each selection fact came from,
-removed and hidden menu
-items, unavailable routes, findings, the layers behind each menu item, container
+removed and hidden menu items, unavailable routes, what the session lacks a
+`requires` for, findings, the layers behind each menu item, container
 narrowing, removed container children, and the layers behind each child). The
 expanded rail lists hidden items, marked "(hidden)", and removed items, struck
 through under the item they showed in, each with its id and layers on hover;
@@ -73,15 +84,19 @@ allows.
 app fell back), the `home` `/` lands on, the layer that set each menu node
 field, removed nodes and who removed them, hidden nodes (by `hide` or a layer's
 `only`), unavailable routes with the reason, diagnostics such as
-out-of-namespace menu ids (warned in development), and under `containers` each layer's narrowing per address, the
-removed children with who removed them, and the layer behind each child field.
+out-of-namespace menu ids (warned in development), under `requires` each menu
+node and container child (`address/id`) naming a presence ref, and under
+`containers` each layer's narrowing per address, the removed children with who
+removed them, and the layer behind each child field.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
-remain unique. A same-model route may declare `recordMatch` for its records;
-`useResourceRecordHref` and `useResourceRecordHrefLookup` select a matching route,
-then the canonical route. Explicit route names use `useRouteHref()`. With an
-app selected, each rail root claims its own routes; elsewhere claims stay
+remain unique. A same-model route (or a mount) may declare `recordMatch` for its
+records; `useResourceRecordHref` and `useResourceRecordHrefLookup` open a record
+at the match its row satisfies, from every app, then at the active app's own
+claim, then at the canonical route. Two matches on one resource and condition
+fail composition. Explicit route names use `useRouteHref()`. With an app
+selected, each rail root claims its own routes; elsewhere claims stay
 canonical. See the [frontend guideline](../../docs/frontend/guidelines.md) for
 the shared Settings place.
 
@@ -112,9 +127,11 @@ An addon can specialize existing copy and declare named resource views:
 }
 ```
 
-The referenced app root, route, menu IDs, message keys and metadata fields or
-filterable predicates must exist. Duplicate vocabulary scopes fail composition.
-App scope precedes route scope; nearer route ancestors win. Scoped field labels override
+The referenced app (a root or an included app, flattened ones too), route, menu
+IDs, message keys and metadata fields or filterable predicates must exist.
+Duplicate vocabulary scopes fail composition. A page composes the scopes of
+every app on its trail, outermost first, then route scopes; nearer route
+ancestors win. Scoped field labels override
 authored labels without altering wire metadata. A field may declare
 `{ label: "Priority", tones: { HIGH: "warning" } }` in place of a string label;
 the scoped map colors that field's badge, and route maps extend app maps.
@@ -165,7 +182,8 @@ the child through `ContainerKinds`. `when: { app, route }` applies
 `only`, `except` and `hide` on matching pages; children are declared and moved
 unconditionally. Each layer's `only` intersects with what it inherits and never
 filters children its dependents add; `only: []` keeps none, and `hide: false`
-undoes a `hide`, never an `only`. A child may carry `permission`,
+undoes a `hide`, never an `only`. A child may carry `permission`, `requires`
+(presence: absent unless the session's `current_user.permitted` holds the ref),
 `requiredFields`, `impl` (shown only on rows of that implementation) or
 `variant: { of, impl }` (stands in for `of` on those rows). An addon declares a
 container of its own on its own node, model-scoped with `models: true` or one

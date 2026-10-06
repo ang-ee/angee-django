@@ -152,6 +152,32 @@ export interface RuntimeAuthUser {
   username?: string;
   email?: string;
   roles?: readonly string[];
+  /**
+   * The composition's `requires` refs this identity holds (`current_user.permitted`),
+   * read with the identity; absent when it was read without them.
+   */
+  permitted?: readonly string[];
+}
+
+const NOTHING_PERMITTED: readonly string[] = [];
+
+/**
+ * The `requires` refs a session holds: none without an identity (signed out or
+ * resolving); `undefined` for an identity read without them, where declarations stand.
+ */
+export function sessionPermitted(
+  user: Pick<RuntimeAuthUser, "permitted"> | null | undefined,
+): readonly string[] | undefined {
+  return user ? user.permitted : NOTHING_PERMITTED;
+}
+
+/**
+ * Whether something declaring `requires` is present for a session holding
+ * `permitted`. Presence only: the server still decides data, row verbs and
+ * field values.
+ */
+export function isPresent(requires: string | undefined, permitted: readonly string[] | undefined): boolean {
+  return requires === undefined || permitted === undefined || permitted.includes(requires);
 }
 
 export interface RuntimeAuthState {

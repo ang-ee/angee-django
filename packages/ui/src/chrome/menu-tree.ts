@@ -160,6 +160,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   home?: string;
   brand?: RuntimeBrand;
   theme?: string;
+  requires?: string;
   /** An included app shown without an entry of its own (logical tree only); still an app for words and rules (G-8). */
   flatten?: boolean;
 
@@ -281,6 +282,21 @@ export class MenuTree {
       const app = project(root);
       return [app, ...settings];
     }));
+  }
+
+  /**
+   * This tree without the nodes in `ids`, each leaving with its subtree; a node
+   * that reached somewhere only through nodes that left goes with them.
+   */
+  without(ids: ReadonlySet<string>): MenuTree {
+    if (!ids.size) return this;
+    const reaches = (item: ChromeMenuItem): boolean => Boolean(item.to) || (item.children ?? []).some(reaches);
+    const keep = (items: readonly ChromeMenuNode[]): ChromeMenuItem[] => items.flatMap((item) => {
+      if (ids.has(item.id)) return [];
+      const kept: ChromeMenuItem = { ...item, children: item.children && keep(item.children) };
+      return item.target && !reaches(kept) ? [] : [kept];
+    });
+    return MenuTree.from(keep(this.roots));
   }
 
   /**
