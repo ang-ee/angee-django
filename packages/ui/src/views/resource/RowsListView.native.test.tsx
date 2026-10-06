@@ -120,6 +120,28 @@ test("reorder handles compose native drag/drop, isolate lists and retain externa
   expect(screen.queryByRole("columnheader", { name: "Reorder row" })).toBeNull();
 });
 
+test("a row that may not move shows a lock instead of a handle and never starts a reorder", () => {
+  const onReorder = vi.fn();
+  render(<AppRuntimeProvider runtime={{}}><ToastProvider>
+    <RowsListView scope="local" rows={rows} columns={columns} onReorder={onReorder}
+      canReorderRow={(row) => row.id !== "1"} />
+  </ToastProvider></AppRuntimeProvider>);
+  const [, locked, free] = screen.getAllByRole("row");
+  expect(within(locked!).getByRole("img", { name: "Locked row" })).toBeTruthy();
+  expect(within(locked!).queryByRole("button", { name: "Reorder row" })).toBeNull();
+  const handle = within(free!).getByRole("button", { name: "Reorder row" });
+  // Another row may still move past it.
+  fireEvent.keyDown(handle, { key: "ArrowUp", altKey: true });
+  expect(onReorder).toHaveBeenLastCalledWith("2", "1");
+  // A forged drag of the locked row is refused by the owner.
+  const dataTransfer = testDndTransfer();
+  fireEvent.dragStart(handle, { dataTransfer });
+  const payload = readDndPayload<string>(dataTransfer)!;
+  writeDndPayload(dataTransfer, { type: payload.type, data: "1" });
+  fireEvent.drop(free!, { dataTransfer });
+  expect(onReorder).toHaveBeenCalledTimes(1);
+});
+
 test.each(["unregistered widgets", "registered widgets", "scalar defaults"] as const)(
   "local rows display DateTime, Date and Float values with %s",
   (mode) => {

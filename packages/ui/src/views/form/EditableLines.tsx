@@ -12,6 +12,7 @@ import {
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
+import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { relationValueId, type WidgetControlProps } from "../../widgets/types";
 import { RowsListView } from "../resource/RowsListView";
@@ -23,7 +24,9 @@ import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
-import { CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig } from "./editable-lines";
+import {
+  CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig, lineLockedFields,
+} from "./editable-lines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { ValidationErrors } from "./validation-errors";
 
@@ -70,7 +73,12 @@ export interface EditableLineSupplementalColumn {
 /** Table identity is the RHF key; widgets and save diffs retain the child's public id. */
 type LineViewRow = { id: string; index: number; value: Row };
 
-/** The local data view in edit mode, bound to the parent form's native field array. */
+/**
+ * The local data view in edit mode, bound to the parent form's native field array.
+ * A row the backend locks (`lines.lockField`) is a system row: the list shows a lock
+ * in place of its reorder handle, it carries a "System" marker, it offers no duplicate
+ * or remove, and its locked cells are read-only while its other cells stay editable.
+ */
 export function EditableLines({
   control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,
   primaryFields, supplementalColumns = [], relationFilters,
@@ -136,6 +144,7 @@ export function EditableLines({
         || ["money", "integer", "float"].includes(widget ?? "") ? "right" : "left",
       render: ({ id, index, value }) => {
         const messages = rowMessages(rowErrors?.[index], field.name);
+        const cellReadOnly = readOnly || lineLockedFields(value, config).includes(field.name);
         const controlProps: WidgetControlProps = {
           presentation: "cell", id: `${controlId}-${id}-${field.name}`,
           "aria-invalid": messages.length > 0 || undefined,
@@ -146,7 +155,7 @@ export function EditableLines({
               <RelationMultiFieldWidget
                 controlProps={controlProps}
                 value={Array.isArray(controller.value) ? controller.value : []}
-                onChange={controller.onChange} readOnly={readOnly} relation={relationMulti}
+                onChange={controller.onChange} readOnly={cellReadOnly} relation={relationMulti}
                 filters={relationFilters?.(field.name, parentRow ?? null)}
                 aria-label={header}
               />
@@ -154,7 +163,7 @@ export function EditableLines({
               <RelationFieldWidget
                 controlProps={controlProps} controlRef={controller.ref}
                 value={relationValueId(controller.value) || null}
-                onChange={controller.onChange} readOnly={readOnly} relation={relation}
+                onChange={controller.onChange} readOnly={cellReadOnly} relation={relation}
                 filters={relationFilters?.(field.name, parentRow ?? null)}
                 selectedOption={relationSelectedOption(controller.value, relation.labelField)}
                 aria-label={header}
@@ -163,7 +172,7 @@ export function EditableLines({
               <FieldDescriptorControl
                 controlProps={controlProps} controlRef={controller.ref} field={descriptor}
                 row={value} parentRow={parentRow} value={controller.value}
-                messages={messages} readOnly={readOnly} onChange={controller.onChange}
+                messages={messages} readOnly={cellReadOnly} onChange={controller.onChange}
                 onRowChange={(patch) => patchRow(id, patch)}
               />
             )}
@@ -180,15 +189,25 @@ export function EditableLines({
     minWidth: column.minWidth, align: column.align ?? "right", sortable: false,
     render: ({ value, index }) => column.render(value, parentRow ?? null, index, { formIsDirty }),
   })));
+  const unlocked = ({ value }: LineViewRow) => lineLockedFields(value, config).length === 0;
+  if (config.lockField) {
+    columns.push({
+      id: "system", field: "system", header: t("lines.system"), headerVisuallyHidden: true,
+      sortable: false, hideable: false,
+      render: (row) => unlocked(row) ? null : (
+        <Badge tone="neutral" density="compact" title={t("lines.systemHint")}>{t("lines.system")}</Badge>
+      ),
+    });
+  }
   const rowActions = readOnly ? undefined : [
     defineRowAction<LineViewRow>({
       kind: "page", id: "duplicate", label: t("lines.duplicate"), icon: "copy",
-      presentation: "icon", variant: "ghost", pendingPolicy: "disable-actions",
+      presentation: "icon", variant: "ghost", pendingPolicy: "disable-actions", visible: unlocked,
       onSelect: ({ index }) => insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never),
     }),
     defineRowAction<LineViewRow>({
       kind: "page", id: "remove", label: t("lines.remove"), icon: "trash",
-      presentation: "icon", variant: "danger", pendingPolicy: "disable-actions",
+      presentation: "icon", variant: "danger", pendingPolicy: "disable-actions", visible: unlocked,
       onSelect: ({ index }) => remove(index),
     }),
   ];
@@ -205,6 +224,7 @@ export function EditableLines({
         const to = current.fields.findIndex((field) => field.rhfKey === toId);
         if (from >= 0 && to >= 0 && from !== to) move(from, to);
       }}
+      canReorderRow={unlocked}
       footerRow={readOnly ? undefined : <Button type="button" variant="ghost" size="sm"
         onClick={() => append(emptyLineRow(fields.length, config) as never)}>
         <Glyph name="plus" decorative />{t("lines.add")}

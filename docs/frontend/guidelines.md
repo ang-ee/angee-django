@@ -1095,6 +1095,15 @@ A save whose normalized header and line values equal the server record sends no
 mutation. It resets the dirty-but-equivalent draft to those server values and
 clears the dirty state, including the editable lines.
 
+A line row the backend locks is a system row. The child model owns the fact
+(`RowLockMixin.locked_fields`), its node projects it, and the lines metadata
+names it as `lockField`; [EditableLines](../../packages/ui/src/views/form/EditableLines.tsx)
+reads it per row. Through the data view's `canReorderRow`, the row shows a lock
+where its reorder handle would be; it carries a "System" marker, offers no duplicate
+or remove, and keeps its locked cells read-only while its other cells edit. Never
+re-derive a lock from a category or name in the page; the backend refuses the same
+writes regardless of what the composer shows.
+
 ## Pitfalls
 
 Hard-won traps — the wise learn from others' mistakes

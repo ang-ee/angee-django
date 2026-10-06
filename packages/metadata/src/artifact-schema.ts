@@ -49,6 +49,7 @@ const LinesSchema = v.looseObject({
   modelLabel: v.string(),
   inputType: OptionalString,
   positionField: OptionalString,
+  lockField: OptionalString,
   fields: v.optional(Fields),
   defaults: v.optional(v.record(v.string(), v.union([
     v.string(), v.number(), v.boolean(), v.null(),

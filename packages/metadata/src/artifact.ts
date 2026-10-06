@@ -311,6 +311,7 @@ export function lineReadSelectionPaths(
 ): readonly string[] {
   const paths = new Set<string>(["id"]);
   if (lines.positionField) paths.add(lines.positionField);
+  if (lines.lockField) paths.add(lines.lockField);
   for (const field of lines.fields ?? []) {
     if (field.name === lines.positionField) continue;
     if (

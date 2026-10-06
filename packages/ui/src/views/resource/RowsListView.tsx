@@ -68,6 +68,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rowActions?: readonly RowActionDeclaration<TRow>[];
   /** Move a local row to another row's position; the list owns handles and drop targets. */
   onReorder?: (fromId: string, toId: string) => void;
+  /** Whether a row may move; a row that may not shows a lock where its handle would be. */
+  canReorderRow?: (row: TRow) => boolean;
   /** Content of a spanning table footer row, for example an add-record control. */
   footerRow?: React.ReactNode;
   emptyContent?: ListEmptyContent;
@@ -174,6 +176,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rowHref,
   rowActions,
   onReorder,
+  canReorderRow,
   footerRow,
   emptyContent,
   className,
@@ -302,6 +305,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
             rowActionSurface.hasActions ? rowActionSurface.render : undefined
           }
           onReorder={onReorder}
+          canReorderRow={canReorderRow}
           footerRow={footerRow}
           emptyContent={resolvedEmptyContent}
           fetching={fetching}

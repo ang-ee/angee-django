@@ -10,6 +10,7 @@ import {
   duplicateLineRow,
   emptyLineRow,
   lineDiffConfig,
+  lineLockedFields,
   lineToInput,
   recordLinesToRows,
   sameObservedLines,
@@ -258,6 +259,27 @@ describe("emptyLineRow / duplicateLineRow", () => {
     );
     expect(duplicate.id).toBeUndefined();
     expect(duplicate).toEqual({ product: "p1", label: "A", quantity: 1, position: 0 });
+  });
+});
+
+describe("lineLockedFields", () => {
+  const locking = lineDiffConfig({ ...LINES, lockField: "locked_fields" });
+
+  test("reads a loaded row's projected lock, which never reaches the line input", () => {
+    const [locked, free] = recordLinesToRows([
+      { id: "ln_a", label: "Triage", quantity: 1, position: 0, locked_fields: ["label"] },
+      { id: "ln_b", label: "Ready", quantity: 1, position: 1, locked_fields: [] },
+    ], locking);
+    expect(lineLockedFields(locked, locking)).toEqual(["label"]);
+    expect(lineLockedFields(free, locking)).toEqual([]);
+    expect(lineToInput(locked!, 0, locking)).not.toHaveProperty("locked_fields");
+  });
+
+  test("a new or duplicated row is never locked, and lines without a lock field never lock", () => {
+    expect(lineLockedFields(emptyLineRow(0, locking), locking)).toEqual([]);
+    const copy = duplicateLineRow({ id: "ln_a", label: "Triage", position: 0, locked_fields: ["label"] }, locking);
+    expect(lineLockedFields(copy, locking)).toEqual([]);
+    expect(lineLockedFields({ locked_fields: ["label"] }, config)).toEqual([]);
   });
 });
 
