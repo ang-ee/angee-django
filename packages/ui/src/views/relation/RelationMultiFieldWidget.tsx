@@ -20,7 +20,7 @@ import {
   useRelationForms,
   type RelationDialogState,
 } from "./RelationRecordDialog";
-import { relationSelectedOption, useRelationOptions } from "./relation-options";
+import { relationSelectedOption, useRelationOptions, useRelationSelectedOptions } from "./relation-options";
 
 export interface RelationMultiFieldWidgetProps {
   /** Related records (`{ id, … }`) or their public ids, in any mix. */
@@ -75,13 +75,21 @@ export function RelationMultiFieldWidget({
     filters,
     sort: true,
   });
-  // Loaded related records carry their own labels, also outside the option page.
-  const selectedOptions = useMemo(
+  // Loaded related records carry their own labels, also outside the option page;
+  // bare ids (seeded by an action, or past the first page) are read for theirs.
+  const recordOptions = useMemo(
     () => (value ?? []).flatMap((record) => {
       const option = relationSelectedOption(record, relation.labelField);
       return option ? [option] : [];
     }),
     [value, relation.labelField],
+  );
+  const ids = useMemo(() => relationIdList(value), [value]);
+  const known = useMemo(() => [...recordOptions, ...options], [recordOptions, options]);
+  const resolvedOptions = useRelationSelectedOptions(relation, ids, known);
+  const selectedOptions = useMemo(
+    () => [...recordOptions, ...resolvedOptions],
+    [recordOptions, resolvedOptions],
   );
   const field = useMemo<WidgetField>(
     () => ({
@@ -94,7 +102,7 @@ export function RelationMultiFieldWidget({
     [options, selectedOptions, ariaLabel],
   );
   if (readOnly) {
-    return <RecordReferenceChips model={relation.resource} records={relationIdList(value).map((id) => ({
+    return <RecordReferenceChips model={relation.resource} records={ids.map((id) => ({
       id, label: selectedOptions.find((option) => option.value === id)?.label,
     }))} />;
   }
