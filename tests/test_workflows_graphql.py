@@ -935,6 +935,27 @@ def test_record_workflow_filters_list_only_published_startable_matching_workflow
     assert start_on_record(schema, offered, subject, actor, input={"source_id": subject.sqid})["ok"]
 
 
+def test_published_graph_with_unregistered_steps_projects_no_start_contract(schema, callers):
+    from angee.workflows.testing.drivers import register_steps
+
+    admin, actor, _ = callers
+    subject = vault_for(actor)
+
+    class Retired(Step[Value, Value, None]):
+        key = "record_action_retired"
+
+    with register_steps(Retired):
+        workflow = load_workflow(document("entry", step=Retired.key), key="retired", actor=admin,
+                                 subject_model=subject._meta.label, publish=True)
+    workflow.with_actor(admin).grant_record_access("starter", actor)
+    rows = result_data(execute_schema(schema, """query($models: [String!]!) {
+      workflow(where: {subject_model: {_in: $models}, can_start: {_eq: true}, is_published: {_eq: true}}) {
+        key published { input_schema }
+      }
+    }""", {"models": [subject._meta.label]}, user=actor))["workflow"]
+    assert rows == [{"key": "retired", "published": {"input_schema": None}}]
+
+
 def test_record_start_accepts_a_workflow_for_the_canonical_mti_ancestor(schema, callers):
     from tests.mtidemo.models import MtiChild, MtiParent
 

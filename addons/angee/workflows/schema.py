@@ -8,7 +8,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import F, Prefetch
 from django.db.models.lookups import IsNull
 from rebac import system_context
@@ -107,9 +107,16 @@ class WorkflowVersionType(AngeeNode):
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
 
     @strawberry_django.field(only=["document"])
-    def input_schema(self) -> JSON:
-        """Project the definition's admission contract for manual start forms."""
-        return cast(Any, self).definition.input_schema
+    def input_schema(self) -> JSON | None:
+        """Project the definition's admission contract for manual start forms.
+
+        A published graph whose step classes are no longer registered has no
+        contract and cannot be started; it projects null instead of failing the list.
+        """
+        try:
+            return cast(Any, self).definition.input_schema
+        except ImproperlyConfigured:
+            return None
 
 
 @strawberry_django.type(WorkflowRun)

@@ -30,7 +30,8 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
   const actions = React.useMemo<readonly ActionDescriptor[]>(() =>
     (workflows.data?.workflow ?? []).flatMap((workflow) => {
       const published = workflow.published;
-      if (!published) return [];
+      // A null contract means the published graph cannot be started (its steps are gone).
+      if (!published || published.input_schema == null) return [];
       const schema = parseFormSpec(published.input_schema);
       // An opening retains its key across submissions, including transport retries.
       let requestKey: string | undefined;
