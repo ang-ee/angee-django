@@ -265,7 +265,7 @@ describe("EditableLines", () => {
     render(<Host readOnly />);
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.getByRole("cell", { name: "Widget" })).toBeTruthy();
-    expect(screen.queryByRole("columnheader", { name: "Actions" })).toBeNull();
+    // Read-only keeps the trailing header for the fields menu, with no verbs in it.
     expect(screen.queryByRole("columnheader", { name: "Reorder row" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Duplicate line" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove line" })).toBeNull();
@@ -289,7 +289,7 @@ describe("EditableLines", () => {
     const subtotal = screen.getByRole("columnheader", { name: /^Subtotal/ });
     expect(subtotal.className).toContain("text-right");
     expect(subtotal.style.minWidth).toBe("144px");
-    expect(subtotal.contains(screen.getByRole("button", { name: "Visible fields" }))).toBe(true);
+    expect(subtotal.contains(screen.getByRole("button", { name: "Visible fields" }))).toBe(false);
     expect(screen.getByText("20.00")).toBeTruthy();
     await toggleField("Quantity");
     expect(screen.getAllByRole("textbox", { name: "Quantity" }).map((input) => (input as HTMLInputElement).value))

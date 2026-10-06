@@ -457,6 +457,11 @@
   gap: 0.5rem;
 }
 
+/* No leading actions: the empty group must not keep a gap before the box. */
+.resource-toolbar-actions:empty {
+  display: none;
+}
+
 /* The search area sizes by what SearchControls shows (`data-search-layout`):
    the full box takes a line of its own on a narrow toolbar and the leftover
    width between actions and utilities on a roomy one; a shortcut row always

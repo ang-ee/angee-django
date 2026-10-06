@@ -30,7 +30,8 @@ test.each([false, true])("a spanning footer follows optional columns and selecti
   </ToastProvider>);
   const footer = screen.getByRole("button", { name: "Add record" }).closest("td")!;
   expect(footer.closest("tfoot")).toBeTruthy();
-  expect(footer.colSpan).toBe(2 + Number(selectable));
+  // Reorder handle, the name column and the trailing fields-menu column (the optional column is hidden).
+  expect(footer.colSpan).toBe(3 + Number(selectable));
   expect(screen.getByText("Nothing here").closest("td")?.colSpan).toBe(footer.colSpan);
   expect(screen.queryByRole("columnheader", { name: /^Status/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
@@ -39,7 +40,7 @@ test.each([false, true])("a spanning footer follows optional columns and selecti
   expect(screen.getByRole("menuitemcheckbox", { name: "Name" }).getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(status);
   expect(screen.getByRole("columnheader", { name: /^Status/ }).style.minWidth).toBe("144px");
-  expect(footer.colSpan).toBe(3 + Number(selectable));
+  expect(footer.colSpan).toBe(4 + Number(selectable));
 });
 
 test("native visibility overrides defaults, while a required column remains visible", async () => {
@@ -138,7 +139,8 @@ test.each(["unregistered widgets", "registered widgets", "scalar defaults"] as c
           ]} />
       </ToastProvider>
     </AppRuntimeProvider>);
-    expect(screen.getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["Oct 4", "Oct 8", "2"]);
+    // The last cell is the empty trailing cell under the visible-fields header.
+    expect(screen.getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["Oct 4", "Oct 8", "2", ""]);
   },
 );
 
@@ -241,7 +243,7 @@ test("the native row model sorts declared Decimal strings numerically without lo
       { id: "3", name: "Smaller", amount: "9007199254740993.00" },
     ]} columns={[{ field: "name", header: "Name" }]} />
   </ResourceViewProvider></ToastProvider>);
-  expect(screen.getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["Small", "Smaller", "Larger"]);
+  expect(screen.getAllByRole("cell").map((cell) => cell.textContent).filter(Boolean)).toEqual(["Small", "Smaller", "Larger"]);
 });
 
 test("declared local fields support aliases and text search beside a virtual render column", () => {
