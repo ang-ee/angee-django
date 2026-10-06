@@ -104,7 +104,9 @@ test("statements render separately and the responder files their own statement",
   renderView(<ProposalStatements proposals={[own, { ...other, statement: "Existing statement" }]}
     labels={{ heading: "Statements" }} />);
   expect(screen.getByText("Statements")).toBeTruthy();
-  expect(await screen.findByText("Existing statement")).toBeTruthy();
+  // The statement renders through the code-split markdown preview; its cold import can outlast
+  // the default 1s wait on a loaded runner.
+  expect(await screen.findByText("Existing statement", {}, { timeout: 5000 })).toBeTruthy();
   fireEvent.change(screen.getByRole("textbox", { name: /Your statement, in your own words/ }), { target: { value: "Six weeks, subject to access" } });
   fireEvent.click(screen.getByRole("button", { name: "File statement" }));
   await waitFor(() => expect(mocks.saveStatement).toHaveBeenCalledExactlyOnceWith(own, "Six weeks, subject to access"));
