@@ -1250,13 +1250,13 @@ class TaskWork(StagedModelMixin):
             "complete": (missing("completed"), reserved),
             "drop": (reserved,),
             "reopen": (
-                # Reopening returns closed work; open work never moves through it, and a removed
-                # task returns through restore, which keeps its pre-removal stage.
+                (lacks("unstarted") & Q(queue__default_stage__isnull=True), {"stage": "Queue has no default stage."}),
+                # A removed task returns through restore, which keeps its pre-removal stage.
+                (queued & Q(stage__conceals=True), {"stage": "Restore a removed task instead of reopening it."}),
+                reserved,
+                # Reopening returns closed work; open work never moves through it.
                 (queued & ~Q(stage__category__in=("completed", "canceled", "duplicate")),
                  {"stage": "Only a closed task can be reopened."}),
-                (queued & Q(stage__conceals=True), {"stage": "Restore a removed task instead of reopening it."}),
-                (lacks("unstarted") & Q(queue__default_stage__isnull=True), {"stage": "Queue has no default stage."}),
-                reserved,
             ),
             "accept": (reserved, (~triage, {"stage": "Only a task in triage can be accepted."})),
             "start": (

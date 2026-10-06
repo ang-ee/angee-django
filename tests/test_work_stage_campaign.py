@@ -193,6 +193,8 @@ def test_every_hand_verb_refuses_rule_owned_targets(work_case, verb, elevated):
     task, canonical = make_task(queue, category="triage"), make_task(queue)
     if verb in {"start", "return_to_triage"}:
         task = make_task(queue, category="backlog")
+    elif verb == "reopen":
+        task = make_task(queue, category="completed")
     target_category = {
         "start": "started", "complete": "completed", "reopen": "unstarted", "accept": "unstarted",
         "decline": "canceled", "drop": "canceled", "drop_duplicate": "duplicate",
