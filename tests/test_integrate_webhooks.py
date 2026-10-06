@@ -7,7 +7,7 @@ import socket
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -516,12 +516,12 @@ def _record_posts(
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
         **kwargs: Any,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         del kwargs
         posts.append({"url": url, "body": body, "headers": headers or {}})
         if post_error is not None:
             raise post_error
-        return httpx.Response(status, content=b"", headers={})
+        return httpx2.Response(status, content=b"", headers={})
 
     monkeypatch.setattr("angee.integrate.http.HttpClient.post", fake_post)
     return posts

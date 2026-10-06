@@ -356,6 +356,8 @@ export const enUiMessages: Record<string, string> = {
   "app.loadFailed": "Application could not load",
   "app.loadFailedDescription": "Application data is unavailable. Please try again.",
   "app.retry": "Retry",
+  // Title of refine's generic error notification; the error's message is its description.
+  "notifications.error": "Something went wrong",
   "app.startFailed": "Application could not start",
   "app.startFailedDescription": "Its configuration is invalid. The cause is below.",
   "app.reload": "Reload",
@@ -641,6 +643,11 @@ export const enUiMessages: Record<string, string> = {
   "combobox.search": "Search",
   "combobox.searchOptions": "Search options",
   "combobox.noOptions": "No options",
+  "many2many.label": "Related records",
+  "many2many.add": "Add record",
+  "many2many.allSelected": "All records selected",
+  "many2many.record": "record",
+  "tagInput.label": "Tags",
   "deletePreview.title": "Delete {count} records?",
   "deletePreview.description":
     "Review the cascade tree before deleting the selected records.",

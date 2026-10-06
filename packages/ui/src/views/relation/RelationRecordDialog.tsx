@@ -1,17 +1,40 @@
-import { createElement, type ReactElement, type ReactNode } from "react";
-import { modelLabelSegment, rowPublicId, type Row } from "@angee/metadata";
+import { createElement, useMemo, type ReactElement, type ReactNode } from "react";
+import { modelLabelSegment, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
 
 import { useUiT } from "../../i18n";
 import { ControlBandProvider } from "../../layouts/ControlBand";
 import { Dialog } from "../../ui/dialog";
 import { FormView } from "../form/FormView";
 import { RegisteredFormView, useRegisteredForm } from "../form/registered-form";
+import type { FieldDescriptor } from "../page";
+import { formFieldsFromMetadata, type RelationFieldInfo } from "../resource/model-metadata-defaults";
 import type { RelationCreateConfig, RelationEditConfig } from "./RelationPicker";
 
 /** The open inline-form dialog: a create prefilled with the typed query, or an edit of a record. */
 export type RelationDialogState =
   | { mode: "create"; query: string }
   | { mode: "edit"; id: string };
+
+/**
+ * The inline forms a relation control offers for its related model: the fields
+ * derived from that model's metadata, and create. An explicit `create` wins and
+ * `null` offers none; otherwise create is offered when the model has a create
+ * root and form fields. The one rule both relation widgets apply.
+ */
+export function useRelationForms(
+  relation: RelationFieldInfo,
+  create: RelationCreateConfig | null | undefined,
+): { fields: readonly FieldDescriptor[]; create: RelationCreateConfig | undefined } {
+  const metadata = useModelMetadata(relation.resource);
+  const fields = useMemo(() => formFieldsFromMetadata(metadata), [metadata]);
+  const derived = useMemo(
+    () => relation.canCreate && fields.length > 0
+      ? { resource: relation.resource, fields, prefillField: relation.labelField }
+      : undefined,
+    [fields, relation.canCreate, relation.labelField, relation.resource],
+  );
+  return { fields, create: create === undefined ? derived : create ?? undefined };
+}
 
 /** The create dialog's title: the declared one, else `New <model>`. */
 export function relationCreateTitle(

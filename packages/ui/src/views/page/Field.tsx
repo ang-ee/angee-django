@@ -106,6 +106,14 @@ export function isRelationIdField(field: FieldDescriptor): boolean {
   return fieldWidgetId(field) === "many2one";
 }
 
+/**
+ * Whether a field is a to-many relation multi-select (`many2many`), which holds
+ * related records or their ids and submits the public id list.
+ */
+export function isRelationListField(field: FieldDescriptor): boolean {
+  return fieldWidgetId(field) === "many2many";
+}
+
 function FieldMarker(_props: FieldProps): null {
   return null;
 }

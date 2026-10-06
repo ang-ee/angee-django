@@ -100,8 +100,8 @@ export type RemovableChipProps = ChipProps & {
 
 /**
  * A `Chip` carrying a trailing remove button — the single owner for the removable
- * chips widgets and pages hand-rolled (many2many, tagInput, facet filters). The
- * body truncates; the remove affordance and its localized aria copy live here once.
+ * chips widgets and pages hand-rolled (value lists, facet filters). The body
+ * truncates; the remove affordance and its localized aria copy live here once.
  */
 export const RemovableChip = React.forwardRef<HTMLSpanElement, RemovableChipProps>(
   function RemovableChip(
@@ -127,3 +127,37 @@ export const RemovableChip = React.forwardRef<HTMLSpanElement, RemovableChipProp
   },
 );
 RemovableChip.displayName = "RemovableChip";
+
+export interface ChipListItem {
+  /** Unique within the list: the chip's key and the value `onRemove` reports. */
+  id: string;
+  label: React.ReactNode;
+  /** Plain-text subject of the remove button when `label` is not text; defaults to `id`. */
+  text?: string;
+}
+
+export interface ChipListProps {
+  items: readonly ChipListItem[];
+  /** Makes every chip removable, reporting the removed item's `id`. */
+  onRemove?: (id: string) => void;
+  className?: string;
+}
+
+/**
+ * A field value's items as one wrapping row of chips — the single owner for the
+ * value lists widgets and cells render (related records, tags, string arrays).
+ */
+export function ChipList({ items, onRemove, className }: ChipListProps): React.ReactElement {
+  return (
+    <span className={cn("inline-flex min-w-0 flex-wrap items-center gap-1", className)}>
+      {items.map((item) => onRemove ? (
+        <RemovableChip key={item.id} tone="info" size="sm" removeLabel={item.text ?? item.id}
+          onRemove={() => onRemove(item.id)}>
+          {item.label}
+        </RemovableChip>
+      ) : (
+        <Chip key={item.id} tone="info" size="sm">{item.label}</Chip>
+      ))}
+    </span>
+  );
+}

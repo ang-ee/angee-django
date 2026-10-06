@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-import httpx
+import httpx2
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -58,7 +58,7 @@ class UrlSource(sources.ResourceSource):
             response = HttpClient().get(url, follow_redirects=True)
         except ValidationError as error:
             raise ResourceLoadError(f"{url!r}: {exception_text(error)}") from error
-        except (httpx.RequestError, OSError) as error:
+        except (httpx2.RequestError, OSError) as error:
             raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
         if not response.is_success:
             raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status_code}")

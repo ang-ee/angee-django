@@ -33,6 +33,7 @@ export {
   Field,
   fieldWidgetId,
   isRelationIdField,
+  isRelationListField,
   type PageFieldKind,
 } from "./Field";
 export { Group } from "./Group";

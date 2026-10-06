@@ -1,4 +1,3 @@
-import { useAuthoredQuery } from "@angee/refine";
 import { useCallback } from "react";
 import { errorMessage, useToast } from "@angee/ui";
 
@@ -6,8 +5,7 @@ import {
   JOB_RUN_MUTATION,
   LATEST_JOB_RUN_QUERY,
 } from "./documents.daemon";
-import { OPERATOR_PROVIDER } from "./operator-provider";
-import { useOperatorAction, useOperatorConnectionState } from "./transport";
+import { useOperatorAction, useOperatorQuery } from "./transport";
 import { useOperatorT } from "../i18n";
 
 const POLL_MS = 2_000;
@@ -16,11 +14,9 @@ const POLL_MS = 2_000;
 export function useJobRunOperation(options: { enabled?: boolean } = {}) {
   const toast = useToast();
   const t = useOperatorT();
-  const connected = useOperatorConnectionState().kind === "ready";
   const enabled = options.enabled ?? true;
-  const latest = useAuthoredQuery(LATEST_JOB_RUN_QUERY, undefined, {
-    dataProviderName: OPERATOR_PROVIDER,
-    enabled: connected && enabled,
+  const latest = useOperatorQuery(LATEST_JOB_RUN_QUERY, undefined, {
+    enabled,
     // Keep observing while idle too: another browser or the CLI can start a run.
     refetchInterval: enabled ? POLL_MS : false,
   });

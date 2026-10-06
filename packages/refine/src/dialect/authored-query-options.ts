@@ -209,7 +209,7 @@ export function useAuthoredErrorPolicy(keys: readonly QueryKey[]): void {
         message: translate(
           "notifications.error",
           { statusCode: error.statusCode },
-          `Error (status code: ${error.statusCode})`,
+          error.statusCode === undefined ? "Something went wrong" : `Error (status code: ${error.statusCode})`,
         ),
         description: error.message,
         type: "error",

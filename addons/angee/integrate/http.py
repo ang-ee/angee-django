@@ -1,17 +1,18 @@
 """Shared SSRF-pinned outbound HTTP for integration backends.
 
-The single owner of "make one outbound HTTP request." The transport is httpx over
-a custom httpcore network backend (:class:`_PinnedBackend`) that resolves the host
+The single owner of "make one outbound HTTP request." The transport is httpx2 over
+a custom httpcore2 network backend (:class:`_PinnedBackend`) that resolves the host
 once and dials a validated IP — closing the resolve-then-connect (DNS-rebind) gap
-— while httpcore's ``start_tls(server_hostname=…)`` keeps TLS verification on the
+— while httpcore2's ``start_tls(server_hostname=…)`` keeps TLS verification on the
 original hostname. The address judgement is owned by ``net.is_unsafe_address``;
 this module only pins and dials.
 
 One outbound-network policy lives here and everything composes it: integration
 backends reach it as ``self.http`` (:class:`HttpClientMixin`), and the OAuth client
-hands the same :class:`PinnedTransport` to Authlib. TLS trusts the system store
-(``ssl.create_default_context``) per docs/backend/guidelines.md, not httpx's bundled
-certifi default.
+hands the same :class:`PinnedTransport` to Authlib, whose OAuth2 client is an
+``httpx2.Client`` — a transport from another HTTP stack cannot serve it. TLS trusts
+the system store through the stdlib context (``ssl.create_default_context``) per
+docs/backend/guidelines.md, not httpx2's own default context.
 
 By default only public addresses are dialled. ``allow_private=True`` is the
 operator-configured-connection policy — a self-hosted host on a private network:
@@ -34,8 +35,8 @@ from functools import cached_property
 from typing import Any, ClassVar
 from urllib.parse import urljoin
 
-import httpcore
-import httpx
+import httpcore2
+import httpx2
 from django.core.exceptions import ValidationError
 
 from .net import canonical_address, is_unsafe_address, parse_http_url, resolved_addresses
@@ -59,10 +60,10 @@ class ResponseTooLargeError(ValidationError):
     """The decoded response body exceeds the caller's byte limit."""
 
 
-def same_origin(first: str | httpx.URL, second: str | httpx.URL) -> bool:
+def same_origin(first: str | httpx2.URL, second: str | httpx2.URL) -> bool:
     """Compare normalized URL origins, including effective ports and excluding credentials."""
 
-    left, right = httpx.URL(first), httpx.URL(second)
+    left, right = httpx2.URL(first), httpx2.URL(second)
     return (left.scheme, left.host, left.port) == (right.scheme, right.host, right.port)
 
 
@@ -104,8 +105,8 @@ class OutboundBudgetState:
         return self.budget.deadline_seconds - (time.monotonic() - self.started)
 
 
-class _PinnedBackend(httpcore.SyncBackend):
-    """httpcore backend that resolves once, rejects SSRF-unsafe addresses, and dials
+class _PinnedBackend(httpcore2.SyncBackend):
+    """httpcore2 backend that resolves once, rejects SSRF-unsafe addresses, and dials
     a validated IP — so a DNS rebind between check and connect cannot move the
     request. ``net.is_unsafe_address`` owns the judgement; this only pins and dials.
     """
@@ -123,10 +124,10 @@ class _PinnedBackend(httpcore.SyncBackend):
         timeout: float | None = None,
         local_address: str | None = None,
         socket_options: Iterable[Any] | None = None,
-    ) -> httpcore.NetworkStream:
+    ) -> httpcore2.NetworkStream:
         """Resolve ``host``, reject unsafe addresses, and dial a validated IP.
 
-        ``host`` is the origin hostname; httpcore later calls
+        ``host`` is the origin hostname; httpcore2 later calls
         ``start_tls(server_hostname=host)``, so dialing a validated IP here leaves
         SNI and certificate verification on the real hostname.
         """
@@ -141,7 +142,7 @@ class _PinnedBackend(httpcore.SyncBackend):
                     local_address=local_address,
                     socket_options=socket_options,
                 )
-            except (httpcore.ConnectError, httpcore.ConnectTimeout, OSError) as exc:
+            except (httpcore2.ConnectError, httpcore2.ConnectTimeout, OSError) as exc:
                 last_error = _as_os_error(exc)
         # Every validated address failed to connect: surface a transport ``OSError``
         # (distinct from the gate's ``ValidationError``) so callers — e.g. webhook
@@ -158,9 +159,9 @@ class _PinnedBackend(httpcore.SyncBackend):
         return addresses
 
 
-class PinnedTransport(httpx.HTTPTransport):
-    """An httpx transport whose connections are SSRF-pinned and whose TLS trusts the
-    system store. The shared pinned-httpx primitive: :class:`HttpClient` issues
+class PinnedTransport(httpx2.HTTPTransport):
+    """An httpx2 transport whose connections are SSRF-pinned and whose TLS trusts the
+    system store. The shared pinned-httpx2 primitive: :class:`HttpClient` issues
     requests over it, and the OAuth client hands it to Authlib's ``OAuth2Client``.
     """
 
@@ -168,21 +169,21 @@ class PinnedTransport(httpx.HTTPTransport):
         """Build a pinned transport; ``allow_private`` permits self-hosted RFC-1918 hosts."""
 
         super().__init__(verify=_SSL_CONTEXT, retries=0)
-        # httpx.HTTPTransport builds the connection pool but exposes no public seam to
-        # inject a network backend, so swap httpcore's private ``_network_backend``
-        # before any request. Fail loudly if a future httpx/httpcore renames it: a
+        # httpx2.HTTPTransport builds the connection pool but exposes no public seam to
+        # inject a network backend, so swap httpcore2's private ``_network_backend``
+        # before any request. Fail loudly if a future httpx2/httpcore2 renames it: a
         # silent fallback to the default backend would disable SSRF pinning (fail-open).
         pool = self._pool
         if not hasattr(pool, "_network_backend"):
             raise RuntimeError(
-                "httpx/httpcore changed: ConnectionPool exposes no '_network_backend'; SSRF "
+                "httpx2/httpcore2 changed: ConnectionPool exposes no '_network_backend'; SSRF "
                 "pinning would be disabled — re-verify PinnedTransport against the new version."
             )
         pool._network_backend = _PinnedBackend(allow_private=allow_private)
 
 
 class HttpClient:
-    """A reusable SSRF-pinned outbound HTTP client over httpx.
+    """A reusable SSRF-pinned outbound HTTP client over httpx2.
 
     Stateless to the caller — one instance per backend is fine. Each call gates the
     URL, pins via :class:`PinnedTransport`, and dials the validated IP; a DNS rebind
@@ -192,7 +193,7 @@ class HttpClient:
     supplied to ``request`` (each hop re-validates).
     """
 
-    transport_factory: ClassVar[Callable[..., httpx.BaseTransport]] = PinnedTransport
+    transport_factory: ClassVar[Callable[..., httpx2.BaseTransport]] = PinnedTransport
     """Build each transport with ``allow_private``.
 
     Overrides must be a transport class or a ``staticmethod`` so instance access
@@ -207,7 +208,7 @@ class HttpClient:
         allow_private: bool = False,
         follow_redirects: bool = False,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """GET ``url`` and return the response."""
 
         return self.request(
@@ -257,7 +258,7 @@ class HttpClient:
         Redirects are followed manually so every location re-enters URL parsing,
         DNS validation and the pinned transport while request and hop counts remain
         visible. ``iter_bytes`` enforces the cap after content decoding.
-        Identity encoding is requested; if ignored, httpx may allocate a decoded
+        Identity encoding is requested; if ignored, httpx2 may allocate a decoded
         network chunk before the cap is checked. See :meth:`request` for the
         residual decoder-memory bound.
         """
@@ -278,7 +279,7 @@ class HttpClient:
             if remaining <= 0 or state.requests >= budget.requests:
                 return None
             state.requests += 1
-            with httpx.Client(
+            with httpx2.Client(
                 transport=self.transport_factory(allow_private=allow_private),
                 timeout=min(float(HTTP_TIMEOUT_SECONDS), remaining),
             ) as client:
@@ -321,7 +322,7 @@ class HttpClient:
         allow_private: bool = False,
         follow_redirects: bool = False,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """POST ``body`` to ``url`` and return the response."""
 
         return self.request(
@@ -346,7 +347,7 @@ class HttpClient:
         same_origin_redirects: int = 0,
         max_bytes: int | None = None,
         timeout: int = HTTP_TIMEOUT_SECONDS,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """Send one pinned request to ``url`` and return the response.
 
         Raises ``ValidationError`` when the URL or a resolved address is rejected by
@@ -358,8 +359,8 @@ class HttpClient:
         ``max_bytes`` caps each decoded response body, including redirect hops,
         raising ``ResponseTooLargeError`` on overflow. Capped reads request
         ``Accept-Encoding: identity``. If a server still encodes its response,
-        httpx decodes a whole network chunk before the cap is checked: the cap
-        bounds accepted decoded content, not peak decoder memory.
+        httpx2 may decode a whole network chunk before the cap is checked: the
+        cap bounds accepted decoded content, not peak decoder memory.
         """
 
         if same_origin_redirects < 0 or (same_origin_redirects and follow_redirects):
@@ -367,18 +368,18 @@ class HttpClient:
         if max_bytes is not None and max_bytes < 1:
             raise ValueError("max_bytes must be positive when provided.")
 
-        def read_response(response: httpx.Response) -> None:
-            """Enforce the cap before httpx buffers a response or follows its redirect."""
+        def read_response(response: httpx2.Response) -> None:
+            """Enforce the cap before httpx2 buffers a response or follows its redirect."""
 
             if max_bytes is not None:
                 content = _read_capped(response, max_bytes=max_bytes)
                 if content is None:
                     raise ResponseTooLargeError("HTTP response exceeds the byte limit.")
-                # httpx.read() has no cap or public body-cache setter. Store
+                # httpx2's read() has no cap or public body-cache setter. Store
                 # the decoded cache it owns, preserving the native response.
                 response._content = content
 
-        with httpx.Client(
+        with httpx2.Client(
             transport=self.transport_factory(allow_private=allow_private),
             timeout=timeout,
             event_hooks={"response": [read_response]} if max_bytes is not None else None,
@@ -393,7 +394,7 @@ class HttpClient:
                 if (
                     hop == same_origin_redirects
                     or response.status_code not in {301, 302, 307, 308}
-                    or not response.headers.get("location")  # httpx also creates next_request for an empty Location.
+                    or not response.headers.get("location")  # httpx2 also creates next_request for an empty Location.
                     or response.next_request is None
                 ):
                     break
@@ -405,7 +406,7 @@ class HttpClient:
 
 
 def _read_capped(
-    response: httpx.Response,
+    response: httpx2.Response,
     *,
     max_bytes: int,
     state: OutboundBudgetState | None = None,
@@ -453,10 +454,10 @@ class HttpClientMixin:
         return HttpClient()
 
 
-def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx.Headers:
+def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx2.Headers:
     """Keep the URL's Host and request identity encoding for capped response reads."""
 
-    result = httpx.Headers(headers)
+    result = httpx2.Headers(headers)
     result.pop("Host", None)
     if capped:
         result["Accept-Encoding"] = "identity"
@@ -464,7 +465,7 @@ def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx.H
 
 
 def _as_os_error(exc: Exception) -> OSError:
-    """Return the underlying ``OSError`` for a connect failure (httpcore wraps it)."""
+    """Return the underlying ``OSError`` for a connect failure (httpcore2 wraps it)."""
 
     if isinstance(exc, OSError):
         return exc

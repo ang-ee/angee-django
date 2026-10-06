@@ -21,6 +21,7 @@ import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
   hasPageField,
+  isRelationListField,
   pageChildren,
   pageElementKind,
   parsePageActions,
@@ -35,6 +36,7 @@ import {
 import {
   fieldsWithMetadataDefaults,
   relationFieldInfoForDescriptor,
+  relationListFieldInfo,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
@@ -187,6 +189,8 @@ export interface FormViewSurface
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
   relationByField: ReadonlyMap<string, RelationFieldInfo>;
+  /** Fields rendered by the relation multi-select, with the related model it lists. */
+  relationListByField: ReadonlyMap<string, RelationFieldInfo>;
   requiredMessage: string;
   titleField: FieldDescriptor | undefined;
   titlePlacementField: FieldDescriptor | undefined;
@@ -500,6 +504,16 @@ export function useFormViewSurface({
     }
     return map;
   }, [formFields, modelMetadata, schemaMetadata]);
+  // To-many relations the relation multi-select edits: the picker's target per field.
+  const relationListByField = React.useMemo(() => {
+    const map = new Map<string, RelationFieldInfo>();
+    for (const field of formFields) {
+      if (!isRelationListField(field)) continue;
+      const info = relationListFieldInfo(field.name, modelMetadata, schemaMetadata);
+      if (info) map.set(field.name, info);
+    }
+    return map;
+  }, [formFields, modelMetadata, schemaMetadata]);
   const selection = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
     if (!isCreate && modelMetadata?.fields.permissions?.readable !== false && modelMetadata?.fields.permissions) {
@@ -787,6 +801,7 @@ export function useFormViewSurface({
     modelMetadata,
     formFields,
     relationByField,
+    relationListByField,
     requiredMessage: t("form.required"),
     titleField,
     titlePlacementField,

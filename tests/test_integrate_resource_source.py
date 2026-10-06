@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from django.core.exceptions import ValidationError
 
@@ -46,9 +46,9 @@ def test_url_source_fetches_then_reads_from_cache(
     settings.ANGEE_DATA_DIR = tmp_path
     calls: list[str] = []
 
-    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx.Response:
+    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx2.Response:
         calls.append(url)
-        return httpx.Response(200, content=_PAYLOAD)
+        return httpx2.Response(200, content=_PAYLOAD)
 
     _patch_get(monkeypatch, fake_get)
 
@@ -68,7 +68,7 @@ def test_url_source_maps_ssrf_rejection_to_resource_load_error(
 
     settings.ANGEE_DATA_DIR = tmp_path
 
-    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx.Response:
+    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx2.Response:
         raise ValidationError("URL host must resolve only to public IP addresses.")
 
     _patch_get(monkeypatch, fake_get)
@@ -83,7 +83,7 @@ def test_url_source_maps_transport_failure_to_resource_load_error(
 
     settings.ANGEE_DATA_DIR = tmp_path
 
-    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx.Response:
+    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx2.Response:
         raise ConnectionRefusedError("down")
 
     _patch_get(monkeypatch, fake_get)
@@ -91,15 +91,15 @@ def test_url_source_maps_transport_failure_to_resource_load_error(
         _entry("https://example.test/data.csv").materialize()
 
 
-def test_url_source_maps_httpx_transport_failure_to_resource_load_error(
+def test_url_source_maps_httpx2_transport_failure_to_resource_load_error(
     tmp_path: Path, settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Native httpx transport errors remain resource-boundary errors."""
+    """Native httpx2 transport errors remain resource-boundary errors."""
 
     settings.ANGEE_DATA_DIR = tmp_path
 
-    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx.Response:
-        raise httpx.ConnectError("down", request=httpx.Request("GET", url))
+    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx2.Response:
+        raise httpx2.ConnectError("down", request=httpx2.Request("GET", url))
 
     _patch_get(monkeypatch, fake_get)
     with pytest.raises(ResourceLoadError, match="fetch failed"):
@@ -113,8 +113,8 @@ def test_url_source_maps_non_2xx_to_resource_load_error(
 
     settings.ANGEE_DATA_DIR = tmp_path
 
-    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx.Response:
-        return httpx.Response(404, content=b"not found")
+    def fake_get(self: Any, url: str, **kwargs: Any) -> httpx2.Response:
+        return httpx2.Response(404, content=b"not found")
 
     _patch_get(monkeypatch, fake_get)
     with pytest.raises(ResourceLoadError, match="HTTP 404"):

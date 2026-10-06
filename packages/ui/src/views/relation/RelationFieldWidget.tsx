@@ -1,18 +1,15 @@
-import { useMemo, type ReactElement, type Ref } from "react";
+import type { ReactElement, Ref } from "react";
 import type { CrudFilter } from "@refinedev/core";
 
 import {
   useResourceRecordHref,
 } from "../../runtime";
-import { useModelMetadata } from "@angee/metadata";
 
 import type { RelationOption } from "../../widgets/RelationField";
 import type { WidgetControlProps } from "../../widgets/types";
-import {
-  formFieldsFromMetadata,
-  type RelationFieldInfo,
-} from "../resource/model-metadata-defaults";
+import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationPicker, type RelationCreateConfig } from "./RelationPicker";
+import { useRelationForms } from "./RelationRecordDialog";
 import { useRelationPickerOptions } from "./relation-options";
 import { RecordReference } from "./RecordReference";
 
@@ -89,11 +86,7 @@ function EditableRelationFieldWidget(
     searchFields,
   });
 
-  const relatedMetadata = useModelMetadata(relation.resource);
-  const createFields = useMemo(
-    () => formFieldsFromMetadata(relatedMetadata),
-    [relatedMetadata],
-  );
+  const forms = useRelationForms(relation, create);
 
   // A "follow" arrow appears only when the related resource has a routed detail page
   // and a record is selected — navigating to it turns the relation into a link.
@@ -121,25 +114,15 @@ function EditableRelationFieldWidget(
       onOpenChange={picker.onOpenChange}
       onSearchChange={picker.onSearchChange}
       searchState={picker.searchState}
-      create={
-        create === undefined
-          ? relation.canCreate && createFields.length > 0
-            ? {
-                resource: relation.resource,
-                fields: createFields,
-                prefillField: relation.labelField,
-              }
-            : undefined
-          : create ?? undefined
-      }
+      create={forms.create}
       onCreated={refreshOptions}
       // Edit is offered whenever the resource has editable fields — intentionally
       // UX-only, not gated on a `canEdit` flag (resource metadata exposes no
       // per-relation edit capability). The server is the authorization boundary: a denied
       // patch surfaces in the dialog's own error banner.
       edit={
-        createFields.length > 0
-          ? { resource: relation.resource, fields: createFields }
+        forms.fields.length > 0
+          ? { resource: relation.resource, fields: forms.fields }
           : undefined
       }
       onEdited={refreshOptions}

@@ -168,6 +168,7 @@ describe("resource metadata defaults", () => {
         },
         defaultScopes: { name: "defaultScopes", kind: "list", scalar: "String" },
         reviewer: { name: "reviewer", kind: "relation", relationModelLabel: "Reviewer" },
+        approvers: { name: "approvers", kind: "list", scalar: null, relationModelLabel: "iam.User" },
       }, testDataResource("policies.Policy"));
     const resolved = fieldsWithMetadataDefaults(
       [
@@ -177,6 +178,7 @@ describe("resource metadata defaults", () => {
         { name: "defaultScopes" },
         { name: "reviewer" },
         { name: "isEnabled", widget: "booleanBadge" },
+        { name: "approvers" },
       ],
       policyMetadata,
     );
@@ -187,6 +189,7 @@ describe("resource metadata defaults", () => {
     expect(resolved[3]?.widget).toBe("tagInput"); // string list → tag input
     expect(resolved[4]?.widget).toBe("many2one"); // relation → picker
     expect(resolved[5]?.widget).toBe("booleanBadge"); // explicit widget is preserved
+    expect(resolved[6]?.widget).toBe("many2many"); // relation list → multi-select, not free text
   });
 
   test("derives list filter fields, enum filter chips, and group options", () => {

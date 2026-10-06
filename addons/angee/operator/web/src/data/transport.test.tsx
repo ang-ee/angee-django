@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OperatorConnectionQuery } from "./documents";
 import { createOperatorClient } from "./operator-client";
 import { operatorToken } from "./operator-token";
-import { OperatorTransportProvider, useOperatorConnectionState } from "./transport";
+import { OperatorTransportProvider, useOperatorConnectionState, useOperatorQuery } from "./transport";
+import { SERVICE_ENDPOINT_QUERY } from "./documents.daemon";
 
 const bridge = vi.hoisted(() => ({
   query: {
@@ -17,12 +18,16 @@ const bridge = vi.hoisted(() => ({
     error: null as Error | null,
     isFetching: false,
   },
+  operatorReads: [] as { enabled?: boolean; dataProviderName?: string }[],
   t: (key: string) => key,
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: () => bridge.query,
+  useAuthoredQuery: (_document: unknown, _variables: unknown, options: { enabled?: boolean; dataProviderName?: string } = {}) => {
+    if (options.dataProviderName === "operator") bridge.operatorReads.push(options);
+    return bridge.query;
+  },
 }));
 
 vi.mock("../i18n", () => ({ useOperatorT: () => bridge.t }));
@@ -71,6 +76,7 @@ beforeEach(() => {
   bridge.query.data = connectionData();
   bridge.query.error = null;
   bridge.query.isFetching = false;
+  bridge.operatorReads = [];
   bridge.t = (key: string) => key;
   vi.mocked(createOperatorClient).mockClear();
 });
@@ -167,5 +173,30 @@ describe("OperatorTransportProvider bearer lifetime", () => {
     view.unmount();
 
     expect(operatorToken.get()).toBeNull();
+  });
+});
+
+describe("useOperatorQuery", () => {
+  function OperatorRead({ enabled }: { enabled?: boolean }) {
+    useOperatorQuery(SERVICE_ENDPOINT_QUERY, { name: "django" }, enabled === undefined ? {} : { enabled });
+    return null;
+  }
+
+  test("sends nothing until the connection is ready, then reads with the bearer", () => {
+    bridge.query.data = undefined;
+    bridge.query.isFetching = true;
+    const view = renderTransport(<OperatorRead />);
+    expect(bridge.operatorReads.every((read) => read.enabled === false)).toBe(true);
+
+    bridge.query.data = connectionData();
+    bridge.query.isFetching = false;
+    view.rerender(<OperatorTransportProvider><OperatorRead /></OperatorTransportProvider>);
+    expect(bridge.operatorReads.at(-1)?.enabled).toBe(true);
+    expect(operatorToken.get()).toBe("first-token");
+  });
+
+  test("a caller's own condition still holds once connected", () => {
+    renderTransport(<OperatorRead enabled={false} />);
+    expect(bridge.operatorReads.at(-1)?.enabled).toBe(false);
   });
 });

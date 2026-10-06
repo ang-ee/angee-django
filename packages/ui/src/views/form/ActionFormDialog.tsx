@@ -402,7 +402,7 @@ function ActionRelationListControl({
     <RelationMultiFieldWidget
       relation={relation}
       filters={arg.filters}
-      create={arg.create}
+      create={arg.create ?? null}
       value={Array.isArray(value) ? value : []}
       readOnly={readOnly}
       aria-label={typeof arg.label === "string" ? arg.label : arg.name}
