@@ -1101,7 +1101,10 @@ queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`
 the form renders them as one ordered section, saved by its one Save, with row
 order as the position. `linePrimaryFields` chooses the columns shown first (the
 rest wait in the data view's visible-fields menu) and `lineFields` their headers,
-choices and help. A record with a life of its own (its own verbs, revision,
+choices and help. `<Group label lines />` places the lines as a section; carried
+by a `<model>#sections` child it narrows like any section, so a product keeps only
+the lines on its route with `only` under `when`, and narrowed away they are gone.
+Undeclared, the lines trail the form. A record with a life of its own (its own verbs, revision,
 pages or references from elsewhere) is an associated record and stays an
 embedded list, however small or ordered it is. Never split one owned collection
 into several lists to protect some of its rows; lock those rows instead. See

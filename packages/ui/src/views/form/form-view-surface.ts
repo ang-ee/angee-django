@@ -16,7 +16,9 @@ import {
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
-import { useContainer, useFormOverride, modelChain } from "../../runtime";
+import {
+  EMPTY_CONTAINERS, composedContainerChildren, modelChain, useAppRuntime, useContainer, useFormOverride,
+} from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
@@ -44,6 +46,7 @@ import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } 
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import {
   addFieldSelection,
+  EDITABLE_LINES_SECTION,
   fieldErrorMessages,
   flattenedFormFields,
   formSections,
@@ -211,6 +214,8 @@ export interface FormViewSurface
   bodyTabSections: readonly FormSectionModel[];
   /** The editable lines' section label, as a tab or a stacked heading. */
   linesLabel: React.ReactNode;
+  /** The lines trail the form: none of its sections, admitted or not, declares them. */
+  linesTrailing: boolean;
   railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
@@ -441,6 +446,15 @@ export function useFormViewSurface({
   const declaredGroups = React.useMemo(
     () => [...baseGroups, ...contributedGroups],
     [baseGroups, contributedGroups],
+  );
+  const { containers = EMPTY_CONTAINERS } = useAppRuntime();
+  // A form whose page or layers declare a `lines` group shows its lines only there, so
+  // narrowing that section away hides them; with no declaration they trail the form.
+  const linesDeclared = React.useMemo(
+    () => baseGroups.some((group) => group.lines)
+      || composedContainerChildren<React.ReactNode>(containers, "form#sections", models)
+        .some((child) => parsePageGroups(child.content).some((group) => group.lines)),
+    [baseGroups, containers, models],
   );
   const declaredGroupSequences = React.useMemo(
     () => [
@@ -702,14 +716,16 @@ export function useFormViewSurface({
       const permitted = groupSections.filter((section) =>
         (section.permission === undefined
           || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)))
-        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord)));
+        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord))
+        // A declared lines section shows only where the form edits its lines.
+        && (section.key !== EDITABLE_LINES_SECTION || save.linesActive));
       const stacked = permitted.filter((section) => section.label == null);
       const tabbedSections = permitted
         .filter((section) => section.label != null)
         .sort(compareFormSections);
       return [...stacked, ...tabbedSections];
     },
-    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, sectionAdmits],
+    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
   );
   const sectionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
   const sections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
@@ -744,11 +760,12 @@ export function useFormViewSurface({
     [id, save],
   );
   const linesLabel = linesTabLabel ?? t("lines.section");
+  const linesTrailing = save.linesActive && !linesDeclared;
   const bodyTabSections: readonly FormSectionModel[] = layout === "tabs" ? [
-    ...(save.linesActive ? [{ key: "editable-lines", label: linesLabel, fields: [] }] : []),
+    ...(linesTrailing ? [{ key: EDITABLE_LINES_SECTION, label: linesLabel, fields: [] }] : []),
     ...(bodyTabs ?? []).map((tab) => ({ key: tab.id, label: tab.label, fields: [], render: () => tab.render(recordToolbarContext) })),
     ...sections.filter((section) => section.label != null && !section.collapsible
-      && (section.fields.length > 0 || section.render !== undefined)),
+      && (section.fields.length > 0 || section.render !== undefined || section.key === EDITABLE_LINES_SECTION)),
   ] : [];
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
@@ -794,7 +811,7 @@ export function useFormViewSurface({
     const target = options?.recordTabId && options.recordTabId !== FORM_VIEW_OVERVIEW_TAB_ID
       ? options.recordTabId : focusSectionsRef.current.sections.find((section) =>
         section.fields.some((field) => path === field.name || path.startsWith(`${field.name}.`))
-        || (section.key === "editable-lines" && save.linesField && (path === save.linesField || path.startsWith(`${save.linesField}.`))))?.key
+        || (section.key === EDITABLE_LINES_SECTION && save.linesField && (path === save.linesField || path.startsWith(`${save.linesField}.`))))?.key
         ?? focusSectionsRef.current.fallback;
     pendingFocusRef.current = { path, recordTabId: target };
     setRequestedFocusPath(path);
@@ -837,6 +854,7 @@ export function useFormViewSurface({
     sections,
     bodyTabSections,
     linesLabel,
+    linesTrailing,
     railGroups: visibleRailGroups,
     subtitleParts,
     lineRowErrors,

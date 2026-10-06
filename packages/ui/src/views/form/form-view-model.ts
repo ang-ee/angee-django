@@ -80,6 +80,9 @@ export interface FormViewFieldLayout {
   gridGroups: readonly GroupDescriptor[];
 }
 
+/** The section key of a form's editable lines, declared by a `lines` group or trailing the form. */
+export const EDITABLE_LINES_SECTION = "editable-lines";
+
 export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
@@ -87,14 +90,17 @@ export function formSections(
   isCreate = false,
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
+  if (groups.filter((group) => group.lines).length > 1) {
+    throw new Error("A form declares its editable lines in one group.");
+  }
   const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
     if (isCreate && group.savedOnly) return [];
-    if (group.fields.length === 0 && group.content === undefined) return [];
+    if (group.fields.length === 0 && group.content === undefined && !group.lines) return [];
     for (const field of group.fields) groupedNames.add(field.name);
     return [
       {
-        key: `group:${index}:${String(group.label ?? "")}`,
+        key: group.lines ? EDITABLE_LINES_SECTION : `group:${index}:${String(group.label ?? "")}`,
         label: group.label,
         ...(group.hint !== undefined ? { hint: group.hint } : {}),
         ...(group.audience !== undefined ? { audience: group.audience } : {}),

@@ -3,9 +3,11 @@ import { describe, expect, test } from "vitest";
 import type { FieldDescriptor } from "../page";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import {
+  EDITABLE_LINES_SECTION,
   emptyDraft,
   addFieldSelection,
   fieldErrorMessages,
+  formSections,
   formViewFieldLayout,
   isCompositeFieldDescriptor,
   missingRequiredFieldNames,
@@ -350,4 +352,25 @@ test("a to-many relation keeps an equal re-picked set as its baseline and submit
     { dirtyFields: { members: true }, id: "team-1", isCreate: false },
   )).toEqual({ id: "team-1", members: ["user-1", "user-3"] });
   expect(emptyDraft([{ name: "members", widget: "many2many" }])).toEqual({ members: [] });
+});
+
+describe("formSections", () => {
+  test("a lines group is the lines section, kept without fields, in its declared order", () => {
+    const sections = formSections([], [
+      { label: "Identity", fields: [{ name: "key" }], actions: [] },
+      { label: "Stages", lines: true, fields: [], actions: [] },
+      { label: "Empty", fields: [], actions: [] },
+    ], [10, 50, 60]);
+    expect(sections.map((section) => [section.key, section.label, section.sequence])).toEqual([
+      ["group:0:Identity", "Identity", 10],
+      [EDITABLE_LINES_SECTION, "Stages", 50],
+    ]);
+  });
+
+  test("a form declares its lines in one group", () => {
+    expect(() => formSections([], [
+      { label: "One", lines: true, fields: [], actions: [] },
+      { label: "Two", lines: true, fields: [], actions: [] },
+    ])).toThrow("one group");
+  });
 });

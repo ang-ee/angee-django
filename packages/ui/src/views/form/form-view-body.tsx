@@ -41,6 +41,7 @@ import {
   relationListValue,
   resolveField,
   titleText,
+  EDITABLE_LINES_SECTION,
   type FormSectionModel,
   type FormValues,
 } from "./form-view-model";
@@ -344,6 +345,7 @@ export function FormViewOverview({
     bodyTabSections,
     tabbed,
     linesLabel,
+    linesTrailing,
     linesActive,
     linesResource,
     linesField,
@@ -384,8 +386,10 @@ export function FormViewOverview({
       footer={lineFooter}
     />
   ) : null;
-  const bodySections = bodyTabSections.map((section) => section.key === "editable-lines"
-    ? { ...section, render: () => editableLines } : section);
+  // The lines render in their section, whether a body tab or a declared lines group.
+  const withLines = (list: readonly FormSectionModel[]): readonly FormSectionModel[] => list.map((section) =>
+    section.key === EDITABLE_LINES_SECTION ? { ...section, render: () => editableLines } : section);
+  const bodySections = withLines(bodyTabSections);
   const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {
     const pair = groupLayout === "paired"
       ? list.filter((section) => section.label == null && section.key.startsWith("group:")).slice(0, 2)
@@ -440,15 +444,15 @@ export function FormViewOverview({
         </section>
       ) : null}
       <div className="grid gap-6">
-        {renderOverviewSections(bodySections.length > 0
-          ? sections.filter((section) => section.label == null || section.collapsible) : sections)}
+        {renderOverviewSections(withLines(bodySections.length > 0
+          ? sections.filter((section) => section.label == null || section.collapsible) : sections))}
         {/* Without a strip, a lone body tab stacks in its place under its own heading. */}
         {tabbed && bodySections.length > 0
           ? <FormSectionTabs surface={surface} tabStrip={tabStrip} sections={bodySections} renderField={renderField} />
           : bodySections.map((section) => <FormSection key={section.key} section={section} renderField={renderField}
             control={form.control} requestedFocusPath={requestedFocusPath} />)}
       </div>
-      {layout !== "tabs" && editableLines ? (
+      {layout !== "tabs" && linesTrailing && editableLines ? (
         <section className="grid gap-3">
           <SectionHeading label={linesLabel}
             className="border-b border-border-subtle pb-1" />
@@ -643,7 +647,7 @@ function FormSectionTabs({
     handledSubmitCount.current = submitCount;
     const errored = sections.find((section) =>
       section.fields.some((field) => get(errors, field.name) !== undefined)
-      || (section.key === "editable-lines" && lineField && get(errors, lineField) !== undefined),
+      || (section.key === EDITABLE_LINES_SECTION && lineField && get(errors, lineField) !== undefined),
     );
     if (errored) setActiveRecordTab(errored.key);
   }, [errors, lineField, requestedFocusPath, sections, setActiveRecordTab, submitCount]);

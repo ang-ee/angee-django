@@ -12,6 +12,7 @@ export {
 } from "./user-preferences";
 export {
   EMPTY_CONTAINERS,
+  composedContainerChildren,
   containerName,
   containersFromChildren,
   modelChain,

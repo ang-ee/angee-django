@@ -10,13 +10,13 @@ import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { AppRuntimeProvider } from "../../runtime";
+import { AppRuntimeProvider, containersFromChildren, type ComposedContainers } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { defaultWidgets } from "../../widgets";
-import { FormView } from "./FormView";
+import { FORM_CONTAINERS, FormView } from "./FormView";
 import { useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
-import type { FieldDescriptor } from "../page";
+import { Group, type FieldDescriptor } from "../page";
 
 const formFields: readonly FieldDescriptor[] = [{ name: "title", label: "Title" }];
 const fieldByName = new Map(formFields.map((field) => [field.name, field]));
@@ -63,7 +63,10 @@ async function fixture(options: {
   publicView?: boolean;
   save?: (variables: ResourceSaveVariables) => Promise<Row>;
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
-  formProps?: Pick<ComponentProps<typeof FormView>, "layout" | "bodyTabs" | "recordTabs" | "linesTabLabel">;
+  formProps?: Pick<ComponentProps<typeof FormView>, "layout" | "bodyTabs" | "recordTabs" | "linesTabLabel" | "groups">;
+  containers?: ComposedContainers;
+  /** The form loads with its lines in values but not on the page. */
+  linesHidden?: boolean;
 } = {}) {
   const seedLines = options.lines ?? initialLines;
   const activeResource = options.resourceMetadata ?? (options.publicView ? renderedResource : resource);
@@ -121,7 +124,7 @@ async function fixture(options: {
     <RouterContextProvider router={router}><ModalsHost><ToastProvider>
       {options.publicView ? (
         <OperationDocumentsProvider documents={{ [activeResource.schemaName]: { saves: { [activeResource.modelLabel]: saveDocument } } }}>
-          <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets, ...(options.containers ? { containers: options.containers } : {}) }}>
             <FormView
               {...options.formProps}
               resource={activeResource.modelLabel}
@@ -136,7 +139,7 @@ async function fixture(options: {
     </ToastProvider></ModalsHost></RouterContextProvider>
   </Provider>);
   if (!options.isCreate) {
-    if (options.publicView) await screen.findByDisplayValue("Charlie");
+    if (options.publicView) await screen.findByDisplayValue(options.linesHidden ? "Original" : "Charlie");
     else await screen.findByLabelText("c.label");
     await waitFor(() => expect(surface?.form.getValues("lines")).toMatchObject(seedLines));
   }
@@ -185,6 +188,38 @@ test("a stacked form heads its lines section with the declared lines label", asy
   expect(screen.getByRole("heading", { name: "Stages" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Lines" })).toBeNull();
   expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
+});
+
+test("a declared lines group renders the lines in its place, titled by the group, and nothing trails", async () => {
+  await fixture({ publicView: true, formProps: {
+    linesTabLabel: "Unused trailing label",
+    groups: [{ label: "Order lines", lines: true, fields: [], actions: [] }],
+  } });
+  expect(screen.getByRole("heading", { name: "Order lines" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Unused trailing label" })).toBeNull();
+  expect(screen.getAllByDisplayValue("Alpha")).toHaveLength(1);
+});
+
+test("a contributed lines section is narrowed like any section: narrowed away, the lines are gone", async () => {
+  const contributed = containersFromChildren(FORM_CONTAINERS, {
+    "review.Document#sections": { "review.lines": { sequence: 20, content: <Group label="Order lines" lines /> } },
+  });
+  await fixture({ publicView: true, containers: contributed });
+  expect(screen.getByRole("heading", { name: "Order lines" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Lines" })).toBeNull();
+  cleanup();
+  clearClients();
+  const narrowed: ComposedContainers = {
+    ...contributed,
+    rules: { "review.Document#sections": [{ layer: "review", rank: 1, only: [], exempt: [] }] },
+  };
+  const f = await fixture({ publicView: true, containers: narrowed, linesHidden: true });
+  // The lines still load into the form, unchanged, so a save sends none of them.
+  expect(f.surface().form.getValues("lines")).toMatchObject(initialLines);
+  expect(screen.queryByDisplayValue("Alpha")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Order lines" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Lines" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Add line" })).toBeNull();
 });
 
 test("new documents render Add line and create their draft lines in one native nested insert", async () => {
