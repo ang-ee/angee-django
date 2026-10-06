@@ -718,6 +718,17 @@ shared UI copy through an addon bundle.
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
+- **Presence reflects permissions; it never gates.** A menu entry (app roots
+  and legacy list items too; dependents and the deployment may set it like any
+  declaration field) or a container child may name `requires:
+  "<app_label.ModelName>#<permission>"`. The identity read asks
+  `current_user.permitted` about every composed ref; an entry the session
+  lacks leaves the rail, menus and palette with its subtree, a child leaves its
+  container, and routes stay reachable. Each ref is evaluated at type level,
+  where row-specific arms are false, so name a role- or const-decidable
+  permission (`iam.User#read__last_login`). A question about one row stays the
+  child's per-row `permission`; data stays with querysets and field values with
+  their gates. See [IAM presence](../../addons/angee/iam/README.md#presence).
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 
 ## Containers
@@ -776,8 +787,9 @@ containers: {
 
 A child carries `content` and, optionally, `sequence` and `before`/`after`
 (its position), `permission` (a projected record permission the row must hold,
-checked by owners rendering for one record), `requiredFields` (readable fields
-it consumes, which the form selects), `impl`, `variant` and `key`.
+checked by owners rendering for one record), `requires` (presence: a ref the
+session must hold, whatever the row; see Rules), `requiredFields` (readable
+fields it consumes, which the form selects), `impl`, `variant` and `key`.
 
 Any other key alters a child an addon this one depends on declared:
 `sequence`, `before` and `after` move it (at the address it was declared at),
@@ -991,7 +1003,9 @@ Developer mode's composition dialog lists container narrowing (each layer's
 `only`, `except`, `hide` and `when` per address), removed children with the
 layer that removed them, and the layers behind each child's fields. The same
 facts are on `createApp(...).explain.containers`; see the
-[app package](../../packages/app/README.md).
+[app package](../../packages/app/README.md). It also lists the menu nodes and
+children absent for the session with the ref each lacks;
+`createApp(...).explain.requires` maps every declared one to its ref.
 
 ## Form save contracts
 

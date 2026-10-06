@@ -60,8 +60,9 @@ turns it off). The session choice, from the URL or the menu, wins over the
 stored preference until the tab closes. A debug button then sits beside the
 avatar: hovering it gives the page's route, app, perspective and home, and
 clicking it opens the composition (shell provenance, removed and hidden menu
-items, unavailable routes, findings, the layers behind each menu item, container
-narrowing, removed container children, and the layers behind each child). The
+items, unavailable routes, what the session lacks a `requires` for, findings, the
+layers behind each menu item, container narrowing, removed container children,
+and the layers behind each child). The
 expanded rail lists hidden items, marked "(hidden)", and removed items, struck
 through under the item they showed in, each with its id and layers on hover;
 form field labels and list column headers show their technical field name. It
@@ -73,8 +74,9 @@ shell with the layer behind each field, the effective home and confinement, the
 layer that set each menu node field, removed nodes and who removed them, hidden
 nodes (by `hide` or a layer's `only`), unavailable routes with the reason,
 diagnostics such as shell fallbacks and out-of-namespace menu ids (warned in
-development), and under `containers` each layer's narrowing per address, the
-removed children with who removed them, and the layer behind each child field.
+development), under `requires` each menu node and container child (`address/id`)
+naming a presence ref, and under `containers` each layer's narrowing per address,
+the removed children with who removed them, and the layer behind each child field.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
@@ -166,7 +168,8 @@ the child through `ContainerKinds`. `when: { app, route, perspective }` applies
 `only`, `except` and `hide` on matching pages; children are declared and moved
 unconditionally. Each layer's `only` intersects with what it inherits and never
 filters children its dependents add; `only: []` keeps none, and `hide: false`
-undoes a `hide`, never an `only`. A child may carry `permission`,
+undoes a `hide`, never an `only`. A child may carry `permission`, `requires`
+(presence: absent unless the session's `current_user.permitted` holds the ref),
 `requiredFields`, `impl` (shown only on rows of that implementation) or
 `variant: { of, impl }` (stands in for `of` on those rows). An addon declares a
 container of its own on its own node, model-scoped with `models: true` or one

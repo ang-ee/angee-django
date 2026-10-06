@@ -540,6 +540,8 @@ export const enUiMessages: Record<string, string> = {
   "developer.hiddenLine": "{id} ← {layer} ({reason})",
   "developer.hiddenBy": "hidden by {layer} ({reason})",
   "developer.unavailableLine": "{route}: {reason}",
+  "developer.absent": "Absent for this session",
+  "developer.absentLine": "{subject} requires {ref}",
   "developer.reason.hide": "hide",
   "developer.reason.only": "only",
   "developer.hiddenItem": "{label} (hidden)",

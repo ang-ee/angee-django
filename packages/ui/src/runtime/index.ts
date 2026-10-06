@@ -58,6 +58,8 @@ export {
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
   readRuntimeRouteShortcuts,
+  isPresent,
+  sessionPermitted,
   usePreviews,
   useChatterRoutes,
   useT,

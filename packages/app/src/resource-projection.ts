@@ -16,6 +16,7 @@ import {
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
 
 import type { BaseAddonRoute } from "./define-base-addon";
+import { absentMenuNodes } from "./presence";
 import {
   childRoutesByParentName,
   fullRoutePath,
@@ -167,6 +168,7 @@ export class AppRouteProjection {
   private readonly claims = new Map<string, Map<string, RuntimeResourceRoutes[]>>();
   private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  private readonly presentNavigation = new Map<string, MenuTree>();
 
   /** Console routes removed menu nodes made unavailable, with the reason; they redirect home. */
   readonly unavailable: ReadonlyMap<string, string>;
@@ -258,8 +260,25 @@ export class AppRouteProjection {
     return owner ? menuNodeForRoute(owner, this.menuTree) : undefined;
   }
 
-  activeMenu(pathname: string, routeName?: string, search?: string): MenuMatch | undefined {
-    return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  activeMenu(pathname: string, routeName?: string, search?: string, navigation = this.navigationTree): MenuMatch | undefined {
+    return navigation.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  }
+
+  /**
+   * The navigation a session holding `permitted` sees: a menu node whose
+   * `requires` it lacks leaves the rail, menus and palette with its subtree.
+   * Presence only: routes, trails, app scope and admission do not change.
+   * Without refs (`undefined`) the navigation stands as declared.
+   */
+  navigationFor(permitted: readonly string[] | undefined): MenuTree {
+    if (permitted === undefined) return this.navigationTree;
+    const key = [...new Set(permitted)].sort().join("\n");
+    let navigation = this.presentNavigation.get(key);
+    if (!navigation) {
+      navigation = this.navigationTree.without(absentMenuNodes(this.menuTree, permitted));
+      this.presentNavigation.set(key, navigation);
+    }
+    return navigation;
   }
 
   /** The logical root a page sits in; lifting a node into Settings does not change it. */

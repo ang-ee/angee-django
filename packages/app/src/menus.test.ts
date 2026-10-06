@@ -243,4 +243,28 @@ describe("compileMenus", () => {
     expect(() => compileMenus([projects, work, pm, deployment({ pm: { only: "pm.inbox" } })])).toThrow(/only must be a list/);
     expect(() => compileMenus([projects, work, pm, deployment([{ id: "x" }])])).toThrow(/must be a mapping/);
   });
+
+  test("requires is a declaration field: authored in both forms, set by dependents and the deployment, emitted on both trees", () => {
+    const people: MenuLayer = { id: "people", menus: {
+      people: { label: "People" },
+      "people.manage": { parent: "people", route: "people.manage", requires: "iam.User#create" },
+      "people.directory": { parent: "people", route: "people.directory" },
+    } };
+    const compiled = compileMenus([people]);
+    for (const items of [compiled.logical, compiled.navigation]) {
+      expect(items[0]?.children?.map((item) => [item.id, item.requires])).toEqual([
+        ["people.manage", "iam.User#create"], ["people.directory", undefined],
+      ]);
+    }
+    const legacy = compileMenus([{ id: "audit", menus: [{ id: "audit", requires: "iam.User#delete", children: [{ id: "audit.log", route: "audit.log" }] }] }]);
+    expect(legacy.logical[0]?.requires).toBe("iam.User#delete");
+    const product: MenuLayer = { id: "product", dependsOn: ["people"], menus: { "people.directory": { requires: "iam.User#read" } } };
+    const deployment: MenuLayer = { id: DEPLOYMENT_LAYER_ID, dependsOn: ["people", "product"], menus: { people: { requires: "iam.Group#read" } } };
+    const altered = compileMenus([people, product, deployment]);
+    expect(altered.logical[0]?.requires).toBe("iam.Group#read");
+    expect(altered.logical[0]?.children?.find((item) => item.id === "people.directory")?.requires).toBe("iam.User#read");
+    expect(altered.provenance.people).toMatchObject({ requires: DEPLOYMENT_LAYER_ID });
+    expect(() => compileMenus([{ id: "people", menus: { people: { requires: ["iam.User#create"] } } } as unknown as MenuLayer]))
+      .toThrow(/requires must be a string/);
+  });
 });

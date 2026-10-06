@@ -58,6 +58,14 @@ export interface RuntimeComposition {
     unavailable: Readonly<Record<string, string>>;
     diagnostics: readonly string[];
   };
+  /**
+   * Every `requires` the composition declares: menu ids, and container children
+   * keyed `address/id`, to their refs. Developer mode lists those the session lacks.
+   */
+  requires?: {
+    menus: Readonly<Record<string, string>>;
+    containers: Readonly<Record<string, string>>;
+  };
   containers?: {
     /** Children a layer removed from a container. */
     removed: readonly { address: string; id: string; by: string }[];
@@ -104,6 +112,12 @@ export interface MenuItem {
   /** External URL. Internal app destinations use `route` and optional `params`. */
   to?: string;
   icon?: string;
+  /**
+   * Presence: `<app_label.ModelName>#<permission>` the session's identity must
+   * hold (`current_user.permitted`), else the item and its subtree are absent
+   * from the rail, menus and palette. Its routes stay reachable.
+   */
+  requires?: string;
 }
 
 /** A composed navigation entry with defaults and its runtime target applied. */
