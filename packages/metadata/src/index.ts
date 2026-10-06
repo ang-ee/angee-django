@@ -72,6 +72,7 @@ export {
   resourceOrderFieldForPath,
   isToOneRelationField,
   supportsChoiceFacet,
+  trashFlagField,
   type ChoiceFacetSupport,
   type ResourceFilterFieldType,
 } from "./fields";

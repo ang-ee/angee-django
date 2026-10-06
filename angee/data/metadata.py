@@ -64,6 +64,8 @@ class DataResourceFieldMetadata:
     updatable: bool = False
     required_on_create: bool = False
     archivable: bool = False
+    trashable: bool = False
+    """Whether the field is the ``TrashMixin`` flag, marking the resource trashable."""
     currency_field: str | None = None
     relation_model_label: str | None = None
     relation_object: bool = False

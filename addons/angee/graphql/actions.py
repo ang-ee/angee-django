@@ -251,13 +251,21 @@ def authorized_permission_target(
     model: type[_RebacActionTarget],
     id: PublicID,
     permission: str,
+    *,
+    narrow: Callable[[models.QuerySet[_RebacActionTarget]], models.QuerySet[_RebacActionTarget]] | None = None,
 ) -> _RebacActionTarget:
-    """Resolve a target through the exact requested permission scope."""
+    """Resolve a target through the exact requested permission scope.
+
+    ``narrow`` lets the verb's owner keep rows another verb owns out of the
+    lookup; a narrowed-away row reads as not found.
+    """
 
     user = getattr(info.context.request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     scoped = read_scoped_queryset(model, user, action=permission)
+    if narrow is not None:
+        scoped = narrow(scoped)
     instance = instance_for_id(model, id, queryset=scoped)
     return _require_action_permission(instance, model, id, permission)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -76,6 +77,10 @@ from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
+
+# Settings reloads in the suite compose through ProjectContract, which starts
+# Sentry for a configured DSN; a developer's exported DSN never receives test errors.
+os.environ.pop("SENTRY_DSN", None)
 
 
 @pytest.fixture
@@ -801,10 +806,17 @@ def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:
     return make_addon(schemas=schemas)
 
 
-def addon_schema(schemas: dict[str, Any], name: str) -> Any:
-    """Build one addon-only GraphQL schema from its raw ``schemas`` mapping."""
+def addon_schema(schemas: dict[str, Any], name: str, *composed: dict[str, Any]) -> Any:
+    """Build one addon-only GraphQL schema from its raw ``schemas`` mapping.
 
-    parts = {key: tuple(schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS}
+    ``composed`` mappings (another addon's ``schemas``, e.g. the shared record
+    verbs) contribute their same-named bucket parts after the addon's own.
+    """
+
+    parts = {
+        key: tuple(part for source in (schemas, *composed) for part in source.get(name, {}).get(key, ()))
+        for key in SCHEMA_PART_KEYS
+    }
     return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
 
 

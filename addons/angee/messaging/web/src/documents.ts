@@ -212,6 +212,7 @@ export const RecordMessageFields = graphql(`
     message_type
     can_edit
     can_delete
+    can_trash
     author_label
     is_self
     is_reply
@@ -372,6 +373,7 @@ export const RecordThreadDocument = graphql(`
         ...RecordThreadSummaryFields
       }
       message_result_count
+      removed_message_count
       audience_label
       post_kinds
       messages {
@@ -525,6 +527,70 @@ export const UpdateRecordMessageDocument = graphql(`
       }
       thread {
         ...RecordThreadSummaryFields
+      }
+    }
+  }
+`);
+
+// Moderation keeps a comment, moved to the trash: only the record's moderators
+// list and restore it. The thread read refreshes through READ_MODELS.
+export const TrashRecordMessageDocument = graphql(`
+  mutation MessagingTrashRecordMessage(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+    $reason: String!
+  ) {
+    trash_record_message(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+        reason: $reason
+        confirm: true
+      }
+    ) {
+      error
+      error_code
+      removed_message_count
+    }
+  }
+`);
+
+export const RestoreRecordMessageDocument = graphql(`
+  mutation MessagingRestoreRecordMessage(
+    $modelLabel: String!
+    $recordId: ID!
+    $messageId: ID!
+  ) {
+    restore_record_message(
+      input: {
+        model_label: $modelLabel
+        record_id: $recordId
+        message_id: $messageId
+        confirm: true
+      }
+    ) {
+      error
+      error_code
+      removed_message_count
+    }
+  }
+`);
+
+export const RecordRemovedMessagesDocument = graphql(`
+  query MessagingRecordRemovedMessages($modelLabel: String!, $recordId: ID!) {
+    record_removed_messages(input: { model_label: $modelLabel, record_id: $recordId }) {
+      error
+      error_code
+      message_result_count
+      messages {
+        id
+        preview
+        author_label
+        trashed_at
+        trash_reason
+        trashed_by_label
       }
     }
   }

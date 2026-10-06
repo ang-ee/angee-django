@@ -99,7 +99,7 @@ describe("iam addon manifest", () => {
     expect(iam.containers?.["resource#utilities"]).toMatchObject({ "iam.share-list": { sequence: 20, content: expect.anything() } });
   });
 
-  test("contributes the login methods, the OIDC tab on the OAuth client form and the user's password verb", () => {
+  test("contributes the login methods, the OIDC tab on the OAuth client form and the user's account verbs", () => {
     // The Share panel's role and visibility containers, addressed per model by their contributors.
     expect(iam.containers?.["iam#access-roles"]).toEqual({ models: true });
     expect(iam.containers?.["iam#access-visibility"]).toEqual({ models: true });
@@ -108,9 +108,22 @@ describe("iam addon manifest", () => {
     expect(iam.containers?.["auth.login#method"]).toMatchObject({ "iam.oauth-login": { content: expect.anything() } });
     // The OIDC login tab the iam addon adds to integrate's OAuth client form.
     expect(iam.containers?.["integrate.OAuthClient#sections"]).toMatchObject({ "iam.oidc-login": { content: expect.anything() } });
-    // Issuing a password is an overflow-menu verb on the user form only.
-    expect(iam.containers?.["iam.User#actions-menu"])
-      .toMatchObject({ "iam.issue-password": { requiredFields: ["can_issue_password"], content: expect.anything() } });
+    // Account verbs are overflow-menu children on the user form, each reading the row's projection.
+    const verbs = iam.containers?.["iam.User#actions-menu"] as Record<string, { requiredFields?: readonly string[] }>;
+    expect(Object.keys(verbs)).toEqual(["iam.set-active", "iam.rename", "iam.issue-password", "iam.reset-password"]);
+    for (const child of Object.values(verbs)) {
+      expect(child.requiredFields).toEqual(expect.arrayContaining(["account_actions", "revision"]));
+    }
+  });
+
+  test("declares the users list's columns container with IAM's default columns and activity presets", () => {
+    const columns = iam.containers?.["iam.users#columns"] as Record<string, { sequence?: number }>;
+    expect(Object.keys(columns)).toEqual(["iam.username", "iam.email", "iam.is-staff", "iam.is-active", "iam.last-login"]);
+    expect(Object.values(columns).map((child) => child.sequence)).toEqual([10, 20, 30, 40, 50]);
+    expect(iam.resourceViews?.map((preset) => [preset.id, preset.label, preset.filter])).toEqual([
+      ["iam.users.active", "Active", { is_active: { exact: true } }],
+      ["iam.users.deactivated", "Deactivated", { is_active: { exact: false } }],
+    ]);
   });
 
   test("publishes login backgrounds as frontend build assets", () => {

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
+from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
@@ -14,7 +16,8 @@ from django.core.exceptions import ValidationError
 from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
-from rebac import PermissionDenied, system_context
+from django.utils import timezone
+from rebac import PermissionDenied, current_actor, system_context
 from rebac.field_visibility import gated_read_fields
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from simple_history.models import HistoricalRecords
@@ -25,10 +28,11 @@ from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.scoping import system_queryset
-from angee.base.serialization import canonical_json_sha256, json_safe
+from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
+_TrashModelT = TypeVar("_TrashModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
 
 ARCHIVE_FLAG_FIELD = "is_archived"
@@ -40,6 +44,18 @@ the resource-metadata field classifier recognises the archive flag by this name
 identical everywhere is the contract that lets pickers default-filter archived
 rows and lists expose an archived facet without per-model wiring.
 """
+
+TRASH_FLAG_FIELD = "is_trashed"
+"""The one trash-flag column name — the single trash vocabulary word.
+
+Every model that composes :class:`TrashMixin` carries this exact column, and the
+resource-metadata field classifier recognises it by this name
+(``angee.data.field_classification.is_trash_field``) so shared views can offer a
+removed-records list for any trashable resource without per-model wiring.
+"""
+
+TRASH_REASON_MAX_LENGTH = 1000
+"""Upper bound, in characters, of the optional reason recorded with a trash."""
 
 
 def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
@@ -506,6 +522,198 @@ class ArchiveQuerySet(models.QuerySet[_ArchiveModelT]):
         return cast(Self, self.filter(**{ARCHIVE_FLAG_FIELD: False}))
 
 
+def clean_trash_reason(reason: Any) -> str:
+    """Return the stored form of an optional trash reason, refusing an oversized one."""
+
+    text = strip_null_bytes(str(reason or "")).strip()
+    if len(text) > TRASH_REASON_MAX_LENGTH:
+        raise ValidationError({"reason": f"Keep the reason within {TRASH_REASON_MAX_LENGTH} characters."})
+    return text
+
+
+class TrashMixin(models.Model):
+    """Soft-remove ("trash") a row while keeping it, with who, when and why.
+
+    Trash is removal, distinct from archival (:class:`ArchiveMixin`): nothing is
+    destroyed, but the row leaves every surface for readers who do not manage
+    it. The owning model's Zed declares that audience — a ``withheld`` arm over a
+    constant relation filtered on ``is_trashed`` (see ``knowledge/page``) — so
+    lists, counts and search lose the row inside the permission engine. Managers
+    act through the row's ``delete`` permission: the shared ``trash_record`` /
+    ``restore_record`` GraphQL verbs check it before calling :meth:`trash` /
+    :meth:`restore`; a domain verb with its own authority (record-chatter
+    moderation) checks that authority instead.
+
+    Both verbs refuse a no-op state change under a row lock and persist through
+    ``save(update_fields=...)``, so REBAC write gates and history tracking still
+    apply. Restoring clears the stamps (a history-tracked model keeps them in its
+    history) and re-grants nothing: the row is readable by whoever its
+    permissions admit today. Compose :class:`TrashQuerySet` into the model's
+    queryset for the ``.trashed()`` / ``.untrashed()`` scopes.
+    """
+
+    TRASH_FIELDS: ClassVar[tuple[str, ...]] = (TRASH_FLAG_FIELD, "trashed_at", "trashed_by", "trash_reason")
+    """Every column a trash or restore writes."""
+
+    UNTRASHED_VALUES: ClassVar[Mapping[str, Any]] = MappingProxyType({
+        TRASH_FLAG_FIELD: False,
+        "trashed_at": None,
+        "trashed_by": None,
+        "trash_reason": "",
+    })
+    """Column values of a row outside the trash, for owners restoring in a wider write."""
+
+    is_trashed = models.BooleanField(default=False, db_index=True, editable=False)
+    """Whether the row is in the trash — withheld from everyone who does not manage it."""
+
+    trashed_at = models.DateTimeField(null=True, blank=True, editable=False)
+    """When the row was moved to the trash."""
+
+    trashed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        editable=False,
+    )
+    """The user who moved the row to the trash, when a user acted."""
+
+    trash_reason = models.TextField(blank=True, default="", editable=False)
+    """The optional reason recorded with the trash, at most ``TRASH_REASON_MAX_LENGTH`` characters."""
+
+    class Meta:
+        """Django model options for trash-only abstract inheritance."""
+
+        abstract = True
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require the default manager to carry the trash row scopes."""
+
+        errors = super().check(**kwargs)
+        if (
+            not cls._meta.abstract
+            and cls.stores_trash()
+            and not isinstance(cls._default_manager.get_queryset(), TrashQuerySet)
+        ):
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label}'s default manager must compose TrashQuerySet.",
+                    hint="Declare a default manager whose queryset inherits TrashQuerySet.",
+                    obj=cls,
+                    id="angee.E036",
+                )
+            )
+        return errors
+
+    @classmethod
+    def stores_trash(cls) -> bool:
+        """Return whether this concrete model stores its own trash flag.
+
+        A multi-table child inherits its parent's flag; the parent owns trash
+        for both, so shared verbs address the parent only.
+        """
+
+        return cls._meta.get_field(TRASH_FLAG_FIELD).model is cls
+
+    def trash(self, *, reason: str = "", using: str | None = None) -> None:
+        """Move this row to the trash, stamping the acting user, time and reason."""
+
+        reason = clean_trash_reason(reason)
+        db = using or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=db):
+            self._require_trash_state(trashed=False, using=db)
+            self.is_trashed = True
+            self.trashed_at = timezone.now()
+            self.trashed_by_id = actor_user_id(instance_actor(self))
+            self.trash_reason = reason
+            self.save(using=db, update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
+
+    def restore(self, *, using: str | None = None) -> None:
+        """Take this row out of the trash, clearing its trash stamps."""
+
+        db = using or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=db):
+            self._require_trash_state(trashed=True, using=db)
+            for name, value in self.UNTRASHED_VALUES.items():
+                setattr(self, name, value)
+            self.save(using=db, update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
+
+    def _require_trash_state(self, *, trashed: bool, using: str) -> None:
+        """Lock the stored row and refuse a trash verb that would change nothing."""
+
+        stored = (
+            system_queryset(type(self), lock=("self",))
+            .using(using)
+            .filter(pk=self.pk)
+            .values_list(TRASH_FLAG_FIELD, flat=True)
+            .first()
+        )
+        if stored is None:
+            raise ValidationError(f"This {self._meta.verbose_name} no longer exists.")
+        if bool(stored) is not trashed:
+            state = "is not in" if trashed else "is already in"
+            raise ValidationError({TRASH_FLAG_FIELD: f"This {self._meta.verbose_name} {state} the trash."})
+
+
+class TrashQuerySet(models.QuerySet[_TrashModelT]):
+    """Composable row scopes for the :class:`TrashMixin` trash flag.
+
+    Mix into the model's queryset beside its base queryset (e.g.
+    ``class PageQuerySet(TrashQuerySet[Page], AngeeQuerySet[Page])``).
+    """
+
+    def trashed(self) -> Self:
+        """Return rows in the trash — the removed-records list's scope."""
+
+        return cast(Self, self.filter(**{TRASH_FLAG_FIELD: True}))
+
+    def untrashed(self) -> Self:
+        """Return rows outside the trash — the default surface's scope."""
+
+        return cast(Self, self.filter(**{TRASH_FLAG_FIELD: False}))
+
+    def trash_targets(self) -> Self:
+        """Return the rows the shared trash verbs may address.
+
+        Override to keep rows whose removal another verb owns out of the shared
+        surface (record-chatter messages are moderated through their record).
+        """
+
+        return self
+
+    def trash(self, *, reason: str = "", at: datetime | None = None) -> int:
+        """Bulk-trash this set's untrashed rows; the caller has authorized every row.
+
+        Protected API for an owning verb (an external sync retiring vanished
+        rows, a folder taking its contents along): a queryset update emits no
+        instance-save signals or history. ``at`` stamps rows trashed together.
+        """
+
+        now = timezone.now()
+        return self.untrashed().update(
+            **self._auto_now_stamps(now),
+            is_trashed=True,
+            trashed_at=at or now,
+            trashed_by_id=actor_user_id(current_actor()),
+            trash_reason=clean_trash_reason(reason),
+        )
+
+    def restore(self) -> int:
+        """Bulk-restore this set's trashed rows; the caller has authorized every row.
+
+        The protected counterpart of :meth:`trash`, with the same contract.
+        """
+
+        return self.trashed().update(**self._auto_now_stamps(timezone.now()), **TrashMixin.UNTRASHED_VALUES)
+
+    def _auto_now_stamps(self, now: datetime) -> dict[str, Any]:
+        """Return the ``auto_now`` columns a queryset update must stamp itself."""
+
+        return {field.name: now for field in self.model._meta.concrete_fields if getattr(field, "auto_now", False)}
+
+
 class ModelHistory(HistoricalRecords):
     """Native history adapted to abstract sources and generated module names.
 
@@ -851,9 +1059,17 @@ class OptimisticLockMixin(models.Model):
     only the revision-owning table before Django saves the instance in the same
     transaction, even for multi-table children. New instances require an INSERT;
     loaded rows are never resurrected by ``save()``. On unguarded updates,
-    ``pre_save`` receivers see an ``F()`` expression in ``instance.revision``;
+    ``pre_save`` receivers see an ``F()`` expression in the counter;
     ``post_save`` receivers and callers see the resulting integer.
+
+    ``REVISION_FIELD`` names the counter. A model whose ``revision`` name is
+    taken removes the inherited field with ``revision = None``, declares the
+    same counter under another name and sets ``REVISION_FIELD`` to it; its
+    GraphQL projection still exposes the counter as ``revision``.
     """
+
+    REVISION_FIELD = "revision"
+    """Name of the model field holding the save counter."""
 
     revision = models.PositiveIntegerField(default=1, editable=False)
 
@@ -863,7 +1079,7 @@ class OptimisticLockMixin(models.Model):
     def require_revision(self, expected: Any) -> None:
         """Check a row already locked by an owning verb."""
 
-        require_revision(expected=expected, current=self.revision)
+        require_revision(expected=expected, current=getattr(self, self.REVISION_FIELD))
 
     def save(self, *, expected_revision: int | None = None, **kwargs: Any) -> None:
         """Save atomically, rejecting a competing update when an expectation is supplied."""
@@ -872,8 +1088,9 @@ class OptimisticLockMixin(models.Model):
             validate_revision(expected_revision)
             if self._state.adding:
                 raise ValidationError({"expected_revision": "An expected revision requires an existing row."})
+        counter = self.REVISION_FIELD
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        owner = self._meta.get_field("revision").model
+        owner = self._meta.get_field(counter).model
         rows = system_queryset(owner).using(using).filter(pk=self._get_pk_val(owner._meta))
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
@@ -881,34 +1098,34 @@ class OptimisticLockMixin(models.Model):
             kwargs["update_fields"] = update_fields
             if not update_fields:
                 if expected_revision is not None:
-                    current = rows.values_list("revision", flat=True).first()
+                    current = rows.values_list(counter, flat=True).first()
                     require_revision(expected=expected_revision, current=current)
                 return
-        previous = self.__dict__.get("revision", models.DEFERRED)
+        previous = self.__dict__.get(counter, models.DEFERRED)
         existing = not self._state.adding
         kwargs["using"] = using
         if existing:
             if update_fields is not None:
-                kwargs["update_fields"] = update_fields | {"revision"}
+                kwargs["update_fields"] = update_fields | {counter}
             kwargs["force_update"] = True
         else:
             kwargs["force_insert"] = True
         try:
             with transaction.atomic(using=using):
                 if expected_revision is not None:
-                    updated = rows.filter(revision=expected_revision).update(revision=F("revision") + 1)
+                    updated = rows.filter(**{counter: expected_revision}).update(**{counter: F(counter) + 1})
                     if not updated:
-                        current = rows.values_list("revision", flat=True).first()
+                        current = rows.values_list(counter, flat=True).first()
                         raise StaleRevisionError(expected_revision, current)
-                    self.revision = expected_revision + 1
+                    setattr(self, counter, expected_revision + 1)
                 elif existing:
-                    self.revision = F("revision") + 1
+                    setattr(self, counter, F(counter) + 1)
                 super().save(**kwargs)
         except Exception as error:
             if previous is models.DEFERRED:
-                self.__dict__.pop("revision", None)
+                self.__dict__.pop(counter, None)
             else:
-                self.revision = previous
+                setattr(self, counter, previous)
             # Django doesn't pass force_update to MTI parents; a missing parent's
             # F-expression INSERT raises ValueError before that INSERT can execute.
             if (

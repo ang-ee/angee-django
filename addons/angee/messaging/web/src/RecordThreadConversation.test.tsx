@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, ToastProvider } from "@angee/ui";
+import { AppRuntimeProvider, ModalsHost, ToastProvider } from "@angee/ui";
 
 import type { RecordActivityRow, RecordMessageRow, RecordThreadPayload } from "./documents";
 import type { RecordThreadConversationChrome } from "./RecordThreadConversation";
@@ -618,6 +618,64 @@ describe("RecordThreadConversation", () => {
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
     expect(posts[1]?.vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
+  });
+
+  test("only a moderator's comment carries the remove control", () => {
+    mocks.threadData = threadPayload([
+      message({ id: "own", preview: "Mine", can_delete: true, can_trash: false } as Partial<RecordMessageRow>),
+      message({ id: "theirs", preview: "Theirs", can_trash: true } as Partial<RecordMessageRow>),
+    ]);
+    render(<ModalsHost><RecordThreadConversation modelLabel="projects.Task" recordId="task_1" /></ModalsHost>);
+
+    expect(screen.getAllByRole("button", { name: "Remove comment" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Delete message" })).toHaveLength(1);
+  });
+
+  test("a moderator removes a comment with an optional reason", async () => {
+    mocks.threadData = threadPayload([message({ id: "msg_spam", can_trash: true } as Partial<RecordMessageRow>)]);
+    render(<ModalsHost><RecordThreadConversation modelLabel="projects.Task" recordId="task_1" /></ModalsHost>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove comment" }));
+    const reason = await screen.findByRole("textbox", { name: "Reason (optional)" });
+    fireEvent.change(reason, { target: { value: "Off topic" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+
+    await waitFor(() => expect(mocks.mutateCalls).toEqual([expect.objectContaining({
+      op: "MessagingTrashRecordMessage",
+      vars: { modelLabel: "projects.Task", recordId: "task_1", messageId: "msg_spam", reason: "Off topic" },
+    })]));
+  });
+
+  test("moderators restore from the Removed list; readers never see it", async () => {
+    const payload = threadPayload([message()]);
+    mocks.threadData = { record_thread: { ...payload.record_thread, removed_message_count: 1 } };
+    mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
+      const op = operationName(document);
+      if (op === "MessagingRecordThread") return { data: mocks.threadData, fetching: false, error: null };
+      if (op === "MessagingRecipientUsers") return { data: mocks.recipientData, fetching: false, error: null };
+      if (op === "MessagingRecordRemovedMessages") {
+        return { data: { record_removed_messages: {
+          error: null, error_code: null, message_result_count: 1,
+          messages: [{ id: "msg_gone", preview: "Removed remark", author_label: "Grace Hopper",
+            trashed_at: "2026-07-07T00:00:00Z", trash_reason: "Off topic", trashed_by_label: "Ada" }],
+        } }, fetching: false, error: null };
+      }
+      throw new Error(`Unexpected authored query: ${op}`);
+    });
+    const { rerender } = render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Removed (1)" }));
+    expect(screen.getByText("Removed remark")).toBeTruthy();
+    expect(screen.getByText("Reason: Off topic")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(mocks.mutateCalls).toEqual([expect.objectContaining({
+      op: "MessagingRestoreRecordMessage",
+      vars: { modelLabel: "projects.Task", recordId: "task_1", messageId: "msg_gone" },
+    })]));
+
+    mocks.threadData = { record_thread: { ...payload.record_thread, removed_message_count: null } };
+    rerender(<RecordThreadConversation modelLabel="projects.Task" recordId="task_2" />);
+    expect(screen.queryByRole("button", { name: /Removed/ })).toBeNull();
   });
 });
 

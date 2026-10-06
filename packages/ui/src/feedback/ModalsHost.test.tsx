@@ -38,6 +38,23 @@ describe("ModalsHost", () => {
     });
   });
 
+  test("collects multi-line text from a textarea prompt without submitting on Enter", async () => {
+    render(<ModalsHost><ReasonPromptButton /></ModalsHost>);
+    fireEvent.click(screen.getByRole("button", { name: "Open reason" }));
+
+    const reason = await screen.findByRole("textbox", { name: "Reason (optional)" });
+    expect(reason.tagName).toBe("TEXTAREA");
+    expect(reason.getAttribute("maxlength")).toBe("1000");
+    fireEvent.change(reason, { target: { value: "Off topic\nand repeated" } });
+    fireEvent.keyDown(reason, { key: "Enter" });
+    expect(screen.getByRole("button", { name: "Keep it" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Off topic/)).toBeTruthy();
+    });
+  });
+
   test("keeps structured confirmation content inside a block description", async () => {
     render(<ModalsHost><ConfirmButton /></ModalsHost>);
     fireEvent.click(screen.getByRole("button", { name: "Open confirmation" }));
@@ -76,6 +93,27 @@ function PromptButton(): ReactElement {
         }}
       >
         Open prompt
+      </button>
+      <output>{value}</output>
+    </>
+  );
+}
+
+function ReasonPromptButton(): ReactElement {
+  const prompt = usePrompt();
+  const [value, setValue] = useState("");
+  return (
+    <>
+      <button type="button" onClick={() => {
+        void prompt({
+          title: "Move to the trash?",
+          fields: [{ name: "reason", label: "Reason (optional)", type: "textarea", maxLength: 1000 }],
+          confirm: "Move to trash",
+          cancel: "Keep it",
+          danger: true,
+        }).then((result) => setValue(result?.reason ?? ""));
+      }}>
+        Open reason
       </button>
       <output>{value}</output>
     </>

@@ -6,18 +6,28 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { AngeeApp } from "./create-app";
+import { type ErrorReportingInput, startErrorReporting } from "./error-reporting";
 
 export interface BootAppInput<Schemas> {
   target: string | Element;
   loadSchemas: () => Promise<Schemas>;
   create: (schemas: Schemas) => AngeeApp;
+  /** Sentry DSN and environment; without a DSN no reporting SDK is loaded. */
+  errorReporting?: ErrorReportingInput | undefined;
 }
 
 /** Load generated metadata before synchronous app composition and route creation. */
-export async function bootApp<Schemas>({ target, loadSchemas, create }: BootAppInput<Schemas>): Promise<void> {
+export async function bootApp<Schemas>({
+  target,
+  loadSchemas,
+  create,
+  errorReporting,
+}: BootAppInput<Schemas>): Promise<void> {
   const found = typeof target === "string" ? document.querySelector(target) : target;
   if (!found) throw new Error(`bootApp: no element matched ${String(target)}`);
   const element: Element = found;
+  // Loads alongside the metadata; resolves to no options when no DSN is configured.
+  const rootOptions = startErrorReporting(errorReporting);
   const root = createRoot(element);
   let pending = false;
 
@@ -33,6 +43,8 @@ export async function bootApp<Schemas>({ target, loadSchemas, create }: BootAppI
       root.render(<MetadataLoadFailure retry={() => { void run().catch(reportError); }} />);
       return;
     }
+    // Reporting is running before composition, so a start failure reaches it too.
+    const options = await rootOptions;
     let app: AngeeApp;
     try {
       app = create(schemas);
@@ -44,7 +56,7 @@ export async function bootApp<Schemas>({ target, loadSchemas, create }: BootAppI
       throw error;
     }
     root.unmount();
-    app.mount(element);
+    app.mount(element, options);
   }
 
   await run();

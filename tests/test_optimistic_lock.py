@@ -11,7 +11,7 @@ from django.db.models.signals import post_save, pre_save
 from django.test.utils import CaptureQueriesContext
 
 from angee.base.mixins import StaleRevisionError, require_revision
-from tests.core_persistence import RevisionChild, RevisionRow
+from tests.core_persistence import RenamedRevisionRow, RevisionChild, RevisionRow
 
 pytestmark = pytest.mark.django_db
 POSTGRES_LOCK = pytest.mark.skipif(
@@ -58,6 +58,25 @@ def test_deferred_save_preserves_unloaded_columns_and_bumps_revision():
     partial.save()
     row.refresh_from_db()
     assert (row.title, row.other, row.revision) == ("changed", "retained", 2)
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_a_renamed_counter_keeps_the_revision_contract(guarded):
+    assert "revision" not in {field.name for field in RenamedRevisionRow._meta.fields}
+    row = RenamedRevisionRow.objects.create()
+    stale = RenamedRevisionRow.objects.get(pk=row.pk)
+    row.title = "first"
+    row.save(update_fields=["title"], expected_revision=1 if guarded else None)
+    assert row.save_count == 2
+    row.require_revision(2)
+    stale.title = "second"
+    with pytest.raises(StaleRevisionError) as caught:
+        stale.save(expected_revision=1)
+    assert (caught.value.expected, caught.value.current) == (1, 2)
+    with pytest.raises(StaleRevisionError):
+        stale.require_revision(2)
+    row.refresh_from_db()
+    assert (row.title, row.save_count) == ("first", 2)
 
 
 def test_queryset_update_does_not_bump_revision():

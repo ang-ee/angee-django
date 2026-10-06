@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listProps: null as Record<string, unknown> | null,
+  removedProps: null as Record<string, unknown> | null,
   params: { queueId: "que_eng", id: "cyc_7" } as Record<string, string>,
 }));
 
@@ -67,17 +68,30 @@ vi.mock("../task-work", () => ({
   WorkTaskCard: () => null,
 }));
 
+vi.mock("../removed-tasks", () => ({
+  RemovedTasks: (props: Record<string, unknown>) => {
+    mocks.removedProps = props;
+    return null;
+  },
+}));
+
 import { CycleBoardPage } from "./CycleBoardPage";
 import { QueueBoardPage } from "./QueueBoardPage";
 
 beforeEach(() => {
   mocks.listProps = null;
+  mocks.removedProps = null;
   mocks.params = { queueId: "que_eng", id: "cyc_7" };
 });
 
 afterEach(cleanup);
 
 describe("work board stage lanes", () => {
+  test("offers the queue's removed tasks beside its board", () => {
+    render(<QueueBoardPage />);
+    expect(mocks.removedProps).toMatchObject({ queue: "que_eng" });
+  });
+
   test("keeps triage and duplicate stages out of both planning boards", () => {
     // System stages are excluded by the LANE filters only: `stage` is an ID
     // comparison on the wire, so a nested stage.category baseFilter is not

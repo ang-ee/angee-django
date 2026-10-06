@@ -118,6 +118,30 @@ them:
   routable address there.
 - **IPv6:** write literals in brackets.
 
+### Report errors to Sentry
+
+Both stack templates take `sentry_dsn` (Django, Celery, and management commands)
+and `sentry_web_dsn` (the React SPA). Both are empty by default, and an empty
+input renders nothing. With a DSN:
+
+- Every Python service and job gets `SENTRY_DSN` and `SENTRY_ENVIRONMENT`.
+- The frontend dev server and the production build get `VITE_SENTRY_DSN` and
+  `VITE_SENTRY_ENVIRONMENT`. A production SPA bakes them in at build time, so
+  changing the web DSN needs a rebuild.
+- The environment follows the serve mode (`development` or `production`).
+- A host renders `main.tsx` from the project template, which passes the web DSN
+  to `bootApp`. A host rendered before that change must re-render `main.tsx`,
+  or add the `errorReporting` option to its `bootApp` call by hand. Until then
+  `sentry_web_dsn` has no effect there.
+
+To turn reporting on for an existing stack, run `angee stack update --template`
+with the input.
+
+To turn it off, run the same update with an empty value. The update merges, so
+it keeps the variables it no longer renders: then remove `SENTRY_DSN`,
+`SENTRY_ENVIRONMENT`, `VITE_SENTRY_DSN`, and `VITE_SENTRY_ENVIRONMENT` from
+`angee.yaml` by hand.
+
 ### The `local` root is a git-controlled project
 
 Commit what you author; ignore what a tool regenerates:

@@ -11,7 +11,7 @@ import {
 import {
   rowPublicId, } from "@angee/metadata";
 import {
-  useBusyRun, useDeleteWithPreview, useLatestRef } from "@angee/ui";
+  useBusyRun, useLatestRef, useTrashRecord } from "@angee/ui";
 import {
   useModelMetadata,
 } from "@angee/metadata";
@@ -28,16 +28,19 @@ export interface PageActions {
     kind: string;
     parent: string | null;
   }) => Promise<string | null>;
-  /** Delete a page (and its subtree). */
-  deletePage: (id: string) => Promise<void>;
+  /** Confirm, then move a page (and the pages below it) to the trash; resolves whether it moved. */
+  trashPage: (id: string, title: string) => Promise<boolean>;
+  /** Restore a trashed page with the pages trashed along with it. */
+  restorePage: (id: string) => Promise<boolean>;
   /** Reparent a page (move) — `null` lifts it to the vault root. */
   movePage: (id: string, parent: string | null) => Promise<void>;
 }
 
 /**
- * The navigator write verbs over the knowledge CRUD mutations (create/delete are
- * the gated factory mutations; move rides `updatePage`'s parent patch).
- * Successful writes invalidate the shared authored page reads.
+ * The navigator write verbs over the knowledge mutations (create is the gated
+ * factory mutation; trash and restore are the shared record verbs; move rides
+ * `updatePage`'s parent patch). Successful writes invalidate the shared
+ * authored page reads.
  */
 export function usePageActions(): PageActions {
   const invalidateModels = useInvalidateAuthoredModels();
@@ -53,7 +56,7 @@ export function usePageActions(): PageActions {
     meta: { fields },
     invalidates: ["list", "many", "detail"],
   });
-  const deleteWithPreview = useDeleteWithPreview(resource);
+  const trashRecord = useTrashRecord(resource);
   const { busy, run } = useBusyRun(invalidatePages);
 
   // The navigator publishes into the shell primary pane, so its action handlers
@@ -61,9 +64,9 @@ export function usePageActions(): PageActions {
   const { mutateAsync: updateMutate } = updatePageMutation;
   const actionRef = useLatestRef({
     createPageMutation,
-    deleteWithPreview,
     resource,
     run,
+    trashRecord,
     updateMutate,
   });
 
@@ -79,12 +82,23 @@ export function usePageActions(): PageActions {
     [],
   );
 
-  const deletePage = useCallback<PageActions["deletePage"]>(
-    (id) => {
-      const { deleteWithPreview, resource, run } = actionRef.current;
+  const trashPage = useCallback<PageActions["trashPage"]>(
+    (id, title) => {
+      const { resource, run, trashRecord } = actionRef.current;
       return run(async () => {
         requirePageResource(resource);
-        await deleteWithPreview.remove(id);
+        return await trashRecord.trash(id, title);
+      });
+    },
+    [],
+  );
+
+  const restorePage = useCallback<PageActions["restorePage"]>(
+    (id) => {
+      const { resource, run, trashRecord } = actionRef.current;
+      return run(async () => {
+        requirePageResource(resource);
+        return await trashRecord.restore(id);
       });
     },
     [],
@@ -102,8 +116,8 @@ export function usePageActions(): PageActions {
   );
 
   return useMemo(
-    () => ({ busy, createPage, deletePage, movePage }),
-    [busy, createPage, deletePage, movePage],
+    () => ({ busy: busy || trashRecord.busy, createPage, trashPage, restorePage, movePage }),
+    [busy, createPage, trashPage, restorePage, movePage, trashRecord.busy],
   );
 }
 

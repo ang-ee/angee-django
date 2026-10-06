@@ -26,6 +26,8 @@ const ResourceFieldSchema = v.looseObject({
   updatable: v.boolean(),
   requiredOnCreate: v.boolean(),
   nullable: v.optional(v.boolean()),
+  /** The backend `TrashMixin` flag: its resource offers the shared trash verbs. */
+  trashable: v.optional(v.boolean()),
   relationModelLabel: OptionalString,
   relationObject: v.nullish(v.boolean()),
 });

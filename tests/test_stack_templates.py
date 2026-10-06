@@ -365,6 +365,8 @@ def _render_local_stack(
     serve_workers: int = 0,
     db_pool_max_size: int = 2,
     db_pool_timeout: int = 5,
+    sentry_dsn: str = "",
+    sentry_web_dsn: str = "",
 ) -> dict[str, Any]:
     """Render the docker-mode local stack enough for YAML contract tests."""
 
@@ -384,6 +386,8 @@ def _render_local_stack(
         "serve_workers": str(serve_workers),
         "db_pool_max_size": str(db_pool_max_size),
         "db_pool_timeout": str(db_pool_timeout),
+        "sentry_dsn": sentry_dsn,
+        "sentry_web_dsn": sentry_web_dsn,
         "ui_port": "5173",
         "web_image": "ghcr.io/ang-ee/angee-web:latest",
         "web_path": "web",
@@ -416,6 +420,8 @@ def _render_dev_stack(
     redis_port: int = 6379,
     redis_db: int = 0,
     redis_broker_db: int = 1,
+    sentry_dsn: str = "",
+    sentry_web_dsn: str = "",
     serve_mode: str = "development",
     serve_workers: int = 0,
     db_pool_max_size: int = 2,
@@ -461,6 +467,8 @@ def _render_dev_stack(
         "redis_port": str(redis_port),
         "redis_db": str(redis_db),
         "redis_broker_db": str(redis_broker_db),
+        "sentry_dsn": sentry_dsn,
+        "sentry_web_dsn": sentry_web_dsn,
         "runtime_mode": _runtime_mode,
         "serve_mode": serve_mode,
         "serve_workers": str(serve_workers),
@@ -1958,3 +1966,68 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
     # Two queues render two workers; the shared worker stays untouched.
     two = _render_dev_stack(celery_queues="whatsapp,voice")
     assert {"celery-whatsapp", "celery-voice", "celery-worker"} <= set(two["services"])
+
+
+_BACKEND_DSN = "https://backend@sentry.example.invalid/1"
+_WEB_DSN = "https://web@sentry.example.invalid/2"
+
+
+def _env_nodes(stack: dict[str, Any], key: str) -> dict[str, dict[str, str]]:
+    """Every service or job whose environment carries ``key``, by name."""
+
+    return {
+        name: node["env"]
+        for section in ("services", "jobs")
+        for name, node in stack[section].items()
+        if key in (node.get("env") or {})
+    }
+
+
+@pytest.mark.parametrize(
+    "stack",
+    [
+        pytest.param(lambda: _render_dev_stack(), id="dev-process"),
+        pytest.param(lambda: _render_dev_stack(_runtime_mode="docker"), id="dev-docker"),
+        pytest.param(lambda: _render_dev_stack(_runtime_mode="docker", serve_mode="production"), id="dev-production"),
+        pytest.param(lambda: _render_local_stack(serve_mode="production"), id="local"),
+    ],
+)
+def test_empty_sentry_dsns_render_no_error_reporting(stack: Any) -> None:
+    rendered = json.dumps(stack())
+
+    assert "SENTRY" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("render", "environment"),
+    [
+        (lambda **inputs: _render_dev_stack(**inputs), "development"),
+        (lambda **inputs: _render_dev_stack(_runtime_mode="docker", **inputs), "development"),
+        (lambda **inputs: _render_dev_stack(_runtime_mode="docker", serve_mode="production", **inputs), "production"),
+        (lambda **inputs: _render_local_stack(serve_mode="production", **inputs), "production"),
+    ],
+    ids=["dev-process", "dev-docker", "dev-production", "local"],
+)
+def test_sentry_dsns_reach_python_processes_and_the_spa(render: Any, environment: str) -> None:
+    stack = render(sentry_dsn=_BACKEND_DSN, sentry_web_dsn=_WEB_DSN)
+
+    python_nodes = _env_nodes(stack, "DATABASE_URL")
+    assert python_nodes
+    for name, env in python_nodes.items():
+        assert (env["SENTRY_DSN"], env["SENTRY_ENVIRONMENT"]) == (_BACKEND_DSN, environment), name
+        assert "VITE_SENTRY_DSN" not in env, name
+
+    web_nodes = _env_nodes(stack, "VITE_SENTRY_DSN")
+    assert web_nodes
+    assert set(web_nodes).isdisjoint(python_nodes)
+    for name, env in web_nodes.items():
+        assert (env["VITE_SENTRY_DSN"], env["VITE_SENTRY_ENVIRONMENT"]) == (_WEB_DSN, environment), name
+        assert "SENTRY_DSN" not in env, name
+
+
+def test_each_sentry_dsn_is_independent() -> None:
+    backend_only = _render_dev_stack(sentry_dsn=_BACKEND_DSN)
+    web_only = _render_dev_stack(sentry_web_dsn=_WEB_DSN)
+
+    assert _env_nodes(backend_only, "SENTRY_DSN") and not _env_nodes(backend_only, "VITE_SENTRY_DSN")
+    assert _env_nodes(web_only, "VITE_SENTRY_DSN") and not _env_nodes(web_only, "SENTRY_DSN")

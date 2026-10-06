@@ -8,7 +8,8 @@ from django.db import IntegrityError, connection, models, transaction
 from django.db.migrations.exceptions import IrreversibleError
 from django.db.migrations.state import ModelState, ProjectState
 
-from angee.messaging.runtime_migrations import follower_party, notification_read_at, owner_column
+from angee.base.fields import StateField
+from angee.messaging.runtime_migrations import follower_party, message_trash, notification_read_at, owner_column
 from tests.tables import model_tables
 from tests.test_runtime_migrations import isolated_upgrade_database as isolated_upgrade_database
 
@@ -212,3 +213,60 @@ def test_notification_transition_leaves_existing_deliveries_unacknowledged(histo
     with connection.schema_editor() as editor:
         migration.unapply(before, editor)
     assert before.apps.get_model("messaging", "ThreadNotification").objects.filter(pk=original.pk).exists()
+
+
+@pytest.fixture
+def historical_messages(transactional_db, isolated_upgrade_database):
+    """Messages whose status still carries the retired hidden/removed moderation values."""
+    state = ProjectState()
+    label, name = settings.AUTH_USER_MODEL.split(".")
+    state.add_model(ModelState(label, name, [("id", models.AutoField(primary_key=True))]))
+    statuses = [(value, value.title()) for value in (
+        "draft", "queued", "sent", "synced", "edited", "hidden", "removed", "failed",
+    )]
+    state.add_model(ModelState("messaging", "Message", [
+        ("id", models.AutoField(primary_key=True)),
+        ("direction", models.CharField(max_length=8, default="inbound")),
+        ("status", StateField(choices=statuses, max_length=7, default="synced", db_index=True)),
+        ("updated_at", models.DateTimeField()),
+    ]))
+    historical = [state.apps.get_model(label, name), state.apps.get_model("messaging", "Message")]
+    with model_tables(tuple(historical)):
+        yield state
+
+
+def test_message_moderation_status_moves_into_the_trash(historical_messages):
+    before = historical_messages
+    messages = before.apps.get_model("messaging", "Message")
+    moderated_at = datetime(2026, 3, 4, tzinfo=timezone.utc)
+    rows = {
+        status: messages.objects.create(status=status, direction=direction, updated_at=moderated_at)
+        for status, direction in (("hidden", "inbound"), ("removed", "outbound"), ("edited", "inbound"))
+    }
+    assert message_trash.applies(before)
+    migration = message_trash.Migration("message_trash", "messaging")
+    with connection.schema_editor() as editor:
+        after = migration.apply(before.clone(), editor)
+    upgraded = after.apps.get_model("messaging", "Message").objects
+    assert {
+        row.pk: (row.status, row.is_trashed, row.trashed_at, row.trash_reason)
+        for row in upgraded.order_by("pk")
+    } == {
+        rows["hidden"].pk: ("synced", True, moderated_at, ""),
+        rows["removed"].pk: ("sent", True, moderated_at, ""),
+        rows["edited"].pk: ("edited", False, None, ""),
+    }
+    assert not message_trash.applies(after)
+    with connection.schema_editor() as editor:
+        migration.unapply(before, editor)
+    assert dict(messages.objects.values_list("pk", "status")) == {
+        rows["hidden"].pk: "removed", rows["removed"].pk: "removed", rows["edited"].pk: "edited",
+    }
+
+
+def test_message_trash_transition_refuses_a_partial_history(historical_messages):
+    partial = historical_messages.clone()
+    partial.models["messaging", "message"].fields["is_trashed"] = models.BooleanField(default=False)
+    with pytest.raises(ValueError, match="partial trash transition"):
+        message_trash.applies(partial)
+

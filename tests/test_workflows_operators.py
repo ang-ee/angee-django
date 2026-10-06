@@ -7,7 +7,7 @@ from rebac import to_subject_ref
 
 from angee.base.identity import public_subject_ref
 from angee.base.scoping import system_queryset
-from angee.graphql import sharing
+from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
@@ -40,7 +40,7 @@ def operator_run(execution):
 def operator_schema():
     """Compose the resource metadata and IAM's existing record-access API."""
     parts = {
-        key: [*workflow_schema.schemas["console"].get(key, ()), *sharing.schemas["console"].get(key, ())]
+        key: [*workflow_schema.schemas["console"].get(key, ()), *records.schemas["console"].get(key, ())]
         for key in SCHEMA_PART_KEYS
     }
     return GraphQLSchemas([SchemaAddon({"console": parts})]).build("console")

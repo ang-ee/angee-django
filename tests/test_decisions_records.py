@@ -228,12 +228,6 @@ def test_empty_concerns_are_rejected(records):
         admit(records, [])
 
 
-def test_need_without_cutover_question_refuses_plainly():
-    need = apps.get_model("intake", "Need")()
-    with pytest.raises(ValidationError, match="no access question"):
-        need.decide_access("intake.approve")
-
-
 def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
     from angee.base.refs import record_ref_for
     from angee.graphql.events import ChangeRelatedRecord

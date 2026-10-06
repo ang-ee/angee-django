@@ -350,6 +350,24 @@ export {
   type UseDeleteWithPreviewResult,
 } from "./resource/resource-operations";
 export {
+  RemovedDisclosure,
+  RemovedItem,
+  RemovedRecords,
+  TRASH_PERMISSION,
+  TRASH_REASON_MAX_LENGTH,
+  TRASH_STAMP_FIELDS,
+  useTrashActions,
+  useTrashPrompt,
+  useTrashRecord,
+  useTrashRowActions,
+  type RemovedDisclosureProps,
+  type RemovedItemProps,
+  type RemovedRecordsProps,
+  type TrashActionOptions,
+  type TrashPrompt,
+  type UseTrashRecordResult,
+} from "./resource/trash";
+export {
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,

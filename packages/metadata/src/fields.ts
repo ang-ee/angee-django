@@ -100,6 +100,17 @@ export function fieldUpdatable(
   return metadata.fields[fieldName]?.updatable !== false;
 }
 
+/**
+ * The resource's trash flag field, when its metadata classifies one trashable.
+ * The backend owns the one column name; shared views read this facet to offer
+ * the trash and restore verbs and a removed-records list.
+ */
+export function trashFlagField(
+  resource: DataResourceMetadata | null | undefined,
+): string | null {
+  return resource?.fields?.find((field) => field.trashable === true)?.name ?? null;
+}
+
 export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {
   if (support.field?.kind === "enum") return true;
   if (support.hasOptions) return true;

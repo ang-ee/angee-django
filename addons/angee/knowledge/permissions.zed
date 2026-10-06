@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -47,15 +47,27 @@ definition knowledge/vault {
 // (folder trees cascade access), so role and admin reach arrives through
 // `vault->...` without per-page relations. `viewer` carries per-page
 // shares granted through the Permissions Hub.
+//
+// A trashed page (trashing a folder trashes its subtree) is withheld from
+// everyone who cannot delete it; deleters keep reading to list and restore it.
 definition knowledge/page {
     relation vault: knowledge/vault // rebac:field=vault
     relation parent: knowledge/page // rebac:field=parent
     relation viewer: auth/user | auth/group#member
+    relation trashed: knowledge/page // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
 
+    // The trashed sentinel needs no target row because this permission is
+    // authenticated. Arrow-only through `trashed`; never check it directly.
+    permission conceal = authenticated
+    // The exclusion stays outside the recursive grants, so permission SQL grows
+    // linearly with tree depth and deep pages keep their vault read.
+    permission withheld = trashed->conceal
+    permission read_granted = viewer + parent->read_granted + vault->read
+    permission write_granted = parent->write_granted + vault->write
     // Preflighted by PageManager.create_in with the vault the row will carry.
     permission create = vault->write
-    permission read   = viewer + parent->read + vault->read
-    permission write  = parent->write + vault->write
+    permission read   = (read_granted - withheld) + vault->delete
+    permission write  = (write_granted - withheld) + vault->delete
     // `parent->delete` matches the FK CASCADE: deleting a folder must pass
     // the gate on every cascaded child, so the right to delete the parent
     // carries down the subtree.

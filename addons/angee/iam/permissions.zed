@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 20
+// @rebac_schema_revision: 22
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -13,15 +13,49 @@ definition auth/user {
     relation directory_reader: auth/user | auth/user:*
 
     permission create = admin->member
-    permission issue_password = admin->member
     permission view_as = admin->member
     permission read = directory_reader + directory->reader + admin->member
+    permission read__last_login = admin->member
     permission write = admin->member
     permission delete = admin->member
+
+    // Identity, credential and authority columns stay with administrators even
+    // where a consumer grants `write` (which then edits the name fields).
+    permission write__username = admin->member
+    permission write__email = admin->member
+    permission write__password = admin->member
+    permission write__kind = admin->member
+    permission write__is_active = admin->member
+    permission write__is_staff = admin->member
+    permission write__is_superuser = admin->member
+    // A person's UI preferences and the account's audit dates: never through a
+    // consumer's `write`. Self-service preferences save under a system context.
+    permission write__preferences = admin->member
+    permission write__date_joined = admin->member
+    permission write__last_login = admin->member
+
+    // Account verbs. Each refuses protected accounts (see iam/protected).
+    permission issue_password = admin->member
+    permission reset_password = admin->member
+    permission set_active = admin->member
+    permission rename = admin->member
+
+    // Generic updates of a protected account (the actor's own included).
+    permission administer = admin->member
 }
 
 definition iam/directory {
     relation reader: auth/user | auth/user:*
+}
+
+// Accounts whose authority account verbs, non-administrator updates and
+// view-as never act on, beyond staff and superusers: the effective members of
+// `iam/protected:main#member`. A consumer adds its elevated role from its own
+// permissions.extends.zed with a const-backed relation unioned into `member`.
+definition iam/protected {
+    relation admin: angee/role // rebac:const=admin
+
+    permission member = admin->effective_member
 }
 
 // Kind and activity are live user facts, including bulk-created/updated rows.

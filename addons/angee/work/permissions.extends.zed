@@ -1,6 +1,6 @@
 // Additive task and project authorization contributed by the work addon.
 // @rebac_package: work
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 7
 
 definition projects/project {
     relation team: spaces/group // rebac:field=team
@@ -14,10 +14,14 @@ definition projects/task {
     relation queue: work/queue // rebac:field=queue
     relation inherited_queue: work/queue // rebac:field={"path":"queue","filters":{"visibility":"inherited","stage__conceals":false}}
     relation concealing_stage: work/stage // rebac:field={"path":"stage","filters":{"stage__conceals":true}}
+    // A concealed task's inherited queue: only its writers restore it, and no
+    // grant arm reads through it, so concealment still hides the task from them.
+    relation concealed_in_queue: work/queue // rebac:field={"path":"queue","filters":{"visibility":"inherited","stage__conceals":true}}
 
     permission read_granted = inherited_queue->read
     permission withheld = concealing_stage->conceal
     permission write_granted = inherited_queue->write
     permission share_granted = inherited_queue->write
     permission comment_granted = inherited_queue->post
+    permission restore = concealed_in_queue->write
 }

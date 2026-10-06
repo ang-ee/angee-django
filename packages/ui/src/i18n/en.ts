@@ -702,6 +702,20 @@ export const enUiMessages: Record<string, string> = {
   "drawer.rail.right": "Right drawers",
   "drawer.rail.bottom": "Bottom drawers",
   "drawer.close": "Close drawer",
+  "trash.action": "Move to trash",
+  "trash.title": "Move this record to the trash?",
+  "trash.titleNamed": "Move “{name}” to the trash?",
+  "trash.body": "It disappears for everyone who cannot manage it. Nothing is deleted; it can be restored.",
+  "trash.reason": "Reason (optional)",
+  "trash.reasonPlaceholder": "Why is it being removed?",
+  "trash.confirm": "Move to trash",
+  "trash.cancel": "Keep it",
+  "trash.cancelNamed": "Keep “{name}”",
+  "trash.restore": "Restore",
+  "trash.removed": "Removed ({count})",
+  "trash.removedBy": "Removed by {name}",
+  "trash.removedReason": "Reason: {reason}",
+  "trash.loadFailed": "Removed records could not be loaded.",
 };
 
 export const enUiBundle = { ui: enUiMessages } as const;
