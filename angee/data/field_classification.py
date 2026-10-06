@@ -20,10 +20,14 @@ RESOURCE_FIELD_SCALARS = frozenset(
 )
 """Supported GraphQL scalar families in data-resource field metadata."""
 
-RESOURCE_FIELD_WIDGETS = frozenset(
-    {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility"}
-)
+RESOURCE_FIELD_WIDGETS = frozenset({
+    "select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility",
+    "tone",
+})
 """Widget vocabulary owned by backend data-resource metadata."""
+
+ENUM_FIELD_WIDGETS = frozenset({"select", "tone"})
+"""Widgets that pick one of an enum's own values; ``tone`` shows each in its colour."""
 
 
 def is_resource_field_widget(value: str) -> bool:
