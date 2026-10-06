@@ -55,7 +55,7 @@ describe("CircleMembershipList", () => {
 
     expect(mocks.listProps).toMatchObject({
       resource: "parties.CircleMember",
-      scope: "local",
+      presentation: "embedded",
       baseFilter: { party: { exact: "person-1" } },
     });
     const columns = mocks.listProps?.columns as Array<{ field: string }>;

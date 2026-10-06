@@ -5,6 +5,20 @@ The [stage statusbar](web/src/stage-statusbar.tsx) reads each stage's model-owne
 side-state chip while the ordinary stages remain in queue order. The task's
 reopen verb stays in the form header action bar.
 
+A queue's stages are its owned lines: `work_queues_save` writes them with the
+queue, row order is their position, and the queue form shows them as one ordered
+section. Triage and duplicate stages are system rows. Their `locked_fields`
+projection locks name and category, so lines may change their tone and order but
+cannot rename, recategorize, delete or create one; provisioning and resource loads
+still own them.
+
+The queue settings form is one owner, `useQueueFormDeclaration` (and
+`QueueSettingsForm` for a product's own route). Its sections are
+`work.Queue#sections` children: `work.queue-identity` (with the description),
+`work.queue-triage`, `work.queue-cadence`, `work.queue-estimates` and
+`work.queue-stages`, the Stages lines. A product narrows them per route, for
+example `{ only: ["work.queue-stages"], when: { route: "<its route>" } }`.
+
 The setup contributors consume native project teams and optional milestone
 `active_stage` choices through their ordinary sharing and stage-validation owners.
 
@@ -31,3 +45,9 @@ writers. `removed_tasks(queue, parent)` lists only the concealed tasks the reade
 holds `restore` on, with their removal facts, and `RemovedTasks` renders that list;
 a restricted task stays with administrators. Clients label Decline as Reject
 where appropriate.
+
+A queue's triage, board and cycles pages are the record pages of the Triage,
+Boards and Cycles hubs, under their paths and anchors, so they render in Work
+wherever composition places the queue record. [`QueueSettingsLink`](web/src/queue-settings-link.tsx)
+opens that record from their headers; a suite that lifts queues into Settings
+keeps their configuration there and their work here.

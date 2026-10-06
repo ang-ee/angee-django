@@ -383,6 +383,47 @@ describe("availability edge cases", () => {
   });
 });
 
+describe("the place rule", () => {
+  // A suite whose queue settings live in Settings while its triage hub stays in the app.
+  const layers: MenuLayer[] = [{ id: "desk", menus: {
+    desk: {},
+    "desk.queues": { parent: "desk", route: "desk.queues", group: "platform" },
+    "desk.triage-hub": { parent: "desk", route: "desk.triage-hub" },
+  } }];
+  const queueRoutes = (triagePath: string): readonly BaseAddonRoute[] => [
+    ...resourcePageRoutes("desk.queues", "/desk/queues", Page, "desk.Queue"),
+    { name: "desk.triage-hub", path: "/desk/triage" },
+    { name: "desk.triage", path: triagePath, menu: "desk.triage-hub" },
+    { name: "desk.triage.task", path: `${triagePath}/$taskId`, parent: "desk.triage" },
+  ];
+  const project = (routes: readonly BaseAddonRoute[], selection?: { rail: readonly string[] }) => {
+    const compiled = compileMenus(layers);
+    const href = createRouteHref(routes);
+    return new AppRouteProjection(routes, MenuTree.from(resolveMenuRouteTargets(compiled.logical, href)), selection, {
+      navigation: MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href)),
+    });
+  };
+
+  test("a route anchored in an app whose path nests under a Settings page fails composition, naming both, selected or not", () => {
+    const nested = queueRoutes("/desk/queues/$queueId/triage");
+    const message = /Route "desk\.triage" is anchored to menu item "desk\.triage-hub" in app "desk", but its path "\/desk\/queues\/\$queueId\/triage" nests under menu item "desk\.queues" in Settings/;
+    expect(() => project(nested)).toThrow(message);
+    expect(() => project(nested, { rail: ["desk"] })).toThrow(message);
+  });
+
+  test("under its anchor's path the page and its children render in the app, while the queue record stays in Settings", () => {
+    const projection = project(queueRoutes("/desk/triage/$queueId"));
+    const triage = projection.activeMenu("/desk/triage/q1", "desk.triage");
+    expect(triage?.item.id).toBe("desk.triage-hub");
+    expect(projection.navigationTree.railPlace(triage)).toMatchObject({ scope: "apps", activeRootId: "desk" });
+    const task = projection.activeMenu("/desk/triage/q1/t1", "desk.triage.task");
+    expect(task?.item.id).toBe("desk.triage-hub");
+    expect(projection.activeApp("/desk/triage/q1/t1", "desk.triage.task")).toBe("desk");
+    const record = projection.activeMenu("/desk/queues/q1", "desk.queues.record");
+    expect(projection.navigationTree.railPlace(record)).toMatchObject({ scope: "settings", activeRootId: "desk.queues" });
+  });
+});
+
 describe("presence in the navigation", () => {
   const presenceRoutes: readonly BaseAddonRoute[] = [
     { name: "people.directory", path: "/people" },

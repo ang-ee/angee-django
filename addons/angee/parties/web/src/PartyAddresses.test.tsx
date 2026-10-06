@@ -24,6 +24,7 @@ describe("PartyAddresses", () => {
     const props = capture.props;
     expect(props).toMatchObject({
       resource: "parties.Address",
+      presentation: "embedded",
       baseFilter: { party: { exact: "party_7" } },
       createDefaults: { party: "party_7" },
     });

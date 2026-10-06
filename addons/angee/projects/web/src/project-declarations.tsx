@@ -76,7 +76,6 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   return (
     <Form
       resource={PROJECT_MODEL}
-      layout="tabs"
       returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
       contextLine={selection.contextLine}
     >
@@ -158,7 +157,7 @@ function ProjectParticipantsTab({ recordId }: RecordPanelContext): React.ReactEl
   return (
     <ListView
       resource={PARTICIPANT_MODEL}
-      scope="local"
+      presentation="embedded"
       fields={["id", "party.display_name", "kind", "created_at"]}
       baseFilter={{ project: { exact: recordId } }}
       columns={[

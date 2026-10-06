@@ -97,8 +97,11 @@ at the match its row satisfies, from every app, then at the active app's own
 claim, then at the canonical route. Two matches on one resource and condition
 fail composition. Explicit route names use `useRouteHref()`. With an app
 selected, each rail root claims its own routes; elsewhere claims stay
-canonical. See the [frontend guideline](../../docs/frontend/guidelines.md) for
-the shared Settings place.
+canonical. A route renders in the place of its `route.menu` anchor (inherited
+by record children); an anchor and a path that fall in different places, an app
+and Settings, fail composition. See the
+[frontend guideline](../../docs/frontend/guidelines.md) for the shared Settings
+place.
 
 ## App vocabulary and shipped views
 
@@ -113,7 +116,6 @@ An addon can specialize existing copy and declare named resource views:
     messages: { notes: { title: "Reviews" } },
     resources: { "notes.Note": {
       label: "Review", pluralLabel: "Reviews", fields: { title: "Subject" },
-      overview: "Summary", // the record form's Overview tab
     } },
     menus: { "desk.review": "Reviews" },
   }],

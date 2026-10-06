@@ -125,9 +125,9 @@ const editableGroups = [
   },
 ] satisfies readonly GroupDescriptor[];
 
-// A long form split across several labelled groups — rendered as tabs via
-// `layout="tabs"` (the title/body stay in the header above the tab strip).
-const tabbedGroups = [
+// A long form split across several labelled groups, each a titled section of the
+// record's sheet (the title/body stay in the header above them).
+const sectionGroups = [
   {
     label: "Ownership",
     columns: 2,
@@ -206,12 +206,11 @@ export const ReadOnlyMode: Story = {
   ),
 };
 
-export const TabbedLayout: Story = {
+export const GroupedSections: Story = {
   render: () => (
     <FormViewFixture
       fields={editableFields}
-      groups={tabbedGroups}
-      layout="tabs"
+      groups={sectionGroups}
     />
   ),
 };
@@ -283,11 +282,9 @@ export const RecordSectionHeading: Story = {
 function FormViewFixture({
   fields,
   groups,
-  layout,
 }: {
   fields: readonly FormField[];
   groups: readonly GroupDescriptor[];
-  layout?: "stacked" | "tabs";
 }) {
   return (
     <RuntimeFixture schemas={storySchemas}>
@@ -296,7 +293,6 @@ function FormViewFixture({
         id={storyRecord.id}
         fields={fields}
         groups={groups}
-        layout={layout}
         returning={[
           "owner",
           "priority",

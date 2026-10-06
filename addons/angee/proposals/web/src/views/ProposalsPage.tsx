@@ -4,11 +4,8 @@ import {
   Field,
   Form,
   Group,
-  InlineEmpty,
   List,
   ResourceList,
-  SettingsSection,
-  SettingsShell,
   useRuntimeAuth,
   useEnumOptions,
   type RecordPanelContext,
@@ -77,6 +74,7 @@ function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElem
   return (
     <DrawerResourceList
       resource={ANSWER_MODEL}
+      presentation="embedded"
       baseFilter={{ proposal: { exact: recordId } }}
       createDefaults={{ proposal: recordId }}
     >
@@ -101,56 +99,45 @@ function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElem
   );
 }
 
-function ProposalReviewsPanel({ recordId }: RecordPanelContext): React.ReactElement {
+/**
+ * Every review the server returns for this proposal, as one list. "Mine" narrows
+ * it to the viewer's own review, which the viewer creates and edits here; other
+ * reviewers' rows open read-only through their projected permissions.
+ */
+export function ProposalReviewsPanel({ recordId }: Pick<RecordPanelContext, "recordId">): React.ReactElement {
   const t = useProposalsT();
   const { user } = useRuntimeAuth();
+  const mine = React.useMemo(
+    () => user ? [{ id: "mine", label: t("proposal.reviews.mine"), filter: { reviewer: { exact: user.id } } }] : [],
+    [t, user],
+  );
   return (
-    <SettingsShell maxWidth="1100" gap="8">
-      <SettingsSection
-        title={t("proposal.reviews.mine.title")}
-        description={t("proposal.reviews.mine.description")}
+    <DrawerResourceList
+      resource={REVIEW_MODEL}
+      presentation="embedded"
+      baseFilter={{ proposal: { exact: recordId } }}
+      createDefaults={user ? { proposal: recordId, reviewer: user.id } : undefined}
+      hideCreate={!user}
+    >
+      <List
+        resource={REVIEW_MODEL}
+        order={{ updated_at: "DESC" }}
+        emptyContent={t("proposal.reviews.empty")}
+        filterOptions={mine}
+        search={user ? { shortcuts: [{ kind: "toggle", id: "mine" }] } : undefined}
+        chrome={user ? { search: true } : undefined}
       >
-        {user ? (
-          <DrawerResourceList
-            resource={REVIEW_MODEL}
-            baseFilter={{
-              proposal: { exact: recordId },
-              reviewer: { exact: user.id },
-            }}
-            createDefaults={{ proposal: recordId, reviewer: user.id }}
-          >
-            <List resource={REVIEW_MODEL}>
-              <Column field="body" widget="markdown.preview" />
-              <Column field="updated_at" header={t("common.updatedAt")} />
-            </List>
-            <Form resource={REVIEW_MODEL}>
-              <Group columns={2}>
-                <Field name="proposal" readOnly />
-                <Field name="reviewer" readOnly />
-              </Group>
-              <Field name="body" widget="markdown.editor" body />
-            </Form>
-          </DrawerResourceList>
-        ) : (
-          <InlineEmpty label={t("proposal.reviews.mine.signedOut")} />
-        )}
-      </SettingsSection>
-      <SettingsSection
-        title={t("proposal.reviews.readable.title")}
-        description={t("proposal.reviews.readable.description")}
-      >
-        <List
-          resource={REVIEW_MODEL}
-          scope="local"
-          baseFilter={{ proposal: { exact: recordId } }}
-          order={{ updated_at: "DESC" }}
-          emptyContent={t("proposal.reviews.empty")}
-        >
-          <Column field="reviewer" />
-          <Column field="body" widget="markdown.preview" />
-          <Column field="updated_at" header={t("common.updatedAt")} />
-        </List>
-      </SettingsSection>
-    </SettingsShell>
+        <Column field="reviewer" />
+        <Column field="body" widget="markdown.preview" />
+        <Column field="updated_at" header={t("common.updatedAt")} />
+      </List>
+      <Form resource={REVIEW_MODEL}>
+        <Group columns={2}>
+          <Field name="proposal" readOnly />
+          <Field name="reviewer" readOnly />
+        </Group>
+        <Field name="body" widget="markdown.editor" body />
+      </Form>
+    </DrawerResourceList>
   );
 }

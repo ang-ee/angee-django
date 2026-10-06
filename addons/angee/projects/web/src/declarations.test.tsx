@@ -181,6 +181,12 @@ describe("composable standard project and task declarations", () => {
     expect(projectTimelineSpec).toMatchObject({ current: "current_milestone", start: "start_date", end: "target_date",
       markers: { resource: TASK_MODEL, lane: "project", date: "due_date" },
     });
+    const participants = projectRecordTabs.find(({ id }) => id === "participants")!;
+    render(participants.render({ recordId: "project-a", active: true } as RecordPanelContext & { active: boolean }));
+    expect(mounted.list).toMatchObject({
+      resource: "projects.Participant", presentation: "embedded",
+      baseFilter: { project: { exact: "project-a" } },
+    });
   });
 
   test("ProjectsPage mounts the exported list, form and tabs", () => {

@@ -18,6 +18,7 @@ from django.db.models import F, Value
 from django.db.models.functions import Replace
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
+from rebac.actors import is_sudo
 from rebac.field_visibility import gated_read_fields
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from simple_history.models import HistoricalRecords
@@ -886,6 +887,92 @@ class ImmutableFieldsMixin(models.Model):
             super().save(*args, **kwargs)
         finally:
             self._allowed_immutable_fields = set()
+
+
+class RowLockMixin(models.Model):
+    """Lock a row's system-owned fields against user writes.
+
+    :meth:`locked_fields` names the fields a row's own loaded state locks; a row
+    with any locked field is a system row. A user write may change only its
+    unlocked fields: it cannot change a locked field, delete the row, or turn a
+    new or unlocked row into a system row. System writers (provisioning and
+    resource loads under ``system_context``) own system rows and are not
+    checked. An elevation that only authorizes a user's write still checks:
+    editable lines write their children elevated under the parent's write
+    permission, so :class:`~angee.graphql.data.hasura.HasuraLines` calls
+    :meth:`validate_row_lock` and :meth:`validate_row_delete` itself before each
+    child write. Child nodes project the same fact as ``locked_fields``.
+    """
+
+    locked_rows_label: ClassVar[str | None] = None
+    """Plural phrase naming the system rows in refusals; defaults to ``System <plural>``."""
+
+    class Meta:
+        """Django options for the shared system-row lock."""
+
+        abstract = True
+
+    def locked_fields(self) -> tuple[str, ...]:
+        """Return the fields this row's loaded state locks; empty when the row is unlocked."""
+
+        return ()
+
+    def row_lock(self) -> dict[str, Any]:
+        """Return this row's locked fields with their current values."""
+
+        return {name: self._meta.get_field(name).value_from_object(self) for name in self.locked_fields()}
+
+    def validate_row_lock(self, previous: Mapping[str, Any] | None) -> None:
+        """Refuse this state as a user write over ``previous``, the row's persisted :meth:`row_lock`.
+
+        ``previous`` is ``None`` (or empty) for a new or unlocked row, which a
+        user write must not turn into a system row.
+        """
+
+        label = self._locked_rows_label()
+        if previous:
+            changed = [
+                name for name, value in previous.items() if self._meta.get_field(name).value_from_object(self) != value
+            ]
+            if changed:
+                raise ValidationError({
+                    name: f"The {self._meta.get_field(name).verbose_name} of {label.lower()} cannot change."
+                    for name in changed
+                })
+            return
+        if locked := self.locked_fields():
+            raise ValidationError(dict.fromkeys(locked, f"{label} are system-provisioned."))
+
+    def validate_row_delete(self) -> None:
+        """Refuse deleting this system row as a user write."""
+
+        if self.locked_fields():
+            raise ValidationError(f"{self._locked_rows_label()} cannot be deleted.")
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Check a user write against the committed row's lock before persisting it."""
+
+        if not is_sudo():
+            persisted = None
+            if self.pk is not None and not self._state.adding:
+                with system_context(reason=f"{self._meta.label_lower}.row_lock"):
+                    persisted = type(self)._base_manager.filter(pk=self.pk).first()
+            self.validate_row_lock(None if persisted is None else persisted.row_lock())
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Refuse a user deleting a committed system row."""
+
+        if not is_sudo():
+            with system_context(reason=f"{self._meta.label_lower}.row_lock"):
+                persisted = type(self)._base_manager.filter(pk=self.pk).first()
+            (persisted or self).validate_row_delete()
+        return cast(tuple[int, dict[str, int]], super().delete(*args, **kwargs))
+
+    def _locked_rows_label(self) -> str:
+        """Return the plural phrase naming this model's system rows."""
+
+        return self.locked_rows_label or f"System {self._meta.verbose_name_plural}"
 
 
 class CreationKeyConflict(DomainError):

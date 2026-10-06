@@ -64,7 +64,7 @@ function RecordRoundsPane({
   return (
     <ListView<RoundPaneRow>
       resource={ROUND_MODEL}
-      scope="local"
+      presentation="embedded"
       fields={[
         "id",
         "name",

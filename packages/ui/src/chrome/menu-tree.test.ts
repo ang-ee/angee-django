@@ -33,16 +33,31 @@ const MENU: readonly ChromeMenuItem[] = [
 ];
 
 describe("match", () => {
-  test("an anchor cannot select an unrelated path", () => {
+  test("a declared anchor beats another item's path prefix; an absent anchor leaves the path alone", () => {
     const tree = MenuTree.from([{ id: "desk", children: [{ id: "desk.hub", to: "/desk/hub" }] },
       { id: "foreign", to: "/records" }]);
+    expect(tree.match("/records/one")?.item.id).toBe("foreign");
     const match = tree.match("/records/one", undefined, false, "desk.hub");
-    expect(match?.item.id).toBe("foreign");
-    expect(match?.app?.id).toBe("foreign");
+    expect(match?.item.id).toBe("desk.hub");
+    expect(match?.trail.map((item) => item.id)).toEqual(["desk", "desk.hub"]);
+    expect(match?.app?.id).toBe("desk");
     expect(tree.match("/records/one", undefined, false, "removed")?.item.id).toBe("foreign");
   });
 
-  test("path and params beat the anchor; depth decides among the items at or under it", () => {
+  test("a declared anchor in an app wins over a deeper Settings prefix; the Settings record stays there", () => {
+    const navigation = MenuTree.from([{ id: "suite", children: [
+      { id: "suite.queues", group: "platform", to: "/suite/queues" },
+      { id: "suite.triage", to: "/suite/triage" },
+    ] }]).withSettingsPlace();
+    const triage = navigation.match("/suite/queues/q1/triage", undefined, false, "suite.triage");
+    expect(triage?.item.id).toBe("suite.triage");
+    expect(navigation.railPlace(triage)).toMatchObject({ scope: "apps", activeRootId: "suite" });
+    // The path alone names the Settings page it nests under; the anchor is what keeps the page in its app.
+    expect(navigation.railPlace(navigation.match("/suite/queues/q1/triage"))).toMatchObject({ scope: "settings" });
+    expect(navigation.railPlace(navigation.match("/suite/queues/q1"))).toMatchObject({ scope: "settings", activeRootId: "suite.queues" });
+  });
+
+  test("the page's own destinations beat the anchor; depth decides among the items at or under it", () => {
     const tree = MenuTree.from([
       { id: "dashboards", to: "/dashboards" },
       { id: "accounting", children: [{ id: "vendors", children: [
@@ -412,8 +427,8 @@ describe("railMenuItems", () => {
       "iam",
       "platform",
     ]);
-    expect(tree.isSettingsActive("/platform/models/Note")).toBe(true);
-    expect(tree.isSettingsActive("/notes")).toBe(false);
+    expect(tree.railPlace("/platform/models/Note").scope).toBe("settings");
+    expect(tree.railPlace("/notes").scope).toBe("apps");
   });
 });
 

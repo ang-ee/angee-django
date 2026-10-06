@@ -13,14 +13,14 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
-test("the routed run defaults to its filling graph and retains Overview", async () => {
+test("the routed run defaults to its filling graph beneath its sheet", async () => {
   render(<RunStory />);
   // The file's first render pays the cold graph-module transform; under CI's parallel `pnpm -r test`
   // load that exceeds the default 1s wait (locally it is ~250ms).
   await screen.findByTestId("rf__node-inspect", undefined, { timeout: 5000 });
   expect(screen.getByRole("tab", { name: "Graph" }).getAttribute("aria-selected")).toBe("true");
   expect(screen.getByTestId("run-graph-canvas").className).toContain("flex-1");
-  await openOverview();
+  // The run's own facts stay on the sheet above the graph.
   expect(await screen.findByText("Operator")).toBeTruthy();
 });
 
@@ -73,13 +73,8 @@ async function openStep() {
   return screen.findByRole("dialog", { name: "Step Run" });
 }
 
-async function openOverview() {
-  fireEvent.click(await screen.findByRole("tab", { name: "Overview" }));
-}
-
 test("routed record uses the framework action menu, facts and retained JSON", async () => {
   render(Recovery.render());
-  await openOverview();
   expect(await screen.findByText("Operator")).toBeTruthy();
   expect(await screen.findByText("Review notes")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Step runs" })).toBeTruthy();
@@ -92,7 +87,6 @@ test("routed record uses the framework action menu, facts and retained JSON", as
 test("empty run facts are omitted", async () => {
   render(<RunStory run={runFixture({ finished_at: null })} />);
   await screen.findByRole("heading", { name: "Record review run" });
-  await openOverview();
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.queryByText(label)).toBeNull();
   }
@@ -102,7 +96,6 @@ test("populated run facts remain visible", async () => {
   render(<RunStory run={runFixture({ outcome: "approved", outcome_label: "Approved", reprocess_of: { id: "wfr_previous" },
     parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } }, trigger_event: { id: "wte_review" } })} />);
   await screen.findByRole("heading", { name: "Record review run" });
-  await openOverview();
   await screen.findByText("Approved");
   for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
     expect(screen.getByText(label)).toBeTruthy();
@@ -114,7 +107,6 @@ test("parent references and the child tab compose the existing scoped runs list"
   render(<RunStory run={runFixture({ parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } } })}
     children={[runFixture({ id: "wfr_child", origin: "WORKFLOW" })]}
     onRequest={(request) => requests.push(request)} />);
-  await openOverview();
   expect((await screen.findByRole("link", { name: "wfr_parent" })).getAttribute("href")).toBe("/workflows/runs/wfr_parent");
   fireEvent.click(await screen.findByRole("tab", { name: "Child runs" }));
   await waitFor(() => expect(requests.some(({ variables }) =>
@@ -164,7 +156,6 @@ test("a record waiter reads its watches on demand and follows the shared record 
 
 test("trigger origin links to its retained admission event", async () => {
   render(<RunStory run={runFixture({ origin: "TRIGGER", trigger_event: { id: "wte_review" } })} />);
-  await openOverview();
   expect(await screen.findByText("Trigger")).toBeTruthy();
   expect((await screen.findByRole("link", { name: "wte_review" })).getAttribute("href")).toBe("/workflows/trigger-events/wte_review");
 });
@@ -358,7 +349,6 @@ test("backend capability facts hide operator actions and retain complete error e
   const error = "Retained details: " + "all evidence remains visible. ".repeat(50);
   render(<RunStory run={runFixture({ can_reprocess: false, outcome: "error", failure_reason: error })} />);
   await screen.findByRole("heading", { name: "Record review run" });
-  await openOverview();
   expect(await screen.findByText(error.trim())).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 });

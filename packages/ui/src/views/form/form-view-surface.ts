@@ -16,7 +16,9 @@ import {
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
-import { useContainer, useFormOverride, modelChain } from "../../runtime";
+import {
+  EMPTY_CONTAINERS, composedContainerChildren, modelChain, useAppRuntime, useContainer, useFormOverride,
+} from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
@@ -44,6 +46,7 @@ import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } 
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import {
   addFieldSelection,
+  EDITABLE_LINES_SECTION,
   fieldErrorMessages,
   flattenedFormFields,
   formSections,
@@ -76,25 +79,26 @@ export type {
 } from "./use-form-view-save";
 export { acknowledgeFormSubmit } from "./use-form-view-save";
 
-/** Built-in field tab on forms without body tabs. */
-export const FORM_VIEW_OVERVIEW_TAB_ID = "overview";
-
 export type RecordPresentation = "document" | "workspace";
 
 export interface RecordFieldFocusOptions {
+  /** The pane holding the field; a sheet field, or one in the trailing lines, needs none. */
   recordTabId?: string;
 }
 
-export interface OverviewTabOptions {
-  /** On forms without body tabs, hide Overview and default to the first record tab. */
-  hidden?: boolean;
+/** One pane beneath the sheet: the trailing editable lines or a saved-record tab. */
+export interface FormViewPane {
+  id: string;
+  label: TabLabel;
+  icon?: React.ReactNode;
+  badge?: React.ReactNode;
 }
 
 export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
   form: FormViewSaveSurface;
-  /** Switch tabs, then focus one registered RHF field after that tab mounts. */
+  /** Focus one registered RHF field: in the sheet, or in the pane `recordTabId` names once it mounts. */
   focusField: (path: string, options?: RecordFieldFocusOptions) => void;
 }
 
@@ -109,7 +113,7 @@ export interface RecordToolbarContext {
 export interface RecordTabDescriptor {
   id: string;
   label: TabLabel;
-  /** Fill the available content area beneath the shared record header and tab strip. */
+  /** Fill the content area beneath the sheet and the pane strip. */
   presentation?: "full-bleed";
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
@@ -151,29 +155,21 @@ export interface UseFormViewSurfaceProps {
   onFieldInteractionCommit?: (path: string) => void;
   /** Called after the native form baseline has been restored. */
   onDiscarded?: () => void;
+  /** Saved-record panes beneath the sheet. */
   recordTabs?: readonly RecordTabDescriptor[];
-  /** Selected body or saved-record tab when an outer owner, such as the router, controls it. */
+  /** Selected pane when an outer owner, such as the router, controls it. */
   recordTab?: string;
-  /** Called when the selected tab changes. */
+  /** Called when the selected pane changes. */
   onRecordTabChange?: (tab: string) => void;
   /**
-   * Initial tab, or a rule choosing it from the record. A rule runs once per record, when the
-   * record and its tab fields have loaded; a later change to the record does not move the tab.
-   * The routed tab and the viewer's own choice win over either. Unavailable ids fall back to
-   * the first body tab, or Overview.
+   * Initial pane, or a rule choosing it from the record. A rule runs once per record, when the
+   * record and its pane fields have loaded; a later change to the record does not move the pane.
+   * The routed pane and the viewer's own choice win over either. An id that names no visible
+   * pane falls back to the first pane.
    */
   defaultRecordTab?: string | ((record: Row) => string | undefined);
-  /** Labelled, non-collapsible groups join the form's single tab strip. */
-  layout?: "stacked" | "tabs";
-  /** Content tabs alongside editable lines and groups in the tabbed layout. */
-  bodyTabs?: readonly {
-    id: string;
-    label: React.ReactNode;
-    render: (context: RecordToolbarContext) => React.ReactNode;
-  }[];
+  /** The trailing editable lines' pane label; a declared `lines` group is titled by its own label. */
   linesTabLabel?: React.ReactNode;
-  /** Without an Overview tab an unavailable tab id falls back to the first record tab. */
-  overviewHidden?: boolean;
   deleteAction?: RecordDeleteAction;
   deleteVisibleWhen?: (record: Row) => boolean;
 }
@@ -182,7 +178,8 @@ export interface FormViewSurface
   extends FormViewSaveSurface,
     FormViewRecordChromeSurface {
   t: UiTranslate;
-  activeRecordTab: string;
+  /** The selected pane; undefined when the record has none. */
+  activeRecordTab: string | undefined;
   requestedFocusPath: string | null;
   setActiveRecordTab: (tab: string) => void;
   isCreate: boolean;
@@ -197,8 +194,12 @@ export interface FormViewSurface
   titleFieldMessages: readonly string[];
   statusField: FieldDescriptor | undefined;
   bodyField: FieldDescriptor | undefined;
+  /** The sheet's sections, always shown; a declared `lines` group holds the editable lines. */
   sections: readonly FormSectionModel[];
-  bodyTabSections: readonly FormSectionModel[];
+  /** The trailing editable lines' pane label. */
+  linesLabel: React.ReactNode;
+  /** The lines trail the form as its first pane: none of its sections, admitted or not, declares them. */
+  linesTrailing: boolean;
   railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
@@ -206,8 +207,14 @@ export interface FormViewSurface
   actionsBlocked: boolean;
   recordPanelContext: RecordPanelContext | null;
   recordToolbarContext: RecordToolbarContext;
+  /** The visible saved-record tabs. */
   recordTabList: readonly RecordTabDescriptor[];
+  /** The visible panes beneath the sheet, in strip order: trailing lines, then saved-record tabs. */
+  panes: readonly FormViewPane[];
+  /** Whether the pane strip shows: only with two or more panes. */
   tabbed: boolean;
+  /** A default-tab rule has not chosen for this record yet: no record panel mounts until it does. */
+  recordTabPending: boolean;
   visibleDeleteAction: RecordDeleteAction | undefined;
 }
 
@@ -235,22 +242,19 @@ export function useFormViewSurface({
   recordTabs,
   recordTab,
   onRecordTabChange,
-  defaultRecordTab = FORM_VIEW_OVERVIEW_TAB_ID,
-  layout = "stacked",
-  bodyTabs,
+  defaultRecordTab,
   linesTabLabel,
-  overviewHidden = false,
   deleteAction,
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
   const t = useUiT();
   // The viewer's own choice on this record, and the default a rule chose for which record.
   const [localRecordTab, setLocalRecordTab] = React.useState<string | null>(null);
-  const [ruledRecordTab, setRuledRecordTab] = React.useState<{ key: string; tab: string } | null>(null);
+  const [ruledRecordTab, setRuledRecordTab] = React.useState<{ key: string; tab: string | undefined } | null>(null);
   const ruledRecordKey = `${resource}\u0000${id ?? ""}`;
   const requestedRecordTab = recordTab ?? localRecordTab
     ?? (typeof defaultRecordTab === "function"
-      ? ruledRecordTab?.key === ruledRecordKey ? ruledRecordTab.tab : FORM_VIEW_OVERVIEW_TAB_ID
+      ? ruledRecordTab?.key === ruledRecordKey ? ruledRecordTab.tab : undefined
       : defaultRecordTab);
   const setActiveRecordTab = React.useCallback((tab: string) => {
     if (recordTab === undefined) setLocalRecordTab(tab);
@@ -424,6 +428,15 @@ export function useFormViewSurface({
   const declaredGroups = React.useMemo(
     () => [...baseGroups, ...contributedGroups],
     [baseGroups, contributedGroups],
+  );
+  const { containers = EMPTY_CONTAINERS } = useAppRuntime();
+  // A form whose page or layers declare a `lines` group shows its lines only there, so
+  // narrowing that section away hides them; with no declaration they trail the form.
+  const linesDeclared = React.useMemo(
+    () => baseGroups.some((group) => group.lines)
+      || composedContainerChildren<React.ReactNode>(containers, "form#sections", models)
+        .some((child) => parsePageGroups(child.content).some((group) => group.lines)),
+    [baseGroups, containers, models],
   );
   const declaredGroupSequences = React.useMemo(
     () => [
@@ -640,8 +653,8 @@ export function useFormViewSurface({
   const tabRecordSettled = tabRecord != null && !tabFieldsPending
     && !(id != null && tabRecord.id != null && String(tabRecord.id) !== String(id));
   if (typeof defaultRecordTab === "function" && tabRecordSettled && ruledRecordTab?.key !== ruledRecordKey) {
-    // Set during render, so React re-renders before painting and no fallback tab flashes first.
-    setRuledRecordTab({ key: ruledRecordKey, tab: defaultRecordTab(tabRecord) ?? FORM_VIEW_OVERVIEW_TAB_ID });
+    // Set during render, so React re-renders before painting and no fallback pane flashes first.
+    setRuledRecordTab({ key: ruledRecordKey, tab: defaultRecordTab(tabRecord) });
   }
   const fieldLayout = React.useMemo(
     () =>
@@ -685,14 +698,16 @@ export function useFormViewSurface({
       const permitted = groupSections.filter((section) =>
         (section.permission === undefined
           || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)))
-        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord)));
-      const stacked = permitted.filter((section) => section.label == null);
-      const tabbedSections = permitted
+        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord))
+        // A declared lines section shows only where the form edits its lines.
+        && (section.key !== EDITABLE_LINES_SECTION || save.linesActive));
+      const unlabelled = permitted.filter((section) => section.label == null);
+      const labelled = permitted
         .filter((section) => section.label != null)
         .sort(compareFormSections);
-      return [...stacked, ...tabbedSections];
+      return [...unlabelled, ...labelled];
     },
-    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, sectionAdmits],
+    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
   );
   const sectionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
   const sections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
@@ -726,12 +741,8 @@ export function useFormViewSurface({
     }),
     [id, save],
   );
-  const bodyTabSections: readonly FormSectionModel[] = layout === "tabs" ? [
-    ...(save.linesActive ? [{ key: "editable-lines", label: linesTabLabel ?? t("lines.section"), fields: [] }] : []),
-    ...(bodyTabs ?? []).map((tab) => ({ key: tab.id, label: tab.label, fields: [], render: () => tab.render(recordToolbarContext) })),
-    ...sections.filter((section) => section.label != null && !section.collapsible
-      && (section.fields.length > 0 || section.render !== undefined)),
-  ] : [];
+  const linesLabel = linesTabLabel ?? t("lines.section");
+  const linesTrailing = save.linesActive && !linesDeclared;
   const visibleDeleteAction =
     readOnly || deleteAction === undefined ||
     (deleteVisibleWhen !== undefined &&
@@ -754,27 +765,32 @@ export function useFormViewSurface({
         render: () => tab.children,
       }];
     }),
-    bodyTabSections,
   );
-  const fallbackRecordTab = bodyTabSections[0]?.key ?? (overviewHidden && recordTabList[0] ? recordTabList[0].id : FORM_VIEW_OVERVIEW_TAB_ID);
-  const activeRecordTab = bodyTabSections.some((section) => section.key === requestedRecordTab) || recordTabList.some((tab) => tab.id === requestedRecordTab)
-    ? requestedRecordTab
-    : fallbackRecordTab;
+  // The record's own fields are always the sheet; panes beneath it hold what the record owns
+  // or relates to: the trailing editable lines first, then its saved-record tabs.
+  const panes: readonly FormViewPane[] = [
+    ...(linesTrailing ? [{ id: EDITABLE_LINES_SECTION, label: linesLabel }] : []),
+    ...recordTabList,
+  ];
+  // A routed, chosen or default pane that is not visible (dropped by `visibleWhen`, a permission
+  // or a create form, or an unknown id) falls back to the first pane without writing it back.
+  const activeRecordTab = panes.some((pane) => pane.id === requestedRecordTab) ? requestedRecordTab : panes[0]?.id;
   const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
-  const focusSectionsRef = useLatestRef({ sections: bodyTabSections, fallback: fallbackRecordTab });
+  const focusPanesRef = useLatestRef({ paneIds: panes.map((pane) => pane.id), linesPane: linesTrailing });
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
   const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
-    const target = options?.recordTabId && options.recordTabId !== FORM_VIEW_OVERVIEW_TAB_ID
-      ? options.recordTabId : focusSectionsRef.current.sections.find((section) =>
-        section.fields.some((field) => path === field.name || path.startsWith(`${field.name}.`))
-        || (section.key === "editable-lines" && save.linesField && (path === save.linesField || path.startsWith(`${save.linesField}.`))))?.key
-        ?? focusSectionsRef.current.fallback;
+    const { paneIds, linesPane } = focusPanesRef.current;
+    const linePath = save.linesField !== null
+      && (path === save.linesField || path.startsWith(`${save.linesField}.`));
+    // The sheet always shows; only a field in a pane selects that pane before it takes focus.
+    const target = options?.recordTabId && paneIds.includes(options.recordTabId) ? options.recordTabId
+      : linesPane && linePath ? EDITABLE_LINES_SECTION : undefined;
     pendingFocusRef.current = { path, recordTabId: target };
     setRequestedFocusPath(path);
-    setActiveRecordTab(target);
+    if (target !== undefined) setActiveRecordTab(target);
     setFocusRequest((request) => request + 1);
-  }, [focusSectionsRef, save.linesField, setActiveRecordTab]);
+  }, [focusPanesRef, save.linesField, setActiveRecordTab]);
   React.useEffect(() => {
     const pending = pendingFocusRef.current;
     if (!pending || (pending.recordTabId && pending.recordTabId !== activeRecordTab)) return;
@@ -809,7 +825,8 @@ export function useFormViewSurface({
     statusField,
     bodyField,
     sections,
-    bodyTabSections,
+    linesLabel,
+    linesTrailing,
     railGroups: visibleRailGroups,
     subtitleParts,
     lineRowErrors,
@@ -818,7 +835,12 @@ export function useFormViewSurface({
     recordPanelContext,
     recordToolbarContext,
     recordTabList,
-    tabbed: bodyTabSections.length > 0 || (recordPanelContext != null && recordTabList.length > 0),
+    panes,
+    // A strip of one pane only repeats its label: that pane renders beneath the sheet under its heading.
+    tabbed: panes.length > 1,
+    // Until a rule chooses, the fallback is a placeholder: mounting its pane would flash it.
+    recordTabPending: recordTab === undefined && localRecordTab === null && !isCreate
+      && typeof defaultRecordTab === "function" && ruledRecordTab?.key !== ruledRecordKey,
     visibleDeleteAction,
   };
 }
@@ -850,13 +872,12 @@ function compareFormSections(
 function mergeRecordTabs(
   declared: readonly RecordTabDescriptor[],
   contributed: readonly RecordTabDescriptor[],
-  bodySections: readonly FormSectionModel[],
 ): readonly RecordTabDescriptor[] {
   const tabs =
     contributed.length === 0 ? declared : [...declared, ...contributed];
-  // All tabs share one id namespace; Overview remains reserved even when absent.
-  const seen = new Set<string>([FORM_VIEW_OVERVIEW_TAB_ID]);
-  for (const tab of [...bodySections.map((section) => ({ id: section.key })), ...tabs]) {
+  // All panes share one id namespace; the lines pane's id stays reserved even when absent.
+  const seen = new Set<string>([EDITABLE_LINES_SECTION]);
+  for (const tab of tabs) {
     if (seen.has(tab.id)) {
       throw new Error(`FormView received duplicate record tab id "${tab.id}".`);
     }

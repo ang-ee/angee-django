@@ -326,6 +326,17 @@ class StateField(TextChoicesField):
         return value
 
 
+class ToneField(StateField):
+    """A presentation tone whose stored values are the frontend tone names.
+
+    Each value names a palette of the shared tone vocabulary (``neutral``,
+    ``brand``, ``info`` …), so the ``tone`` widget renders it as a chip in its
+    own colour and picks among them, instead of treating it as a status.
+    """
+
+    angee_widget = "tone"
+
+
 class FractionalRankExhausted(ValueError):
     """Raised when binary64 cannot represent another safe fractional rank."""
 

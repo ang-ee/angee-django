@@ -4,6 +4,7 @@ import { Button, DatePopover, EmptyState, ErrorBanner, FieldRoot, Glyph, Loading
 import type { ChatterViewContext } from "@angee/ui/runtime";
 import { userDisplayName } from "@angee/iam";
 
+import { activityStateLabel } from "./activity-state";
 import { useMessagingT } from "./i18n";
 import {
   CancelRecordActivityDocument,
@@ -401,15 +402,4 @@ function activityRank(activity: RecordActivityRow): number {
 
 function dateValue(value: string | null | undefined): number {
   return value ? Date.parse(value) : Number.MAX_SAFE_INTEGER;
-}
-
-function activityStateLabel(
-  activity: RecordActivityRow,
-  t: ReturnType<typeof useMessagingT>,
-): string {
-  if (activity.status === "DONE") return t("activity.stateDone");
-  if (activity.status === "CANCELED") return t("activity.stateCanceled");
-  if (activity.state === "overdue") return t("activity.stateOverdue");
-  if (activity.state === "today") return t("activity.stateToday");
-  return t("activity.statePlanned");
 }

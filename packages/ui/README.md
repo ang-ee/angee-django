@@ -30,9 +30,12 @@ metadata-dependent targets throw with their ids in development; production
 omits them and logs each id and reason once per mount. Malformed declarations
 still fail fast in every environment.
 `chrome.heading` takes `label`, `hint`, and `audience`; the shared list frame
-supplies the live count. `chrome`
-can also hide the view switcher, pager, or column chooser without changing the
-collection query. Bare enum columns use `statusBadge` and metadata option labels.
+supplies the live count. An embedded list is compact: a heading row with the
+count, toolbar actions and Create; no view switcher, column chooser or
+selection; search and pager only once the collection outgrows its page. Each
+declared `chrome` key (`viewSwitcher`, `pager`, `columnChooser`, `search`,
+`heading: false`) overrides that default without changing the collection
+query. Bare enum columns use `statusBadge` and metadata option labels.
 A scalar stage column may declare `widget="statusBadge"`, `options`, and `tone`.
 A descriptor row action marked `primary` stays visible; other inline actions
 appear on hover, while `placement: "menu"` retains the row menu.

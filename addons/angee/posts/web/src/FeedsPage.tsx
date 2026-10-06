@@ -137,7 +137,7 @@ function FeedFollowsTab({ recordId }: RecordPanelContext): React.ReactElement {
   return (
     <ListView<FeedFollowRow>
       resource={FEED_FOLLOW_MODEL}
-      scope="local"
+      presentation="embedded"
       fields={["id", "handle.display_name", "started_at", "ended_at", "created_at"]}
       baseFilter={{ feed: { exact: recordId } }}
       columns={columns}

@@ -26,6 +26,8 @@ interface RowReorder {
   onReorder: (fromId: string, toId: string) => void;
   previousId?: string;
   nextId?: string;
+  /** The row keeps its place: a lock replaces its handle, though others may still move past it. */
+  locked?: boolean;
 }
 
 function RecordRowInner<TRow extends Row>({
@@ -77,8 +79,14 @@ function RecordRowInner<TRow extends Row>({
     ...(reorder ? dropProps : {}),
     "data-drop-target": isOver ? "" : undefined,
   };
-  const handleDragProps = dragSourceProps(reorder && !blocked ? { type: reorder.type, data: row.id } : null);
-  const reorderCell = reorder ? <TableCell className="w-8">
+  const handleDragProps = dragSourceProps(
+    reorder && !reorder.locked && !blocked ? { type: reorder.type, data: row.id } : null,
+  );
+  const reorderCell = reorder?.locked ? <TableCell className="w-8">
+    <span role="img" aria-label={t("list.lockedRow")} className="grid h-7 place-content-center text-fg-subtle">
+      <Glyph name="lock" decorative />
+    </span>
+  </TableCell> : reorder ? <TableCell className="w-8">
     <Button type="button" variant="ghost" size="iconSm" aria-label={t("list.reorderRow")}
       disabled={blocked}
       title={t("list.reorderRowHint")}

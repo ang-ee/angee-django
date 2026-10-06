@@ -203,7 +203,7 @@ describe("FeedsPage", () => {
 
     expect(pageMocks.listViews.at(-1)).toMatchObject({
       resource: "posts.FeedFollow",
-      scope: "local",
+      presentation: "embedded",
       baseFilter: { feed: { exact: "fed_1" } },
     });
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { resolveContainer, type ContainersDeclaration, type CoreContainer } from "@angee/ui/runtime";
+import { composedContainerChildren, resolveContainer, type ContainersDeclaration, type CoreContainer } from "@angee/ui/runtime";
 import { RESOURCE_CONTAINERS } from "@angee/ui/views/index";
 
 import { compileContainers, type ContainerLayer } from "./containers";
@@ -80,6 +80,18 @@ describe("compileContainers", () => {
     expect(() => compileContainers([work, pm, other], core)).toThrow(/Unrelated addons "pm" and "other" both set child "work.task"/);
     expect(() => compileContainers([work, layer("stray", { "projects.Task#sections": { "work.task": { sequence: 1 } } })], core))
       .toThrow(/"stray" alters child "work.task".*does not depend on/);
+  });
+
+  test("a record's declared children stand before any narrowing, kind and model addresses merged", () => {
+    const composed = compileContainers([
+      layer("iam", { "form#sections": { "iam.share": { content: 1 } } }),
+      layer("work", { "work.Queue#sections": { "work.queue-stages": { content: 2 } } }),
+      layer("product", { "form#sections": { only: [] } }, ["iam", "work"]),
+    ], core);
+    expect(ids(resolveContainer(composed, "form#sections", { models: ["work.Queue"] }))).toEqual([]);
+    expect(ids(composedContainerChildren(composed, "form#sections", ["work.Queue"]))).toEqual(["iam.share", "work.queue-stages"]);
+    expect(ids(composedContainerChildren(composed, "form#sections"))).toEqual(["iam.share"]);
+    expect(composedContainerChildren(composed, "nowhere#sections")).toEqual([]);
   });
 
   test("remove drops a child at composition and records who removed it", () => {

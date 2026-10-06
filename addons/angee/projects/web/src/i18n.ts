@@ -42,11 +42,6 @@ export const enProjectsMessages: Record<string, string> = {
   "task.action.failed": "The task action returned no result.",
   "board.empty.title": "No open tasks",
   "board.empty.description": "Create a task in an assignee lane to start the board.",
-  "myWork.tasks": "Assigned tasks",
-  "myWork.activities": "Activities due",
-  "myWork.title": "My Work",
-  "myWork.description": "Your open tasks and scheduled record activities in one place.",
-  "myWork.activitiesHint": "Overdue activities and activities due in the next 30 days.",
   "myWork.empty.tasks": "No open tasks are assigned to you.",
 };
 

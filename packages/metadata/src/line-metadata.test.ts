@@ -102,6 +102,12 @@ describe("lineReadSelectionPaths", () => {
     expect(lineReadSelectionPaths({ ...LINES, positionField: null }, schema))
       .not.toContain("position");
   });
+
+  test("selects the row lock a row-locked child projects", () => {
+    expect(lineReadSelectionPaths({ ...LINES, lockField: "locked_fields" }, schema))
+      .toEqual(expect.arrayContaining(["id", "position", "locked_fields"]));
+    expect(lineReadSelectionPaths(LINES, schema)).not.toContain("locked_fields");
+  });
 });
 
 describe("relationRepresentationForPath", () => {

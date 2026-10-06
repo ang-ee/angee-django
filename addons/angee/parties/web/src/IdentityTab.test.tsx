@@ -35,6 +35,7 @@ describe("IdentityTab", () => {
 
   test("keeps identity decisions available on an editable Party form", () => {
     render(<IdentityTab {...context(false)} />);
+    expect(capture.props?.presentation).toBe("embedded");
     expect(capture.props?.rowActions).toBe(actions);
   });
 

@@ -10,7 +10,7 @@ export function TriggerEventsList({ triggerId }: { triggerId?: string }) {
   const t = useWorkflowsT();
   const href = useRouteHref();
   return <ResourceList<StringIdRow> resource={TRIGGER_EVENT_MODEL} hideCreate placement="inline" routed={!triggerId}
-    presentation={triggerId ? "embedded" : undefined} fields={["record_model"]}
+    scope={triggerId ? "local" : undefined} fields={["record_model"]}
     baseFilter={triggerId ? { trigger: { exact: triggerId } } : undefined}
     rowHref={triggerId ? (row) => href("workflows.trigger-events.record", { id: row.id }) : undefined}>
     <List order={{ changed_at: "DESC" }} emptyContent={t("trigger.noEvents")}>

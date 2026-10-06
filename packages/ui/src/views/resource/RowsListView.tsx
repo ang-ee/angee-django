@@ -30,12 +30,13 @@ import {
   type ListColumn,
 } from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
-import type {
-  ListSearchDeclaration,
-  ListEmptyContent,
-  ResourceCollectionPresentation,
-  ResourceTableHeaderVisibility,
-  ResourceTableLayout,
+import {
+  listChromeState,
+  type ListSearchDeclaration,
+  type ListEmptyContent,
+  type ResourceCollectionPresentation,
+  type ResourceTableHeaderVisibility,
+  type ResourceTableLayout,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
@@ -68,6 +69,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rowActions?: readonly RowActionDeclaration<TRow>[];
   /** Move a local row to another row's position; the list owns handles and drop targets. */
   onReorder?: (fromId: string, toId: string) => void;
+  /** Whether a row may move; a row that may not shows a lock where its handle would be. */
+  canReorderRow?: (row: TRow) => boolean;
   /** Content of a spanning table footer row, for example an add-record control. */
   footerRow?: React.ReactNode;
   emptyContent?: ListEmptyContent;
@@ -174,6 +177,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rowHref,
   rowActions,
   onReorder,
+  canReorderRow,
   footerRow,
   emptyContent,
   className,
@@ -230,8 +234,10 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
       }
     : emptyContent ?? t("list.empty");
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack });
+  // The same chrome rule as ListView: embedded rows get search and a pager only once they outgrow a page.
+  const chrome = listChromeState(presentation, undefined, { ...surface.list, queryDirty: search.queryDirty });
   const toolbar: ResourceToolbarProps = {
-    search, searchDeclaration, actions: toolbarActions, pager: surface.list,
+    search, chrome, searchDeclaration, actions: toolbarActions, pager: surface.list,
     viewSwitcher: gallery ? (
       <ResourceViewSwitcher<RowLayout> mode="layout" view={layout} onViewChange={setLayout} />
     ) : undefined,
@@ -242,6 +248,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     <ResourceListFrame
       className={className}
       presentation={presentation}
+      compact={chrome.compact}
       toolbar={toolbar}
       selection={
         selectable
@@ -302,6 +309,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
             rowActionSurface.hasActions ? rowActionSurface.render : undefined
           }
           onReorder={onReorder}
+          canReorderRow={canReorderRow}
           footerRow={footerRow}
           emptyContent={resolvedEmptyContent}
           fetching={fetching}

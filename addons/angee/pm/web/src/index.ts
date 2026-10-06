@@ -3,9 +3,11 @@ import { LayoutList } from "lucide-react";
 
 /**
  * The project-management suite: the PM apps arranged as one Linear-like rail.
- * Installing it only rearranges the rail; the rest of the console is unchanged.
- * The `pm` root lands on My Work when a deployment selects it, by `?app=pm` or
- * an `ANGEE_UI.shell.hosts` entry.
+ * Installing it rearranges the rail and moves team configuration (the queues,
+ * called Teams here) into Settings. A team's triage, board and cycles stay in
+ * the suite, anchored to their hubs, and link to the team's settings. The `pm`
+ * root lands on My Work when a deployment selects it, by `?app=pm` or an
+ * `ANGEE_UI.shell.hosts` entry.
  */
 export default defineBaseAddon({
   id: "pm",
@@ -30,7 +32,7 @@ export default defineBaseAddon({
     "work.cycles-hub": { sequence: 60 },
     "portfolio.roadmap": { sequence: 70 },
     "proposals.rounds": { sequence: 80 },
-    // Teams are queues; the suite manages them in the Settings place.
+    // Teams are queues: their configuration lives in Settings, their work in the suite.
     "work.queues": { group: "platform" },
     // My Work lists my assigned tasks, so the assignee board goes.
     "projects.board": { remove: true },
@@ -43,5 +45,6 @@ export default defineBaseAddon({
     app: "pm",
     resources: { "work.Queue": { label: "Team", pluralLabel: "Teams" } },
     menus: { "work.queues": "Teams", "proposals.rounds": "Proposals" },
+    messages: { work: { "queue.settings": "Team settings" } },
   }],
 });

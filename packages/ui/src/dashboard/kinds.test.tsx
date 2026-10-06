@@ -14,6 +14,7 @@ import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
 import { AppRuntimeProvider } from "../runtime/runtime";
 import { createRouteHref } from "../runtime/route-href";
 import { useResourceView } from "../views/resource/resource-view-context";
+import { listChromeState } from "../views/resource/resource-view-types";
 import { ResourceToolbar } from "../toolbars/ResourceToolbar";
 import { GanttLane } from "../views/gantt/gantt-lane";
 
@@ -268,10 +269,12 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
       props.onListStateChange({ rows: [], total: 17, page: 1, pageSize: 20,
         pageCount: 1, hasNext: false, hasPrev: false, fetching: false });
     }, [props.onListStateChange]);
+    // The standard list resolves the hosted chrome through its presentation's defaults.
+    const chrome = listChromeState(props.presentation, props.chrome, { total: 17, page: 1, pageSize: 20, queryDirty: false });
     return <><div>Standard list</div><button type="button" onClick={rowVerb}>Open record</button><ResourceToolbar
       pager={{ total: 17, page: 1, pageSize: 20 }} view="list" availableViews={["list", "board"]}
       search={search}
-      onViewChange={() => {}} chrome={props.chrome}
+      onViewChange={() => {}} chrome={chrome}
     /></>;
   }
   const hosted: WidgetSpec = { ...spec, kind: "resourceView", data: { shape: "resourceView", preset: "desk.open" },
@@ -296,7 +299,7 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
   expect(screen.queryByLabelText("Previous page")).toBeNull();
   expect(screen.queryByLabelText("Board view")).toBeNull();
   expect(observed.mock.lastCall?.[0]).toMatchObject({ presentation: "embedded", scope: "inherit",
-    chrome: { viewSwitcher: false, pager: false, columnChooser: false },
+    chrome: { heading: false, search: true, pager: false },
     preset: "desk.open", baseFilter: { status: { exact: "open" } } });
   expect(observed.mock.lastCall?.[0].queryError).toBeFalsy();
   expect(onCountChange).toHaveBeenCalledWith(17);

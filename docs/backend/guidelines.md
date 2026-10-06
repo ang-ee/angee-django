@@ -1282,6 +1282,18 @@ and current contracts before applying a historical example to a new deployment.
   retain their Django relation and widget semantics with `readable=False`.
   Expose enum and M2M line cells on the child node so their complete read shape is
   present in the final schema.
+- **Lines are owned parts, written as the user.** Declare `HasuraLines` only for
+  rows that exist as part of their parent and save with it; associated records
+  stay their own resource. The child writes run elevated because the parent
+  write authorizes them, which never makes them system work. A child whose
+  invariants separate users from system writers composes
+  [`RowLockMixin`](../../angee/base/mixins.py): `locked_fields()` names what its
+  state locks, user writes may not change those fields, delete the row or create
+  one, and `HasuraLines` checks the same lock before each elevated child write.
+  Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
+  guard a child on `is_sudo()` alone; [`Stage`](../../addons/angee/work/models.py)
+  is the reference. A nested insert only inserts beside children the parent's own
+  save provisions.
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.

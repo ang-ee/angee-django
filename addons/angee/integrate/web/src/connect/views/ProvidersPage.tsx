@@ -125,7 +125,7 @@ export function ProvidersPage(): React.ReactElement {
   return (
     <ResourceList resource={MODEL} placement="inline" routed>
       {providerList}
-      <Form resource={MODEL} layout="tabs">
+      <Form resource={MODEL}>
         <Field name="display_name" title />
         <Group label={t("providers.group.client")} columns={2}>
           <Field

@@ -113,6 +113,6 @@ def test_system_stage_deferred_identity_still_rejects_rename(deferred_save_rows:
     stage = Stage._base_manager.only("id", "tone").get(queue=queue, category="triage")
     stage.name = "Renamed"
     stage.sudo(reason="tests.productivity.stage.rename")
-    with pytest.raises(ValidationError, match="cannot be renamed"):
+    with pytest.raises(ValidationError, match="name of triage and duplicate stages cannot change"):
         stage.save()
     assert Stage._base_manager.get(pk=stage.pk).name == "Triage"

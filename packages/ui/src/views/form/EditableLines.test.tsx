@@ -336,4 +336,105 @@ describe("EditableLines", () => {
     expect(screen.getByRole("table").contains(screen.getByText("lines: 2"))).toBe(false);
     expect(screen.getByRole("button", { name: "Add line" }).compareDocumentPosition(screen.getByText("lines: 2")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  test("a locked row keeps its place with read-only locked cells while its other cells stay editable", () => {
+    render(<LockedHost />);
+
+    const table = within(screen.getByRole("table"));
+    const [, system, free] = table.getAllByRole("row");
+    // The list shows a lock where the system row's handle would be; the row carries
+    // the System marker and offers no duplicate or remove. The ordinary row keeps all three.
+    expect(within(system!).getByRole("img", { name: "Locked row" })).toBeTruthy();
+    expect(within(system!).queryByRole("button", { name: "Reorder row" })).toBeNull();
+    expect(within(system!).getByText("System")).toBeTruthy();
+    expect(within(system!).queryByRole("button", { name: "Duplicate line" })).toBeNull();
+    expect(within(system!).queryByRole("button", { name: "Remove line" })).toBeNull();
+    expect(within(free!).getByRole("button", { name: "Reorder row" })).toBeTruthy();
+    expect(within(free!).getByRole("button", { name: "Remove line" })).toBeTruthy();
+    expect(within(free!).queryByText("System")).toBeNull();
+    // Its locked label reads; its unlocked quantity still edits.
+    expect(within(system!).queryByRole("textbox", { name: "Label" })).toBeNull();
+    expect(within(system!).getByText("Triage")).toBeTruthy();
+    expect(within(system!).getByRole("textbox", { name: "Quantity" })).toBeTruthy();
+    expect(within(free!).getByRole("textbox", { name: "Label" })).toBeTruthy();
+  });
+
+  test("removing and adding rows never touches the locked row", async () => {
+    render(<LockedHost />);
+
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Remove line" })); });
+    expect(screen.getByText("Triage")).toBeTruthy();
+    expect(screen.queryByDisplayValue("Gadget")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+    // A new row is never locked: its label edits and it can be reordered.
+    expect(screen.getAllByRole("textbox", { name: "Label" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Reorder row" })).toHaveLength(1);
+    expect(screen.getAllByRole("img", { name: "Locked row" })).toHaveLength(1);
+  });
+
+  test("lines without a lock field add no System column", () => {
+    render(<Host />);
+    expect(screen.queryByRole("columnheader", { name: "System" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Locked row" })).toBeNull();
+  });
 });
+
+describe("EditableLines authored fields", () => {
+  test("authored headers name the columns and cells, and their help explains a column kept in the header menu", async () => {
+    function AuthoredHost(): React.ReactElement {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: { lines: [{ id: "one", label: "Widget", quantity: 2, position: 0 }] },
+      });
+      return (
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <ModalsHost><EditableLines
+            control={form.control}
+            setValue={form.setValue}
+            name="lines"
+            lines={LINES}
+            primaryFields={["label"]}
+            fields={[
+              { name: "label", label: "Item" },
+              { name: "quantity", label: "Units", description: "How many the order ships." },
+            ]}
+          /></ModalsHost>
+        </AppRuntimeProvider>
+      );
+    }
+    render(<AuthoredHost />);
+
+    expect(screen.getByRole("columnheader", { name: /^Item/ })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Item" })).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: /^Units/ })).toBeNull();
+    expect(screen.getByText("How many the order ships.")).toBeTruthy();
+    await toggleField("Units");
+    expect(screen.getByRole("textbox", { name: "Units" })).toBeTruthy();
+  });
+
+  test("lines without authored help render no legend beside the composer's footer", () => {
+    const { container } = render(<Host footer={(rows) => <div>lines: {rows.length}</div>} />);
+    expect(container.querySelector("dl")).toBeNull();
+    expect(screen.getByText("lines: 2")).toBeTruthy();
+  });
+});
+
+function LockedHost(): React.ReactElement {
+  const form = useForm<Record<string, unknown>>({
+    defaultValues: {
+      lines: [
+        { id: "system", label: "Triage", quantity: 1, position: 0, locked_fields: ["label"] },
+        { id: "free", label: "Gadget", quantity: 5, position: 1, locked_fields: [] },
+      ],
+    },
+  });
+  return (
+    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <ModalsHost><EditableLines
+        control={form.control}
+        setValue={form.setValue}
+        name="lines"
+        lines={{ ...LINES, lockField: "locked_fields" }}
+      /></ModalsHost>
+    </AppRuntimeProvider>
+  );
+}

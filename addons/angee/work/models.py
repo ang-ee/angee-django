@@ -29,7 +29,7 @@ from rebac.mixins import RebacModelBase
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, clean_trash_reason
+from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, RowLockMixin, clean_trash_reason
 from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import system_queryset
@@ -330,13 +330,19 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
             raise ValidationError({"default_estimate": "Default estimate cannot be zero when zero is disallowed."})
 
 
-class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
-    """One ordered, user-named pipeline stage owned by a queue."""
+class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
+    """One ordered, user-named pipeline stage owned by a queue.
+
+    Triage and duplicate stages are system rows: provisioning and resource loads
+    own their name and category, and no user write — the queue's stage lines
+    included — may change them, delete such a stage, or create one.
+    """
 
     runtime = True
     sqid_prefix = "stg_"
     container_field_name = "queue"
     category_field_name = "category"
+    locked_rows_label = "Triage and duplicate stages"
 
     class StageCategory(models.TextChoices):
         """Closed semantic categories projected onto coarse task status."""
@@ -496,28 +502,16 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
             if project_model._base_manager.filter(converted_from__stage_id=self.pk).exists():
                 raise ValidationError({"conceals": "A stage holding a promoted source task cannot conceal tasks."})
 
+    def locked_fields(self) -> tuple[str, ...]:
+        """Lock a system stage's identity; its tone, order and rule flags stay editable."""
+
+        return ("name", "category") if self.category in self.SYSTEM_CATEGORIES else ()
+
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Protect system-stage identity and keep the queue's default enterable."""
+        """Keep the queue's default enterable; the row lock guards system-stage identity."""
 
         self._validate_configuration()
-        if not is_sudo():
-            persisted = None
-            if not self._state.adding:
-                # Compare persisted identity without loading unrelated deferred columns.
-                persisted = type(self)._base_manager.filter(pk=self.pk).values_list("name", "category").first()
-            previous_category = persisted[1] if persisted is not None else None
-            if self.category in self.SYSTEM_CATEGORIES and previous_category != self.category:
-                raise ValidationError({"category": "Triage and duplicate stages are system-provisioned."})
-            if previous_category in self.SYSTEM_CATEGORIES and persisted != (self.name, self.category):
-                raise ValidationError({"name": "System-provisioned stages cannot be renamed or recategorized."})
         super().save(*args, **kwargs)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Prevent users from deleting the two system-provisioned stages."""
-
-        if not is_sudo() and self.category in self.SYSTEM_CATEGORIES:
-            raise ValidationError({"category": "System-provisioned stages cannot be deleted."})
-        return super().delete(*args, **kwargs)
 
 
 class CycleManager(AngeeManager):

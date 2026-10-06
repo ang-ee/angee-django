@@ -148,24 +148,62 @@ export type ResourceCollectionPresentation = "page" | "workspace" | "embedded";
 export type ResourceTableLayout = "auto" | "fixed";
 export type ResourceTableHeaderVisibility = "visible" | "visually-hidden";
 
+/**
+ * Declared list chrome. Each declared key overrides the presentation's default:
+ * a page or workspace list shows every control; an embedded list is compact
+ * (see {@link listChromeState}).
+ */
 export interface ListChrome extends ResourceToolbarChrome {
   columnChooser?: boolean;
-  /** Copy surrounding the live collection count in the shared heading line. */
-  heading?: { label: ReactNode; hint?: ReactNode; audience?: ReactNode };
+  /** Copy surrounding the live collection count in the shared heading line;
+   * `false` leaves an embedded list's heading to its host. */
+  heading?: { label: ReactNode; hint?: ReactNode; audience?: ReactNode } | false;
+}
+
+/** The chrome one list render shows, resolved from its presentation, declaration and collection. */
+export interface ListChromeState extends Required<Omit<ListChrome, "heading">> {
+  /** An embedded list's heading row replaces the control band. */
+  compact: boolean;
+}
+
+/**
+ * Resolve a list's chrome. An embedded list is compact: its heading row carries
+ * the label, live count, create and toolbar actions; the view switcher, column
+ * chooser and row selection stay hidden; search and pager appear only once the
+ * collection outgrows one page, leaves its first page or carries a query beyond
+ * its default. Declared `chrome` keys override every default.
+ */
+export function listChromeState(
+  presentation: ResourceCollectionPresentation | undefined,
+  chrome: ListChrome | undefined,
+  collection: { total: number | undefined; page: number; pageSize: number; hasNext?: boolean; queryDirty: boolean },
+): ListChromeState {
+  const compact = presentation === "embedded";
+  const paged = !compact || (collection.total ?? 0) > collection.pageSize || collection.page > 1
+    || Boolean(collection.hasNext);
+  return {
+    compact,
+    viewSwitcher: chrome?.viewSwitcher ?? !compact,
+    columnChooser: chrome?.columnChooser ?? !compact,
+    search: chrome?.search ?? (paged || collection.queryDirty),
+    pager: chrome?.pager ?? paged,
+  };
 }
 
 export interface ListViewProps<TRow extends Row = Row> {
   /** Model label rendered by this list, e.g. `"notes.Note"`. */
   resource: string;
-  /** Hide selected list chrome while preserving the resource view's query. */
+  /** Show or hide list chrome while preserving the resource view's query. */
   chrome?: ListChrome;
-  /** Page/workspace surfaces fill their owner; embedded surfaces grow in flow. */
+  /** Page/workspace surfaces fill their owner with full chrome; embedded
+   * surfaces grow in flow with compact chrome. */
   presentation?: ResourceCollectionPresentation;
   /** CSS table sizing strategy. Fixed layout lets rich single-column rows truncate to their pane. */
   tableLayout?: ResourceTableLayout;
   /** Keep column headers visible or accessible-only. Defaults to visible. */
   headerVisibility?: ResourceTableHeaderVisibility;
-  /** Enable row selection and the bulk-selection column. Defaults to true. */
+  /** Enable row selection and the bulk-selection column. Defaults to true,
+   * except in the embedded presentation. */
   selectable?: boolean;
   /** Authored server projection using the same native collection surface. */
   source?: CollectionSource<TRow>;

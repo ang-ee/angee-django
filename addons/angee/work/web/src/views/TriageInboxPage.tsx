@@ -6,6 +6,7 @@ import {
   Page,
   PageBody,
   PageHeader,
+  useBreadcrumbLeafLabel,
   useRouteParam,
   useResourceRecordHref,
 } from "@angee/ui";
@@ -14,6 +15,7 @@ import { TASK_MODEL } from "@angee/projects";
 
 import { useQueueContext } from "../context";
 import { useWorkT } from "../i18n";
+import { QueueSettingsLink } from "../queue-settings-link";
 import { TriageDwell, type WorkTaskRow } from "../task-work";
 import { useTriageRowActions } from "../triage-actions";
 
@@ -24,6 +26,8 @@ export function TriageInboxPage(): React.ReactElement {
   const recordHref = useResourceRecordHref(TASK_MODEL);
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
+  // The Triage hub's record page: the queue names the crumb after the hub.
+  useBreadcrumbLeafLabel(queue.data?.work_queues_by_pk?.name);
   // Never send a placeholder sqid to the server — an unknown id makes the
   // stage decoder raise. While the queue loads we render a loading panel; a
   // queue without a triage stage gets the no-match filter (the MyWorkPage
@@ -37,6 +41,7 @@ export function TriageInboxPage(): React.ReactElement {
         <PageHeader
           title={t("triage.title", { queue: name })}
           description={t("triage.description")}
+          actions={<QueueSettingsLink queueId={queueId} />}
         />
         <PageBody>
           <LoadingPanel />
@@ -50,6 +55,7 @@ export function TriageInboxPage(): React.ReactElement {
       <PageHeader
         title={t("triage.title", { queue: name })}
         description={t("triage.description")}
+        actions={<QueueSettingsLink queueId={queueId} />}
       />
       <PageBody>
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}

@@ -61,16 +61,12 @@ export interface ModelMetadata {
   fieldVocabulary?: Readonly<Record<string, Pick<ModelFieldMetadata, "label" | "tones">>>;
   label?: string;
   pluralLabel?: string;
-  /** The record form's Overview tab label, when the app renames it. */
-  overviewLabel?: string;
 }
 
 /** Presentation overrides; schema identity, fields and query capabilities stay canonical. */
 export interface ResourceVocabulary {
   label?: string;
   pluralLabel?: string;
-  /** The record form's Overview tab, e.g. "Summary" or "Bill". */
-  overview?: string;
   fields?: Readonly<Record<string, string | { label?: string; tones?: Readonly<Record<string, string>> }>>;
   relations?: Readonly<Record<string, string>>;
 }
@@ -89,7 +85,6 @@ export function schemaFieldMetadataWithVocabulary(
       ...model,
       label: words.label,
       pluralLabel: words.pluralLabel,
-      ...(words.overview ? { overviewLabel: words.overview } : {}),
       fieldVocabulary,
       ...(words.relations ? { resource: { ...model.resource, grantable: model.resource.grantable?.map((relation) => ({
         ...relation, label: words.relations?.[relation.relation] ?? relation.label,
@@ -316,6 +311,7 @@ export function lineReadSelectionPaths(
 ): readonly string[] {
   const paths = new Set<string>(["id"]);
   if (lines.positionField) paths.add(lines.positionField);
+  if (lines.lockField) paths.add(lines.lockField);
   for (const field of lines.fields ?? []) {
     if (field.name === lines.positionField) continue;
     if (

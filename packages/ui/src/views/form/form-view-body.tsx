@@ -12,7 +12,6 @@ import {
 } from "../../ui/field";
 import { FormGrid } from "../../ui/form-layout";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
-import { Tabs } from "../../ui/tabs";
 import { Collapsible } from "../../ui/collapsible";
 import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
 import { textRoleVariants } from "../../ui/text";
@@ -41,6 +40,7 @@ import {
   relationListValue,
   resolveField,
   titleText,
+  EDITABLE_LINES_SECTION,
   type FormSectionModel,
   type FormValues,
 } from "./form-view-model";
@@ -316,36 +316,71 @@ export function FormViewRecordHeader({
   );
 }
 
-export function FormViewOverview({
+/** Line rendering a form passes through to its editable lines, wherever they render. */
+export interface FormViewLineProps {
+  linePrimaryFields?: readonly string[];
+  lineFields?: EditableLinesProps["fields"];
+  lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
+  lineRelationFilters?: EditableLinesProps["relationFilters"];
+  /** Rendered under the lines only (totals belong to the lines, not to the whole record). */
+  lineFooter?: EditableLinesProps["footer"];
+}
+
+/** The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane. */
+export function FormViewLines({
   surface,
-  layout,
-  groupLayout,
-  tabStrip,
   linePrimaryFields,
+  lineFields,
   lineSupplementalColumns,
   lineRelationFilters,
   lineFooter,
-}: {
+}: FormViewLineProps & { surface: FormViewSurface }): React.ReactElement | null {
+  const { form, linesActive, linesResource, linesField, formReadOnly, lineRowErrors } = surface;
+  if (!linesActive || !linesResource || !linesField) return null;
+  return (
+    <FormEditableLines
+      control={form.control}
+      setValue={form.setValue}
+      name={linesField}
+      lines={linesResource}
+      parentRow={surface.displayRecord}
+      readOnly={formReadOnly}
+      rowErrors={lineRowErrors}
+      primaryFields={linePrimaryFields}
+      fields={lineFields}
+      supplementalColumns={lineSupplementalColumns}
+      relationFilters={lineRelationFilters}
+      footer={lineFooter}
+    />
+  );
+}
+
+/**
+ * The trailing lines' pane. It stays mounted beside other panes, so a save whose lines
+ * fail, in the browser or on the server, selects it and the viewer sees the rows to fix.
+ */
+export function FormViewLinesPane(props: FormViewLineProps & { surface: FormViewSurface }): React.ReactElement | null {
+  const { form: { control }, linesField, setActiveRecordTab, tabbed } = props.surface;
+  const { errors, submitCount } = useFormState({ control, name: linesField ?? undefined, disabled: !linesField });
+  const linesFailed = tabbed && linesField !== null && submitCount > 0 && get(errors, linesField) !== undefined;
+  React.useEffect(() => {
+    if (linesFailed) setActiveRecordTab(EDITABLE_LINES_SECTION);
+  }, [linesFailed, setActiveRecordTab, submitCount]);
+  return <FormViewLines {...props} />;
+}
+
+/** The record's sheet: its body field and every section, always shown above any panes. */
+export function FormViewSheet({
+  surface,
+  groupLayout,
+  ...lineProps
+}: FormViewLineProps & {
   surface: FormViewSurface;
-  layout: "stacked" | "tabs";
   groupLayout: "stacked" | "paired";
-  tabStrip: React.ReactNode;
-  linePrimaryFields?: readonly string[];
-  lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
-  lineRelationFilters?: EditableLinesProps["relationFilters"];
-  /** Rendered under the lines only (totals belong to the lines, not to every tab). */
-  lineFooter?: EditableLinesProps["footer"];
 }): React.ReactElement {
   const {
-    t,
     form,
     sections,
-    bodyTabSections,
-    linesActive,
-    linesResource,
-    linesField,
-    formReadOnly,
-    lineRowErrors,
     bodyField,
     clearServerFieldError,
     afterFieldChange,
@@ -365,43 +400,16 @@ export function FormViewOverview({
     if (field.hidden) return null;
     return <BoundFormField key={field.name} surface={surface} field={field} />;
   };
-  const editableLines = linesActive && linesResource && linesField ? (
-    <FormEditableLines
-      control={form.control}
-      setValue={form.setValue}
-      name={linesField}
-      lines={linesResource}
-      parentRow={surface.displayRecord}
-      readOnly={formReadOnly}
-      rowErrors={lineRowErrors}
-      primaryFields={linePrimaryFields}
-      supplementalColumns={lineSupplementalColumns}
-      relationFilters={lineRelationFilters}
-      footer={lineFooter}
-    />
-  ) : null;
-  const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {
-    const pair = groupLayout === "paired"
-      ? list.filter((section) => section.label == null && section.key.startsWith("group:")).slice(0, 2)
-      : [];
-    const [left, right] = pair;
-    if (!left || !right) {
-      return list.map((section) => (
-        <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
-      ));
-    }
-    return list.map((section) => {
-      if (section.key === right.key) return null;
-      if (section.key === left.key) {
-        return <FormGrid key="paired-overview-groups" columns="adaptiveTwo" density="comfortable" className="items-start gap-6">
-          {pair.map((group) => (
-            <FormSection key={group.key} section={group} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
-          ))}
-        </FormGrid>;
-      }
-      return <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />;
-    });
-  };
+  // A declared `lines` group holds the editable lines in its place in the sheet.
+  const sheetSections = sections.map((section) => section.key === EDITABLE_LINES_SECTION
+    ? { ...section, render: () => <FormViewLines surface={surface} {...lineProps} /> } : section);
+  const pair = groupLayout === "paired"
+    ? sheetSections.filter((section) => section.label == null && section.key.startsWith("group:")).slice(0, 2)
+    : [];
+  const [left, right] = pair;
+  const renderSection = (section: FormSectionModel) => (
+    <FormSection key={section.key} section={section} renderField={renderField} control={form.control} requestedFocusPath={requestedFocusPath} />
+  );
   return (
     <>
       {currentBodyField ? (
@@ -434,19 +442,16 @@ export function FormViewOverview({
         </section>
       ) : null}
       <div className="grid gap-6">
-        {renderOverviewSections(bodyTabSections.length > 0
-          ? sections.filter((section) => section.label == null || section.collapsible) : sections)}
-        {bodyTabSections.length > 0 ? <FormSectionTabs surface={surface} tabStrip={tabStrip}
-          sections={bodyTabSections.map((section) => section.key === "editable-lines"
-            ? { ...section, render: () => editableLines } : section)} renderField={renderField} /> : null}
+        {sheetSections.map((section) => {
+          if (left && right && section.key === right.key) return null;
+          if (left && right && section.key === left.key) {
+            return <FormGrid key="paired-sheet-groups" columns="adaptiveTwo" density="comfortable" className="items-start gap-6">
+              {pair.map(renderSection)}
+            </FormGrid>;
+          }
+          return renderSection(section);
+        })}
       </div>
-      {layout !== "tabs" && editableLines ? (
-        <section className="grid gap-3">
-          <SectionHeading label={t("lines.section")}
-            className="border-b border-border-subtle pb-1" />
-          {editableLines}
-        </section>
-      ) : null}
     </>
   );
 }
@@ -614,49 +619,6 @@ function FormSection({
   );
 }
 
-function FormSectionTabs({
-  surface,
-  sections,
-  renderField,
-  tabStrip,
-}: {
-  surface: FormViewSurface;
-  sections: readonly FormSectionModel[];
-  renderField: (field: FieldDescriptor) => React.ReactNode;
-  tabStrip: React.ReactNode;
-}): React.ReactElement {
-  const { form: { control }, requestedFocusPath, linesField: lineField, setActiveRecordTab } = surface;
-  const trackedFields = sections.flatMap((section) => section.fields.map((field) => field.name));
-  if (lineField) trackedFields.push(lineField);
-  const { errors, submitCount } = useFormState({ control, name: trackedFields });
-  const handledSubmitCount = React.useRef(submitCount);
-  React.useEffect(() => {
-    if (handledSubmitCount.current === submitCount) return;
-    handledSubmitCount.current = submitCount;
-    const errored = sections.find((section) =>
-      section.fields.some((field) => get(errors, field.name) !== undefined)
-      || (section.key === "editable-lines" && lineField && get(errors, lineField) !== undefined),
-    );
-    if (errored) setActiveRecordTab(errored.key);
-  }, [errors, lineField, requestedFocusPath, sections, setActiveRecordTab, submitCount]);
-  return (
-    <>
-      {tabStrip}
-      {sections.map((section) => (
-        <Tabs.Panel key={section.key} value={section.key}>
-          {/* The tab names its panel; any inner heading belongs to its content. */}
-          <FormSection
-            section={{ ...section, label: undefined }}
-            renderField={renderField}
-            control={control}
-            requestedFocusPath={requestedFocusPath}
-          />
-        </Tabs.Panel>
-      ))}
-    </>
-  );
-}
-
 function BoundFieldRow({
   field,
   rail = false,
@@ -816,7 +778,7 @@ function FieldFooter({
 }
 
 
-/** Watch the draft only inside the lines boundary, leaving overview fields unsubscribed. */
+/** Watch the draft only inside the lines boundary, leaving sheet fields unsubscribed. */
 function FormEditableLines({ control, parentRow, ...props }: EditableLinesProps): React.ReactElement {
   const draft = useWatch({ control });
   return <EditableLines {...props} control={control} parentRow={{ ...parentRow, ...draft }} />;
