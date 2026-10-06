@@ -62,7 +62,7 @@ export function ProductsPage(): React.ReactElement {
         <Column field="originated_from" />
         <Column field="updated_at" />
       </List>
-      <Form resource={PRODUCT_MODEL} layout="tabs">
+      <Form resource={PRODUCT_MODEL}>
         <Field name="name" title />
         <Field
           name="lifecycle"

@@ -139,7 +139,7 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       icon="projects" run={promote} /> : null}
   </>;
   return (
-    <Form resource={TASK_MODEL} layout="tabs" contextLine={selection.contextLine} returning={selection.returning}>
+    <Form resource={TASK_MODEL} contextLine={selection.contextLine} returning={selection.returning}>
       <Field name="title" title />
       <Field name="allowed_visibility" hidden readOnly />
       <Field name="audience_label" hidden readOnly />

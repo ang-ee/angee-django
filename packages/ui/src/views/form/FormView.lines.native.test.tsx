@@ -63,7 +63,7 @@ async function fixture(options: {
   publicView?: boolean;
   save?: (variables: ResourceSaveVariables) => Promise<Row>;
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
-  formProps?: Pick<ComponentProps<typeof FormView>, "layout" | "bodyTabs" | "recordTabs" | "linesTabLabel" | "groups">;
+  formProps?: Pick<ComponentProps<typeof FormView>, "recordTabs" | "linesTabLabel" | "groups">;
   containers?: ComposedContainers;
   /** The form loads with its lines in values but not on the page. */
   linesHidden?: boolean;
@@ -159,35 +159,51 @@ async function fixture(options: {
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
-test("editable lines lead the single strip and field reveal returns from a record panel to their control", async () => {
+test("trailing editable lines lead the pane strip and field reveal returns from a record pane to their control", async () => {
   await fixture({ publicView: true, formProps: {
-    layout: "tabs", linesTabLabel: "Lines",
-    bodyTabs: [{ id: "summary", label: "Summary", render: () => <p>Body summary</p> }],
+    linesTabLabel: "Lines",
     recordTabs: [{ id: "evidence", label: "Evidence", render: ({ focusField }) =>
       <button type="button" onClick={() => focusField("lines.0.label")}>Reveal first line</button> }],
   } });
   expect(screen.getAllByRole("tablist")).toHaveLength(1);
-  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Lines", "Summary", "Evidence"]);
-  expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Lines", "Evidence"]);
+  expect(screen.getByRole("tab", { name: "Lines" }).getAttribute("aria-selected")).toBe("true");
   fireEvent.click(screen.getByRole("tab", { name: "Evidence" }));
   fireEvent.click(await screen.findByRole("button", { name: "Reveal first line" }));
   await waitFor(() => expect(document.activeElement).toBe(screen.getByDisplayValue("Alpha")));
   expect(screen.getByRole("tab", { name: "Lines" }).getAttribute("aria-selected")).toBe("true");
 });
 
-test("editable lines alone in a tabs layout stack under their tab label without a strip", async () => {
-  await fixture({ publicView: true, formProps: { layout: "tabs", linesTabLabel: "Order lines" } });
-  expect(screen.queryByRole("tablist")).toBeNull();
-  expect(screen.getByRole("heading", { name: "Order lines" })).toBeTruthy();
-  expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
-});
-
-test("a stacked form heads its lines section with the declared lines label", async () => {
+test("trailing lines alone are one pane beneath the sheet, headed by their label without a strip", async () => {
   await fixture({ publicView: true, formProps: { linesTabLabel: "Stages" } });
   expect(screen.queryByRole("tablist")).toBeNull();
   expect(screen.getByRole("heading", { name: "Stages" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Lines" })).toBeNull();
-  expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
+  const line = screen.getByDisplayValue("Alpha");
+  expect(line.closest("form")).toBeNull();
+  expect(screen.getByLabelText("Title").compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("a save the lines fail on the server selects the lines pane", async () => {
+  const f = await fixture({ publicView: true, formProps: {
+    recordTabs: [{ id: "evidence", label: "Evidence", render: () => <p>Evidence pane</p> }],
+  }, save: async () => {
+    throw { graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: {
+        code: "VALIDATION",
+        validationErrors: { "lines.1.label": ["This field is required."] },
+        formErrors: [],
+      },
+    }] };
+  } });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Evidence" }));
+  expect(await screen.findByText("Evidence pane")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Lines" }).getAttribute("aria-selected")).toBe("true"));
+  expect(await screen.findByText("This field is required.")).toBeTruthy();
 });
 
 test("a declared lines group renders the lines in its place, titled by the group, and nothing trails", async () => {

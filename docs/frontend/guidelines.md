@@ -587,25 +587,19 @@ shared UI copy through an addon bundle.
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
   custom form component only when the declarative DSL genuinely cannot express it.
-- A long form opts into tabs with `<Form layout="tabs">` (default `"stacked"`):
-  each *labelled* `<Group>` becomes a tab panel, while the title/body/status and any
-  ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
-  are untouched — and reuses the same `<Group>` declarations, so no field metadata is
-  duplicated. Group your fields for the stacked layout and tabbing is one prop away.
-  Body tabs (lines, explicit body tabs, then labelled groups) and contributed record
-  tabs share one strip in that order; header fields and stacked groups stay visible.
-  Overview appears only on forms without body tabs. `defaultRecordTab` and controlled
-  `recordTab` address either kind; field reveal selects its owning body tab.
-- **A strip needs two tabs.** [The form surface](../../packages/ui/src/views/form/form-view-surface.ts)
-  counts the tabs that will show — body tabs, Overview unless `overviewTab.hidden`,
-  and the record tabs left after `visibleWhen`, permissions and the record's
-  implementation — and shows a strip only for two or more. One visible tab renders
-  no strip: its panel is the record body under the header, introduced by a
-  `SectionHeading` with the tab's label, in the column and presentation its strip
-  would have used; a single labelled group in `layout="tabs"` stacks. A routed,
-  chosen or default tab that is not visible falls back to the first visible tab.
+- **A record's own fields are its sheet, never a tab.** `FormView` always renders
+  the header, body field and every group as the sheet; labelled groups are titled
+  sections, so group fields for reading order, not for tabs. Tabs exist only beneath
+  the sheet, for panes: the editable lines when no `<Group lines>` places them in
+  the sheet, then the saved-record tabs left after `visibleWhen`, permissions and
+  the record's implementation. Two or more panes get a strip; one renders without
+  one, beneath the sheet under a `SectionHeading` with its label. A full-bleed pane
+  fills the height beneath the sheet, which then scrolls in its own region. `defaultRecordTab` (or its rule), a controlled
+  `recordTab` and `?recordTab=` choose among the panes; an id that names no visible
+  pane falls back to the first pane without rewriting the URL. Field reveal focuses
+  a sheet field in place and selects the lines pane for a line.
 - **The form hero precedes secondary facts.** `FormView` places its status control
-  above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the overview's groups. A domain-owned
+  above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the sheet's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget
   with the addon. Add `fill` when it should use the measured hero width; the
   widget receives `field.fill` and `field.containerWidth`. Do not repeat that
@@ -657,8 +651,8 @@ shared UI copy through an addon bundle.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
-  save state; unreadable rows stay absent. The rail follows the active record
-  tab and stacks beneath the body in a narrow container.
+  save state; unreadable rows stay absent. The rail sits beside the sheet and
+  stacks beneath it in a narrow container.
 - **Inline visibility controls bind a server verb.** Declare a
   `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record

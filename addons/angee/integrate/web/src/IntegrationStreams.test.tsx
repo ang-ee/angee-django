@@ -167,23 +167,23 @@ async function selectRowAction(id: string, row: Row): Promise<void> {
 }
 
 async function openStreams(resource = INTEGRATION_MODEL): Promise<void> {
+  // The record's one pane renders beneath its sheet, without a strip to open.
   renderIntegration(resource);
-  fireEvent.click(await screen.findByRole("tab", { name: "Streams" }));
   await screen.findByTestId("sync-data-view");
 }
 
 describe("Integration Streams contribution", () => {
   test.each([INTEGRATION_MODEL, "messaging.Channel"])("appears once on a saved %s form with streams", async (resource) => {
     const { selectedFields } = renderIntegration(resource);
-    await screen.findByRole("tab", { name: "Streams" });
-    expect(screen.getAllByRole("tab", { name: "Streams" })).toHaveLength(1);
+    await screen.findByRole("heading", { name: "Streams" });
+    expect(screen.getAllByRole("heading", { name: "Streams" })).toHaveLength(1);
     expect(selectedFields).toContain("stream_count");
   });
 
   test.each([0, null])("hides the tab when the saved record has no stream evidence (%s)", async (count) => {
     renderIntegration(INTEGRATION_MODEL, count);
     await screen.findByDisplayValue("Calendar bridge");
-    expect(screen.queryByRole("tab", { name: "Streams" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Streams" })).toBeNull();
     expect(state.list).toBeNull();
   });
 
@@ -198,13 +198,13 @@ describe("Integration Streams contribution", () => {
     const childRequests = requests.filter((request) => request.resource === childResource);
     expect(childRequests.length).toBeGreaterThan(0);
     for (const request of childRequests) expect(request.fields).not.toContain("stream_count");
-    if (count !== null && count > 0) await screen.findByRole("tab", { name: "Streams" });
-    expect(screen.queryAllByRole("tab", { name: "Streams" })).toHaveLength(count ? 1 : 0);
+    if (count !== null && count > 0) await screen.findByRole("heading", { name: "Streams" });
+    expect(screen.queryAllByRole("heading", { name: "Streams" })).toHaveLength(count ? 1 : 0);
   });
 
   test("does not expose a saved-record tab while creating an integration", () => {
     renderIntegration(INTEGRATION_MODEL, 2, false);
-    expect(screen.queryByRole("tab", { name: "Streams" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Streams" })).toBeNull();
     expect(state.list).toBeNull();
   });
 

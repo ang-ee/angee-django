@@ -90,10 +90,7 @@ export function RoundsPage(): React.ReactElement {
         <Column field="last_call_at" />
         <Column field="submission_deadline" />
       </List>
-      <Form
-        resource={ROUND_MODEL}
-        layout="tabs"
-      >
+      <Form resource={ROUND_MODEL}>
         <Field name="permissions" hidden readOnly />
         <Field name="revision" hidden readOnly />
         <Field name="name" title />

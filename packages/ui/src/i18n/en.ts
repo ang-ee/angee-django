@@ -624,7 +624,6 @@ export const enUiMessages: Record<string, string> = {
   "form.reloadSaved": "Reload saved record",
   "form.save": "Save",
   "form.stay": "Stay",
-  "form.tabOverview": "Overview",
   "form.unsavedLeaveTitle": "Unsaved changes - leave without saving?",
   "form.untitled": "Untitled",
   "form.updated": "updated {value}",

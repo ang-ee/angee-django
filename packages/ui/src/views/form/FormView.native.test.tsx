@@ -392,7 +392,7 @@ test("local child panels share the routed unsaved-change leave owner", async () 
   await expect(leaving).resolves.toBe(true);
 });
 
-test("a record panel switches to the field tab before focusing its native control", async () => {
+test("a pane focuses a sheet field's native control in place", async () => {
   await fixture({
     publicView: true,
     acknowledgedSource: {
@@ -408,10 +408,10 @@ test("a record panel switches to the field tab before focusing its native contro
       label: "Activity",
       render: (context) => (
         <>
-          <button type="button" onClick={() => context.focusField("title", { recordTabId: "overview" })}>
+          <button type="button" onClick={() => context.focusField("title")}>
             Focus title
           </button>
-          <button type="button" onClick={() => context.focusField("note", { recordTabId: "overview" })}>
+          <button type="button" onClick={() => context.focusField("note")}>
             Focus absent value
           </button>
         </>
@@ -421,11 +421,10 @@ test("a record panel switches to the field tab before focusing its native contro
 
   fireEvent.click(await screen.findByRole("button", { name: "Focus title" }));
 
-  await waitFor(() => expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true"));
-  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Title" }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Title" })));
+  expect(screen.queryByRole("tablist")).toBeNull();
 
-  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Focus absent value" }));
+  fireEvent.click(screen.getByRole("button", { name: "Focus absent value" }));
   await waitFor(() => expect(document.activeElement?.textContent).toBe("Set value"));
 });
 

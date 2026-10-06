@@ -234,7 +234,9 @@ test.describe("shared record access", () => {
     page,
   }) => {
     const expectAccessSurface = async (): Promise<void> => {
-      const access = page.getByRole("tab", { name: "Access", exact: true });
+      // Several panes share a strip; a record's one pane renders beneath its sheet under its heading.
+      const access = page.getByRole("tab", { name: "Access", exact: true })
+        .or(page.getByRole("heading", { name: "Access", exact: true })).first();
       await expect(access).toBeVisible({ timeout: 20_000 });
       await access.click();
 

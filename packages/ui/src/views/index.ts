@@ -267,7 +267,6 @@ export {
   type FormViewAcknowledgedSource,
   type FormField,
   type FieldKind,
-  type OverviewTabOptions,
   type RecordPresentation,
   type RecordPanelContext,
   type RecordToolbarContext,

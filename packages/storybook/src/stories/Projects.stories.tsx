@@ -278,7 +278,6 @@ export const ProjectRecord: Story = {
           id={project.id}
           fields={projectFields}
           groups={projectGroups}
-          layout="tabs"
           returning={["body", "status", "lead", "start_date", "target_date", "updated_at"]}
         />
       </div>

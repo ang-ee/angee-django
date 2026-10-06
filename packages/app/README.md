@@ -116,7 +116,6 @@ An addon can specialize existing copy and declare named resource views:
     messages: { notes: { title: "Reviews" } },
     resources: { "notes.Note": {
       label: "Review", pluralLabel: "Reviews", fields: { title: "Subject" },
-      overview: "Summary", // the record form's Overview tab
     } },
     menus: { "desk.review": "Reviews" },
   }],

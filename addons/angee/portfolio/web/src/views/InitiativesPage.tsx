@@ -58,7 +58,7 @@ export function InitiativesPage(): React.ReactElement {
         <Column field="target_date" />
         <Column field="priority" />
       </List>
-      <Form resource={INITIATIVE_MODEL} layout="tabs">
+      <Form resource={INITIATIVE_MODEL}>
         <Field name="name" title />
         <Field name="status" widget="statusbar" status options={statusOptions} />
         <Group label={t("initiative.group.identity")} columns={2}>

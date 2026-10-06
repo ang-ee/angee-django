@@ -8,11 +8,11 @@ test("scoped vocabulary projects labels without altering resource or query ident
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] });
   const base = schemaFieldMetadataFromDataResources([resource]);
   const scoped = schemaFieldMetadataWithVocabulary(base, {
-    "notes.Note": { label: "Document", pluralLabel: "Documents", overview: "Summary", fields: { title: "Subject" } },
+    "notes.Note": { label: "Document", pluralLabel: "Documents", fields: { title: "Subject" } },
   });
   const model = scoped.labels["notes.Note"]!;
   expect(model).toBe(scoped.types["NoteType"]);
-  expect(model).toMatchObject({ label: "Document", pluralLabel: "Documents", overviewLabel: "Summary", fields: { title: { label: "Subject" } } });
+  expect(model).toMatchObject({ label: "Document", pluralLabel: "Documents", fields: { title: { label: "Subject" } } });
   expect(model.resource).toBe(base.labels["notes.Note"]!.resource);
   expect(scoped.resources).toBe(base.resources);
   expect(base.labels["notes.Note"]!.fields.title?.label).toBeUndefined();
