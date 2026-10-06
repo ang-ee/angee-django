@@ -5,6 +5,9 @@ import {
   useAuthoredMutation,
   useAuthoredQuery,
   useStableVariables,
+  type AuthoredDocument,
+  type AuthoredQueryOptions,
+  type AuthoredVariables,
   type DocumentData,
   type DocumentVariables,
 } from "@angee/refine";
@@ -186,6 +189,24 @@ export function useOperatorConnection(): OperatorConnection | null {
   return useContext(OperatorConnectionContext);
 }
 
+/**
+ * A daemon read on the `operator` refine data provider. It waits for the
+ * connection: the bearer is minted by the console, so a read sent before it
+ * arrives is refused (401) and surfaces as a request failure.
+ */
+export function useOperatorQuery<TDocument extends AuthoredDocument>(
+  document: TDocument,
+  variables?: AuthoredVariables<TDocument>,
+  options: Omit<AuthoredQueryOptions, "dataProviderName"> = {},
+) {
+  const connected = useOperatorConnectionState().kind === "ready";
+  return useAuthoredQuery(document, variables, {
+    ...options,
+    dataProviderName: OPERATOR_PROVIDER,
+    enabled: connected && (options.enabled ?? true),
+  });
+}
+
 export interface OperatorSnapshotResult {
   result: { fetching: boolean; error: Error | null };
   snapshot: OperatorSnapshot | null;
@@ -212,10 +233,7 @@ export function useOperatorSnapshot(
   // so the console reads the current state once through the `operator` provider.
   // The live subscription supersedes it for every subsequent change (no polling —
   // see docs/frontend/guidelines.md).
-  const query = useAuthoredQuery(SNAPSHOT_QUERY, variables, {
-    dataProviderName: OPERATOR_PROVIDER,
-    enabled: connectionState.kind === "ready",
-  });
+  const query = useOperatorQuery(SNAPSHOT_QUERY, variables);
 
   const snapshot = useMemo(() => snapshotFromQueryData(query.data), [query.data]);
 
