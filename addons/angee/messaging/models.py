@@ -23,6 +23,7 @@ The write path lives on the managers.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -46,11 +47,13 @@ from rebac import (
     CheckItem,
     PermissionDenied,
     SubjectRef,
+    actor_context,
     current_actor,
     system_context,
     to_object_ref,
     to_subject_ref,
 )
+from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
@@ -297,12 +300,29 @@ class ThreadedModelMixin(models.Model):
         tracker = self._field_tracker()
         tracking_before = tracker.snapshot(kwargs.get("update_fields"))
         super().save(*args, **kwargs)
-        if creating:
-            self._message_after_create()
-            return
-        changes = tracker.changes(tracking_before)
-        if changes:
-            self.message_track(changes, subtype_key=self.thread_tracking_subtype_key)
+        with self._own_write_scope():
+            if creating:
+                self._message_after_create()
+                return
+            changes = tracker.changes(tracking_before)
+            if changes:
+                self.message_track(changes, subtype_key=self.thread_tracking_subtype_key)
+
+    def _own_write_scope(self) -> AbstractContextManager[None]:
+        """Make this row's write scope ambient for the chatter its save writes.
+
+        A queryset's pinned actor or system scope reaches the row but not the
+        threads, followers and notes written on its behalf, which follow the
+        ambient scope. A pinned actor then owns a new thread as an ambient one
+        would; an elevated insert writes them as system bookkeeping.
+        """
+
+        actor, unscoped = self.effective_actor()
+        if unscoped and not is_sudo():
+            return system_context(reason="messaging.record_write")
+        if actor is not None and actor != current_actor():
+            return actor_context(actor)
+        return nullcontext()
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Delete this row after authorizing the record, then elevate its cascade.

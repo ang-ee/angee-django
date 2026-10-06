@@ -26,7 +26,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -1010,6 +1010,34 @@ def test_threaded_model_create_autofollows_and_logs_author(composed_tables: None
     follower.refresh_from_db()
     assert follower.last_read_message_id == tracking_message.pk
     assert not ThreadFollower.objects.unread_messages(creation_message.thread, user=user).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_row_inserted_under_its_querysets_scope_logs_its_creation(composed_tables: None) -> None:
+    """A queryset's pinned actor or system scope writes the row's chatter without an ambient scope.
+
+    The pinned actor owns the new thread as an ambient actor does; an elevated
+    insert writes it as system bookkeeping even where the public sudo verb is off.
+    """
+
+    del composed_tables
+    with system_context(reason="test queryset-scoped creation setup"):
+        user = get_user_model().objects.create_user(username="pinned-creator", email="pinned@example.com")
+
+    with actor_context(user):
+        ambient = ThreadedTicket.objects.create(title="Ambient case")
+    pinned = ThreadedTicket.objects.with_actor(user).insert(ThreadedTicket(title="Pinned case"))
+    with override_settings(REBAC_ALLOW_SUDO=False):
+        elevated = ThreadedTicket.objects.system_context(reason="test elevated insert").insert(
+            ThreadedTicket(title="Elevated case")
+        )
+
+    with system_context(reason="test queryset-scoped creation assertions"):
+        threads = {ticket.title: ticket.message_thread(create=False) for ticket in (ambient, pinned, elevated)}
+        for thread in threads.values():
+            assert Message._base_manager.filter(thread=thread, subtype__key="record_created").count() == 1
+    assert threads["Ambient case"].owner_id == threads["Pinned case"].owner_id == user.pk
+    assert threads["Elevated case"].owner_id is None
 
 
 @pytest.mark.django_db(transaction=True)

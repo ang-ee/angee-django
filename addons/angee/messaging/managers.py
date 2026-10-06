@@ -854,9 +854,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         # Identity resolution is system bookkeeping (the callers gate reads at their
         # own surface), so it runs elevated — a REBAC-scoped read that cannot see
         # the existing row would double-create and then dead-end.
-        queryset = _external_id_annotated(self.sudo(reason="messaging.thread.identity").lock_if_supported()).filter(
-            _external_id_q(external_id), platform=platform
-        )
+        identities = self.system_context(reason="messaging.thread.identity").lock_if_supported()
+        queryset = _external_id_annotated(identities).filter(_external_id_q(external_id), platform=platform)
         existing = queryset.first()
         if existing is not None:
             return existing, False
