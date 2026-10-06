@@ -321,6 +321,7 @@ export function FormViewOverview({
   linePrimaryFields,
   lineSupplementalColumns,
   lineRelationFilters,
+  lineFooter,
 }: {
   surface: FormViewSurface;
   layout: "stacked" | "tabs";
@@ -329,6 +330,8 @@ export function FormViewOverview({
   linePrimaryFields?: readonly string[];
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   lineRelationFilters?: EditableLinesProps["relationFilters"];
+  /** Rendered under the lines only (totals belong to the lines, not to every tab). */
+  lineFooter?: EditableLinesProps["footer"];
 }): React.ReactElement {
   const {
     t,
@@ -379,6 +382,7 @@ export function FormViewOverview({
       primaryFields={linePrimaryFields}
       supplementalColumns={lineSupplementalColumns}
       relationFilters={lineRelationFilters}
+      footer={lineFooter}
     />
   ) : null;
   const renderOverviewSections = (list: readonly FormSectionModel[]): React.ReactNode => {
