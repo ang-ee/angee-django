@@ -274,6 +274,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const renderRecordPanel = (tab: RecordTabDescriptor) => {
     if (!recordPanelContext || awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === tab.id;
+    // Only the active tab, or one asked to stay mounted, has content: the strip's own selection
+    // can trail the record's for a render, and an inactive panel must not mount meanwhile.
+    if (!active && !tab.keepMounted) return null;
     const content = withRail(tab.render({ ...recordPanelContext, active }), active, panelFills(tab));
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
