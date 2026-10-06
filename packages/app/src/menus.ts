@@ -53,15 +53,20 @@ export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<Chrom
 
 export type MenuDeclarations = Readonly<Record<string, MenuEntry>>;
 
+/** One item of the legacy declaration list; like a dict entry, it may borrow a page. */
+export interface MenuDeclarationItem extends BaseMenuItem, Pick<MenuEntry, "mount" | "path" | "recordMatch"> {
+  children?: readonly MenuDeclarationItem[];
+}
+
 /** Whether an addon authored its menus as the legacy declaration list rather than the dict. */
 export function isMenuDeclarationList(
-  menus: readonly BaseMenuItem[] | MenuDeclarations | undefined,
-): menus is readonly BaseMenuItem[] {
+  menus: readonly MenuDeclarationItem[] | MenuDeclarations | undefined,
+): menus is readonly MenuDeclarationItem[] {
   return Array.isArray(menus);
 }
 
 export interface MenuLayer extends Layer {
-  menus?: readonly BaseMenuItem[] | MenuDeclarations;
+  menus?: readonly MenuDeclarationItem[] | MenuDeclarations;
   /** The layer's routes, which its dependents may mount. */
   routes?: readonly { name: string }[];
 }
@@ -268,7 +273,7 @@ function declareLegacy(
   declare: (layer: string, id: string, fields: Node["fields"]) => void,
   diagnostics: string[],
   layer: string,
-  item: BaseMenuItem,
+  item: MenuDeclarationItem,
   parent: string | undefined,
 ): void {
   if ("app" in item) throw new Error(`Menu item "${item.id}" authors app; app identity is compiler-emitted.`);

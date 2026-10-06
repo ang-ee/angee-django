@@ -78,11 +78,12 @@ export interface ResourceViewKindContent {
   render?: ComponentType<{ resource: string }>;
 }
 
-/** When a render-time verb applies: an app or route on the active trail. */
+/** When a render-time verb applies: an app or route on the active trail, or the perspective. */
 export interface ContainerCondition {
   app?: string | readonly string[];
   /** The route or any route below it. */
   route?: string | readonly string[];
+  perspective?: string | readonly string[];
 }
 
 /** One child of a container: the owner's typed content plus the fields every container honours. */
@@ -198,12 +199,13 @@ export interface ComposedContainers {
   diagnostics: readonly string[];
 }
 
-/** Where the page is, for `when`: its apps and its routes. */
+/** Where the page is, for `when`: its apps, its routes and the perspective. */
 export interface ContainerScope {
   /** Every app on the page's menu trail, outermost first, flattened ones too (G-8). */
   apps: readonly string[];
   /** The page's route and its parent routes, nearest first. */
   routes: readonly string[];
+  perspective: string | null;
 }
 
 const warnedAddresses = new Set<string>();
@@ -236,7 +238,7 @@ export function containersFromChildren(
     children: composed,
   };
 }
-const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [] };
+const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [], perspective: null };
 
 /** Split an address into its node and container name. */
 export function containerName(address: string): string {
@@ -281,7 +283,8 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
   if (!condition) return true;
   const any = (wanted: string | readonly string[] | undefined, present: readonly string[]): boolean =>
     wanted === undefined || (typeof wanted === "string" ? [wanted] : wanted).some((id) => present.includes(id));
-  return any(condition.app, scope.apps) && any(condition.route, scope.routes);
+  return any(condition.app, scope.apps) && any(condition.route, scope.routes)
+    && any(condition.perspective, scope.perspective ? [scope.perspective] : []);
 }
 
 /**
@@ -334,7 +337,7 @@ export function resolveContainer<TContent = unknown>(
   const originals = new Map(merged.map((child) => [child.id, child]));
   const lineage = (child: ComposedContainerChild): string => child.variant?.of ?? child.id;
   const ownerOf = (child: ComposedContainerChild): string => originals.get(lineage(child))?.owner ?? child.owner;
-  const rowAllows = (child: ComposedContainerChild): boolean =>
+  const permitted = (child: ComposedContainerChild): boolean =>
     projection || row === undefined || !child.permission || holdsPermission(row, child.permission);
   // A variant positioned in its own right keeps its place; one without stands where
   // its original stood, or keeps its own when the original is not on this page.
@@ -356,7 +359,7 @@ export function resolveContainer<TContent = unknown>(
     // row lacks the permission for leaves the original in place (G-13).
     const variants = new Map<string, ComposedContainerChild>();
     for (const child of visible) {
-      if (!child.variant || !impls.includes(child.variant.impl) || !rowAllows(child)) continue;
+      if (!child.variant || !impls.includes(child.variant.impl) || !permitted(child)) continue;
       const taken = variants.get(child.variant.of);
       if (taken) throw new Error(`Children "${taken.id}" and "${child.id}" of "${address}" are both variants of "${child.variant.of}" for this row.`);
       variants.set(child.variant.of, child);
@@ -375,7 +378,7 @@ export function resolveContainer<TContent = unknown>(
     const kept = new Set(rule.only);
     visible = visible.filter((child) => kept.has(child.id) || kept.has(lineage(child)) || rule.exempt.includes(ownerOf(child)));
   }
-  return visible.filter(rowAllows) as readonly ComposedContainerChild<TContent>[];
+  return visible.filter(permitted) as readonly ComposedContainerChild<TContent>[];
 }
 
 /**

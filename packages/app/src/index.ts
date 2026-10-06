@@ -11,7 +11,7 @@ export type { ErrorReportingInput } from "./error-reporting";
 
 // Addon composition API (headless manifest authoring + folding).
 export * from "./define-addon";
-export { isMenuDeclarationList, type MenuDeclarations, type MenuEntry, type MenuInclude } from "./menus";
+export { isMenuDeclarationList, type MenuDeclarationItem, type MenuDeclarations, type MenuEntry, type MenuInclude } from "./menus";
 export type { CompositionExplanation } from "./explain";
 
 // The login/OAuth-callback auth surface — app-shell pages the host mounts as
