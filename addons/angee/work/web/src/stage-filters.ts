@@ -1,5 +1,5 @@
-/** The system-owned stage categories excluded from ordinary planning surfaces. */
-const SYSTEM_STAGE_CATEGORIES = ["triage", "duplicate"] as const;
+/** The system-owned stage categories: no planning lane, and no user may give a stage one. */
+export const SYSTEM_STAGE_CATEGORIES = ["triage", "duplicate"] as const;
 
 /** Same-queue stages rendered as ordinary board lanes. */
 export function queueStageFilters(queueId: string) {

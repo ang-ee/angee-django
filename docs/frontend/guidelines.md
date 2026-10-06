@@ -1095,6 +1095,18 @@ A save whose normalized header and line values equal the server record sends no
 mutation. It resets the dirty-but-equivalent draft to those server values and
 clears the dirty state, including the editable lines.
 
+**Lines are owned parts; embedded lists show associated records.** "Lines" means
+rows that exist only as part of the record and are saved with it, such as a
+queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`;
+the form renders them as one ordered section, saved by its one Save, with row
+order as the position. `linePrimaryFields` chooses the columns shown first (the
+rest wait in the data view's visible-fields menu) and `lineFields` their headers,
+choices and help. A record with a life of its own (its own verbs, revision,
+pages or references from elsewhere) is an associated record and stays an
+embedded list, however small or ordered it is. Never split one owned collection
+into several lists to protect some of its rows; lock those rows instead. See
+[QueuesPage](../../addons/angee/work/web/src/views/QueuesPage.tsx).
+
 A line row the backend locks is a system row. The child model owns the fact
 (`RowLockMixin.locked_fields`), its node projects it, and the lines metadata
 names it as `lockField`; [EditableLines](../../packages/ui/src/views/form/EditableLines.tsx)

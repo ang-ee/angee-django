@@ -2,6 +2,7 @@
 
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
+    HasuraLines,
     SortAlias,
     aggregate_queryset,
     attach_hasura_resource_metadata,
@@ -18,6 +19,7 @@ from angee.graphql.data.pydantic_resource import (
 
 __all__ = [
     "AngeeHasuraWriteBackend",
+    "HasuraLines",
     "SortAlias",
     "aggregate_queryset",
     "declared_hasura_resource_fields",

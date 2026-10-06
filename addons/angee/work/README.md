@@ -5,6 +5,13 @@ The [stage statusbar](web/src/stage-statusbar.tsx) reads each stage's model-owne
 side-state chip while the ordinary stages remain in queue order. The task's
 reopen verb stays in the form header action bar.
 
+A queue's stages are its owned lines: `work_queues_save` writes them with the
+queue, row order is their position, and the queue form shows them as one ordered
+section. Triage and duplicate stages are system rows. Their `locked_fields`
+projection locks name and category, so lines may change their tone and order but
+cannot rename, recategorize, delete or create one; provisioning and resource loads
+still own them.
+
 The setup contributors consume native project teams and optional milestone
 `active_stage` choices through their ordinary sharing and stage-validation owners.
 

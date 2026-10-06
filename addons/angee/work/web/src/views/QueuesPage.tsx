@@ -1,35 +1,29 @@
 import {
+  Badge,
   Column,
-  DrawerResourceList,
   Field,
   Form,
   Group,
   List,
   ResourceList,
-  SettingsSection,
-  SettingsShell,
   useEnumOptions,
   useRouteHref,
   useRouteRecordId,
-  type RecordPanelContext,
+  type EditableLineField,
+  type EditableLineSupplementalColumn,
   type RecordSmartButtonDescriptor,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
-import { useQueueRecordTabs } from "../queue-record-tabs";
 
 import { useWorkT } from "../i18n";
 import { QUEUE_MODEL, STAGE_MODEL } from "../resources";
+import { SYSTEM_STAGE_CATEGORIES } from "../stage-filters";
 
-const CUSTOM_STAGE_CATEGORIES = [
-  "BACKLOG",
-  "UNSTARTED",
-  "STARTED",
-  "COMPLETED",
-  "CANCELED",
-] as const;
+/** Stage columns shown at first; the rule flags stay in the lines' header menu of visible fields. */
+const STAGE_PRIMARY_FIELDS = ["name", "category", "tone"] as const;
 
-/** Queue collection and routed settings record. */
+/** Queue collection and routed settings record: one stacked form, its stages one ordered section. */
 export function QueuesPage(): React.ReactElement {
   const t = useWorkT();
   const navigate = useNavigate();
@@ -37,7 +31,8 @@ export function QueuesPage(): React.ReactElement {
   const recordId = useRouteRecordId();
   const visibilityOptions = useEnumOptions(QUEUE_MODEL, "visibility");
   const estimateOptions = useEnumOptions(QUEUE_MODEL, "estimate_scale");
-  const recordTabs = useQueueRecordTabs();
+  const stageFields = useStageLineFields();
+  const stageBadges = useStageBadges();
   const smartButtons = React.useMemo<readonly RecordSmartButtonDescriptor[]>(
     () =>
       ([
@@ -63,7 +58,6 @@ export function QueuesPage(): React.ReactElement {
       resource={QUEUE_MODEL}
       placement="inline"
       routed
-      recordTabs={recordTabs}
       recordSmartButtons={smartButtons}
     >
       <List resource={QUEUE_MODEL} order={{ key: "ASC" }}>
@@ -74,7 +68,13 @@ export function QueuesPage(): React.ReactElement {
         <Column field="estimate_scale" />
         <Column field="updated_at" />
       </List>
-      <Form resource={QUEUE_MODEL} layout="tabs">
+      <Form
+        resource={QUEUE_MODEL}
+        linesTabLabel={t("queue.stages.title")}
+        linePrimaryFields={STAGE_PRIMARY_FIELDS}
+        lineFields={stageFields}
+        lineSupplementalColumns={stageBadges}
+      >
         <Field name="name" title />
         <Group label={t("queue.group.identity")} columns={2}>
           <Field name="key" />
@@ -110,71 +110,43 @@ export function QueuesPage(): React.ReactElement {
   );
 }
 
-export function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
+/**
+ * The stage cells' headers, help and choices. A new or custom stage picks only a
+ * custom category; a system stage's category cell is locked by the backend and
+ * still reads its own label.
+ */
+function useStageLineFields(): readonly EditableLineField[] {
   const t = useWorkT();
-  const categoryOptions = useEnumOptions(STAGE_MODEL, "category").filter((option) =>
-    CUSTOM_STAGE_CATEGORIES.includes(
-      String(option.value).toUpperCase() as (typeof CUSTOM_STAGE_CATEGORIES)[number],
-    ),
-  );
-  return (
-    <SettingsShell maxWidth="1100" gap="8">
-      <SettingsSection
-        title={t("queue.stages.system.title")}
-        description={t("queue.stages.system.description")}
-      >
-        <List
-          resource={STAGE_MODEL}
-          scope="local"
-          baseFilter={{
-            queue: { exact: recordId },
-            category: { inList: ["TRIAGE", "DUPLICATE"] },
-          }}
-          order={{ position: "ASC" }}
-        >
-          <Column field="name" header={t("common.name")} />
-          <Column field="category" header={t("common.category")} />
-          <Column field="tone" header={t("common.tone")} />
-          <Column field="position" header={t("common.order")} />
-          <Column field="rule_owned" header={t("common.ruleOwned")} />
-          <Column field="conceals" header={t("common.conceals")} />
-        </List>
-      </SettingsSection>
-      <SettingsSection
-        title={t("queue.stages.custom.title")}
-        description={t("queue.stages.custom.description")}
-      >
-        <DrawerResourceList
-          resource={STAGE_MODEL}
-          createDefaults={{ queue: recordId }}
-        >
-          <List
-            resource={STAGE_MODEL}
-            baseFilter={{
-              queue: { exact: recordId },
-              category: { inList: CUSTOM_STAGE_CATEGORIES },
-            }}
-            order={{ position: "ASC" }}
-          >
-            <Column field="name" header={t("common.name")} />
-            <Column field="category" header={t("common.category")} />
-            <Column field="tone" header={t("common.tone")} />
-            <Column field="position" header={t("common.order")} />
-            <Column field="rule_owned" header={t("common.ruleOwned")} />
-            <Column field="conceals" header={t("common.conceals")} />
-          </List>
-          <Form resource={STAGE_MODEL}>
-            <Field name="name" title />
-            <Field name="queue" readOnly />
-            <Field name="category" options={categoryOptions} />
-            <Field name="tone" />
-            <Field name="position" />
-            <Field name="rule_owned" />
-            <Field name="conceals" label={t("common.conceals")} />
-          </Form>
-        </DrawerResourceList>
-      </SettingsSection>
-    </SettingsShell>
-  );
+  const categories = useEnumOptions(STAGE_MODEL, "category");
+  return React.useMemo<readonly EditableLineField[]>(() => [
+    { name: "name", label: t("common.name") },
+    {
+      name: "category",
+      label: t("common.category"),
+      options: categories.map((option) => ({
+        ...option,
+        disabled: (SYSTEM_STAGE_CATEGORIES as readonly string[]).includes(String(option.value)),
+      })),
+    },
+    { name: "tone", label: t("common.tone") },
+    { name: "rule_owned", label: t("stage.ruleOwned"), description: t("stage.ruleOwned.help") },
+    { name: "conceals", label: t("stage.conceals"), description: t("stage.conceals.help") },
+  ], [categories, t]);
 }
 
+/** Each stage's rule behaviour as badges, read from the live row. */
+function useStageBadges(): readonly EditableLineSupplementalColumn[] {
+  const t = useWorkT();
+  return React.useMemo<readonly EditableLineSupplementalColumn[]>(() => [{
+    key: "behaviour",
+    header: t("stage.behaviour"),
+    minWidth: 160,
+    align: "left",
+    render: (row) => (
+      <div className="flex h-8 flex-wrap items-center gap-1">
+        {row.rule_owned ? <Badge tone="info" density="compact">{t("stage.ruleOwned")}</Badge> : null}
+        {row.conceals ? <Badge tone="neutral" density="compact">{t("stage.conceals")}</Badge> : null}
+      </div>
+    ),
+  }], [t]);
+}
