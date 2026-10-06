@@ -577,7 +577,7 @@ describe("ActionFormDialog", () => {
         },
         {
           name: "documentIds", argKind: "relationList", resource: "Document", label: "Documents",
-          create: { resource: "Document" },
+          create: { resource: "Document" }, fromContext: ({ selectedIds }) => selectedIds,
         },
       ],
     });
