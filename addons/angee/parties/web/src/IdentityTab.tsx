@@ -78,7 +78,7 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
       <p className="text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
       <ListView<LinkRow>
         resource="parties.PartyHandle"
-        scope="local"
+        presentation="embedded"
         fields={[
           "id",
           "handle.value",
