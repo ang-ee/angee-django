@@ -161,6 +161,36 @@ def test_pickers_offer_a_non_manager_their_colleagues(composed_permissions: None
     assert [person.first_name for person in User.objects.visible_people(viewer, search="Follow")] == ["Follower"]
 
 
+def test_a_non_manager_reads_no_restricted_field_of_a_colleague_or_service_account(composed_permissions: None) -> None:
+    """Through every path a non-manager reaches people by, others' restricted fields read null."""
+
+    del composed_permissions
+    viewer = _person("leak-viewer", first_name="Viewer")
+    colleague = _person("leak-colleague", first_name="Colleague")
+    service = User.objects.create_user("workflow-leak", kind="service", first_name="Workflow")
+    with actor_context(viewer):
+        ticket = ThreadedTicket.objects.create(title="Shared record")
+    with system_context(reason="test.directory.followers"):
+        for person in (colleague, service):
+            ticket.message_subscribe(user=person)
+
+    gated = "display_name username email is_active is_staff last_login"
+    through_users = {
+        row["display_name"]: row for row in _run(viewer, "{ users(limit: 100) { " + gated + " } }")["users"]
+    }
+    through_colleagues = {
+        row["display_name"]: row for row in _run(viewer, "{ colleagues(limit: 100) { " + gated + " } }")["colleagues"]
+    }
+    for path, rows in (("users", through_users), ("colleagues", through_colleagues)):
+        # Service accounts are offered in access pickers (``users``), never among active people.
+        assert {"Colleague", "Workflow"} <= set(rows) if path == "users" else "Colleague" in rows, (path, set(rows))
+        for name, row in rows.items():
+            if name == "Viewer":
+                assert row["username"] == "leak-viewer", path
+                continue
+            assert {key: row[key] for key in _WITHHELD} == _WITHHELD, (path, name)
+
+
 @pytest.mark.parametrize("manager", ["platform-admin", "directory-reader", "consumer-role"])
 def test_people_managers_list_every_account_and_filter_by_activity(spaces_tables: None, manager: str) -> None:
     del spaces_tables
