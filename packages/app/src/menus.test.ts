@@ -262,6 +262,11 @@ describe("compileMenus", () => {
     const removed = compileMenus([iam, desk, product]);
     expect(removed.removed).toContainEqual({ id: "desk.people", route: "desk.people", by: "product", parent: "desk", label: "People" });
     expect(removed.mounts.map((mount) => mount.id)).toEqual(["desk.people", "desk.admin.users"]);
+    // The legacy declaration list mounts the same way.
+    const listed: MenuLayer = { id: "desk", dependsOn: ["iam"], menus: [
+      { id: "desk", children: [{ id: "desk.people", mount: "iam.users", path: "people", label: "People" }] },
+    ] };
+    expect(compileMenus([iam, listed]).mounts).toEqual([{ id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk" }]);
   });
 
   test("a node targets one of route, mount and to; a mount takes a path under an app and a route its addon depends on", () => {
