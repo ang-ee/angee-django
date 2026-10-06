@@ -3276,6 +3276,25 @@ describe("FormView", () => {
     await waitFor(() => expect(run).toHaveBeenCalledOnce());
   });
 
+  test("a title-placed field wraps below the title instead of squeezing it to a sliver", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={[
+          ...fields.filter((field) => field.name !== "wordCount"),
+          { name: "wordCount", label: "Word Count", readOnly: true, placement: "title" },
+        ]}
+      />,
+    );
+    const title = await screen.findByRole("textbox", { name: "Title" });
+    const row = title.closest<HTMLElement>("[data-form-title-row]")!;
+    // The row wraps, and the title keeps a readable basis rather than shrinking to its minimum.
+    expect(row.className).toContain("flex-wrap");
+    expect([...row.children][0]?.className).toContain("flex-[1_1_16rem]");
+    expect(row.children.length).toBeGreaterThan(1);
+  });
+
   test("document records keep Overview before record tabs without changing presentation", async () => {
     renderWithProviders(
       <FormView
