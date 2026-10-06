@@ -12,6 +12,7 @@ const mutationMock = vi.hoisted(() => ({
     dataProviderName: string;
     generation: number;
     values: Record<string, unknown>;
+    errorNotification?: unknown;
   }>,
   data: undefined as unknown,
   generation: 0,
@@ -37,12 +38,14 @@ vi.mock("@refinedev/core", () => ({
         async (payload: {
           dataProviderName: string;
           values: Record<string, unknown>;
+          errorNotification?: unknown;
         }) => {
           const context = mutationOptions.onMutate();
           mutationMock.calls.push({
             dataProviderName: payload.dataProviderName,
             generation,
             values: payload.values,
+            ...("errorNotification" in payload ? { errorNotification: payload.errorNotification } : {}),
           });
           const response = {
             data: {
@@ -117,6 +120,18 @@ describe("useAuthoredMutation", () => {
         values: { value: "fresh" },
       },
     ]);
+  });
+
+  test("a caller that renders its own failure turns off refine's error notification", async () => {
+    const document = "mutation Probe { probe }" as never;
+    const quiet = renderHook(() => useAuthoredMutation(document, { errorNotification: false }), { wrapper: ConsoleProvider });
+    const notifying = renderHook(() => useAuthoredMutation(document), { wrapper: ConsoleProvider });
+    await act(async () => {
+      await quiet.result.current[0]({ value: "quiet" } as never);
+      await notifying.result.current[0]({ value: "notify" } as never);
+    });
+    expect(mutationMock.calls.map((call) => "errorNotification" in call ? call.errorNotification : "default"))
+      .toEqual([false, "default"]);
   });
 
   test("invalidates authored reads by model labels only", async () => {

@@ -356,6 +356,8 @@ export const enUiMessages: Record<string, string> = {
   "app.loadFailed": "Application could not load",
   "app.loadFailedDescription": "Application data is unavailable. Please try again.",
   "app.retry": "Retry",
+  // Title of refine's generic error notification; the error's message is its description.
+  "notifications.error": "Something went wrong",
   "app.startFailed": "Application could not start",
   "app.startFailedDescription": "Its configuration is invalid. The cause is below.",
   "app.reload": "Reload",

@@ -171,6 +171,12 @@ export interface AuthoredMutationOptions<
    */
   transient?: boolean;
   /**
+   * `false` turns off refine's generic error notification, for a caller that
+   * renders the failure itself (a callback page, a form's own error). The
+   * mutation still rejects with the error.
+   */
+  errorNotification?: false;
+  /**
    * Exact canonical model labels whose registered reads should refetch after
    * success. This metadata-free package exact-matches the strings; callers that
    * accept aliases canonicalize them before this boundary.
@@ -248,6 +254,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     mutateAsync: run.mutateAsync,
     reset: run.mutation.reset,
     transient: options.transient,
+    errorNotification: options.errorNotification,
   });
   mutationRef.current = {
     dataProviderName,
@@ -255,6 +262,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     mutateAsync: run.mutateAsync,
     reset: run.mutation.reset,
     transient: options.transient,
+    errorNotification: options.errorNotification,
   };
   const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables) => {
     const {
@@ -263,6 +271,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       mutateAsync,
       reset,
       transient,
+      errorNotification,
     } = mutationRef.current;
     const resolvedVariables = (variables ?? {}) as Variables;
     try {
@@ -272,6 +281,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
         values: resolvedVariables,
         dataProviderName,
         meta: mutationMeta(document, resolvedVariables),
+        ...(errorNotification === false ? { errorNotification } : {}),
       });
       return authoredOperationData<Data>(response.data);
     } finally {
