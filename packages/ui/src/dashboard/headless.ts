@@ -220,9 +220,11 @@ export interface DashboardDefinition {
 export interface HostedResourceViewProps {
   /** Forward this to the standard List's onListStateChange. */
   onListStateChange: (state: ResourceListSnapshot) => void;
+  /** Compact chrome: no view switcher, column chooser or selection. */
   presentation: "embedded";
   scope: "inherit";
-  chrome: { viewSwitcher: false; pager: false; columnChooser: false };
+  /** The widget owns the heading and count; the hosted list keeps search and never pages. */
+  chrome: { heading: false; search: true; pager: false };
 }
 
 export interface DashboardCapabilities {

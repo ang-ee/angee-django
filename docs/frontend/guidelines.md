@@ -448,17 +448,30 @@ shared UI copy through an addon bundle.
   still fail fast in every environment.
   A scoped create verb uses a server-projected parent record for its permission;
   the create label comes
-  from resource vocabulary. `chrome` may hide the view switcher, pager, or column
-  chooser without changing query state; `chrome.heading` declares label, hint,
-  and audience around the live count. A nonselectable list hides Share but keeps
-  other contributed utilities.
-- **Two-collection settings pages are a sanctioned family, not a double toolbar.**
-  A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
-  `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
-  templates; storage settings: drives + backends). Each section is a *distinct*
-  collection and owns its own data-controls/toolbar row — that is correct
-  uniformity, not the double-toolbar defect. The defect is *two* chrome rows
-  stacked over the *same* collection; one collection gets exactly one controls row.
+  from resource vocabulary. Each declared `chrome` key (`viewSwitcher`, `pager`,
+  `columnChooser`, `search`) overrides the presentation's default without
+  changing query state; `chrome.heading` declares label, hint, and audience
+  around the live count. A nonselectable list hides Share but keeps other
+  contributed utilities.
+- **An embedded list is compact by default.** `presentation="embedded"` on
+  `ListView`/`List`/`ResourceList`/`DrawerResourceList` replaces the control band
+  with one heading row: the resource vocabulary's label (or `chrome.heading`) ·
+  the live count, then `toolbarActions` and Create. The view switcher, column
+  chooser and row selection stay hidden; search and pager return inline once the
+  collection outgrows its page, leaves page one or carries a query beyond its
+  default. `chrome.heading: false` hands the heading to a host that already
+  shows the label and count, such as a dashboard widget; any other declared
+  `chrome` key or `selectable` overrides the compact default. See
+  [`listChromeState`](../../packages/ui/src/views/resource/resource-view-types.ts).
+- **One collection is one list.** Never split a collection across two lists —
+  not by foreign-key direction, by a subset such as the viewer's own rows, or by
+  a category. Declare one list and express the split as a column, a search
+  shortcut or a row lock (Person relationships carry a direction column;
+  proposal reviews a "Mine" shortcut). Parts saved with their parent are
+  `lines=` rows in `EditableLines`, not a list. Distinct collections may stack:
+  related collections inside a record as compact embedded lists, page-level
+  configuration collections as `SettingsSection`s that each keep their own
+  controls row (storage settings: drives + backends).
 - **The data view's client/server boundary is a row-model choice, not a fork.**
   Where list operations (filter/sort/paginate/group) resolve follows the
   established data-grid pattern — AG Grid's named *row models*, TanStack's
@@ -598,11 +611,15 @@ shared UI copy through an addon bundle.
   child holding a direct `<Tab>` declaration. Canonical parent sections are
   inherited by concrete child forms; contribute once at the owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
   which evaluates the loaded record; fields omitted by a child projection are
-  read from the canonical resource. Use `useRecordChromeContext()` inside
-  the panel to scope an embedded `ListView` with resource filters. The model's
-  Hasura resource owns filter/order/group/facet capabilities; the list owns
-  controls, paging and `rowActions`, including confirmations for generated action
-  callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  read from the canonical resource. Inside the panel, use
+  `useRecordChromeContext()` and scope a related collection with a base filter
+  on a `presentation="embedded"` list, which brings compact chrome and local
+  state. The model's Hasura resource owns filter/order/group/facet capabilities;
+  the list owns its heading row, paging and `rowActions`, including
+  confirmations for generated action callbacks. See
+  [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  A large browsable set inside a record (child runs, trigger events, a project's
+  tasks) keeps the full list: the default presentation with `scope="local"`.
   A product narrows a form's sections and verbs per app or route with `only`
   under `when` on `form#sections`, `form#actions` and `form#actions-menu`; a
   container nobody narrows keeps all its children and `only: []` keeps none.

@@ -125,7 +125,7 @@ function ResourceViewWidget({ spec, hostedView: View, onCountChange }: Dashboard
     <View
       presentation="embedded"
       scope="inherit"
-      chrome={{ viewSwitcher: false, pager: false, columnChooser: false }}
+      chrome={{ heading: false, search: true, pager: false }}
       onListStateChange={(state) => onCountChange?.(state.total ?? null)}
     />
   </ResourceViewProvider>;
