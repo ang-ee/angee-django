@@ -355,6 +355,16 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need._account_for_party(need.party_id).pk, self.reader.pk)
         self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
 
+    def test_need_without_cutover_question_refuses_plainly(self):
+        # A need captured before the decisions cutover carries no question; an authorised answerer
+        # gets the plain refusal (a redacted projection is refused for access first).
+        need = self.as_user(self.need())
+        with system_context(reason="test pre-cutover need"):
+            models.QuerySet.update(self.Need._base_manager.filter(pk=need.pk), access_decision_id=None)
+        need.refresh_from_db()
+        with self.assertRaisesMessage(ValidationError, "no access question"):
+            need.decide_access("intake.approve")
+
     def test_stale_request_revision_preserves_the_native_conflict_code(self):
         need = self.as_user(self.need())
         revision = need.revision
