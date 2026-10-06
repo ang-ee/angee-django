@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { Controller, useWatch, type Control } from "react-hook-form";
-import { rowPublicId, useModelMetadata } from "@angee/metadata";
+import { useModelMetadata } from "@angee/metadata";
 import type { ActionOutcome } from "@angee/refine";
 
 import { DialogForm } from "../../fragments/DialogForm";
@@ -440,8 +440,9 @@ function argDefaultValues(
   const values: ArgValues = {};
   for (const arg of args) {
     if (arg.argKind === "relationList") {
-      const prefill = arg.fromContext ?? defaultRelationListPrefill;
-      values[arg.name] = [...prefill(context)];
+      // Empty unless the action says which records seed it: the invoking ids are
+      // of the invoking model, which a list of another model must never inherit.
+      values[arg.name] = [...(arg.fromContext?.(context) ?? [])];
     } else if (arg.argKind === "relation") {
       values[arg.name] = relationValueId(arg.fromContext?.(context) ?? arg.defaultValue) ?? "";
     } else {
@@ -449,13 +450,4 @@ function argDefaultValues(
     }
   }
   return values;
-}
-
-/** The invoking selection, else the open record's id — a relation list's default. */
-function defaultRelationListPrefill(
-  context: ActionFormContext,
-): readonly string[] {
-  if (context.selectedIds.length > 0) return context.selectedIds;
-  const id = rowPublicId(context.record);
-  return id ? [id] : [];
 }

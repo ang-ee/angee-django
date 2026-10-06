@@ -138,6 +138,7 @@ const registerReviewArgs: readonly ActionArg[] = [
     resource: "Document",
     label: "Documents",
     filters: [{ field: "status", operator: "eq", value: "submitted" }],
+    fromContext: ({ selectedIds }) => selectedIds,
   },
   {
     name: "collection",
@@ -416,6 +417,21 @@ describe("ActionFormDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
       { documentIds: ["doc-2", "doc-1"] }, context,
     ));
+  });
+
+  test("a relation list without fromContext starts empty, never holding the invoking record's id", async () => {
+    // The invoking record is a document; a list of people must not inherit its id.
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
+    renderDialog({
+      id: "collect",
+      label: "Collect",
+      args: [{ name: "builderIds", argKind: "relationList", resource: "Person", optional: true }],
+      submit,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ builderIds: [] }, context));
   });
 
   test("does not submit its parent record form through the dialog portal", async () => {
