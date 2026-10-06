@@ -43,9 +43,10 @@ from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
 from django.utils import timezone
-from rebac import PermissionDenied, SubjectRef, current_actor, system_context, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
+from rebac.field_backing import canonical_model
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
@@ -53,7 +54,7 @@ from angee.base.actors import actor_user_id
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.refs import canonical_record_model, canonical_record_target
+from angee.base.scoping import system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
@@ -907,9 +908,12 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 class ThreadAttachmentManager(AngeeManager):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
-    The edge key is canonicalized across multi-table inheritance
-    (:func:`angee.base.refs.canonical_record_target`), so a record and each of its
-    REBAC-typed MTI ancestors share one chatter thread instead of splitting it.
+    The edge names its record by :func:`record_target`: a gated record and each
+    of its REBAC-typed MTI ancestors share one chatter thread. ``permissions.zed``
+    backs one relation per attachable record type with ``target``, so a source
+    edge is created and deleted under the actor with write on its record; the
+    chatter edge is the record's own thread, which the record's verbs
+    materialize under system context.
     """
 
     def for_record(self, record: Any, *, role: str = "chatter") -> Any | None:
@@ -917,7 +921,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return None
-        content_type, object_id = canonical_record_target(record)
+        content_type, object_id = record_target(record)
         return (
             self.model._base_manager.select_related("thread")
             .filter(content_type=content_type, object_id=object_id, role=role)
@@ -930,7 +934,7 @@ class ThreadAttachmentManager(AngeeManager):
         if record.pk is None:
             return self.model._base_manager.none()
         record.require_access("read")
-        content_type, object_id = canonical_record_target(record)
+        content_type, object_id = record_target(record)
         visible_threads = apps.get_model("messaging", "Thread").objects.all().scoped().values("pk")
         return (
             self.all()
@@ -954,56 +958,46 @@ class ThreadAttachmentManager(AngeeManager):
     ) -> Any:
         """Attach one existing conversation as retained source evidence for ``record``.
 
-        Source edges do not turn the conversation into record chatter. The caller must
-        be able to write the target and read the source thread; only the canonical,
-        idempotent edge insertion is elevated.
+        Source edges do not turn the conversation into record chatter. The edge's
+        ``create`` requires write on the record through the relation its type
+        declares, so a type no relation names is refused under an actor. A
+        thread reads its record relations through its attachments, so the
+        library's backed-edge gate also requires write on the thread.
+        ``ValueError`` names an unsaved or untyped record.
         """
 
-        if record.pk is None or thread.pk is None:
-            raise ValueError("Source thread attachment requires saved records.")
-        record.require_access("write")
-        thread.require_access("read")
-        content_type, object_id = canonical_record_target(record)
+        if thread.pk is None:
+            raise ValueError("Source thread attachment requires a saved thread.")
+        key = generic_target(record).lookups(self.model, "target")
         values = {
             "label": strip_null_bytes(label or str(record)),
             "metadata": strip_null_bytes(metadata or {}),
         }
-        target_model = content_type.model_class()
-        if target_model is None:
-            raise ValueError("Source attachment target model is unavailable.")
-        with system_context(reason="messaging.thread_attachment.bind_source"), transaction.atomic():
-            target_model._base_manager.select_for_update().get(pk=object_id)
-            thread = type(thread)._base_manager.select_for_update().get(pk=thread.pk)
-            attachment, _created = self.model._base_manager.get_or_create(
-                thread_id=thread.pk,
-                content_type_id=content_type.pk,
-                object_id=object_id,
-                role="source",
-                defaults=values,
-            )
+        with transaction.atomic():
+            self._lock_ends(key, thread)
+            attachment, _created = self.get_or_create(thread_id=thread.pk, role="source", **key, defaults=values)
         return attachment
 
     def unbind_source_thread(self, record: Any, thread: Any) -> int:
-        """Remove only the selected source edge, preserving its conversation graph."""
+        """Remove only the selected source edge; its ``delete`` requires write on the record and thread."""
 
-        if record.pk is None or thread.pk is None:
+        if thread.pk is None:
             return 0
-        record.require_access("write")
-        thread.require_access("read")
-        content_type, object_id = canonical_record_target(record)
-        target_model = content_type.model_class()
+        key = generic_target(record).lookups(self.model, "target")
+        with transaction.atomic():
+            self._lock_ends(key, thread)
+            deleted, _details = self.filter(thread=thread, role="source", **key).delete()
+        return int(deleted)
+
+    @staticmethod
+    def _lock_ends(key: Mapping[str, Any], thread: Any) -> None:
+        """Lock the record and the thread before a source edge is written."""
+
+        target_model = key["content_type"].model_class()
         if target_model is None:
             raise ValueError("Source attachment target model is unavailable.")
-        with system_context(reason="messaging.thread_attachment.unbind_source"), transaction.atomic():
-            target_model._base_manager.select_for_update().get(pk=object_id)
-            type(thread)._base_manager.select_for_update().get(pk=thread.pk)
-            deleted, _details = self.model._base_manager.filter(
-                thread=thread,
-                content_type=content_type,
-                object_id=object_id,
-                role="source",
-            ).delete()
-        return int(deleted)
+        system_queryset(target_model, lock=("self",)).get(pk=key["object_id"])
+        system_queryset(type(thread), lock=("self",)).get(pk=thread.pk)
 
     def ensure_for_record(self, record: Any, *, role: str = "chatter", title: str = "") -> Any:
         """Return ``record``'s attachment, creating its private chatter thread if needed.
@@ -1019,7 +1013,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             raise ValueError("Cannot attach a thread to an unsaved record.")
-        content_type, object_id = canonical_record_target(record)
+        content_type, object_id = record_target(record)
         _assert_canonical_composes_thread_mixin(record, content_type)
         external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
         thread_model = self.model._meta.get_field("thread").related_model
@@ -1085,7 +1079,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return
-        content_type, object_id = canonical_record_target(record)
+        content_type, object_id = record_target(record)
         target_model = content_type.model_class()
         if target_model is None:
             return
@@ -1209,7 +1203,7 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         for rows in collections:
             if not issubclass(rows.model, ThreadedModelMixin):
                 continue
-            content_type = ContentType.objects.get_for_model(canonical_record_model(rows.model))
+            content_type = ContentType.objects.get_for_model(record_target_model(rows.model))
             selection |= models.Q(
                 content_type=content_type,
                 object_id__in=rows.order_by().values("pk"),
@@ -2121,16 +2115,35 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         return activity
 
 
+def record_target_model(model: type[models.Model]) -> type[models.Model]:
+    """Return the model a chatter edge names a host of ``model`` by.
+
+    A gated host is named by its canonical REBAC model
+    (:func:`rebac.field_backing.canonical_model`), so a multi-table child shares
+    its typed parent's chatter and the schema's target relations reach it. An
+    ungated host, which no schema relation can name, keeps its own concrete
+    model: Django's generic-pointer default.
+    """
+
+    return canonical_model(model) or model._meta.concrete_model or model
+
+
+def record_target(record: Any) -> tuple[Any, Any]:
+    """Return the content type and object id the chatter edges of ``record`` store."""
+
+    return ContentType.objects.get_for_model(record_target_model(type(record))), record.pk
+
+
 def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type: Any) -> None:
     """Fail fast on a child-composed / parent-uncomposed threaded MTI split.
 
     ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation and the
     ``pre_delete`` teardown, both of which key on the model that composes the mixin — while
     the attachment row is written at the *canonical* (topmost REBAC-typed) target
-    (:func:`angee.base.refs.canonical_record_target`). If a child composes the mixin but
-    its canonical ancestor does not, the ancestor cannot collect the child's attachment on
-    delete and a reused primary key would mis-resolve. Guard it where the write keys — the
-    placement invariant stated in :mod:`angee.base.refs`.
+    (:func:`record_target`). If a child composes the mixin but its canonical ancestor
+    does not, the ancestor cannot collect the child's attachment on delete and a reused
+    primary key would mis-resolve. Guard it where the write keys — the placement
+    invariant stated in :mod:`angee.base.refs`.
     """
 
     from angee.messaging.models import ThreadedModelMixin

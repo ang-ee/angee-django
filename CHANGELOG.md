@@ -31,6 +31,20 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Messaging thread attachments authorize their record in the REBAC schema: the
+  app that owns an attachable record type declares one `target`-backed relation
+  for it and unions its write into `messaging/thread_attachment`'s `target_write`
+  (projects: tasks and projects; proposals: rounds; messaging itself: files; the
+  notes example: notes). A source conversation is bound to a record under the
+  actor with write on the record and, through the library's backed-edge gate,
+  write on the thread, and unbound by the record's or the conversation's
+  writers; a record type no relation names is refused, and an untyped record
+  raises `ValueError`. The target arms reach source edges only (a const relation
+  on the row's role): the chatter edge remains the record's own thread,
+  materialized by its verbs under system context, with access riding on the
+  thread as before, and an ungated host keeps its own concrete content type
+  (`angee.messaging.managers.record_target`). The edge's `create` no longer
+  admits every authenticated actor.
 - Project links, project resource bindings and portfolio health reports
   authorize their target in the REBAC schema: each edge's per-type relations are
   backed by its `GenericForeignKey`, rows are stored at `rebac.generic_target`

@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 15
+// @rebac_schema_revision: 16
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -55,16 +55,38 @@ definition messaging/message {
     permission delete = thread->delete + channel->write + editor + admin->member
 }
 
+// A thread attachment names its record through its GenericForeignKey. The app
+// that owns an attachable record type declares it from its
+// permissions.extends.zed: one relation over the type's canonical model, backed
+// by `target`, unioned into `target_write`:
+//
+//     relation task: projects/task // rebac:field=target
+//     permission target_write = task->write
+//
+// A source edge retains a conversation as evidence for a record: it is created
+// with write on the record and deleted by the record's or the conversation's
+// writers, so a record type no relation names is refused under an actor. A
+// chatter edge is the record's own thread, which the record's verbs materialize
+// under system context; its access rides on the thread. Files carry source
+// conversations, declared here.
 definition messaging/thread_attachment {
     relation thread: messaging/thread // rebac:field=thread
+    relation file: storage/file // rebac:field=target
+    // Const-backed on the row's own role: `source->retains` holds exactly for a
+    // source edge, so the target arms reach source edges and never chatter.
+    relation source: messaging/thread_attachment // rebac:const={"target_id":"source","filters":{"role":"source"}}
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
-    permission create = authenticated
+    permission target_write = file->write
+
+    // Arrow-only through `source`: never check `retains` directly.
+    permission retains = authenticated
+    permission create = source->retains & target_write
     permission read   = thread->read + editor + reader + admin->member
     permission write  = thread->write + editor + admin->member
-    permission delete = thread->write + admin->member
+    permission delete = thread->write + (source->retains & target_write) + admin->member
 }
 
 definition messaging/thread_follower {

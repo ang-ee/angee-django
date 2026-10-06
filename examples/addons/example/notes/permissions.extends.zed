@@ -1,0 +1,11 @@
+// Notes-owned record arms contributed to upstream edge definitions.
+// @rebac_package: notes
+// @rebac_schema_revision: 1
+
+// A note carries source conversations under its writers: the thread attachment
+// edge reaches the note through its GenericForeignKey.
+definition messaging/thread_attachment {
+    relation note: notes/note // rebac:field=target
+
+    permission target_write = note->write
+}
