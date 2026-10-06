@@ -23,6 +23,7 @@ import { makeContext } from "./make-context";
 import { createAngeeI18nInstance } from "./i18n";
 import {
   createRouteHref,
+  recordMatchValues,
   type RouteHref,
   type RuntimeResourceRoutes,
 } from "./route-href";
@@ -412,7 +413,7 @@ function recordDestination(
   const matching = routes.recordDestinations.filter(({ match }) => {
     const value = match.field.split(".").reduce<unknown>((current, key) =>
       current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined, row);
-    return value === match.equals;
+    return typeof value === "string" && recordMatchValues(match).includes(value);
   });
   if (matching.length > 1) throw new Error("Record matches more than one app route.");
   return matching[0]?.record ?? routes.recordFallback;

@@ -17,11 +17,25 @@ export type RouteHrefSearch =
   | string
   | Readonly<Record<string, RouteHrefSearchValue>>;
 
+/**
+ * A record route's claim: the record's `field` (a dotted path) equals `equals`,
+ * or one of its values when it is a list.
+ */
+export interface RecordMatch {
+  field: string;
+  equals: string | readonly string[];
+}
+
+/** The values a record match accepts. */
+export function recordMatchValues(match: RecordMatch): readonly string[] {
+  return typeof match.equals === "string" ? [match.equals] : match.equals;
+}
+
 /** Collection/record route names selected by the app's resource projection. */
 export interface RuntimeResourceRoutes {
   collection: string;
   record?: { name: string; param: string };
-  recordDestinations?: readonly { record: { name: string; param: string }; match: { field: string; equals: string } }[];
+  recordDestinations?: readonly { record: { name: string; param: string }; match: RecordMatch }[];
   recordFallback?: { name: string; param: string };
 }
 
