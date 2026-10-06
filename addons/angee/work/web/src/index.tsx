@@ -25,6 +25,7 @@ import { ShareAccessRailGroup } from "@angee/iam";
 
 import { ProjectManagerAccessRole } from "./access-role";
 import { enWorkMessages } from "./i18n";
+import { QUEUE_FORM_SECTIONS } from "./queue-form";
 import { QUEUE_MODEL } from "./resources";
 import { StageStatusbar } from "./stage-statusbar";
 import { taskWorkFormSection } from "./task-work";
@@ -143,6 +144,8 @@ const work = defineBaseAddon({
     [`${TASK_MODEL}#sections`]: {
       "work.task-fields": { sequence: 40, content: taskWorkFormSection },
     },
+    // The queue settings form's sections, narrowable per product route (Stages: work.queue-stages).
+    [`${QUEUE_MODEL}#sections`]: QUEUE_FORM_SECTIONS,
     // Every triage verb is a menu verb: it joins the form's one Actions menu.
     [`${TASK_MODEL}#actions-menu`]: {
       "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
@@ -164,5 +167,6 @@ const work = defineBaseAddon({
 
 export { estimateLabel } from "./estimates";
 export { CYCLE_MODEL, QUEUE_MODEL, STAGE_MODEL } from "./resources";
+export { QUEUE_STAGES_SECTION, QueueSettingsForm, useQueueFormDeclaration } from "./queue-form";
 export { RemovedTasks, type RemovedTasksProps } from "./removed-tasks";
 export default work;

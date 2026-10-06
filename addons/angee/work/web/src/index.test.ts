@@ -93,8 +93,15 @@ describe("work addon manifest", () => {
       "work.people-rail",
       "work.project-team",
       "work.task-fields",
+      "work.queue-identity",
+      "work.queue-triage",
+      "work.queue-cadence",
+      "work.queue-estimates",
+      "work.queue-stages",
       "work.task-triage-actions",
     ]);
+    // The queue settings sections are work.Queue's, so a product narrows them per route.
+    expect(Object.keys(work.containers?.["work.Queue#sections"] ?? {})).toContain("work.queue-stages");
     // Menu verbs join the form's Actions menu; a bar in the toolbar would open a second one.
     expect(Object.keys(work.containers?.["projects.Task#actions-menu"] ?? {})).toEqual(["work.task-triage-actions"]);
     expect(work.containers?.["projects.Task#actions"]).toBeUndefined();

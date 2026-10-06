@@ -12,6 +12,13 @@ projection locks name and category, so lines may change their tone and order but
 cannot rename, recategorize, delete or create one; provisioning and resource loads
 still own them.
 
+The queue settings form is one owner, `useQueueFormDeclaration` (and
+`QueueSettingsForm` for a product's own route). Its sections are
+`work.Queue#sections` children: `work.queue-identity` (with the description),
+`work.queue-triage`, `work.queue-cadence`, `work.queue-estimates` and
+`work.queue-stages`, the Stages lines. A product narrows them per route, for
+example `{ only: ["work.queue-stages"], when: { route: "<its route>" } }`.
+
 The setup contributors consume native project teams and optional milestone
 `active_stage` choices through their ordinary sharing and stage-validation owners.
 
