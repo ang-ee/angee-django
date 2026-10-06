@@ -4,7 +4,7 @@ import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import type { ReactElement } from "react";
 import { testDataResource } from "@angee/metadata/testing";
-import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, Field, ModalsHost, ToastProvider, baseIcons, containersFromChildren, defaultWidgets, type ContainerChild } from "@angee/ui";
@@ -51,14 +51,16 @@ function renderPartyForm(
     getOne: vi.fn(async () => ({ data: { id: "party-1", display_name: "Saved party" } })),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
   } satisfies RefineTestDataProvider;
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  // A matched route: the record's first pane mounts with the form and reads the route's search.
+  const rootRoute = createRootRoute({ component: () => (
+    <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, containers }}>
+      {form}
+    </AppRuntimeProvider></ToastProvider></ModalsHost>
+  ) });
+  const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory({ initialEntries: ["/"] }) });
   return render(
     <Provider resources={resources} dataProvider={provider} queryClientConfig={{ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }}>
-      <RouterContextProvider router={router}>
-        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets, icons: baseIcons, containers }}>
-          {form}
-        </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </RouterContextProvider>
+      <RouterProvider router={router} />
     </Provider>,
   );
 }
