@@ -44,6 +44,7 @@ import {
   createRoute,
   createRouter,
   redirect,
+  retainSearchParams,
   useRouterState,
 } from "@tanstack/react-router";
 import {
@@ -608,7 +609,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  const rootRoute = createRootRoute({ component: RootOutlet });
+  const rootRoute = createRootRoute({
+    component: RootOutlet,
+    // `?app=` selects at boot; every link and redirect keeps it, so a reload or a shared link selects the same app.
+    validateSearch: (search: Record<string, unknown>): Record<string, unknown> & { app?: string } => search,
+    search: { middlewares: [retainSearchParams(["app"])] },
+  });
 
   // A signed-out visit to "/" signs in first only when the page it lands on requires it.
   const homeRequiresSignIn = Object.keys(layoutAuthGuard(homeRoute?.layout ?? "console", input.layouts, refineAuthProvider, queryClient, loginPath)).length > 0;

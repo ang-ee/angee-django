@@ -405,6 +405,28 @@ describe("createApp selection", () => {
       host.remove();
     }
   });
+
+  test("?app= stays in the URL through the landing redirect and every navigation, so a reload selects the same app", async () => {
+    history.replaceState(null, "", "/?app=requests");
+    const app = createApp({ ...testAppInput(addons, layouts), location: { search: "?app=requests" } });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(window.location.pathname).toBe("/requests"));
+      expect(window.location.search).toBe("?app=requests");
+      // Chrome links pass a search of their own; href navigation parses one.
+      await app.router.navigate({ to: "/files", search: {} });
+      expect(`${window.location.pathname}${window.location.search}`).toBe("/files?app=requests");
+      await app.router.navigate({ href: "/requests/item-1?tab=notes" });
+      expect(new URLSearchParams(window.location.search).get("app")).toBe("requests");
+      expect(new URLSearchParams(window.location.search).get("tab")).toBe("notes");
+    } finally {
+      root.unmount();
+      host.remove();
+      history.replaceState(null, "", "/");
+    }
+  });
 });
 
 describe("createApp presence", () => {
