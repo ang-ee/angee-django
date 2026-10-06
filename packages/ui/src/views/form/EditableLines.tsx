@@ -47,6 +47,13 @@ export interface EditableLinesProps {
   rowErrors?: readonly (ValidationErrors | undefined)[];
   /** Initially visible editable fields; others remain available in the header menu and save diff. */
   primaryFields?: readonly string[];
+  /**
+   * Authored presentation for named line fields — header, help text, choices or
+   * widget — over the child metadata. Every line field still renders from its
+   * metadata; help text lists under the lines, so a column kept behind the header
+   * menu still explains itself.
+   */
+  fields?: readonly EditableLineField[];
   /** Read-only projections supplied by the composing domain. */
   supplementalColumns?: readonly EditableLineSupplementalColumn[];
   /** Domain-owned relation constraints for a field and its owning document. */
@@ -54,6 +61,12 @@ export interface EditableLinesProps {
     fieldName: string,
     parentRow: Row | null,
   ) => readonly CrudFilter[] | undefined;
+}
+
+/** Authored presentation of one line field, keyed by its name. */
+export interface EditableLineField extends Pick<FieldDescriptor, "name" | "description" | "options" | "widget"> {
+  /** Column header and the cells' accessible name. */
+  label?: string;
 }
 
 export interface EditableLineSupplementalColumn {
@@ -81,7 +94,7 @@ type LineViewRow = { id: string; index: number; value: Row };
  */
 export function EditableLines({
   control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,
-  primaryFields, supplementalColumns = [], relationFilters,
+  primaryFields, fields: authoredFields = [], supplementalColumns = [], relationFilters,
 }: EditableLinesProps): React.ReactElement {
   const t = useUiT();
   const controlId = React.useId();
@@ -122,14 +135,16 @@ export function EditableLines({
   const editableFields = (lines.fields ?? []).filter((field) => field.name !== config.positionField);
   const primary = primaryFields?.some((name) => editableFields.some((field) => field.name === name))
     ? new Set(primaryFields) : null;
+  const authoredByName = new Map(authoredFields.map((field) => [field.name, field]));
   const columns: ColumnDescriptor<LineViewRow>[] = editableFields.map((field) => {
-    const widget = defaultWidgetForModelField(field);
+    const authored = authoredByName.get(field.name);
+    const widget = authored?.widget ?? defaultWidgetForModelField(field);
     const customWidget = Boolean(field.widget && !["many2one", "many2many"].includes(field.widget));
     const relation = customWidget ? null : relationFieldInfoForField(field, schemaMetadata);
     const relationMulti = customWidget ? null : relationListFieldInfoForField(field, schemaMetadata);
-    const header = titleCase(field.name);
+    const header = authored?.label ?? titleCase(field.name);
     const descriptor: FieldDescriptor = {
-      name: field.name, label: header, widget, options: enumOptions(field),
+      name: field.name, label: header, widget, options: authored?.options ?? enumOptions(field),
       ...(field.currencyField ? { currencyField: field.currencyField } : {}),
     };
     const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
@@ -189,6 +204,12 @@ export function EditableLines({
     minWidth: column.minWidth, align: column.align ?? "right", sortable: false,
     render: ({ value, index }) => column.render(value, parentRow ?? null, index, { formIsDirty }),
   })));
+  const described = editableFields.flatMap((field) => {
+    const authored = authoredByName.get(field.name);
+    return authored?.description == null ? [] : [{
+      name: field.name, label: authored.label ?? titleCase(field.name), description: authored.description,
+    }];
+  });
   const unlocked = ({ value }: LineViewRow) => lineLockedFields(value, config).length === 0;
   if (config.lockField) {
     columns.push({
@@ -230,6 +251,16 @@ export function EditableLines({
         <Glyph name="plus" decorative />{t("lines.add")}
       </Button>}
     />
+    {described.length > 0 ? (
+      <dl className="grid gap-1 px-2 pt-2 text-xs text-fg-muted">
+        {described.map(({ name, label, description }) => (
+          <div key={name}>
+            <dt className="inline font-medium text-fg-2">{label}</dt>{": "}
+            <dd className="inline">{description}</dd>
+          </div>
+        ))}
+      </dl>
+    ) : null}
     {footer ? <div className="pt-2">{footer(rows)}</div> : null}
   </div>;
 }

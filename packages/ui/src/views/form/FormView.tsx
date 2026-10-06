@@ -96,6 +96,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   groupLayout?: "stacked" | "paired";
   /** Editable line fields shown before the user expands advanced line details. */
   linePrimaryFields?: readonly string[];
+  /** Authored header, help text, choices or widget for named editable line fields. */
+  lineFields?: EditableLinesProps["fields"];
   /** Read-only domain projections rendered beside editable line fields. */
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   /** Domain-owned filters applied to relation pickers on editable lines. */
@@ -150,6 +152,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     layout = "stacked",
     groupLayout = "stacked",
     linePrimaryFields,
+    lineFields,
     lineSupplementalColumns,
     lineRelationFilters,
     lineFooter,
@@ -245,6 +248,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     <FormViewOverview
       surface={surface} layout={layout} groupLayout={groupLayout} tabStrip={tabStrip}
       linePrimaryFields={linePrimaryFields}
+      lineFields={lineFields}
       lineSupplementalColumns={lineSupplementalColumns}
       lineRelationFilters={lineRelationFilters}
       lineFooter={lineFooter && !awaitingRecord ? () => lineFooter(recordToolbarContext) : undefined}

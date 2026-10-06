@@ -379,6 +379,45 @@ describe("EditableLines", () => {
   });
 });
 
+describe("EditableLines authored fields", () => {
+  test("authored headers name the columns and cells, and their help explains a column kept in the header menu", async () => {
+    function AuthoredHost(): React.ReactElement {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: { lines: [{ id: "one", label: "Widget", quantity: 2, position: 0 }] },
+      });
+      return (
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <ModalsHost><EditableLines
+            control={form.control}
+            setValue={form.setValue}
+            name="lines"
+            lines={LINES}
+            primaryFields={["label"]}
+            fields={[
+              { name: "label", label: "Item" },
+              { name: "quantity", label: "Units", description: "How many the order ships." },
+            ]}
+          /></ModalsHost>
+        </AppRuntimeProvider>
+      );
+    }
+    render(<AuthoredHost />);
+
+    expect(screen.getByRole("columnheader", { name: /^Item/ })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Item" })).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: /^Units/ })).toBeNull();
+    expect(screen.getByText("How many the order ships.")).toBeTruthy();
+    await toggleField("Units");
+    expect(screen.getByRole("textbox", { name: "Units" })).toBeTruthy();
+  });
+
+  test("lines without authored help render no legend beside the composer's footer", () => {
+    const { container } = render(<Host footer={(rows) => <div>lines: {rows.length}</div>} />);
+    expect(container.querySelector("dl")).toBeNull();
+    expect(screen.getByText("lines: 2")).toBeTruthy();
+  });
+});
+
 function LockedHost(): React.ReactElement {
   const form = useForm<Record<string, unknown>>({
     defaultValues: {

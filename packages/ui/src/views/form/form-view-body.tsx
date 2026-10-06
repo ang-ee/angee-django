@@ -322,6 +322,7 @@ export function FormViewOverview({
   groupLayout,
   tabStrip,
   linePrimaryFields,
+  lineFields,
   lineSupplementalColumns,
   lineRelationFilters,
   lineFooter,
@@ -331,17 +332,18 @@ export function FormViewOverview({
   groupLayout: "stacked" | "paired";
   tabStrip: React.ReactNode;
   linePrimaryFields?: readonly string[];
+  lineFields?: EditableLinesProps["fields"];
   lineSupplementalColumns?: readonly EditableLineSupplementalColumn[];
   lineRelationFilters?: EditableLinesProps["relationFilters"];
   /** Rendered under the lines only (totals belong to the lines, not to every tab). */
   lineFooter?: EditableLinesProps["footer"];
 }): React.ReactElement {
   const {
-    t,
     form,
     sections,
     bodyTabSections,
     tabbed,
+    linesLabel,
     linesActive,
     linesResource,
     linesField,
@@ -376,6 +378,7 @@ export function FormViewOverview({
       readOnly={formReadOnly}
       rowErrors={lineRowErrors}
       primaryFields={linePrimaryFields}
+      fields={lineFields}
       supplementalColumns={lineSupplementalColumns}
       relationFilters={lineRelationFilters}
       footer={lineFooter}
@@ -447,7 +450,7 @@ export function FormViewOverview({
       </div>
       {layout !== "tabs" && editableLines ? (
         <section className="grid gap-3">
-          <SectionHeading label={t("lines.section")}
+          <SectionHeading label={linesLabel}
             className="border-b border-border-subtle pb-1" />
           {editableLines}
         </section>

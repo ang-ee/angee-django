@@ -179,6 +179,7 @@ export interface UseFormViewSurfaceProps {
     label: React.ReactNode;
     render: (context: RecordToolbarContext) => React.ReactNode;
   }[];
+  /** The editable lines' section label: their tab, or their stacked section heading. */
   linesTabLabel?: React.ReactNode;
   /** Overview visibility on forms without body tabs. */
   overviewTab?: OverviewTabOptions;
@@ -208,6 +209,8 @@ export interface FormViewSurface
   sections: readonly FormSectionModel[];
   /** The tabs layout's body sections: tabs beside a strip, stacked under their headings without one. */
   bodyTabSections: readonly FormSectionModel[];
+  /** The editable lines' section label, as a tab or a stacked heading. */
+  linesLabel: React.ReactNode;
   railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
@@ -740,8 +743,9 @@ export function useFormViewSurface({
     }),
     [id, save],
   );
+  const linesLabel = linesTabLabel ?? t("lines.section");
   const bodyTabSections: readonly FormSectionModel[] = layout === "tabs" ? [
-    ...(save.linesActive ? [{ key: "editable-lines", label: linesTabLabel ?? t("lines.section"), fields: [] }] : []),
+    ...(save.linesActive ? [{ key: "editable-lines", label: linesLabel, fields: [] }] : []),
     ...(bodyTabs ?? []).map((tab) => ({ key: tab.id, label: tab.label, fields: [], render: () => tab.render(recordToolbarContext) })),
     ...sections.filter((section) => section.label != null && !section.collapsible
       && (section.fields.length > 0 || section.render !== undefined)),
@@ -832,6 +836,7 @@ export function useFormViewSurface({
     bodyField,
     sections,
     bodyTabSections,
+    linesLabel,
     railGroups: visibleRailGroups,
     subtitleParts,
     lineRowErrors,

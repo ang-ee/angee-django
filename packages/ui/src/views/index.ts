@@ -283,6 +283,7 @@ export {
 } from "./resource/record-chrome-context";
 export {
   EditableLines,
+  type EditableLineField,
   type EditableLineSupplementalColumn,
   type EditableLinesProps,
 } from "./form/EditableLines";

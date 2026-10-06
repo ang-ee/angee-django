@@ -179,6 +179,14 @@ test("editable lines alone in a tabs layout stack under their tab label without 
   expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
 });
 
+test("a stacked form heads its lines section with the declared lines label", async () => {
+  await fixture({ publicView: true, formProps: { linesTabLabel: "Stages" } });
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(screen.getByRole("heading", { name: "Stages" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Lines" })).toBeNull();
+  expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
+});
+
 test("new documents render Add line and create their draft lines in one native nested insert", async () => {
   const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
   const f = await fixture({ isCreate: true, publicView: true, create: async () => ({ data: saved }) });
