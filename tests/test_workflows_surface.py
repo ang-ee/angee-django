@@ -46,6 +46,7 @@ EXPECTED_VERBS = {
     "extraction.ExtractionPart.queryset": "validate_insert",
     "extraction.ExtractionSource.queryset": "validate_insert",
     "workflows.StepAttempt.queryset": "close",
+    "workflows.StepRecord.queryset": "change_related_records",
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
         "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
