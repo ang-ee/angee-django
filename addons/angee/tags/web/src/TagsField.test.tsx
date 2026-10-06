@@ -122,6 +122,12 @@ test("a read-only form or reader renders linked chips only", () => {
   expect(getList).not.toHaveBeenCalled();
 });
 
+test("an unset form value is no tags, not a crash", () => {
+  const { Wrapper } = harness(chrome);
+  render(<Wrapper><TagsField value={"" as unknown as readonly unknown[]} field={{ label: "Tags" }} /></Wrapper>);
+  expect(screen.getByRole("combobox")).toBeTruthy();
+});
+
 test("a create form has no record to tag yet", () => {
   const { getList, Wrapper } = harness(null);
   render(<Wrapper><TagsField value={[]} field={{ label: "Tags" }} /></Wrapper>);

@@ -26,7 +26,9 @@ const TAG_MODEL = "tags.Tag";
  * write on the record, gets linked chips; a create form has no record to tag
  * yet and says so.
  */
-export function TagsField({ value, field, readOnly, controlRef }: WidgetRenderProps<readonly unknown[]>): React.ReactElement {
+export function TagsField({ value: formValue, field, readOnly, controlRef }: WidgetRenderProps<readonly unknown[]>): React.ReactElement {
+  // A form holds an unset field as its empty scalar (""), not a list: narrow here.
+  const value: readonly unknown[] = Array.isArray(formValue) ? formValue : [];
   const t = useTagsT();
   const chrome = useRecordChromeContextMaybe();
   const relation = relationFieldInfoForResource(TAG_MODEL, useModelMetadata(TAG_MODEL));
@@ -58,7 +60,7 @@ export function TagsField({ value, field, readOnly, controlRef }: WidgetRenderPr
   };
   return (
     <RelationMultiFieldWidget
-      value={draft ?? value ?? []}
+      value={draft ?? value}
       relation={relation}
       readOnly={readOnly || chrome.formReadOnly}
       controlRef={controlRef}
