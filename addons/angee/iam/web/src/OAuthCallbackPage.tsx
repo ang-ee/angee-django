@@ -24,7 +24,8 @@ export function OAuthCallbackPage(): ReactNode {
     }),
     [loginPath, t],
   );
-  const [loginComplete] = useAuthoredMutation(IamLoginComplete);
+  // This page renders a failed exchange itself; no generic notification on top.
+  const [loginComplete] = useAuthoredMutation(IamLoginComplete, { errorNotification: false });
 
   const complete = useCallback<CallbackExchange>(
     async (args) => {

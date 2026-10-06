@@ -24,8 +24,10 @@ export function OAuthConnectCallbackPage(): ReactNode {
     }),
     [routeHref, t],
   );
+  // This page renders a failed exchange itself; no generic notification on top.
   const [connectAccountComplete] = useAuthoredMutation(
     IntegrateConnectAccountComplete,
+    { errorNotification: false },
   );
 
   const complete = useCallback<CallbackExchange>(
