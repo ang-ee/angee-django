@@ -63,6 +63,8 @@ export interface AuthUser {
   isActive?: boolean;
   preferences?: UserPreferences;
   roles?: readonly string[];
+  /** The composition's `requires` refs this identity holds, re-read with every identity load. */
+  permitted?: readonly string[];
 }
 
 export interface AuthState {
@@ -103,6 +105,8 @@ export interface AngeeAuthProviderOptions extends AngeeHasuraClientOptions {
   queryClient?: QueryClient;
   /** Console IAM owns real_user and viewable_people; public IAM owns login. */
   identityClient?: AngeeHasuraClientOptions;
+  /** The composition's `requires` refs; the identity read asks `current_user.permitted` which it holds. */
+  requires?: readonly string[];
 }
 
 export interface UseRuntimeAuthStateResult {
@@ -163,13 +167,14 @@ export function createAngeeAuthProvider(
 
 export function createAngeeAuthProviderFromRequest(
   request: GraphQLRequest,
-  options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange" | "queryClient"> & {
+  options: Pick<AngeeAuthProviderOptions, "loginPath" | "onAuthChange" | "queryClient" | "requires"> & {
     identityRequest?: GraphQLRequest;
   } = {},
 ): RefineAuthProvider {
   const loginPath = options.loginPath ?? DEFAULT_LOGIN_PATH;
-  const currentUser = async (): Promise<CurrentUserPayload | null> => {
-    const data = await request(AngeeCurrentUserDocument);
+  const refs = [...(options.requires ?? [])];
+  const currentUser = async (permitted: string[] = []): Promise<CurrentUserPayload | null> => {
+    const data = await request(AngeeCurrentUserDocument, { refs: permitted });
     return currentUserPayload(data.current_user);
   };
   const sharedIdentity = async (): Promise<AuthIdentity | null> => {
@@ -198,11 +203,12 @@ export function createAngeeAuthProviderFromRequest(
       }
     },
     async getIdentity() {
-      const payload = await currentUser();
+      // The read that yields the identity asks which `requires` refs it holds: the console read when one follows.
+      const payload = await currentUser(options.identityRequest ? [] : refs);
       if (!payload || !options.identityRequest) return currentUserToAuthState(payload).user;
       // viewable_people requires a session: never send the console read for an
       // anonymous login page. Both reads live in Refine's one identity query.
-      const identity = await options.identityRequest(AngeeViewAsIdentityDocument);
+      const identity = await options.identityRequest(AngeeViewAsIdentityDocument, { refs });
       const user = currentUserToAuthState(currentUserPayload(identity.current_user)).user;
       return user ? {
         ...user,
@@ -550,6 +556,7 @@ export function currentUserToAuthState(
     isActive: payload.isActive,
     preferences: payload.preferences,
     roles: payload.roleRefs,
+    permitted: payload.permitted,
   };
   return authStateFromUser(user);
 }

@@ -1,9 +1,11 @@
 import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
-import type { HiddenMenuItem, MenuItem, RemovedMenuItem } from "@angee/ui/runtime";
+import type { HiddenMenuItem, MenuItem, RemovedMenuItem, RuntimeBrand } from "@angee/ui/runtime";
 
 import { positionSiblings } from "@angee/ui/lib/position";
 
-import { DEPLOYMENT_LAYER_ID, assertMayAlter, layerAncestry, overridesField, type Layer } from "./layers";
+import type { AddonRoute } from "./define-addon";
+import { DEPLOYMENT_LAYER_ID, assertMayAlter, layerAncestry, overridesField, routeOwners, type Layer } from "./layers";
+import { normalizeRoutePath } from "./route-paths";
 
 /** An included node, optionally rendered flat into the including node. */
 export type MenuInclude = string | { id: string; flatten?: boolean };
@@ -11,11 +13,28 @@ export type MenuInclude = string | { id: string; flatten?: boolean };
 /**
  * One key of an addon's `menus` dict. A key in the addon's own namespace (its
  * id, or `<id>.…`) declares a node; any other key alters a node declared by an
- * addon this one depends on.
+ * addon this one depends on. A node targets at most one of `route` (a link),
+ * `mount` (a borrowed page) and `to` (an external URL).
  */
 export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<ChromeMenuExtra, "parentId" | "badge" | "hidden"> {
   /** The parent node id; `null` places the node at the top of the rail. */
   parent?: string | null;
+  /**
+   * Borrow a page: a route of this addon or one it depends on, aliased under the
+   * node's app as a route named after the node (`<id>`, and `<id>.record` for the
+   * route's record child) that reuses the route's page, model and detail. The
+   * source app keeps its own page; the node's `defaultResourceView` and
+   * `recordMatch` go onto the alias.
+   */
+  mount?: string;
+  /**
+   * The URL path mounts use. On an app (a node declared at the top of the rail)
+   * it is the base its mounts live under, `/<id>` by default; on a mount it is
+   * the alias's path under that base.
+   */
+  path?: string;
+  /** A mount's claim on the records whose `field` holds `equals`: they open in it from every app. */
+  recordMatch?: NonNullable<AddonRoute["recordMatch"]>;
   sequence?: number;
   /** Place the node right before or after a node that ends up beside it; a cycle fails composition. */
   before?: string;
@@ -34,21 +53,42 @@ export interface MenuEntry extends Omit<MenuItem, "id" | "children">, Omit<Chrom
 
 export type MenuDeclarations = Readonly<Record<string, MenuEntry>>;
 
+/** One item of the legacy declaration list; like a dict entry, it may borrow a page. */
+export interface MenuDeclarationItem extends BaseMenuItem, Pick<MenuEntry, "mount" | "path" | "recordMatch"> {
+  children?: readonly MenuDeclarationItem[];
+}
+
 /** Whether an addon authored its menus as the legacy declaration list rather than the dict. */
 export function isMenuDeclarationList(
-  menus: readonly BaseMenuItem[] | MenuDeclarations | undefined,
-): menus is readonly BaseMenuItem[] {
+  menus: readonly MenuDeclarationItem[] | MenuDeclarations | undefined,
+): menus is readonly MenuDeclarationItem[] {
   return Array.isArray(menus);
 }
 
 export interface MenuLayer extends Layer {
-  menus?: readonly BaseMenuItem[] | MenuDeclarations;
+  menus?: readonly MenuDeclarationItem[] | MenuDeclarations;
+  /** The layer's routes, which its dependents may mount. */
+  routes?: readonly { name: string }[];
 }
 
 /** A logical-tree node; `flatten` marks an included app rendered into its parent. */
 export interface CompiledMenuItem extends ChromeMenuItem {
   flatten?: boolean;
   children?: readonly CompiledMenuItem[];
+}
+
+/** A borrowed page: the alias route a `mount` node adds under its app. */
+export interface MenuMount {
+  /** The node id, which names the alias route. */
+  id: string;
+  /** The mounted route. */
+  route: string;
+  /** The alias's full path: its app's `path` joined with the node's. */
+  path: string;
+  /** The layer that set `mount`, which depends on the route's owner. */
+  by: string;
+  recordMatch?: NonNullable<AddonRoute["recordMatch"]>;
+  defaultResourceView?: string;
 }
 
 export interface CompiledMenus {
@@ -61,6 +101,8 @@ export interface CompiledMenus {
   navigation: readonly ChromeMenuItem[];
   /** Removed nodes, subtrees included; `parent` is the rail item each showed under. */
   removed: readonly RemovedMenuItem[];
+  /** Every mount node's alias, removed ones included so their pages become unavailable. */
+  mounts: readonly MenuMount[];
   /** Surviving nodes left out of the rail, by a `hide` or by a layer's `only`. */
   hidden: readonly HiddenMenuItem[];
   /** The layer that set each node field, declarations included. */
@@ -69,9 +111,12 @@ export interface CompiledMenus {
   diagnostics: readonly string[];
 }
 
+/** What an app root says about itself when it is selected: where it lands, its identity, its theme. */
+const ROOT_FIELDS = ["home", "brand", "theme"] as const satisfies readonly (keyof MenuEntry)[];
 const DECLARATION_FIELDS = [
-  "label", "route", "params", "defaultResourceView", "to", "icon",
-  "appRoot", "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after",
+  "label", "route", "params", "defaultResourceView", "to", "icon", "requires",
+  "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after", ...ROOT_FIELDS,
+  "mount", "path", "recordMatch",
 ] as const satisfies readonly (keyof MenuEntry)[];
 const OPERATION_FIELDS = ["include", "remove", "hide", "only", "force"] as const satisfies readonly (keyof MenuEntry)[];
 type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[number];
@@ -81,8 +126,8 @@ void _complete;
 const ENTRY_KEYS: ReadonlySet<string> = new Set<string>([...DECLARATION_FIELDS, ...OPERATION_FIELDS]);
 /** Fields a node carries; `badge` arrives only through the legacy list. */
 type Field = (typeof DECLARATION_FIELDS)[number] | "badge" | "hide" | "remove" | "flatten";
-/** Resolution-only fields, never emitted on a compiled item. */
-const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "after", "hide", "remove"];
+/** Resolution-only fields, never emitted on a compiled item; a mount becomes a `route` to its alias. */
+const RESOLUTION_FIELDS: readonly Field[] = ["parent", "sequence", "before", "after", "hide", "remove", "mount", "path", "recordMatch"];
 
 interface Node {
   id: string;
@@ -164,7 +209,15 @@ export function compileMenus(
       if (included.flatten) set(layer, included.id, "flatten", true);
     }
   }
-  return resolve(nodes, ancestors, diagnostics);
+  const compiled = resolve(nodes, ancestors, diagnostics);
+  // An addon borrows only pages of the addons it depends on, like any alteration.
+  const owners = routeOwners(layers);
+  for (const mount of compiled.mounts) {
+    const owner = owners[mount.route];
+    if (owner === undefined) throw new Error(`Menu item "${mount.id}" mounts unknown route "${mount.route}".`);
+    assertMayAlter(ancestors, mount.by, owner, `route "${mount.route}"`, "mounts");
+  }
+  return compiled;
 }
 
 /** Refuse unknown keys and malformed values, which would otherwise do nothing silently. */
@@ -183,7 +236,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "appRoot", "personal", "force"] as const) {
+  for (const key of ["remove", "hide", "personal", "force"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
   }
   // Addons only narrow (G-14); the deployment may force an `only`, and says so.
@@ -193,11 +246,26 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   for (const key of ["sequence"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "number") throw new Error(`${where}: ${key} must be a number.`);
   }
-  for (const key of ["label", "route", "to", "icon", "before", "after"] as const) {
+  for (const key of ["label", "route", "mount", "path", "to", "icon", "requires", "before", "after", "home", "theme"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "string") throw new Error(`${where}: ${key} must be a string.`);
+  }
+  if (value.brand !== undefined) assertBrand(where, value.brand);
+  const match = value.recordMatch as { field?: unknown; equals?: unknown } | null | undefined;
+  if (match !== undefined && (typeof match !== "object" || match === null
+    || typeof match.field !== "string" || typeof match.equals !== "string")) {
+    throw new Error(`${where}: recordMatch must be { field, equals } strings.`);
   }
   if (value.parent !== undefined && value.parent !== null && typeof value.parent !== "string") {
     throw new Error(`${where}: parent must be a menu id or null.`);
+  }
+}
+
+/** A brand names its product and a glyph; the glyph's registration is checked at app boot. */
+export function assertBrand(where: string, brand: unknown): asserts brand is RuntimeBrand {
+  const fields = typeof brand === "object" && brand !== null && !Array.isArray(brand) ? brand as Record<string, unknown> : undefined;
+  if (!fields || Object.keys(fields).some((key) => key !== "name" && key !== "mark")
+    || [fields.name, fields.mark].some((value) => typeof value !== "string" || !value.trim())) {
+    throw new Error(`${where}: brand must be { name, mark } with a non-empty name and mark.`);
   }
 }
 
@@ -205,13 +273,14 @@ function declareLegacy(
   declare: (layer: string, id: string, fields: Node["fields"]) => void,
   diagnostics: string[],
   layer: string,
-  item: BaseMenuItem,
+  item: MenuDeclarationItem,
   parent: string | undefined,
 ): void {
   if ("app" in item) throw new Error(`Menu item "${item.id}" authors app; app identity is compiler-emitted.`);
   const id = item.id ?? item.route;
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
   const { id: _id, children, parentId, ...rest } = item;
+  if (rest.brand !== undefined) assertBrand(`Menu item "${id}" of "${layer}"`, rest.brand);
   const owner = parent ?? parentId;
   if (id !== layer && !id.startsWith(`${layer}.`)) {
     diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);
@@ -252,6 +321,23 @@ function resolve(
     if (node.fields.personal && (parent !== undefined || node.fields.group !== "platform")) {
       throw new Error(`Menu item "${node.id}" is personal, which only a Settings root (group "platform", no parent) may be.`);
     }
+    // An included app drops the root facts it declared as a root; no other nested node has any.
+    const rootField = ROOT_FIELDS.find((field) => node.fields[field] !== undefined);
+    if (rootField && parent !== undefined && !node.declaredRoot) {
+      throw new Error(`Menu item "${node.id}" sets ${rootField}, which only a root (no parent) may.`);
+    }
+    const targets = (["route", "mount", "to"] as const).filter((field) => node.fields[field] !== undefined);
+    if (targets.length > 1) {
+      throw new Error(`Menu item "${node.id}" declares both ${targets[0]} and ${targets[1]}; a node targets one of route, mount and to.`);
+    }
+    if (node.fields.mount === undefined) {
+      if (node.fields.recordMatch !== undefined) throw new Error(`Menu item "${node.id}" sets recordMatch, which only a mount claims.`);
+      if (node.fields.path !== undefined && !node.declaredRoot) {
+        throw new Error(`Menu item "${node.id}" sets path, which only an app or a mount has.`);
+      }
+    } else if (node.fields.path === undefined || node.fields.params !== undefined) {
+      throw new Error(`Menu item "${node.id}" mounts "${String(node.fields.mount)}" with ${node.fields.path === undefined ? "no path" : "params"}; a mount takes a path and no params.`);
+    }
   }
   for (const node of nodes.values()) {
     const seen = new Set<string>();
@@ -260,6 +346,29 @@ function resolve(
       seen.add(current);
     }
   }
+
+  // A mount lives under its app: the nearest node declared at the top of the rail,
+  // which keeps its path when another addon includes it.
+  const appOf = (node: Node): Node | undefined => {
+    const parent = parentOf(node);
+    if (parent === undefined) return undefined;
+    const candidate = nodes.get(parent)!;
+    return candidate.declaredRoot ? candidate : appOf(candidate);
+  };
+  const mounts = [...nodes.values()].filter((node) => node.fields.mount !== undefined).map((node): MenuMount => {
+    const app = appOf(node);
+    if (!app) throw new Error(`Menu item "${node.id}" mounts "${String(node.fields.mount)}" outside an app; mount it under one.`);
+    const base = normalizeRoutePath(typeof app.fields.path === "string" ? app.fields.path : `/${app.id}`);
+    const segment = (node.fields.path as string).replace(/^\/+/, "");
+    return {
+      id: node.id,
+      route: node.fields.mount as string,
+      path: normalizeRoutePath(base === "/" ? `/${segment}` : `${base}/${segment}`),
+      by: node.setBy.mount!,
+      ...(node.fields.recordMatch ? { recordMatch: node.fields.recordMatch as NonNullable<MenuMount["recordMatch"]> } : {}),
+      ...(typeof node.fields.defaultResourceView === "string" ? { defaultResourceView: node.fields.defaultResourceView } : {}),
+    };
+  });
 
   // A flattened app renders no item of its own: its children show under its
   // nearest unflattened ancestor, as `navigationChildren` lifts them.
@@ -274,9 +383,11 @@ function resolve(
   const collectRemoved = (node: Node, by: string): void => {
     if (removed.has(node.id)) return;
     const parent = shownUnder(node);
+    // A removed mount takes its alias with it.
+    const route = node.fields.mount !== undefined ? node.id : node.fields.route;
     removed.set(node.id, {
       id: node.id,
-      ...(typeof node.fields.route === "string" ? { route: node.fields.route } : {}),
+      ...(typeof route === "string" ? { route } : {}),
       by,
       ...(parent !== undefined ? { parent } : {}),
       ...(typeof node.fields.label === "string" ? { label: node.fields.label } : {}),
@@ -288,13 +399,18 @@ function resolve(
   const survivors = (parent: string | undefined): Node[] =>
     (children.get(parent) ?? []).filter((node) => !removed.has(node.id));
 
-  // Included apps lose appRoot, but retain compiler-owned app identity unless
-  // flattened. An author nesting appRoot itself still fails tree validation.
+  // An included app is no longer a root: it drops its root facts but keeps
+  // compiler-owned app identity unless flattened.
   const emitted = (node: Node, drop: readonly Field[]): Record<string, unknown> => {
     const fields: Record<string, unknown> = { ...node.fields };
     for (const field of drop) delete fields[field];
-    if (parentOf(node) !== undefined && node.setBy.parent !== node.owner) delete fields.appRoot;
+    if (parentOf(node) !== undefined) for (const field of ROOT_FIELDS) delete fields[field];
     if (node.declaredRoot && parentOf(node) !== undefined && !node.fields.flatten) fields.app = true;
+    // A mount links to its alias route, which carries its default view.
+    if (node.fields.mount !== undefined) {
+      fields.route = node.id;
+      delete fields.defaultResourceView;
+    }
     return fields;
   };
   const logicalItem = (node: Node): CompiledMenuItem => {
@@ -342,6 +458,7 @@ function resolve(
     logical: roots.map(logicalItem),
     navigation,
     removed: [...removed.values()],
+    mounts,
     hidden: [...hidden.values()],
     provenance: Object.fromEntries([...nodes.values()].map((node) => [node.id, { ...node.setBy }])) as CompiledMenus["provenance"],
     diagnostics,

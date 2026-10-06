@@ -285,7 +285,7 @@ describe("useContainer", () => {
 
   test("applies a layer's narrowing only where the runtime scope matches its condition", () => {
     const narrowed = { ...containers, rules: { "shell#notices": [{ layer: "pm", rank: 1, when: { route: "pm.board" }, only: [], exempt: [] }] } };
-    const scoped = (routes: string[]): ContainerScope => ({ apps: [], routes, perspective: null });
+    const scoped = (routes: string[]): ContainerScope => ({ apps: [], routes });
     const onBoard = renderHook(() => useContainer("shell#notices"), { wrapper: wrapperFor({ containers: narrowed, containerScope: scoped(["pm.board.card", "pm.board"]) }) });
     expect(onBoard.result.current).toEqual([]);
     const elsewhere = renderHook(() => useContainer("shell#notices"), { wrapper: wrapperFor({ containers: narrowed, containerScope: scoped(["pm.list"]) }) });

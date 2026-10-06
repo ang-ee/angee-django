@@ -84,7 +84,7 @@ describe("scoped vocabulary validation", () => {
     const resolve = composeAppVocabulary(resources, [
       { app: "desk", resources: { "test.Record": { fields } } },
     ], predicateModels, menu, routes);
-    expect(resolve("desk", "desk.record").vocabulary.resources["test.Record"]?.fields).toEqual(fields);
+    expect(resolve(["desk"], "desk.record").vocabulary.resources["test.Record"]?.fields).toEqual(fields);
   });
 
   test.each(["missing", "sort_only", "disabled_filter"])("rejects vocabulary for undeclared predicates: %s", (field) => {
@@ -98,8 +98,8 @@ describe("scoped vocabulary validation", () => {
       { app: "desk", messages: { notes: { title: "Documents" } }, resources: { "notes.Note": { pluralLabel: "Documents" } } },
       { app: "desk", route: "desk.all", messages: { notes: { title: "Reviews" } }, resources: { "notes.Note": { fields: { title: "Subject" } } } },
     ]);
-    expect(resolve("desk", "desk.record").i18n.provider.translate("title", { namespace: "notes" })).toBe("Reviews");
-    expect(resolve("desk", "desk.record").vocabulary.resources["notes.Note"]).toEqual({ pluralLabel: "Documents", fields: { title: "Subject" } });
+    expect(resolve(["desk"], "desk.record").i18n.provider.translate("title", { namespace: "notes" })).toBe("Reviews");
+    expect(resolve(["desk"], "desk.record").vocabulary.resources["notes.Note"]).toEqual({ pluralLabel: "Documents", fields: { title: "Subject" } });
     expect(resolve().i18n.provider.translate("title", { namespace: "notes" })).toBe("Notes");
     expect(resolve().vocabulary.resources).toEqual({});
   });
@@ -109,7 +109,7 @@ describe("scoped vocabulary validation", () => {
       { app: "desk", resources: { "notes.Note": { fields: { title: { label: "Subject", tones: { HIGH: "warning" } } } } } },
       { app: "desk", route: "desk.all", resources: { "notes.Note": { fields: { title: { tones: { LOW: "neutral" } } } } } },
     ]);
-    expect(resolve("desk", "desk.record").vocabulary.resources["notes.Note"]?.fields?.title).toEqual({
+    expect(resolve(["desk"], "desk.record").vocabulary.resources["notes.Note"]?.fields?.title).toEqual({
       label: "Subject", tones: { HIGH: "warning", LOW: "neutral" },
     });
   });
@@ -119,9 +119,28 @@ describe("scoped vocabulary validation", () => {
       { app: "desk", resources: { "notes.Note": { fields: { title: { tones: { HIGH: "warning" } } } } } },
       { app: "desk", route: "desk.all", resources: { "notes.Note": { fields: { title: "Request" } } } },
     ]);
-    expect(resolve("desk", "desk.record").vocabulary.resources["notes.Note"]?.fields?.title).toEqual({
+    expect(resolve(["desk"], "desk.record").vocabulary.resources["notes.Note"]?.fields?.title).toEqual({
       label: "Request", tones: { HIGH: "warning" },
     });
+  });
+
+  test("composes every app on the trail, outermost first, then route scopes; any app a trail holds may declare", () => {
+    const suite = MenuTree.from([{ id: "suite", to: "/suite", children: [
+      { id: "desk", app: true, to: "/desk" },
+      { id: "suite.page", to: "/suite/page" },
+    ] }]);
+    const resolve = composeAppVocabulary(resources, [
+      { app: "suite", messages: { notes: { title: "Suite notes" } }, resources: { "notes.Note": { label: "Item", pluralLabel: "Items" } } },
+      { app: "desk", messages: { notes: { title: "Desk notes" } } },
+      { app: "suite", route: "desk.all", resources: { "notes.Note": { label: "Entry" } } },
+    ], models, suite, routes);
+    const words = resolve(["suite", "desk"], "desk.record");
+    expect(words.i18n.provider.translate("title", { namespace: "notes" })).toBe("Desk notes");
+    expect(words.vocabulary.resources["notes.Note"]).toMatchObject({ label: "Entry", pluralLabel: "Items" });
+    expect(resolve(["suite"]).i18n.provider.translate("title", { namespace: "notes" })).toBe("Suite notes");
+    expect(resolve(["suite"]).vocabulary.resources["notes.Note"]).toMatchObject({ label: "Item" });
+    // A menu item that is no app holds no words.
+    expect(() => composeAppVocabulary(resources, [{ app: "suite.page" }], models, suite, routes)).toThrow(/unknown app "suite.page"/);
   });
 
   test("rejects competing declarations", () => {
@@ -131,10 +150,10 @@ describe("scoped vocabulary validation", () => {
   test("keeps one locale across cached and newly entered scopes without leaking copy", async () => {
     const resolve = compose([{ app: "desk", messages: { notes: { title: "Documents" } } }]);
     const base = resolve();
-    const scoped = resolve("desk");
+    const scoped = resolve(["desk"]);
     await scoped.i18n.provider.changeLocale("fr");
     expect(base.i18n.provider.getLocale()).toBe("fr");
-    expect(resolve("desk", "desk.record").i18n.provider.getLocale()).toBe("fr");
+    expect(resolve(["desk"], "desk.record").i18n.provider.getLocale()).toBe("fr");
     expect(base.i18n.provider.translate("title", { namespace: "notes" })).toBe("Notes");
     expect(scoped.i18n.provider.translate("title", { namespace: "notes" })).toBe("Documents");
   });

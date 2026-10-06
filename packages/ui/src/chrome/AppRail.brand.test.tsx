@@ -17,7 +17,7 @@ vi.mock("../lib/use-media-query", async (importOriginal) => ({
 afterEach(cleanup);
 
 const menus: readonly ChromeMenuItem[] = [{
-  id: "notes", label: "Notes root", to: "/notes", appRoot: true,
+  id: "notes", label: "Notes root", to: "/notes",
   children: [
     { id: "all", label: "All notes", to: "/notes", icon: "book" },
     { id: "archive", label: "Archive", to: "/notes/archive", icon: "archive" },
@@ -69,7 +69,7 @@ describe("branded single-root rail", () => {
 
 test("the brand follows a query-bearing app target through the same chrome conversion", async () => {
   const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={{ brand: { name: "Notebook", mark: "book" } }}>
-    <AppRail menuItems={[{ id: "notes", label: "Notes", to: "/notes?preset=all", appRoot: true }]} />
+    <AppRail menuItems={[{ id: "notes", label: "Notes", to: "/notes?preset=all" }]} />
   </AppRuntimeProvider> });
   const router = createRouter({ routeTree: root.addChildren([
     createRoute({ getParentRoute: () => root, path: "/" }), createRoute({ getParentRoute: () => root, path: "/notes" }),

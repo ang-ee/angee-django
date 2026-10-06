@@ -32,6 +32,7 @@ import {
 import {
   QueryClient,
   keepPreviousData,
+  useQuery,
   type QueryClientConfig,
 } from "@tanstack/react-query";
 import {
@@ -43,6 +44,7 @@ import {
   createRoute,
   createRouter,
   redirect,
+  retainSearchParams,
   useRouterState,
 } from "@tanstack/react-router";
 import {
@@ -65,15 +67,19 @@ import {
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
+  aliasRouteHref,
   createRouteHref,
+  sessionPermitted,
   type AppRuntime,
   type ComposedContainers,
+  type RouteHref,
+  type RuntimeBrand,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import { validateSearchShortcut } from "@angee/ui/views/resource-view-types";
-import { composeAddons } from "./define-addon";
+import { composeAddons, type ShellSettings } from "./define-addon";
 import {
   ModalsHost,
   ToastProvider,
@@ -81,7 +87,7 @@ import {
 } from "@angee/ui/feedback/index";
 import { InAppLinkProvider, hrefLocation, routerNavigator, routerPreloader } from "@angee/ui/lib";
 import { landingTarget } from "@angee/ui/chrome/app-rail-model";
-import { baseIcons } from "@angee/ui/chrome/icon-registry";
+import { baseIcons, getIcon } from "@angee/ui/chrome/icon-registry";
 import { ViewAsBanner } from "@angee/ui/chrome/ViewAs";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
@@ -129,10 +135,12 @@ import {
   menuRouteResourceIdentifier,
   resourceMutationsForSchema,
 } from "./resource-projection";
+import { presenceRefs, presenceRequirements } from "./presence";
 import { chatterRouteIndex } from "./chatter-routes";
 import { explainComposition, type CompositionExplanation } from "./explain";
 import { developmentMode } from "@angee/ui/lib/development-mode";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
+import { mountRoutes } from "./mounts";
 import {
   compareCodePoint,
   authRouteError,
@@ -142,7 +150,7 @@ import {
   layoutAuthGuard,
   loadRouteIdentity,
 } from "./route-tree";
-import { shellFieldSource } from "./shell";
+import { appSelection, assertShellSettings, selectApp, type SelectableRoot } from "./boot-app";
 
 export {
   dashboardPageRoute,
@@ -172,15 +180,11 @@ export interface CreateAppInput {
   /** Schema carrying the change subscriptions. Defaults to `console`. */
   subscriptionSchema?: string;
   /**
-   * @deprecated Addons declare `shell.home`; a deployment pins it in `ANGEE_UI`.
-   * When set, it overrides the composed shell's home.
+   * Where the app is served, which selects the app it shows (see `selectApp`):
+   * `?app=` in `search`, else the `hostname`'s `ANGEE_UI.shell.hosts` entry.
+   * Defaults to `window.location`.
    */
-  home?: string;
-  /**
-   * @deprecated Addons declare a perspective and select it with `shell.perspective`.
-   * When set, it overrides the composed perspective's menu root.
-   */
-  confineTo?: string;
+  location?: { search?: string; hostname?: string };
   /** Auth-owned sign-in destination. Defaults to `/login`. */
   loginPath?: string;
   /** Build-owned defaults used until an authenticated user overrides them. */
@@ -206,7 +210,7 @@ export interface AngeeApp {
   router: AnyRouter;
   /** Render the app; `options` carries React root error handlers such as error reporting's. */
   mount(target: string | Element, options?: RootOptions): Root;
-  /** Which layer set the shell and each menu node, and why pages are hidden or unavailable. */
+  /** The selected app and where its facts came from, which layer set each menu node, and why pages are hidden or unavailable. */
   explain: CompositionExplanation;
 }
 
@@ -284,7 +288,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
         canonicalModelLabel(modelLabelInventory, spelling),
     },
   );
-  const routes = resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]);
+  // Mounts add their alias routes before any projection reads the routes.
+  const mounted = mountRoutes(resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]), composed.menuComposition.mounts);
+  const routes = mounted.routes;
   for (const route of routes) {
     if (!route.recordMatch) continue;
     const model = route.recordModel ?? route.resource;
@@ -303,29 +309,52 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routeHref,
   );
   const menuTree = MenuTree.from(menus);
-  const confineTo = input.confineTo ?? composed.shell.perspective?.root;
-  if (confineTo !== undefined && !menuTree.roots.some((root) => root.id === confineTo)) {
-    throw new Error(
-      `Unknown menu root "${confineTo}": a perspective root must be a top-level menu item, not removed or included under another item.`,
-    );
-  }
-  const homeInput = input.home ?? composed.shell.home;
-  const projection = new AppRouteProjection(routes, menuTree, confineTo, {
+  const shell: ShellSettings = composed.shell ?? {};
+  assertShellSettings(shell);
+  const served = input.location ?? (typeof window === "undefined" ? undefined : window.location);
+  const selection = selectApp({ search: served?.search, hostname: served?.hostname, shell, roots: menuTree.roots });
+  const projection = new AppRouteProjection(routes, menuTree, selection.rail ? {
+    rail: selection.rail,
+    ...(selection.home !== undefined ? { home: selection.home } : {}),
+  } : undefined, {
     navigation: MenuTree.from(resolveMenuRouteTargets(composed.menuComposition.navigation, routeHref)),
     removed: composed.menuComposition.removed,
+    owners: composed.routeOwners,
+    ancestors: composed.ancestors,
   });
   const unavailable = projection.unavailable;
+  validateSelections(shell, menuTree.roots, {
+    routes: routesByName,
+    rootFor: (route) => projection.rootFor(route),
+    unavailable,
+    icons: composed.icons,
+    themes: new Set(composed.themes.flatMap((theme) => {
+      const definition = "definition" in theme ? theme.definition : theme;
+      return [definition.id, ...(definition.legacyIds ?? [])];
+    })),
+  });
+  // The selected app's theme is the default until the person picks their own; the build's
+  // theme options belong to the build's theme.
+  const appearance = selection.theme === undefined || selection.theme === input.appearance?.themeId
+    ? input.appearance
+    : { ...input.appearance, themeId: selection.theme, options: undefined };
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
     : routeHref;
+  // Inside a mount, the mounted route's names build its alias's: the borrowed page's own links stay in the borrowing app.
+  const mountedRouteHrefs = new Map<string, RouteHref>(mounted.families.flatMap((family) => {
+    const href = aliasRouteHref(runtimeRouteHref, family);
+    return [...family.values()].map((alias) => [alias, href] as const);
+  }));
   const navigationTree = projection.navigationTree;
   validateContainerConditions(composed.containers, {
     routes: routesByName,
     // The ids a page's app trail can hold: roots and included apps, flattened ones too.
     apps: menuTree.appIds(),
-    perspectives: new Set(input.addons.flatMap((addon) => Object.keys(addon.perspectives ?? {}))),
   });
+  // Presence: what the menus and container children `requires`; the identity read asks which the session holds.
+  const requirements = presenceRequirements(menuTree, composed.containers);
   for (const [address, children] of Object.entries(composed.containers.children)) {
     if (!address.endsWith("#search")) continue;
     const modelLabel = address.slice(0, -"#search".length);
@@ -387,7 +416,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     admitted.push(item.defaultResourceView);
     menuPresetIdsByRoute.set(route.name, admitted);
   }
-  const routesByResource = projection.resourceRoutes(confineTo);
+  const routesByResource = projection.resourceRoutes(projection.homeApp);
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
@@ -395,14 +424,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
     mergeI18n(enUiBundle, composed.i18n), composed.vocabulary,
     modelLabelInventory, menuTree, routes,
   );
-  const defaultVocabulary = vocabularyForRoute(confineTo);
+  const defaultVocabulary = vocabularyForRoute(projection.homeApp === undefined ? [] : [projection.homeApp]);
   const i18n = defaultVocabulary.i18n;
 
   // The static composition; the session fields (auth, logoutAction,
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
-    confineTo: confineTo ?? null,
-    brand: composed.brand,
+    rail: selection.rail,
+    brand: selection.brand,
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
     i18n: i18n.instance,
@@ -433,9 +462,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
   function resourceRegistryFor(
     selected: Readonly<Record<string, RuntimeResourceRoutes>>,
     vocabulary: RuntimeVocabulary,
+    navigation: MenuTree = navigationTree,
   ) {
     const paths = Object.fromEntries(Object.entries(selected).map(([resource, names]) => [resource, routeHref(names.collection)]));
-    const projected = refineRouteResourceProjection(routes, menuTree, navigationTree, selected);
+    const projected = refineRouteResourceProjection(routes, menuTree, navigation, selected);
     return [...projected.resources, ...refineResourcesForSchemas(schemas, paths, projected.metadataByResource)]
       .map((resource) => {
         const model = resource.meta?.modelLabel;
@@ -469,46 +499,38 @@ export function createApp(input: CreateAppInput): AngeeApp {
       viewAs.reset();
       refineLiveProvider?.setEnabled(true);
     },
+    presenceRefs(requirements),
   );
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
   );
-  const declaredHome = homeInput ? homeInput.startsWith("/") ? homeInput : routeHref(homeInput) : undefined;
-  // Where a person without preferences lands; also where an unavailable page sends them. A host with
-  // routes but no rail (a minimal test host) still lands on its first page.
-  const home = landingTarget(navigationTree, {}, declaredHome)
+  // Where a person without preferences lands, and where a selected app always lands: its home,
+  // else its rail's first app. An unavailable page sends people here too. A host with routes but
+  // no rail (a minimal test host) still lands on its first page.
+  const home = landingTarget(navigationTree, {}, selection.home !== undefined ? routeHref(selection.home) : undefined)
     ?? routes.find((route) => route.layout !== "public" && !unavailable.has(route.name))?.path
     ?? "/";
   const homePath = new URL(home, "https://angee.invalid").pathname;
-  const homeRoute = homeInput && !homeInput.startsWith("/")
-    ? routesByName.get(homeInput) : routes.find((route) => route.path === homePath);
-  if (homeRoute && unavailable.has(homeRoute.name)) {
-    throw new Error(`Home "${home}" is unavailable: ${unavailable.get(homeRoute.name)}.`);
-  }
-  if (confineTo !== undefined && (homePath === "/"
-    || !(homeRoute ? projection.rootFor(homeRoute) === confineTo : menuTree.activeAppRoot(homePath)?.id === confineTo))) {
-    const homeFrom = input.home !== undefined ? "createApp home" : shellFieldSource(composed.shell, "home") ?? "default";
-    const confinedBy = input.confineTo !== undefined
-      ? "createApp confineTo"
-      : `perspective "${composed.shell.perspective!.id}" (${shellFieldSource(composed.shell, "perspective")})`;
-    throw new Error(
-      `Home "${home}" (${homeFrom}) is outside menu root "${confineTo}", to which ${confinedBy} confines the console. `
-      + `Set shell.home to a page under "${confineTo}" or stop selecting the perspective; ANGEE_UI.shell can pin either.`,
-    );
-  }
+  const homeRoute = selection.home !== undefined
+    ? routesByName.get(selection.home) : routes.find((route) => route.path === homePath);
 
   function RootOutlet(): ReactNode {
     const pathname = useRouterState({ select: (state) => state.location.pathname });
     const searchStr = useRouterState({ select: (state) => state.location.searchStr });
     const activeRoute = useActiveRoute(routes);
-    const match = projection.activeMenu(pathname, activeRoute?.name, searchStr);
+    // The rail, menus and palette show what the session's identity holds; Refine fetches it into the shared entry.
+    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider), enabled: false }, queryClient);
+    const navigation = projection.navigationFor(sessionPermitted(identity.data));
+    const match = projection.activeMenu(pathname, activeRoute?.name, searchStr, navigation);
     const activeMenuId = match?.item.id ?? null;
     const app = projection.activeApp(pathname, activeRoute?.name, searchStr);
-    const words = vocabularyForRoute(app, activeRoute?.name);
+    const trail = projection.appTrail(pathname, activeRoute?.name, searchStr);
+    // Words compose along the whole app trail, outermost first, as `when: { app }` matches it.
+    const words = vocabularyForRoute(trail, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
     // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
-    const appTrail = publicRoute ? "" : projection.appTrail(pathname, activeRoute?.name, searchStr).join("\0");
+    const appTrail = publicRoute ? "" : trail.join("\0");
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
       const menuResourceViewIds = new Set<string>();
@@ -517,6 +539,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         for (const id of menuPresetIdsByRoute.get(route.name) ?? []) menuResourceViewIds.add(id);
         route = route.parent ? routesByName.get(route.parent) : undefined;
       }
+      const routeNames = routeTrail(activeRoute);
       return {
         ...runtime,
         i18n: words.i18n.instance,
@@ -524,12 +547,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref: runtimeRouteHref,
+        routeHref: routeNames.map((name) => mountedRouteHrefs.get(name)).find((href) => href !== undefined) ?? runtimeRouteHref,
         composition: explain,
         containerScope: {
           apps: appTrail ? appTrail.split("\0") : [],
-          routes: routeTrail(activeRoute),
-          perspective: confineTo !== undefined ? composed.shell.perspective?.id ?? null : null,
+          routes: routeNames,
         },
         activeRouteName: activeRoute?.name ?? null,
         activeMenuId,
@@ -543,7 +565,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
             <InAppLinkProvider navigate={navigateInApp} preload={preloadInApp}>
               <ModalsHost>
                 <ToastProvider>
-                  <RefineRoot i18nProvider={words.i18n.provider} />
+                  <RefineRoot i18nProvider={words.i18n.provider} navigation={navigation} />
                 </ToastProvider>
               </ModalsHost>
             </InAppLinkProvider>
@@ -553,9 +575,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  function RefineRoot({ i18nProvider }: { i18nProvider: I18nProvider }): ReactNode {
+  function RefineRoot({ i18nProvider, navigation }: { i18nProvider: I18nProvider; navigation: MenuTree }): ReactNode {
     const { vocabulary, routesByResource: selected, activeMenuId } = useAppRuntime();
-    const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary), [selected, vocabulary]);
+    // Refine's resources feed the rail, menus and palette.
+    const labeledResources = useMemo(() => resourceRegistryFor(selected, vocabulary, navigation), [navigation, selected, vocabulary]);
     const refineNotificationProvider = useRefineNotificationProvider();
     const routerProvider = useMemo(() => createTanStackRouterProvider(activeMenuId ? menuRouteResourceIdentifier(activeMenuId) : undefined), [activeMenuId]);
     return (
@@ -578,7 +601,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
           viewAs={viewAs}
           authSchema={authSchema}
           loginPath={loginPath}
-          appearance={input.appearance}
+          appearance={appearance}
         >
           <Outlet />
         </AppFrame>
@@ -586,7 +609,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  const rootRoute = createRootRoute({ component: RootOutlet });
+  const rootRoute = createRootRoute({
+    component: RootOutlet,
+    // `?app=` selects at boot; every link and redirect keeps it, so a reload or a shared link selects the same app.
+    validateSearch: (search: Record<string, unknown>): Record<string, unknown> & { app?: string } => search,
+    search: { middlewares: [retainSearchParams(["app"])] },
+  });
 
   // A signed-out visit to "/" signs in first only when the page it lands on requires it.
   const homeRequiresSignIn = Object.keys(layoutAuthGuard(homeRoute?.layout ?? "console", input.layouts, refineAuthProvider, queryClient, loginPath)).length > 0;
@@ -601,7 +629,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       // Location options rather than `href`: older routers preload a redirect's
       // target only from them, and would preload `/` again (see `hrefLocation`).
       throw redirect({
-        ...hrefLocation(router, homeTarget(home, confineTo !== undefined, navigationTree, identity?.preferences ?? {}, declaredHome)),
+        ...hrefLocation(router, homeTarget(home, selection.rail !== null, navigationTree, identity?.preferences ?? {})),
         replace: true,
       });
     },
@@ -623,9 +651,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
-    ...(confineTo !== undefined || unavailable.size
-      ? { consoleConfinement: { allows: (route, pathname) => projection.allows(route, pathname), home } }
-      : {}),
+    ...(unavailable.size ? { unavailable: { routes: unavailable, home } } : {}),
   });
 
   const router = createRouter({
@@ -655,12 +681,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   // Bound after the router exists; RootOutlet only reads them at render time.
   const navigateInApp = routerNavigator(router);
   const preloadInApp = routerPreloader(router);
-  const explain = explainComposition(composed.shell, composed.menuComposition, unavailable, {
-    home,
-    confineTo: confineTo ?? null,
-  }, composed.containers);
+  const explain = explainComposition(selection, composed.menuComposition, unavailable, home, composed.containers, requirements);
   if (developmentMode()) {
-    for (const diagnostic of composed.shell.diagnostics) console.warn(`[angee] ${diagnostic}`);
+    for (const diagnostic of selection.diagnostics) console.warn(`[angee] ${diagnostic}`);
     const menuFindings = composed.menuComposition.diagnostics.length;
     if (menuFindings) console.warn(`[angee] ${menuFindings} menu finding(s); see createApp(...).explain.menus.diagnostics.`);
   }
@@ -779,6 +802,7 @@ function createAuthProviderForSchema(
   loginPath: string,
   queryClient: QueryClient,
   onAuthChange: () => void,
+  requires: readonly string[],
 ): RefineAuthProvider {
   const schema = schemas[authSchema];
   if (!schema) {
@@ -788,6 +812,7 @@ function createAuthProviderForSchema(
     ...schema,
     loginPath,
     queryClient,
+    requires,
     identityClient: schemas.console,
     // Reset observed queries so identity and mounted views see the transition;
     // clearing their entries would strand observers with the previous data.
@@ -905,10 +930,10 @@ function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
 }
 
-/** Where `/` lands: the declared home inside a confined shell, otherwise `landingTarget`'s order for this person. */
-function homeTarget(fallback: string, confined: boolean, menuTree: MenuTree, preferences: UserPreferences, declaredHome: string | undefined): string {
-  if (confined) return fallback;
-  return landingTarget(menuTree, preferences, declaredHome) ?? fallback;
+/** Where `/` lands: a selected app's own home, otherwise `landingTarget`'s order for this person. */
+function homeTarget(fallback: string, selected: boolean, menuTree: MenuTree, preferences: UserPreferences): string {
+  if (selected) return fallback;
+  return landingTarget(menuTree, preferences) ?? fallback;
 }
 
 /** Base and addon namespaces have disjoint ownership. */
@@ -922,13 +947,13 @@ function mergeI18n(base: I18nResources, addons: I18nResources): I18nResources {
 }
 
 /**
- * A container condition names a route, an app (a root or an included app, flattened
- * ones too: what a page's app trail holds) or a perspective
- * that exists; a misspelt one would never match, so it fails at boot.
+ * A container condition names a route or an app (a root or an included app,
+ * flattened ones too: what a page's app trail holds) that exists; a misspelt one
+ * would never match, so it fails at boot.
  */
 function validateContainerConditions(
   containers: ComposedContainers,
-  known: { routes: ReadonlyMap<string, unknown>; apps: ReadonlySet<string>; perspectives: ReadonlySet<string> },
+  known: { routes: ReadonlyMap<string, unknown>; apps: ReadonlySet<string> },
 ): void {
   const listed = (value: string | readonly string[] | undefined): readonly string[] =>
     value === undefined ? [] : typeof value === "string" ? [value] : value;
@@ -941,9 +966,57 @@ function validateContainerConditions(
       for (const app of listed(rule.when?.app)) {
         if (!known.apps.has(app)) throw new Error(`${where} in unknown app "${app}".`);
       }
-      for (const perspective of listed(rule.when?.perspective)) {
-        if (!known.perspectives.has(perspective)) throw new Error(`${where} in unknown perspective "${perspective}".`);
-      }
+    }
+  }
+}
+
+/**
+ * Every app the deployment can select, selected or not: each menu root, each
+ * `ANGEE_UI.shell.apps` entry and each `hosts` entry. Its rail lists top-level
+ * roots, its home lies inside the rail, its brand mark is a registered glyph and
+ * its theme is installed; a misconfigured app fails at boot, not on its host.
+ */
+function validateSelections(
+  shell: ShellSettings,
+  roots: readonly SelectableRoot[],
+  known: {
+    routes: ReadonlyMap<string, BaseAddonRoute>;
+    rootFor: (route: BaseAddonRoute) => string | undefined;
+    unavailable: ReadonlyMap<string, string>;
+    icons: Readonly<Record<string, unknown>>;
+    themes: ReadonlySet<string>;
+  },
+): void {
+  const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string }): void => {
+    if (declared.brand && !getIcon(known.icons, declared.brand.mark)) {
+      throw new Error(`${where} brand mark "${declared.brand.mark}" is not a registered icon.`);
+    }
+    if (declared.theme !== undefined && !known.themes.has(declared.theme)) {
+      throw new Error(`${where} theme "${declared.theme}" is not installed.`);
+    }
+  };
+  checkFacts("ANGEE_UI.shell", shell);
+  for (const [host, key] of Object.entries(shell.hosts ?? {})) {
+    if (!appSelection(key, shell, roots, host)) {
+      throw new Error(`ANGEE_UI.shell.hosts["${host}"] selects "${key}", which is neither a menu root id nor an ANGEE_UI.shell.apps name.`);
+    }
+  }
+  const declarations = [
+    ...roots.map((root) => ({ where: `Menu root "${root.id}"`, key: root.id, declared: root })),
+    ...Object.entries(shell.apps ?? {}).map(([name, app]) => ({ where: `ANGEE_UI.shell.apps.${name}`, key: name, declared: app })),
+  ];
+  for (const { where, key, declared } of declarations) {
+    checkFacts(where, declared);
+    const selected = appSelection(key, shell, roots, where)!;
+    if (selected.home === undefined) continue;
+    const route = known.routes.get(selected.home);
+    if (!route) throw new Error(`${where} home "${selected.home}" names no route.`);
+    const reason = known.unavailable.get(route.name);
+    if (reason !== undefined) throw new Error(`${where} home "${selected.home}" is unavailable: ${reason}.`);
+    const root = known.rootFor(route);
+    if (root === undefined || !selected.rail!.includes(root)) {
+      throw new Error(`${where} home "${selected.home}" lies outside its rail (${selected.rail!.join(", ")})`
+        + `${root === undefined ? ", in no single menu root; anchor the route with route.menu" : `, in menu root "${root}"`}.`);
     }
   }
 }

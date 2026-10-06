@@ -61,7 +61,7 @@ function aside(
 const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<ChatterTabContent> =>
   ({ content, ...(sequence !== undefined ? { sequence } : {}) });
 
-const onRoute = (...routes: string[]) => ({ apps: [], routes, perspective: null });
+const onRoute = (...routes: string[]) => ({ apps: [], routes });
 
 describe("Chatter", () => {
   test("a layer's only on the route narrows the tabs before they render or count", async () => {

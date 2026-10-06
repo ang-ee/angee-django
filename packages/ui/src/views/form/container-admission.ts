@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { Row } from "@angee/metadata";
 
-import { EMPTY_CONTAINERS, resolveContainer, useAppRuntime, type ComposedContainerChild } from "../../runtime";
+import { EMPTY_CONTAINERS, resolveContainer, sessionPermitted, useAppRuntime, type ComposedContainerChild } from "../../runtime";
 import { optionToken } from "../../widgets/types";
 
 /** A row's implementation tokens (its `ImplClassField` values), which select `impl` children and variants. */
@@ -35,21 +35,23 @@ export function useContainerAdmission(
   models: readonly string[],
   implFields: readonly string[] | undefined,
 ): (id: string, record: Row | null | undefined) => boolean {
-  const { containers = EMPTY_CONTAINERS, containerScope } = useAppRuntime();
+  const { containers = EMPTY_CONTAINERS, containerScope, auth } = useAppRuntime();
+  const permitted = sessionPermitted(auth.user);
   return React.useMemo(() => {
-    const scope = containerScope ? { scope: containerScope } : {};
+    // The page's scope and the session's presence, shared by every record's resolution.
+    const shared = { permitted, ...(containerScope ? { scope: containerScope } : {}) };
     const ids = (children: readonly ComposedContainerChild[]): ReadonlySet<string> => new Set(children.map((child) => child.id));
     const byRecord = new WeakMap<Row, ReadonlySet<string>>();
     let withoutRecord: ReadonlySet<string> | undefined;
     const admitted = (record: Row | null | undefined): ReadonlySet<string> => {
-      if (!record) return withoutRecord ??= ids(resolveContainer(containers, address, { models, ...scope }));
+      if (!record) return withoutRecord ??= ids(resolveContainer(containers, address, { models, ...shared }));
       let found = byRecord.get(record);
       if (!found) {
-        found = ids(resolveContainer(containers, address, { models, row: record, impls: rowImplementations(implFields, record), ...scope }));
+        found = ids(resolveContainer(containers, address, { models, row: record, impls: rowImplementations(implFields, record), ...shared }));
         byRecord.set(record, found);
       }
       return found;
     };
     return (id, record) => admitted(record).has(id);
-  }, [address, containerScope, containers, implFields, models]);
+  }, [address, containerScope, containers, implFields, models, permitted]);
 }

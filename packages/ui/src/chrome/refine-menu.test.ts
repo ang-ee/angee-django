@@ -20,7 +20,7 @@ describe("chromeMenuItemsFromRefine", () => {
 
   test("preserves refine parent metadata so flat menu output re-nests before rail rendering", () => {
     const items = chromeMenuItemsFromRefine([
-      refineItem("menu:agents", "agents", "Agents", "/agents", undefined, true),
+      refineItem("menu:agents", "agents", "Agents", "/agents"),
       refineItem(
         "menu:agents.menu.agents",
         "agents.menu.agents",
@@ -54,7 +54,6 @@ function refineItem(
   label: string,
   route: string,
   parent?: string,
-  appRoot?: boolean,
 ): TreeMenuItem {
   return {
     key: identifier,
@@ -65,7 +64,6 @@ function refineItem(
     meta: {
       menuId,
       ...(parent ? { parent } : {}),
-      ...(appRoot ? { appRoot } : {}),
     },
     children: [],
   } as TreeMenuItem;

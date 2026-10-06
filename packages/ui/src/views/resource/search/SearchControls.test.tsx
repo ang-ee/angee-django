@@ -73,7 +73,7 @@ function fixture(searchDeclaration: ListSearchDeclaration = declaration, options
       ] : [] } },
     });
     return <AppRuntimeProvider runtime={{ containers: options.containers ?? containersFromChildren(RESOURCE_CONTAINERS, {}),
-      containerScope: { apps: [], routes: options.route ? [options.route] : [], perspective: null },
+      containerScope: { apps: [], routes: options.route ? [options.route] : [] },
       userPreferences: { available: true, preferences, patchPreferences: async (patch) => setPreferences((current) => patch(current)) } }}>
       <ResourceViewProvider resource="notes.Note" scope="local"><Content /></ResourceViewProvider>
     </AppRuntimeProvider>;

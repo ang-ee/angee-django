@@ -19,7 +19,7 @@ const containers: ComposedContainers = {
   }),
   rules: { "shell#drawers-bottom": [{ layer: "product", rank: 1, when: { route: "product.board" }, except: ["operator.logs"], exempt: [] }] },
 };
-const at = (route: string): ContainerScope => ({ apps: [], routes: [route], perspective: null });
+const at = (route: string): ContainerScope => ({ apps: [], routes: [route] });
 
 function StateProbe() {
   const { openId } = useDrawerState();

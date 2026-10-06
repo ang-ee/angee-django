@@ -12,6 +12,8 @@ interface CurrentUserFields {
   isStaff: boolean;
   isActive: boolean;
   roleRefs: string[];
+  /** The asked `requires` refs the identity holds; identity reads select it, other user payloads do not. */
+  permitted?: string[];
 }
 
 interface LoginUserFields {
@@ -55,13 +57,16 @@ export const currentUserSelection = `
   isStaff: is_staff isActive: is_active preferences roleRefs: role_refs
 `;
 
+/** An identity read's user: the selection, and which of the asked `$refs` it holds. */
+export const identitySelection = `${currentUserSelection} permitted(refs: $refs)`;
+
 export const AngeeCurrentUserDocument = authDocument<
   AngeeCurrentUserResult,
-  Record<string, never>
+  { refs: string[] }
 >(`
-  query AngeeCurrentUser {
+  query AngeeCurrentUser($refs: [String!]!) {
     current_user {
-      ${currentUserSelection}
+      ${identitySelection}
     }
   }
 `);

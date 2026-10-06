@@ -4,8 +4,8 @@
 
 Install: `pnpm add @angee/ui`
 
-`useRuntimeBrand` supplies addon identity to chrome. `DocumentTitle` composes
-the active breadcrumb with that brand. `GanttView` is the presentational date
+`useRuntimeBrand` supplies the selected app's identity to chrome. `DocumentTitle`
+composes the active breadcrumb with that brand. `GanttView` is the presentational date
 axis; the `gantt` collection kind composes the list owner's filter, grouping and
 row paging alongside list, board and calendar views.
 Resource record links resolve through the active app with

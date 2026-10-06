@@ -262,6 +262,27 @@ describe("Angee app auth provider", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  test("the read that yields the identity asks which requires refs it holds; the identity carries them", async () => {
+    const refs = ["iam.User#create", "iam.User#read__last_login"];
+    const request = vi.fn(async (document: unknown) => {
+      expect(document).toBe(AngeeCurrentUserDocument);
+      return { current_user: { ...currentUser, permitted: ["iam.User#create"] } };
+    });
+    const publicOnly = createAngeeAuthProviderFromRequest(request as never, { requires: refs });
+    await expect(publicOnly.getIdentity?.()).resolves.toMatchObject({ permitted: ["iam.User#create"] });
+    expect(request).toHaveBeenLastCalledWith(AngeeCurrentUserDocument, { refs });
+
+    // When the console read follows, it asks and the public read asks about nothing.
+    const identityRequest = vi.fn(async () => ({ current_user: { ...currentUser, permitted: refs }, real_user: null, viewable_people: [] }));
+    const withConsole = createAngeeAuthProviderFromRequest(request as never, { requires: refs, identityRequest: identityRequest as never });
+    await expect(withConsole.getIdentity?.()).resolves.toMatchObject({ permitted: refs, realUser: null });
+    expect(request).toHaveBeenLastCalledWith(AngeeCurrentUserDocument, { refs: [] });
+    expect(identityRequest).toHaveBeenCalledWith(AngeeViewAsIdentityDocument, { refs });
+    // An identity read without refs carries none, so declarations stand; signed out there is no identity.
+    expect(currentUserToAuthState(currentUser).user?.permitted).toBeUndefined();
+    expect(currentUserToAuthState(null).user).toBeNull();
+  });
+
   test("auth state uses role refs for role checks", () => {
     const auth = currentUserToAuthState(currentUser);
 

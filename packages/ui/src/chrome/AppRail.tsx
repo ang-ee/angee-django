@@ -80,14 +80,15 @@ function AppRailBody({
   const rail = useDeveloperRail();
   const { tree, pathname, match, railPlace: activePlace } = useChromePlace();
   const brand = useRuntimeBrand();
-  const { confineTo } = useAppRuntime();
+  const { rail: selectedRail } = useAppRuntime();
   const { railPreferences, setRailPreferences } = useAppRailPreferences();
   const runtimePreferences = useRuntimeUserPreferences();
+  // A selected app's rail keeps only the shortcuts inside its roots.
   const shortcuts = useMemo(
     () => readRuntimeRouteShortcuts(runtimePreferences.preferences).filter(
-      (shortcut) => !confineTo || tree.activeAppRoot(shortcut.path)?.id === confineTo,
+      (shortcut) => !selectedRail || selectedRail.includes(tree.activeAppRoot(shortcut.path)?.id ?? ""),
     ),
-    [confineTo, runtimePreferences.preferences, tree],
+    [selectedRail, runtimePreferences.preferences, tree],
   );
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const drawerMode = presentation === "drawer";
@@ -113,10 +114,8 @@ function AppRailBody({
     [items, rail.enabled, railPreferences.order, tree],
   );
   const [onlyRoot] = items;
-  const railBrand = brand ?? (confineTo && onlyRoot
-    ? { name: onlyRoot.displayLabel, mark: onlyRoot.iconName } : null);
-  const singleApp = railBrand && items.length === 1 && onlyRoot
-    ? { root: onlyRoot, brand: railBrand }
+  const singleApp = brand && items.length === 1 && onlyRoot
+    ? { root: onlyRoot, brand }
     : null;
   const settings = tree.settingsEntry();
   const activeRootId = activePlace.scope === place.scope

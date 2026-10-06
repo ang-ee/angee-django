@@ -88,7 +88,7 @@ describe("angee-web-codegen", () => {
         ],
         codegen: [],
         documentRoots: [],
-        deployment: { shell: { perspective: null } },
+        deployment: { shell: { hosts: { "demo.localhost": "demo" } } },
       }),
     );
 
@@ -97,7 +97,7 @@ describe("angee-web-codegen", () => {
     const appModule = await readFile(join(manifestDir, "app.ts"), "utf8");
     expect(appModule).toContain(
       'export const composedAddons = [addon0, { ...addon1, dependsOn: [addon0.id] }, '
-      + '{ id: "deployment", ...{"shell":{"perspective":null}}, dependsOn: [addon0.id, addon1.id] }] as const;',
+      + '{ id: "deployment", ...{"shell":{"hosts":{"demo.localhost":"demo"}}}, dependsOn: [addon0.id, addon1.id] }] as const;',
     );
   });
 

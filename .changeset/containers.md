@@ -5,8 +5,8 @@
 
 Containers replace slots and surface. An addon's `containers` dict keys
 addresses (`node#name`): an own-namespace key declares a child, any other key
-alters a dependency's child, and `only`, `except` and `when` (app, route,
-perspective) narrow what renders, layered by addon dependency like menus. The
+alters a dependency's child, and `only`, `except` and `when` (app, route)
+narrow what renders, layered by addon dependency like menus. The
 name after `#` types the entry through `ContainerKinds`.
 
 - Framework containers: `form#sections`, `#rail`, `#actions`, `#actions-menu`

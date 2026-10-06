@@ -35,10 +35,10 @@ describe("nexus addon manifest", () => {
     expect(nexus.menus.messaging?.hide).toBeUndefined();
   });
 
-  test("offers a Nexus perspective for the deployment to select without setting a shell or brand", () => {
-    expect(nexus.perspectives).toEqual({ nexus: { root: "nexus", home: "nexus.inbox" } });
+  test("lands the Nexus root on its inbox when a deployment selects it, without a shell or brand of its own", () => {
+    expect(nexus.menus.nexus?.home).toBe("nexus.inbox");
+    expect(nexus.menus.nexus?.brand).toBeUndefined();
     expect(nexus.shell).toBeUndefined();
-    expect(nexus.brand).toBeUndefined();
   });
 
   test("declares a glyph for every menu item it contributes", () => {

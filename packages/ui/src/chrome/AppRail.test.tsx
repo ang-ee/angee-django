@@ -32,7 +32,6 @@ const menuItems: readonly ChromeMenuItem[] = [
     id: "projects",
     label: "Projects",
     icon: "projects",
-    appRoot: true,
     to: "/projects",
     children: [
       { id: "projects.all", label: "All projects", to: "/projects/all" },
@@ -45,11 +44,10 @@ const menuItems: readonly ChromeMenuItem[] = [
     id: "notes",
     label: "Notes",
     icon: "notes",
-    appRoot: true,
     to: "/notes",
     children: [{ id: "notes.all", label: "All notes", to: "/notes/all" }],
   },
-  { id: "help", label: "Help", icon: "help", appRoot: true, to: "/help" },
+  { id: "help", label: "Help", icon: "help", to: "/help" },
   {
     id: "platform",
     label: "Platform",
@@ -242,16 +240,17 @@ describe("AppRail intermediate navigation", () => {
     expect(screen.queryByRole("link", { name: "Notes" })).toBeNull();
     expect(screen.getByRole("link", { name: "Desk brand" })).toBeTruthy();
   });
-  test("uses the supplied confined tree and retains shortcuts inside its root", async () => {
+  test("uses the supplied confined tree and retains shortcuts inside its rail", async () => {
     media.large = true;
-    const confined = MenuTree.from(menuItems).confineTo("projects");
+    const confined = MenuTree.from(menuItems).confineTo(["projects"]);
     const rootRoute = createRootRoute({ component: () => <Outlet /> });
     const router = createRouter({
       routeTree: rootRoute.addChildren([createRoute({
         getParentRoute: () => rootRoute,
         path: "/projects",
         component: () => <AppRuntimeProvider runtime={{
-          confineTo: "projects",
+          rail: ["projects"],
+          brand: { name: "Projects", mark: "projects" },
           userPreferences: {
             available: true,
             preferences: { "chrome.routeShortcuts": [
@@ -321,8 +320,8 @@ describe("AppRail intermediate navigation", () => {
   test("a branded sub-app navigates directly at intermediate widths despite owning menu children", async () => {
     media.large = false;
     const openNavigation = vi.fn();
-    const tree = MenuTree.from(menuItems).confineTo("projects");
-    const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={{ confineTo: "projects" }}>
+    const tree = MenuTree.from(menuItems).confineTo(["projects"]);
+    const root = createRootRoute({ component: () => <AppRuntimeProvider runtime={{ rail: ["projects"], brand: { name: "Projects", mark: "projects" } }}>
       <AppRail menuItems={tree.roots} onOpenNavigation={openNavigation} />
     </AppRuntimeProvider> });
     const router = createRouter({ routeTree: root.addChildren(["/desk", "/desk/inbox"].map((path) =>
@@ -435,7 +434,7 @@ describe("AppRail order, default app and chooser", () => {
   test("developer-mode hidden roots move with the order but never become the default", async () => {
     media.large = true;
     const { preferences } = renderRail({
-      menuItems: [...menuItems, { id: "archive", label: "Archive", appRoot: true, hidden: true, to: "/archive" }],
+      menuItems: [...menuItems, { id: "archive", label: "Archive", hidden: true, to: "/archive" }],
       preferences: { developerMode: true },
     });
     const archive = await screen.findByRole("link", { name: "Archive (hidden)" });
@@ -536,9 +535,9 @@ function renderRail({ confined = false, preferences: initialPreferences = {}, me
     });
     saved.current = preferences;
     return <AppRuntimeProvider runtime={{
-      ...(confined ? { confineTo: "projects" } : {}),
+      ...(confined ? { rail: ["projects"], brand: { name: "Projects", mark: "projects" } } : {}),
       userPreferences: { available: true, preferences, patchPreferences: async (patch) => setPreferences(patch) },
-    }}><AppRail menuItems={confined ? MenuTree.from(items).confineTo("projects").roots : items} presentation={presentation} /></AppRuntimeProvider>;
+    }}><AppRail menuItems={confined ? MenuTree.from(items).confineTo(["projects"]).roots : items} presentation={presentation} /></AppRuntimeProvider>;
   }
   const root = createRootRoute({ component: Host });
   const router = createRouter({ routeTree: root.addChildren(["/projects", "/settings"].map((path) =>
