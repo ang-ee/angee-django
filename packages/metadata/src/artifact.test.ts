@@ -125,7 +125,19 @@ describe("generated resource wire contract", () => {
     expect(defineAngeeSchemaMetadata(wire)).toEqual(wire);
   });
 
+  test("reads an MTI parent's concrete kinds and leaves a plain model without any", () => {
+    const party = testDataResource("parties.Party", { concreteKinds: ["parties.Organization", "parties.Person"] });
+    const handle = testDataResource("parties.Handle");
+    const parsed = defineAngeeSchemaMetadata({ angee: { resources: [party, handle] } });
+    const metadata = schemaFieldMetadataFromDataResources(parsed.angee?.resources ?? []);
+
+    expect(metadata.labels["parties.Party"]?.resource.concreteKinds).toEqual(["parties.Organization", "parties.Person"]);
+    expect(metadata.labels["parties.Handle"]?.resource.concreteKinds).toBeUndefined();
+  });
+
   test.each([
+    { concreteKinds: "parties.Person" },
+    { concreteKinds: [42] },
     { query: { identity: { field: 42 } } },
     { aggregateMeasures: [{ op: 42 }] },
     { createArguments: [42] },

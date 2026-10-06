@@ -1022,6 +1022,9 @@ and current contracts before applying a historical example to a new deployment.
   accessor and any query prefetch identify the child; callers supply their
   actor-scoped queryset when that lookup is permission-sensitive. A parent
   row never grows a human-label kind column to mirror its child model.
+  Clients read a parent's exposed children from its resource metadata's
+  `concrete_kinds` ([projection](../../addons/angee/graphql/data/metadata.py))
+  instead of re-deriving inheritance.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with

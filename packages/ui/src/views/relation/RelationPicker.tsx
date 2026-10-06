@@ -40,6 +40,20 @@ export interface RelationCreateConfig {
   title?: ReactNode;
   /** Optional always-visible action that opens the same native create form. */
   actionLabel?: ReactNode;
+  /**
+   * The kinds this create chooses between, in switcher order: the form opens on
+   * the first and a switcher swaps it for another kind's form. A chosen kind's
+   * `resource`, `fields`, `submit` and `prefillField` replace the outer ones;
+   * `defaultValues`, `title` and `actionLabel` stay shared. The saved row is
+   * selected under the outer `resource`, whose id an MTI child shares.
+   */
+  kinds?: readonly RelationCreateKind[];
+}
+
+/** One kind of record an inline create can make, with its switcher label. */
+export interface RelationCreateKind
+  extends Pick<RelationCreateConfig, "resource" | "fields" | "submit" | "prefillField"> {
+  label: ReactNode;
 }
 
 /** What the inline edit form needs to edit the *selected* related record. */

@@ -25,8 +25,9 @@ export interface RelationFieldWidgetProps {
   where?: Record<string, unknown>;
   /**
    * Explicit inline-create configuration for the picker. Overrides the default
-   * derived from the related model's metadata (offered when it has a create
-   * mutation and form fields). Pass null to disable creation explicitly.
+   * derived from the related model's metadata by `useRelationForms` (the model's
+   * own create, and its creatable concrete kinds). Pass null to disable creation
+   * explicitly.
    */
   create?: RelationCreateConfig | null;
   searchFields?: readonly string[];
@@ -39,6 +40,7 @@ export interface RelationFieldWidgetProps {
   selectedOption?: RelationOption;
   placeholder?: string;
   "aria-label"?: string;
+  "aria-labelledby"?: string;
   controlRef?: Ref<HTMLButtonElement>;
   controlProps?: WidgetControlProps;
 }
@@ -46,8 +48,9 @@ export interface RelationFieldWidgetProps {
 /**
  * The auto-wired relational form control: read-only values compose `RecordReference`;
  * editable values render a searchable `RelationPicker`
- * and — when the related model has a create mutation — offers in-place create
- * with fields derived from its metadata. `FormView` resolves the relation target
+ * and — when the related model or one of its concrete kinds has a create
+ * mutation — offers in-place create with fields derived from its metadata.
+ * `FormView` resolves the relation target
  * (model, display field, create) from the SDL and the selected record's label
  * from its own read. Opening the picker starts the bounded option read, and
  * typing searches that collection on the server.
@@ -74,6 +77,7 @@ function EditableRelationFieldWidget(
   selectedOption,
   placeholder,
   "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   controlRef,
   controlProps,
 }: RelationFieldWidgetProps,
@@ -110,6 +114,7 @@ function EditableRelationFieldWidget(
       readOnly={readOnly}
       placeholder={placeholder}
       aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
       followHref={followHref}
       onOpenChange={picker.onOpenChange}
       onSearchChange={picker.onSearchChange}

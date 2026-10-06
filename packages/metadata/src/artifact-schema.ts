@@ -105,6 +105,8 @@ const ResourceSchema = v.looseObject({
   appLabel: v.string(),
   modelName: v.string(),
   canonicalLabel: OptionalString,
+  /** Model labels of the direct MTI children this schema exposes, sorted; each shares this resource's ids. */
+  concreteKinds: v.optional(Strings),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),

@@ -16,7 +16,7 @@ from strawberry_django_hasura import HasuraResource
 from angee.base.impl import ImplClassField
 from angee.base.models import AngeeModel
 from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import canonical_record_model
+from angee.base.refs import canonical_record_model, concrete_child_models
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis
@@ -284,7 +284,11 @@ def finalize_data_resources(
         finalized.append(metadata)
     resources_by_model = {item.model: item for item in finalized if item.model is not None}
     return tuple(
-        dataclasses.replace(item, grantable=_grantable_relations(item.model, resources_by_model))
+        dataclasses.replace(
+            item,
+            grantable=_grantable_relations(item.model, resources_by_model),
+            concrete_kinds=_concrete_kinds(item.model, resources_by_model),
+        )
         for item in finalized
     )
 
@@ -643,6 +647,25 @@ def _mutation_arguments(
     return tuple(
         data_contract.DataMutationArgument(name=name, type=str(argument.type))
         for name, argument in mutation.fields[root].args.items() if name in declared
+    )
+
+
+def _concrete_kinds(
+    model: type[models.Model] | None,
+    resources_by_model: dict[type[models.Model], data_contract.DataResourceMetadata],
+) -> tuple[str, ...]:
+    """Project the direct MTI children this schema exposes as resources, in model-label order.
+
+    A child shares its parent's primary key and public id, so a row created as one
+    of these kinds is also the parent row a relation to the parent selects.
+    """
+
+    if model is None:
+        return ()
+    return tuple(
+        resources_by_model[child].model_label
+        for child in concrete_child_models(model)
+        if child in resources_by_model
     )
 
 

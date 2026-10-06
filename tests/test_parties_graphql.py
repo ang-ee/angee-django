@@ -169,6 +169,39 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert display_name_field["requiredOnCreate"] is True
 
 
+def test_resource_metadata_lists_the_concrete_kinds_of_an_mti_parent() -> None:
+    """The Party parent names its exposed MTI children; kinds and plain models name none."""
+
+    schema = _schema("public")
+    resources = {item.model_label: item for item in schema.angee_resources}
+
+    assert resources["parties.Party"].concrete_kinds == ("parties.Organization", "parties.Person")
+    assert resources["parties.Person"].concrete_kinds == ()
+    assert resources["parties.Handle"].concrete_kinds == ()
+
+    wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
+    assert wire["parties.Party"]["concreteKinds"] == ["parties.Organization", "parties.Person"]
+    assert wire["parties.Handle"]["concreteKinds"] == []
+
+
+def test_resource_metadata_omits_concrete_kinds_the_schema_does_not_expose() -> None:
+    """A child without a resource in the built schema is not offered as a kind."""
+
+    organization = parties_schema._ORGANIZATION_RESOURCE
+    withheld = {id(organization.query), id(organization.mutation), *map(id, organization.types)}
+    parts = {
+        key: tuple(
+            surface for surface in parties_schema.schemas["public"].get(key, ()) if id(surface) not in withheld
+        )
+        for key in SCHEMA_PART_KEYS
+    }
+    schema = GraphQLSchemas([SchemaAddon({"public": parts})]).build("public")
+    resources = {item.model_label: item for item in schema.angee_resources}
+
+    assert "parties.Organization" not in resources
+    assert resources["parties.Party"].concrete_kinds == ("parties.Person",)
+
+
 def test_contact_resource_metadata_uses_human_relation_labels() -> None:
     """Handle identity and association rows publish their human label fields."""
 

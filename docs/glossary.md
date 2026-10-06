@@ -104,6 +104,10 @@ projection, not the Django model class.
 owns common identity and lifecycle; the child owns kind-specific fields,
 behavior, tabs, and actions.
 
+**Concrete kind** — a child model seen from its parent: one kind of row the
+parent concept can be, sharing the parent's identity. Resource metadata lists a
+parent's exposed kinds as `concrete_kinds`.
+
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
 shape stays the same. Its base class names the implementation registry setting.
