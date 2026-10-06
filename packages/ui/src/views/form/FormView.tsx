@@ -374,9 +374,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     />
   </>;
 
+  // The sheet fills the content area once, around the whole record: a tabbed
+  // record's other panels follow the form, so there the Tabs root owns it.
+  const sheetClass = cn("min-h-full bg-sheet", className);
   const formElement = (
     <form
-      className={cn("min-h-full bg-sheet", className)}
+      className={tabbed ? undefined : sheetClass}
       onKeyDown={handleFormKeyDown}
       onSubmit={(event) => {
         void submitForm(event);
@@ -448,10 +451,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         value={activeRecordTab}
         onValueChange={setActiveRecordTab}
         variant="card"
-        className={cn("bg-sheet", workspace && "flex h-full min-h-0 flex-col", className)}
+        className={cn("bg-sheet", workspace ? "flex h-full min-h-0 flex-col" : "min-h-full", className)}
       >
         <form
-          className={workspace ? "contents" : "min-h-full"}
+          className={workspace ? "contents" : undefined}
           onKeyDown={handleFormKeyDown}
           onSubmit={(event) => {
             void submitForm(event);
@@ -502,7 +505,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   }
 
   return (
-    <Tabs value={activeRecordTab} onValueChange={setActiveRecordTab} variant="card">
+    <Tabs value={activeRecordTab} onValueChange={setActiveRecordTab} variant="card" className={sheetClass}>
       {formElement}
       {recordTabList.map((tab) => (
         <Tabs.Panel
