@@ -10,7 +10,7 @@ Containers follow-ups.
   - The form's layout (title, status, body) and its save read only the fields of the children the record admits. A create form, which knows no implementation, leaves out the children that need one, along with their required fields and defaults.
   - An original and its variants may reuse a tab or rail group id, never a fixed group's.
   - The projection (`resolveContainer(…, { projection: true })`) places an unplaced variant right after its original.
-- **`when: { app }` matches the page's whole app trail.** That is every app on its menu trail, outermost first, flattened ones included. Under a perspective, only the root's own apps count; a page another root owns sits in the root alone. A condition must name such an app; a plain menu item id now fails at boot.
+- **`when: { app }` matches the page's whole app trail.** That is every app on its menu trail, outermost first, flattened ones included. With an app selected, a page outside its rail sits in the selection's home root alone. A condition must name such an app; a plain menu item id now fails at boot.
 - **The deployment may force (G-14).** A deployment `only` still narrows like any other. With `force: true` beside it, it replaces every addon layer's `only` and `except` on that container (across the addresses a page merges) or that menu node, so a deployment can admit what an addon narrowed away.
   - Only the deployment may force, and only beside an `only`; addon layers still only narrow.
   - A `hide` stays until it is shown again.

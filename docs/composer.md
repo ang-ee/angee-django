@@ -388,7 +388,10 @@ error. Discovery does not inspect Python ASTs to predict runtime exports.
 conventional package. It renders `runtime/web/manifest.json` and Tailwind sources
 without importing GraphQL schemas. Each package entry lists, as `dependsOn`, the
 web packages its addon depends on transitively (`angee.addons.addon_ancestors`),
-and the deployment's `ANGEE_UI` setting rides along as `deployment`. The frontend
+and the deployment's `ANGEE_UI` setting (`menus`, `containers`, `shell`) rides
+along as `deployment`. The composer refuses unknown keys and a malformed
+`shell`; `@angee/app` checks the values against the composed menus, routes,
+icons and themes at boot. The frontend
 codegen owner consumes that manifest and SDL to produce `runtime/gql/` and
 `runtime/web/app.ts`, attaching each manifest's ancestry as web ids and appending
 the deployment as the last layer.

@@ -204,17 +204,47 @@ shared UI copy through an addon bundle.
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
   described under [Package Layering](#package-layering).
-- **Products declare the shell.** Home, brand (`{ name, mark }`, with `mark` a
-  registered glyph) and the selected perspective are `shell` facts layered
-  along addon dependencies: a dependent overrides its dependencies, unrelated
-  products fall back to the framework default, and the deployment's `ANGEE_UI`
-  applies last. Hosts pass no product facts. Rail, login, public mark and
-  document title read the brand through `useRuntimeBrand`; shell components
-  hard-code no identity. See [`resolveShell`](../../packages/app/src/shell.ts).
-  `/` signs in like the `console` layout, then lands by [`landingTarget`](../../packages/ui/src/chrome/app-rail-model.ts):
-  the person's saved home page, their rail default, the declared home, the
-  first app of their ordered rail (top-level `sequence` orders it by default),
-  then Settings. Never add a landing flag or fall back to route order.
+- **An app root declares itself; the deployment selects the app.** A
+  top-level menu root is an app. It may declare `home` (a route name inside
+  the root), `brand` (`{ name, mark }`, with `mark` a registered glyph; it
+  defaults to the root's label and icon) and `theme` (an installed theme id).
+  They layer like any menu field, so a dependent addon or `ANGEE_UI.menus`
+  overrides them, and an included app drops them. The deployment's
+  `ANGEE_UI.shell` selects what the console shows; products never name
+  hostnames, and hosts pass no product facts:
+
+  ```python
+  ANGEE_UI = {"shell": {
+      "brand": {"name": "Suite", "mark": "suite"},  # nothing selected: every root
+      "theme": "suite.light",
+      "apps": {"payables": {"rail": ["accounting", "files"], "home": "accounting.bills"}},
+      "hosts": {"payables.example.com": "payables", "work.example.com": "pm"},
+  }}
+  ```
+
+  [`selectApp`](../../packages/app/src/boot-app.tsx) takes `?app=<root id |
+  apps name>`, else the hostname's `hosts` entry, else nothing; no choice is
+  stored. A root id is the one-root app with the root's home, brand and theme.
+  A named app takes its own, else its first rail root's; an unset theme falls
+  back to `shell.theme`. Nothing selected shows every root with `shell.brand`
+  and `shell.theme`. An unknown `?app=` warns in development and falls back.
+  `createApp` checks every root, app and host at boot, selected or not: a
+  rail lists top-level roots, an app name is no root id, a home lies inside
+  its rail and stays available, a declared mark is registered and a theme
+  installed. An addon removing the page a root's home names moves that home.
+- **A selection shapes navigation, never access.** The rail, command palette
+  and Refine resources follow the selected rail plus the personal Settings
+  roots. A page outside the rail stays reachable by URL; its words, record links
+  and `when: { app }` are those of the selection's home root. No route is
+  guarded: only a menu `remove` makes a page unavailable. Rail, login, public
+  mark and document title read the selected brand through `useRuntimeBrand`;
+  shell components hard-code no identity. The selected theme is the appearance
+  default, and the person's own choice still wins.
+  `/` signs in like the `console` layout, then lands by [`landingTarget`](../../packages/ui/src/chrome/app-rail-model.ts).
+  A selected app lands on its home, else on its rail's first app. Otherwise
+  `/` lands on the person's saved home page, their rail default, the first app
+  of their ordered rail (top-level `sequence` orders it by default), then
+  Settings. Never add a landing flag or fall back to route order.
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native
@@ -817,15 +847,13 @@ full addon set.
 layer's own dependents add. Narrowing an addon's container requires depending
 on that addon; the framework's containers are open to every addon.
 
-`when: { app, route, perspective }` limits an entry's render verbs (`only`,
-`except` and `hide`) to some pages. `route` matches the route or any route
-below it, `app` any app on the page's menu trail (its root and every included
-app on the way, flattened ones too, so `when: { app: "work" }` holds on work's
-pages inside the PM suite; under a perspective only the root's own apps count,
-and a page another root owns sits in the root alone), and `perspective` the selected perspective
-while the console is confined; each takes one id or a list, and an id that
-names no route, app or perspective fails at boot. An array of entries holds
-conditional alternatives:
+`when: { app, route }` limits an entry's render verbs (`only`, `except` and
+`hide`) to some pages. `route` matches the route or any route below it, `app`
+any app on the page's menu trail (its root and every included app on the way,
+flattened ones too, so `when: { app: "work" }` holds on work's pages inside the
+PM suite; with an app selected, a page outside its rail sits in the selection's
+home root alone). Each takes one id or a list, and an id that names no route or
+app fails at boot. An array of entries holds conditional alternatives:
 
 ```ts
 // A product layered on its dependencies.
@@ -950,8 +978,8 @@ kind is offered is the container's, so layers narrow kinds per model with
 
 `resource#search` has model inheritance and accepts page-declared `page.*`
 extras alongside contributed typed shortcuts. `only`/`except` reach both;
-`hide` alters declared contributions only, and route/app/perspective `when`
-narrows those verbs. The box follows the shortcuts and is never a child that
+`hide` alters declared contributions only, and route/app `when` narrows those
+verbs. The box follows the shortcuts and is never a child that
 can be hidden. Field capability checks run at composition for model
 contributions; list catalogs validate page and kind-level targets at render.
 See [search declarations](../../packages/ui/src/views/resource/search/shortcuts.ts).
@@ -959,9 +987,8 @@ See [search declarations](../../packages/ui/src/views/resource/search/shortcuts.
 ### Rendering and testing
 
 An owner reads its container with `useContainer(address, { models, row, impls,
-extra })`: the children in order, narrowed for the current app, route and
-perspective, with variants applied and `permission` checked when a `row` is
-given. Render-time extras with a `sequence` interleave with composed children;
+extra })`: the children in order, narrowed for the current app and route, with
+variants applied and `permission` checked when a `row` is given. Render-time extras with a `sequence` interleave with composed children;
 unpositioned extras trail in input order, preserving page chatter tab order.
 An extra's `before`/`after` may anchor on a composed child id. `only`/`except`
 reach extras by id; `hide` alters declared children, so hiding an extra id fails
@@ -1257,13 +1284,12 @@ Hard-won traps — the wise learn from others' mistakes
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
   `ChromeMenuNode.isApp` identifies non-platform roots and included apps.
-  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) selects the
-  rail-root candidates: explicit `appRoot` declarations win, otherwise it returns
-  all roots; the rail filters platform roots, anchors and hidden nodes.
-  `appRoot` on a non-root item throws. An included app drops `appRoot` and
-  receives compiler-emitted `app: true`; authors do not declare that field.
-  A branded single-root rail shows the brand and included apps instead of the
-  app chooser. Addons rearrange
+  [`MenuTree.railMenuItems()`](../../packages/ui/src/chrome/menu-tree.ts) lists
+  every root, or with an app selected the rail `MenuTree.confineTo(rootIds)`
+  projects; the rail filters platform roots, anchors and hidden nodes. An
+  included app receives compiler-emitted `app: true`; authors do not declare
+  that field. A branded single-root rail shows the brand and included apps
+  instead of the app chooser. Addons rearrange
   other addons' menus only through the `menus` dict's declared verbs (include,
   flatten, remove, hide, only, position), along their dependencies; see
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
@@ -1271,8 +1297,8 @@ Hard-won traps — the wise learn from others' mistakes
   `route.menu` identifies a route's owning item when references are ambiguous.
   Multiple references within one root do not throw; without an anchor they
   provide no menu-derived trail or metadata. References from different roots
-  still throw under a perspective; confinement does not choose an owner for
-  the route. `useChromePlace()` shares one memoized
+  leave the route without an owning root; anchor it with `route.menu`, which a
+  root's `home` on such a route requires. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
   trail. Match path length and search params first, then whether the item sits at
