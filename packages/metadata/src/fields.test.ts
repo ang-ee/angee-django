@@ -1,4 +1,4 @@
-import { testDataResource, testResourceQuery } from "./testing";
+import { testDataResource, testQueryField, testResourceQuery } from "./testing";
 import { resourceOrderFieldForPath, trashFlagField } from "./fields";
 import { describe, expect, test } from "vitest";
 
@@ -37,6 +37,22 @@ describe("field metadata helpers", () => {
 
     expect(defaultWidgetForModelField(field)).toBe("money");
     expect(filterFieldType("amount", field)).toBe("number");
+  });
+
+  test("defaults a relation list to the relation multi-select and a value list to the tag input", () => {
+    const members = resourceField({ name: "members", kind: "list", relationModelLabel: "iam.User" });
+    const keywords = resourceField({ name: "keywords", kind: "list", scalar: "String" });
+
+    expect(defaultWidgetForModelField(members)).toBe("many2many");
+    expect(defaultWidgetForModelField(keywords)).toBe("tagInput");
+    expect(defaultWidgetForModelField({ ...keywords, widget: "tagInput" })).toBe("tagInput");
+    const queried = modelMetadata({
+      resource: { query: testResourceQuery({ fields: {
+        reviewers: testQueryField("reviewers", { kind: "list", scalar: null, relation: { model: "iam.User" } }),
+      } }) },
+      fields: { reviewers: resourceField({ name: "reviewers", kind: "list" }) },
+    });
+    expect(defaultWidgetForModelField(queried.fields.reviewers, queried)).toBe("many2many");
   });
 
   test("uses date-name inference only when field metadata is absent", () => {

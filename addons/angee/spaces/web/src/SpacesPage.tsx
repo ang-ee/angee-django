@@ -5,7 +5,7 @@ import { holdsPermission } from "@angee/metadata";
 import {
   Action,
   Button,
-  Chip,
+  ChipList,
   Column,
   EmptyState,
   Field,
@@ -81,15 +81,10 @@ function threadColumns(
     {
       field: "groups",
       header: t("group.threads.audience"),
-      render: (thread) => (
-        <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
-          {(thread.groups ?? []).map((group, index) => (
-            <Chip key={group?.id ?? `${group?.name ?? "unknown"}:${index}`} tone="info" size="sm">
-              {group?.name || group?.id || t("group.threads.unknownAudience")}
-            </Chip>
-          ))}
-        </span>
-      ),
+      render: (thread) => <ChipList items={(thread.groups ?? []).map((group, index) => ({
+        id: group?.id ?? `${group?.name ?? "unknown"}:${index}`,
+        label: group?.name || group?.id || t("group.threads.unknownAudience"),
+      }))} />,
     },
     { field: "message_count", header: t("group.threads.messages") },
     { field: "last_message_at" },

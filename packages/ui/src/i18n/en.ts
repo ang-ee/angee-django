@@ -644,6 +644,11 @@ export const enUiMessages: Record<string, string> = {
   "combobox.search": "Search",
   "combobox.searchOptions": "Search options",
   "combobox.noOptions": "No options",
+  "many2many.label": "Related records",
+  "many2many.add": "Add record",
+  "many2many.allSelected": "All records selected",
+  "many2many.record": "record",
+  "tagInput.label": "Tags",
   "deletePreview.title": "Delete {count} records?",
   "deletePreview.description":
     "Review the cascade tree before deleting the selected records.",

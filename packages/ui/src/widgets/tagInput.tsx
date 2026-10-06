@@ -1,8 +1,7 @@
 import { useState, type KeyboardEvent, type ReactElement } from "react";
 
-import { cn } from "../lib/cn";
-import { Chip, RemovableChip } from "../ui/chip";
-import { textRoleVariants } from "../ui/text";
+import { useUiT } from "../i18n";
+import { ChipList } from "../ui/chip";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
@@ -13,6 +12,7 @@ function TagInputEdit({
   readOnly,
   controlRef,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
+  const t = useUiT();
   const tags = normaliseTags(value);
   const [draft, setDraft] = useState("");
 
@@ -22,8 +22,8 @@ function TagInputEdit({
     setDraft("");
   }
 
-  function remove(index: number): void {
-    onChange?.(tags.filter((_, tagIndex) => tagIndex !== index));
+  function remove(tag: string): void {
+    onChange?.(tags.filter((candidate) => candidate !== tag));
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
@@ -32,37 +32,25 @@ function TagInputEdit({
       commit();
       return;
     }
-    if (event.key === "Backspace" && draft === "" && tags.length > 0) {
+    const last = tags.at(-1);
+    if (event.key === "Backspace" && draft === "" && last !== undefined) {
       event.preventDefault();
-      remove(tags.length - 1);
+      remove(last);
     }
   }
 
   if (readOnly) return <TagInputRead value={tags} />;
 
   return (
-    <div
-      className={cn(
-        "flex min-h-input-h w-full flex-wrap items-center gap-1 rounded-6 border border-border bg-sheet px-1.5 py-1 text-13 text-fg focus-within:border-border-focus focus-within:focus-ring",
-      )}
-    >
-      {tags.map((tag, index) => (
-        <RemovableChip
-          key={`${tag}:${index}`}
-          tone="info"
-          size="sm"
-          removeLabel={tag}
-          onRemove={() => remove(index)}
-        >
-          {tag}
-        </RemovableChip>
-      ))}
+    <div className="flex min-h-input-h w-full flex-wrap items-center gap-1 rounded-6 border border-border bg-sheet px-1.5 py-1 text-13 text-fg focus-within:border-border-focus focus-within:focus-ring">
+      {/* `contents` lets the chips and the draft input share one wrapping row. */}
+      <ChipList className="contents" items={tags.map((tag) => ({ id: tag, label: tag }))} onRemove={remove} />
       <input
         ref={controlRef}
         value={draft}
         className="h-5 min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
-        aria-label={widgetLabel(field, "Tags")}
-        placeholder={tags.length === 0 ? widgetLabel(field, "Tags") : undefined}
+        aria-label={widgetLabel(field, t("tagInput.label"))}
+        placeholder={tags.length === 0 ? widgetLabel(field, t("tagInput.label")) : undefined}
         onBlur={() => commit()}
         onChange={(event) => {
           const next = event.currentTarget.value;
@@ -78,19 +66,7 @@ function TagInputEdit({
 function TagInputRead({
   value,
 }: WidgetRenderProps<readonly string[]>): ReactElement {
-  const tags = normaliseTags(value);
-  if (tags.length === 0) {
-    return <span className={textRoleVariants({ role: "meta" })} />;
-  }
-  return (
-    <span className="inline-flex flex-wrap items-center gap-1">
-      {tags.map((tag, index) => (
-        <Chip key={`${tag}:${index}`} tone="info" size="sm">
-          {tag}
-        </Chip>
-      ))}
-    </span>
-  );
+  return <ChipList items={normaliseTags(value).map((tag) => ({ id: tag, label: tag }))} />;
 }
 
 export const tagInputWidget = {
@@ -99,9 +75,10 @@ export const tagInputWidget = {
   cell: TagInputRead,
 } satisfies WidgetDefinition<readonly string[]>;
 
+/** Trimmed, non-empty and distinct, as `addTags` keeps them. */
 function normaliseTags(value: readonly string[] | null | undefined): string[] {
   if (!value) return [];
-  return value.map((tag) => tag.trim()).filter(Boolean);
+  return [...new Set(value.map((tag) => tag.trim()).filter(Boolean))];
 }
 
 function addTags(current: readonly string[], input: string): string[] {
