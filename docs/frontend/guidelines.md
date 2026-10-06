@@ -1324,13 +1324,26 @@ Hard-won traps — the wise learn from others' mistakes
   it. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
-  trail. Match path length and search params first, then whether the item sits at
-  or under the route's menu anchor (inherited by record children), then depth
-  and pre-order: an anchor on an app root keeps the page on its own item there. The route projection
+  trail, and every place reader (rail, top bar, Settings-only notices) asks
+  `useChromePlace().railPlace`, never a bare path.
+- **A page renders in the place of the menu node it declares.** A route's
+  `route.menu` anchor (inherited by record children) wins over another item's
+  path prefix, even when the anchor's own target lies elsewhere. Only the
+  page's own destinations beat its anchor: an item targeting its exact path, as
+  a more specific preset or parameterized target. Then rank by path length,
+  search params, sitting at or under the anchor, depth and pre-order; an anchor
+  on an app root keeps the page on its own item there. The route projection
   publishes the winning `activeMenuId`; the Refine router binding uses that same
-  destination for native breadcrumbs. A more specific preset or parameterized
-  target wins over an anchor. Breadcrumbs occupy the
-  sheet strip below the top bar; pane toggles stay in the top bar.
+  destination for native breadcrumbs. Breadcrumbs occupy the sheet strip below
+  the top bar; pane toggles stay in the top bar. A route whose anchor and path
+  fall in different places (an app and Settings, as when composition lifts the
+  page its path nests under into Settings) fails composition
+  ([`AppRouteProjection`](../../packages/app/src/resource-projection.ts)),
+  naming the route, its anchor and the item its path nests under: give the
+  route a path under its anchor's. Operational pages keep their app's chrome;
+  configuration stays in Settings, reached from the gear or an explicit link on
+  the operational page that composes the resource's record href (the work
+  queues' "Queue settings", which the PM suite calls "Team settings").
 - **An addon composes other addons under its own app by absorbing or
   borrowing.** Absorb with `include`: the included app moves under the
   composing node and leaves its place on the rail (the PM suite). Borrow with

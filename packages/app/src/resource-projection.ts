@@ -222,6 +222,8 @@ export class AppRouteProjection {
     this.navigationTree = selection === undefined ? navigation.withSettingsPlace() : navigation.confineTo(selection.rail);
     this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
+    // Places are composition facts, so every host checks them whatever it selects.
+    this.assertRoutePlaces(selection === undefined ? this.navigationTree : navigation.withSettingsPlace());
     const home = selection?.home !== undefined ? this.routesByName.get(selection.home) : undefined;
     this.homeApp = selection && ((home && this.rootFor(home)) ?? selection.rail[0]);
     const canonical: BaseAddonRoute[] = [];
@@ -300,6 +302,29 @@ export class AppRouteProjection {
 
   activeMenu(pathname: string, routeName?: string, search?: string, navigation = this.navigationTree): MenuMatch | undefined {
     return navigation.match(pathname, search, false, this.menuAnchor(routeName)?.id);
+  }
+
+  /**
+   * A route renders in the place of the menu node it declares, its own
+   * `route.menu` or its collection's. Its path alone must name the same place:
+   * a page anchored in an app whose path nests under a Settings page, or the
+   * reverse, fails composition, naming the route, its anchor and the other owner.
+   */
+  private assertRoutePlaces(places: MenuTree): void {
+    const placeOf = (match: MenuMatch | undefined): string => places.railPlace(match).scope === "settings"
+      ? "Settings" : `app "${match?.trail[0]?.id}"`;
+    for (const route of this.routes) {
+      const anchor = this.unavailable.has(route.name) ? undefined : this.menuAnchor(route.name);
+      const byPath = anchor && places.match(route.path);
+      if (!anchor || !byPath) continue;
+      const anchored = places.match(route.path, undefined, false, anchor.id);
+      if (places.railPlace(anchored).scope === places.railPlace(byPath).scope) continue;
+      throw new Error(
+        `Route "${route.name}" is anchored to menu item "${anchor.id}" in ${placeOf(anchored)}, but its path `
+          + `"${route.path}" nests under menu item "${byPath.item.id}" in ${placeOf(byPath)}. Give the route a path `
+          + "under its anchor's, or anchor it in the place its path names.",
+      );
+    }
   }
 
   /**
