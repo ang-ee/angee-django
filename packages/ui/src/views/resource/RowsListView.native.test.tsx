@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ResourceQuery } from "@angee/metadata";
 import { testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
@@ -9,6 +9,8 @@ import { defaultWidgets } from "../../widgets";
 import { RowsListView } from "./RowsListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import type { ResourceViewFilter } from "./resource-view-model";
+import { readDndPayload, writeDndPayload } from "../../lib/dnd";
+import { testDndTransfer } from "../../lib/dnd-test-fixtures";
 
 const rows = [
   { id: "1", name: "Alpha", status: "active" },
@@ -19,6 +21,102 @@ const columns = [{ field: "name", header: "Name" }, { field: "status", header: "
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+test.each([false, true])("a spanning footer follows optional columns and selection=%s, even when empty", async (selectable) => {
+  render(<ToastProvider><RowsListView scope="local" presentation="embedded" rows={[]} selectable={selectable}
+    columns={[columns[0]!, { ...columns[1]!, id: "state", hiddenByDefault: true, minWidth: 144 }]}
+    onReorder={vi.fn()} footerRow={<button type="button">Add record</button>} emptyContent="Nothing here" />
+  </ToastProvider>);
+  const footer = screen.getByRole("button", { name: "Add record" }).closest("td")!;
+  expect(footer.closest("tfoot")).toBeTruthy();
+  expect(footer.colSpan).toBe(2 + Number(selectable));
+  expect(screen.getByText("Nothing here").closest("td")?.colSpan).toBe(footer.colSpan);
+  expect(screen.queryByRole("columnheader", { name: /^Status/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  const status = await screen.findByRole("menuitemcheckbox", { name: "Status" });
+  expect(status.getAttribute("aria-checked")).toBe("false");
+  expect(screen.getByRole("menuitemcheckbox", { name: "Name" }).getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(status);
+  expect(screen.getByRole("columnheader", { name: /^Status/ }).style.minWidth).toBe("144px");
+  expect(footer.colSpan).toBe(3 + Number(selectable));
+});
+
+test("native visibility overrides defaults, while a required column remains visible", async () => {
+  render(<ToastProvider><ResourceViewProvider scope="local" initialState={{ columnVisibility: { state: true, name: false } }}>
+    <RowsListView rows={rows} columns={[{ ...columns[0]!, hideable: false }, { ...columns[1]!, id: "state", hiddenByDefault: true }]} />
+  </ResourceViewProvider></ToastProvider>);
+  expect(screen.getByRole("columnheader", { name: "Name" })).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: /^Status/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  expect((await screen.findByRole("menuitemcheckbox", { name: "Name" })).getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Status" }));
+  expect(screen.queryByRole("columnheader", { name: /^Status/ })).toBeNull();
+});
+
+test("refreshing descriptors and row values preserves a focused cell editor", () => {
+  const fixture = (name: string) => <ToastProvider><RowsListView scope="local" rows={[{ id: "1", name }]}
+    columns={[{ field: "name", header: "Name", interactive: true,
+      render: (row) => <input aria-label="Edit name" readOnly value={row.name} /> }]} />
+  </ToastProvider>;
+  const view = render(fixture("Alpha"));
+  const editor = screen.getByRole("textbox", { name: "Edit name" });
+  editor.focus();
+  view.rerender(fixture("Changed"));
+  expect(screen.getByRole("textbox", { name: "Edit name" })).toBe(editor);
+  expect(document.activeElement).toBe(editor);
+  expect((editor as HTMLInputElement).value).toBe("Changed");
+});
+
+test("reorder handles compose native drag/drop, isolate lists and retain external row dragging", () => {
+  const onReorder = vi.fn();
+  const view = render(<AppRuntimeProvider runtime={{}}><ToastProvider>
+    <RowsListView scope="local" rows={rows} columns={columns} onReorder={onReorder}
+      draggableRow={(row) => ({ type: "demo.record", data: row.id })} />
+    <RowsListView scope="local" rows={rows} columns={columns} onReorder={onReorder} />
+  </ToastProvider></AppRuntimeProvider>);
+  const [first, second] = screen.getAllByRole("table").map((table) => within(table));
+  const handles = first!.getAllByRole("button", { name: "Reorder row" });
+  const target = handles[1]!.closest("tr")!;
+  const dataTransfer = testDndTransfer();
+  fireEvent.dragStart(handles[0]!, { dataTransfer });
+  const payload = readDndPayload<string>(dataTransfer)!;
+  expect(payload.data).toBe("1");
+  fireEvent.dragEnter(target, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer });
+  expect(target.hasAttribute("data-drop-target")).toBe(true);
+  fireEvent.dragLeave(target, { dataTransfer });
+  expect(target.hasAttribute("data-drop-target")).toBe(false);
+  fireEvent.drop(target, { dataTransfer });
+  expect(onReorder).toHaveBeenCalledExactlyOnceWith("1", "2");
+  fireEvent.drop(handles[0]!.closest("tr")!, { dataTransfer });
+  fireEvent.drop(second!.getAllByRole("button", { name: "Reorder row" })[1]!.closest("tr")!, { dataTransfer });
+  writeDndPayload(dataTransfer, { type: payload.type, data: { id: "1" } });
+  fireEvent.drop(target, { dataTransfer });
+  writeDndPayload(dataTransfer, { type: payload.type, data: "missing" });
+  fireEvent.drop(target, { dataTransfer });
+  expect(onReorder).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(handles[0]!, { key: "ArrowUp", altKey: true });
+  expect(onReorder).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(handles[0]!, { key: "ArrowDown", altKey: true });
+  expect(onReorder).toHaveBeenLastCalledWith("1", "2");
+  fireEvent.dragStart(handles[0]!.closest("tr")!, { dataTransfer });
+  expect(readDndPayload<string>(dataTransfer)?.type).toBe("demo.record");
+  writeDndPayload(dataTransfer, payload);
+  view.rerender(<AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
+    viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+  } }}><ToastProvider><RowsListView scope="local" rows={rows} columns={columns} onReorder={onReorder} /></ToastProvider></AppRuntimeProvider>);
+  const blockedHandles = screen.getAllByRole("button", { name: "Reorder row" });
+  const calls = onReorder.mock.calls.length;
+  expect(blockedHandles[0]!.hasAttribute("disabled")).toBe(true);
+  fireEvent.keyDown(blockedHandles[0]!, { key: "ArrowDown", altKey: true });
+  fireEvent.dragStart(blockedHandles[0]!, { dataTransfer });
+  fireEvent.drop(blockedHandles[1]!.closest("tr")!, { dataTransfer });
+  expect(onReorder).toHaveBeenCalledTimes(calls);
+  view.rerender(<AppRuntimeProvider runtime={{}}><ToastProvider><RowsListView scope="local" rows={rows} columns={columns} /></ToastProvider></AppRuntimeProvider>);
+  expect(screen.queryByRole("button", { name: "Reorder row" })).toBeNull();
+  expect(screen.queryByRole("columnheader", { name: "Reorder row" })).toBeNull();
 });
 
 test.each(["unregistered widgets", "registered widgets", "scalar defaults"] as const)(

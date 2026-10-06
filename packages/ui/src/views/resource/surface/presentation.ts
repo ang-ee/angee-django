@@ -248,7 +248,7 @@ export function useResourceViewTableChrome<TRow extends Row>(
           id: column.id,
           label: tableColumnLabel(column),
           visible,
-          disabled: visible && visibleCount <= 1,
+          disabled: !column.getCanHide() || (visible && visibleCount <= 1),
         };
       });
     },

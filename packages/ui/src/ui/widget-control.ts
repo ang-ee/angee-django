@@ -87,7 +87,7 @@ export const widgetControlSurfaceVariants = tv({
     },
     presentation: {
       form: "",
-      cell: "border-transparent bg-transparent shadow-none [&_[data-widget-affordance]]:opacity-0 group-hover/line:[&_[data-widget-affordance]]:opacity-100 group-focus-within/line:[&_[data-widget-affordance]]:opacity-100 focus-within:[&_[data-widget-affordance]]:opacity-100 data-[popup-open]:[&_[data-widget-affordance]]:opacity-100",
+      cell: "border-transparent bg-transparent shadow-none [&_[data-widget-affordance]]:opacity-0 group-hover/record:[&_[data-widget-affordance]]:opacity-100 group-focus-within/record:[&_[data-widget-affordance]]:opacity-100 focus-within:[&_[data-widget-affordance]]:opacity-100 data-[popup-open]:[&_[data-widget-affordance]]:opacity-100",
     },
     focus: {
       self: "focus:border-border-focus",
@@ -113,14 +113,14 @@ export const widgetControlSurfaceVariants = tv({
     {
       presentation: "cell",
       readOnly: false,
-      class: "group-hover/line:border-border group-focus-within/line:border-border hover:border-border focus:border-border-focus focus-visible:border-border-focus focus-within:border-border-focus data-[popup-open]:border-border-focus",
+      class: "group-hover/record:border-border group-focus-within/record:border-border hover:border-border focus:border-border-focus focus-visible:border-border-focus focus-within:border-border-focus data-[popup-open]:border-border-focus",
     },
     { invalid: true, readOnly: false, class: "border-danger" },
     {
       presentation: "cell",
       invalid: true,
       readOnly: false,
-      class: "group-hover/line:border-danger group-focus-within/line:border-danger hover:border-danger focus:border-danger focus-visible:border-danger focus-within:border-danger data-[popup-open]:border-danger",
+      class: "group-hover/record:border-danger group-focus-within/record:border-danger hover:border-danger focus:border-danger focus-visible:border-danger focus-within:border-danger data-[popup-open]:border-danger",
     },
     {
       invalid: true,

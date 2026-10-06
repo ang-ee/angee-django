@@ -406,6 +406,7 @@ shared UI copy through an addon bundle.
   because a verb must remain understandable without recognizing its icon.
   Mark the state's next descriptor `primary`; keep infrequent descriptors at
   `placement: "menu"`. Secondary inline verbs appear on hover and focus.
+- Editable lines are the data view in edit mode; compose `RowsListView` and its column, visibility, action, reorder and footer seams, never form-local tables.
 - A list route declares its shipped `presetIds`, `search` shortcuts, `createAction`,
   and `boardCard` fields on `ResourceList`/`List`. Undeclared search shows the full
   combined box; declared or contributed shortcuts default it to a collapsed

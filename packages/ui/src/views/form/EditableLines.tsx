@@ -1,98 +1,52 @@
 import * as React from "react";
 import {
-  Controller,
-  useFieldArray,
-  useFormState,
-  useWatch,
-  type Control,
-  type FieldValues,
-  type UseFormSetValue,
+  Controller, useFieldArray, useFormState, useWatch,
+  type Control, type FieldValues, type UseFormSetValue,
 } from "react-hook-form";
 import type { CrudFilter } from "@refinedev/core";
 import {
-  DndContext,
-  closestCenter,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import {
-  defaultWidgetForModelField,
-  filterFieldType,
-  useSchemaFieldMetadata,
-  type DataResourceLinesMetadata,
-  type ModelFieldMetadata,
-  type Row,
+  defaultWidgetForModelField, filterFieldType, useSchemaFieldMetadata,
+  type DataResourceLinesMetadata, type Row,
 } from "@angee/metadata";
 
 import { Glyph } from "../../chrome/Glyph";
-import { useUiT, type UiTranslate } from "../../i18n";
-import { cn } from "../../lib/cn";
-import { useDndKitSensors } from "../../lib/dnd";
+import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { Button } from "../../ui/button";
-import { tableVariants } from "../../ui/table";
 import { relationValueId, type WidgetControlProps } from "../../widgets/types";
+import { RowsListView } from "../resource/RowsListView";
+import { defineRowAction } from "../resource/RowActions";
 import {
-  CLIENT_LINE_KEY,
-  duplicateLineRow,
-  emptyLineRow,
-  lineDiffConfig,
-  type LineDiffConfig,
-} from "./editable-lines";
-import { FieldDescriptorControl } from "./field-descriptor-control";
-import {
-  enumOptions,
-  relationFieldInfoForField,
-  relationListFieldInfoForField,
-  type RelationFieldInfo,
+  enumOptions, relationFieldInfoForField, relationListFieldInfoForField,
 } from "../resource/model-metadata-defaults";
-import type { FieldDescriptor } from "../page";
+import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
+import { CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig } from "./editable-lines";
+import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { ValidationErrors } from "./validation-errors";
 
 export interface EditableLinesProps {
-  /**
-   * The composing form's react-hook-form control. `EditableLines` owns a
-   * `useFieldArray` over `name`, so its rows join the form's values, dirty state,
-   * and submit — the host reads `getValues(name)` at save time and diffs them
-   * (`diffLines`) into the `<resource>_save` `lines` payload.
-   */
+  /** Owns the ordered child array in the composing form's values and save diff. */
   control: Control<FieldValues>;
-  /**
-   * React Hook Form's native leaf-value writer for widget-produced row patches.
-   * Standalone callers pass `form.setValue` beside `form.control`; `FormView`
-   * supplies both from its owned form automatically.
-   */
+  /** Native leaf writer for widget-produced row patches. */
   setValue: UseFormSetValue<FieldValues>;
-  /** Form field holding the ordered child lines — the `linesResource.field`. */
+  /** Form field holding the ordered child lines — the linesResource.field. */
   name: string;
-  /** The resource's editable-lines contract (`modelMetadata.resource.linesResource`). */
   lines: DataResourceLinesMetadata;
   /** Owning document, passed to domain widgets without interpreting its fields. */
   parentRow?: Row | null;
   readOnly?: boolean;
-  /**
-   * Footer content (e.g. document totals) the composing form supplies. Receives the
-   * live line rows so totals recompute as cells change; the composer owns the money
-   * math, not this primitive.
-   */
+  /** Document totals supplied by the composer, recomputed from live line rows. */
   footer?: (rows: readonly Row[]) => React.ReactNode;
   /** Server validation messages per line row, indexed by row position. */
   rowErrors?: readonly (ValidationErrors | undefined)[];
-  /**
-   * Editable field names shown in the compact line view. Every declared line
-   * field remains available through the details toggle and in the save diff.
-   */
+  /** Initially visible editable fields; others remain available in the header menu and save diff. */
   primaryFields?: readonly string[];
-  /** Read-only columns derived by the composing domain from each live line. */
+  /** Read-only projections supplied by the composing domain. */
   supplementalColumns?: readonly EditableLineSupplementalColumn[];
-  /** Domain-owned relation constraints for a line field and its owning document. */
+  /** Domain-owned relation constraints for a field and its owning document. */
   relationFilters?: (
     fieldName: string,
     parentRow: Row | null,
@@ -113,91 +67,22 @@ export interface EditableLineSupplementalColumn {
   ) => React.ReactNode;
 }
 
-interface LineColumn {
-  field: ModelFieldMetadata;
-  descriptor: FieldDescriptor;
-  relation: RelationFieldInfo | null;
-  relationMulti: RelationFieldInfo | null;
-  header: string;
-  numeric: boolean;
-}
+/** Table identity is the RHF key; widgets and save diffs retain the child's public id. */
+type LineViewRow = { id: string; index: number; value: Row };
 
-const TABLE_STYLES = tableVariants({ interactive: true });
-const HEADER_CLASS = TABLE_STYLES.head({ className: "flex min-w-0 items-center" });
-const CELL_CLASS = TABLE_STYLES.cell({ className: "min-w-0 h-auto py-1" });
-const CELL_PRESENTATION = { presentation: "cell" } as const;
-const ROW_ACTION_CLASS =
-  "grid size-7 shrink-0 place-content-center rounded-6 text-fg-subtle opacity-30 " +
-  "group-hover/line:opacity-100 group-focus-within/line:opacity-100 " +
-  "hover:bg-inset hover:text-fg " +
-  "focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-40";
-
-/**
- * The editable document-lines composer (F6): a drag-orderable list of child rows
- * bound to the parent form's `useFieldArray`, with each cell resolved from the child
- * resource's field metadata (a relation picker, a quantity/number input, or the money
- * widget by its registered key). Add / duplicate / remove maintain the set; drag
- * maintains order (the `position` column is derived from row order at save, not typed).
- * Server-computed fixed-N array values use `RowsField` instead; it has no
- * `useFieldArray` lifecycle or add/remove/reorder affordances.
- * Section/note pseudo-rows and matrix entry are deferred.
- */
+/** The local data view in edit mode, bound to the parent form's native field array. */
 export function EditableLines({
-  control,
-  setValue,
-  name,
-  lines,
-  parentRow,
-  readOnly,
-  footer,
-  rowErrors,
-  primaryFields,
-  supplementalColumns = [],
-  relationFilters,
+  control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,
+  primaryFields, supplementalColumns = [], relationFilters,
 }: EditableLinesProps): React.ReactElement {
   const t = useUiT();
+  const controlId = React.useId();
   const config = React.useMemo(() => lineDiffConfig(lines), [lines]);
   const schemaMetadata = useSchemaFieldMetadata();
-  const allColumns = React.useMemo(
-    () => lineColumns(lines, config, schemaMetadata),
-    [lines, config, schemaMetadata],
-  );
-  const compactColumns = React.useMemo(() => {
-    if (!primaryFields) return allColumns;
-    const names = new Set(primaryFields);
-    const selected = allColumns.filter((column) => names.has(column.field.name));
-    return selected.length > 0 ? selected : allColumns;
-  }, [allColumns, primaryFields]);
-  const hasAdvancedColumns = compactColumns.length < allColumns.length;
-  const [showAdvancedColumns, setShowAdvancedColumns] = React.useState(false);
-  React.useEffect(() => {
-    if (!hasAdvancedColumns || showAdvancedColumns) return;
-    const visible = new Set(compactColumns.map((column) => column.field.name));
-    const hiddenHasErrors = rowErrors?.some((rowError) =>
-      allColumns.some((column) =>
-        !visible.has(column.field.name)
-        && rowMessages(rowError, column.field.name).length > 0,
-      ),
-    );
-    if (hiddenHasErrors) setShowAdvancedColumns(true);
-  }, [allColumns, compactColumns, hasAdvancedColumns, rowErrors, showAdvancedColumns]);
-  const columns = showAdvancedColumns ? allColumns : compactColumns;
-  // The array field lives on the parent form; a per-array keyName keeps rhf's row
-  // key off the line's own `id` (which stays the public id used by the save diff).
-  const { fields, append, insert, move, remove } = useFieldArray({
-    control,
-    name,
-    keyName: "rhfKey",
-  });
-  const { isDirty: formIsDirty } = useFormState({
-    control,
-  });
-  const rows = (useWatch({
-    control,
-    name,
-  }) as Row[] | undefined) ?? [];
-  // Publish the native field-array identity into unsaved row values. The line
-  // serializer ignores this presentation key; it only emits declared columns.
+  // Keep RHF's presentation identity off the child's own public id.
+  const { fields, append, insert, move, remove } = useFieldArray({ control, name, keyName: "rhfKey" });
+  const { isDirty: formIsDirty } = useFormState({ control });
+  const rows = (useWatch({ control, name }) as Row[] | undefined) ?? [];
   React.useEffect(() => {
     fields.forEach((field, index) => {
       const row = rows[index];
@@ -206,8 +91,7 @@ export function EditableLines({
       }
     });
   }, [config.idField, fields, name, rows, setValue]);
-  // Async widgets retain a callback after reorder/remove/refresh. Resolve its
-  // RHF identity at completion, never write through the captured row index.
+  // Async widgets resolve their RHF identity at completion, never a captured index.
   const latest = React.useRef({ fields, readOnly, setValue });
   latest.current = { fields, readOnly, setValue };
   const mounted = React.useRef(true);
@@ -224,316 +108,110 @@ export function EditableLines({
       current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
     }
   }, [name]);
-  const sensors = useDndKitSensors(4);
-
-  const onDragEnd = (event: DragEndEvent): void => {
-    const { active, over } = event;
-    if (readOnly || !over || active.id === over.id) return;
-    const from = fields.findIndex((row) => row.rhfKey === active.id);
-    const to = fields.findIndex((row) => row.rhfKey === over.id);
-    if (from >= 0 && to >= 0) move(from, to);
-  };
-
-  // Header and rows reserve identical drag/action tracks. Minimum cell widths
-  // belong to the grid; a narrow form scrolls this region rather than overlapping
-  // neighboring controls. M2M chips get enough space for their selection summary.
-  const widths = [
-    ...columns.map((column) => column.relationMulti ? 160 : 128),
-    ...supplementalColumns.map((column) => column.minWidth ?? 128),
-  ];
-  const gridStyle = {
-    gridTemplateColumns: `40px ${widths.map((width) => `minmax(${width}px, 1fr)`).join(" ")} 68px`,
-  };
-  const minWidth = widths.reduce((total, width) => total + width, 108);
-
-  return (
-    <div className="min-w-0">
-      {hasAdvancedColumns ? (
-        <div className="mb-2 flex justify-end">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowAdvancedColumns((shown) => !shown)}
-          >
-            {t(showAdvancedColumns ? "lines.hideDetails" : "lines.showDetails")}
-          </Button>
-        </div>
-      ) : null}
-      <div className="overflow-x-auto">
-        <div role="table" aria-label={t("lines.section")} className="text-13" style={{ minWidth }}>
-          <div role="row" className="grid items-center" style={gridStyle}>
-            <span role="columnheader" className={TABLE_STYLES.head()}>
-              <span className="sr-only">{t("lines.reorder")}</span>
-            </span>
-            {columns.map((column) => (
-              <span role="columnheader" key={column.field.name} className={cn(HEADER_CLASS, column.numeric && "justify-end text-right")}>
-                <span className="truncate">{column.header}</span>
-              </span>
-            ))}
-            {supplementalColumns.map((column) => (
-              <span role="columnheader" key={column.key} className={cn(HEADER_CLASS, column.align !== "left" && "justify-end text-right")}>
-                <span className="truncate">{column.header}</span>
-              </span>
-            ))}
-            <span role="columnheader" className={TABLE_STYLES.head()}>
-              <span className="sr-only">{t("list.actions")}</span>
-            </span>
-          </div>
-
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={onDragEnd}
-          >
-            <SortableContext
-              items={fields.map((row) => row.rhfKey)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div role="rowgroup">
-                {fields.length === 0 ? (
-                  <div role="row" className={TABLE_STYLES.row()}>
-                    <p role="cell" aria-colspan={widths.length + 2} className="px-3 py-2 text-fg-muted">{t("lines.empty")}</p>
-                  </div>
-                ) : (
-                  fields.map((row, index) => (
-                    <LineRow
-                      key={row.rhfKey}
-                      id={row.rhfKey}
-                      index={index}
-                      name={name}
-                      control={control}
-                      columns={columns}
-                      supplementalColumns={supplementalColumns}
-                      row={rows[index]}
-                      parentRow={parentRow}
-                      relationFilters={relationFilters}
-                      formIsDirty={formIsDirty}
-                      onRowChange={(patch) => patchRow(row.rhfKey, patch)}
-                      gridStyle={gridStyle}
-                      readOnly={readOnly}
-                      rowError={rowErrors?.[index]}
-                      t={t}
-                      onDuplicate={() =>
-                        insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)
-                      }
-                      onRemove={() => remove(index)}
-                    />
-                  ))
-                )}
-                {readOnly ? null : (
-                  <div role="row" className={TABLE_STYLES.row()}>
-                    <div role="cell" aria-colspan={widths.length + 2}>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-9 w-full justify-start rounded-none px-3 text-fg-muted"
-                        onClick={() => append(emptyLineRow(fields.length, config) as never)}
-                      >
-                        <Glyph name="plus" size={16} />
-                        {t("lines.add")}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </SortableContext>
-          </DndContext>
-        </div>
-        {footer ? <div style={{ minWidth }} className="pt-2">{footer(rows)}</div> : null}
-      </div>
-    </div>
-  );
-}
-
-function LineRow({
-  id,
-  index,
-  name,
-  control,
-  columns,
-  supplementalColumns,
-  row,
-  parentRow,
-  relationFilters,
-  formIsDirty,
-  onRowChange,
-  gridStyle,
-  readOnly,
-  rowError,
-  t,
-  onDuplicate,
-  onRemove,
-}: {
-  id: string;
-  index: number;
-  name: string;
-  control: Control<Record<string, unknown>>;
-  columns: readonly LineColumn[];
-  supplementalColumns: readonly EditableLineSupplementalColumn[];
-  row?: Row;
-  parentRow?: Row | null;
-  relationFilters?: EditableLinesProps["relationFilters"];
-  formIsDirty: boolean;
-  onRowChange: (patch: Record<string, unknown>) => void;
-  gridStyle: React.CSSProperties;
-  readOnly?: boolean;
-  rowError?: ValidationErrors;
-  t: UiTranslate;
-  onDuplicate: () => void;
-  onRemove: () => void;
-}): React.ReactElement {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id, disabled: readOnly });
-  const { role: _dragRole, ...dragAttributes } = attributes;
-  const controlId = React.useId();
-  return (
-    <div
-      ref={setNodeRef}
-      role="row"
-      style={{ ...gridStyle, ...sortableTransformStyle(transform, transition) }}
-      className={TABLE_STYLES.row({ className: cn(
-        "group/line grid min-h-9 items-center cursor-default",
-        isDragging && "z-10 border-border-focus bg-sheet shadow-lg",
-      ) })}
-    >
-      <div role="cell" className="px-1 py-1">
-        {readOnly ? null : (
-          <button
-            type="button"
-            aria-label={t("lines.reorder")}
-            className={cn(ROW_ACTION_CLASS, "cursor-grab touch-none select-none active:cursor-grabbing")}
-            {...dragAttributes}
-            {...listeners}
-          >
-            <Glyph name="grip-vertical" size={16} />
-          </button>
-        )}
-      </div>
-
-      {columns.map((column) => {
-        const messages = rowMessages(rowError, column.field.name);
+  const viewRows = React.useMemo(() => fields.map((field, index) => ({
+    id: field.rhfKey, index, value: rows[index] ?? {},
+  })), [fields, rows]);
+  const editableFields = (lines.fields ?? []).filter((field) => field.name !== config.positionField);
+  const primary = primaryFields?.some((name) => editableFields.some((field) => field.name === name))
+    ? new Set(primaryFields) : null;
+  const columns: ColumnDescriptor<LineViewRow>[] = editableFields.map((field) => {
+    const widget = defaultWidgetForModelField(field);
+    const customWidget = Boolean(field.widget && !["many2one", "many2many"].includes(field.widget));
+    const relation = customWidget ? null : relationFieldInfoForField(field, schemaMetadata);
+    const relationMulti = customWidget ? null : relationListFieldInfoForField(field, schemaMetadata);
+    const header = titleCase(field.name);
+    const descriptor: FieldDescriptor = {
+      name: field.name, label: header, widget, options: enumOptions(field),
+      ...(field.currencyField ? { currencyField: field.currencyField } : {}),
+    };
+    const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
+    return {
+      id: field.name, field: `value.${field.name}`, header, widget,
+      currencyField: field.currencyField,
+      sortable: false, interactive: true,
+      hiddenByDefault: Boolean(primary && !primary.has(field.name)),
+      // Validation reveals an optional field even if the user previously hid it.
+      hideable: !hasErrors,
+      align: filterFieldType(field.name, field) === "number"
+        || ["money", "integer", "float"].includes(widget ?? "") ? "right" : "left",
+      render: ({ id, index, value }) => {
+        const messages = rowMessages(rowErrors?.[index], field.name);
         const controlProps: WidgetControlProps = {
-          ...CELL_PRESENTATION,
-          id: `${controlId}-${column.field.name}`,
+          presentation: "cell", id: `${controlId}-${id}-${field.name}`,
           "aria-invalid": messages.length > 0 || undefined,
         };
-        return <div role="cell" key={column.field.name} className={cn(CELL_CLASS, column.numeric && "text-right tabular-nums")}>
-          <Controller
-            control={control}
-            name={`${name}.${index}.${column.field.name}`}
-            render={({ field: controller }) =>
-              column.relationMulti ? (
-                <RelationMultiFieldWidget
-                  controlProps={controlProps}
-                  value={Array.isArray(controller.value) ? controller.value : []}
-                  onChange={controller.onChange}
-                  readOnly={readOnly}
-                  relation={column.relationMulti}
-                  filters={relationFilters?.(column.field.name, parentRow ?? null)}
-                  aria-label={column.header}
-                />
-              ) : column.relation ? (
-                <RelationFieldWidget
-                  controlProps={controlProps}
-                  controlRef={controller.ref}
-                  value={relationValueId(controller.value) || null}
-                  onChange={controller.onChange}
-                  readOnly={readOnly}
-                  relation={column.relation}
-                  filters={relationFilters?.(column.field.name, parentRow ?? null)}
-                  selectedOption={relationSelectedOption(
-                    controller.value,
-                    column.relation.labelField,
-                  )}
-                  aria-label={column.header}
-                />
-              ) : (
-                <FieldDescriptorControl
-                  controlProps={controlProps}
-                  controlRef={controller.ref}
-                  field={column.descriptor}
-                  row={row}
-                  parentRow={parentRow}
-                  value={controller.value}
-                  messages={messages}
-                  readOnly={readOnly}
-                  onChange={controller.onChange}
-                  onRowChange={onRowChange}
-                />
-              )
-            }
+        return <div className="min-w-0">
+          <Controller control={control} name={`${name}.${index}.${field.name}`}
+            render={({ field: controller }) => relationMulti ? (
+              <RelationMultiFieldWidget
+                controlProps={controlProps}
+                value={Array.isArray(controller.value) ? controller.value : []}
+                onChange={controller.onChange} readOnly={readOnly} relation={relationMulti}
+                filters={relationFilters?.(field.name, parentRow ?? null)}
+                aria-label={header}
+              />
+            ) : relation ? (
+              <RelationFieldWidget
+                controlProps={controlProps} controlRef={controller.ref}
+                value={relationValueId(controller.value) || null}
+                onChange={controller.onChange} readOnly={readOnly} relation={relation}
+                filters={relationFilters?.(field.name, parentRow ?? null)}
+                selectedOption={relationSelectedOption(controller.value, relation.labelField)}
+                aria-label={header}
+              />
+            ) : (
+              <FieldDescriptorControl
+                controlProps={controlProps} controlRef={controller.ref} field={descriptor}
+                row={value} parentRow={parentRow} value={controller.value}
+                messages={messages} readOnly={readOnly} onChange={controller.onChange}
+                onRowChange={(patch) => patchRow(id, patch)}
+              />
+            )}
           />
-          {messages.map((message, messageIndex) => (
-            <p key={messageIndex} className="mt-1 text-xs text-danger-text">
-              {message}
-            </p>
+          {messages.map((message, index) => (
+            <p key={index} className="mt-1 text-xs text-danger-text">{message}</p>
           ))}
         </div>;
-      })}
-
-      {supplementalColumns.map((column) => (
-        <div role="cell" key={column.key} className={cn(CELL_CLASS, column.align !== "left" && "text-right tabular-nums")}>
-          {column.render(row ?? {}, parentRow ?? null, index, { formIsDirty })}
-        </div>
-      ))}
-
-      {readOnly ? (
-        <span role="cell" />
-      ) : (
-        <div role="cell" className="flex shrink-0 items-center gap-0.5 px-1 py-1">
-          <button
-            type="button"
-            aria-label={t("lines.duplicate")}
-            className={ROW_ACTION_CLASS}
-            onClick={onDuplicate}
-          >
-            <Glyph name="copy" size={15} />
-          </button>
-          <button
-            type="button"
-            aria-label={t("lines.remove")}
-            className={ROW_ACTION_CLASS}
-            onClick={onRemove}
-          >
-            <Glyph name="trash" size={15} />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Resolve each editable child column: its widget descriptor and relation target. */
-function lineColumns(
-  lines: DataResourceLinesMetadata,
-  config: LineDiffConfig,
-  schemaMetadata: ReturnType<typeof useSchemaFieldMetadata>,
-): LineColumn[] {
-  return (lines.fields ?? [])
-    .filter((field) => field.name !== config.positionField)
-    .map((field) => {
-      const widget = defaultWidgetForModelField(field);
-      const customWidget = Boolean(field.widget && !["many2one", "many2many"].includes(field.widget));
-      const options = enumOptions(field);
-      const header = titleCase(field.name);
-      const descriptor: FieldDescriptor = {
-        name: field.name,
-        label: header,
-        ...(widget ? { widget } : {}),
-        ...(options.length > 0 ? { options } : {}),
-        ...(field.currencyField ? { currencyField: field.currencyField } : {}),
-      };
-      return {
-        field,
-        descriptor,
-        relation: customWidget ? null : relationFieldInfoForField(field, schemaMetadata),
-        relationMulti: customWidget ? null : relationListFieldInfoForField(field, schemaMetadata),
-        header,
-        numeric: filterFieldType(field.name, field) === "number" || widget === "money" || widget === "integer" || widget === "float",
-      };
-    });
+      },
+    };
+  });
+  columns.push(...supplementalColumns.map((column): ColumnDescriptor<LineViewRow> => ({
+    id: column.key, field: column.key, header: column.header,
+    minWidth: column.minWidth, align: column.align ?? "right", sortable: false,
+    render: ({ value, index }) => column.render(value, parentRow ?? null, index, { formIsDirty }),
+  })));
+  const rowActions = readOnly ? undefined : [
+    defineRowAction<LineViewRow>({
+      kind: "page", id: "duplicate", label: t("lines.duplicate"), icon: "copy",
+      presentation: "icon", variant: "ghost", pendingPolicy: "disable-actions",
+      onSelect: ({ index }) => insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never),
+    }),
+    defineRowAction<LineViewRow>({
+      kind: "page", id: "remove", label: t("lines.remove"), icon: "trash",
+      presentation: "icon", variant: "danger", pendingPolicy: "disable-actions",
+      onSelect: ({ index }) => remove(index),
+    }),
+  ];
+  return <div className="min-w-0">
+    <RowsListView<LineViewRow>
+      rows={viewRows} columns={columns} rowActions={rowActions}
+      presentation="embedded" scope="local" headerVisibility="visible"
+      pageSize={Number.MAX_SAFE_INTEGER /* Keep the ordered child array on one page as rows are added. */}
+      emptyContent={t("lines.empty")}
+      onReorder={readOnly ? undefined : (fromId, toId) => {
+        const current = latest.current;
+        if (current.readOnly) return;
+        const from = current.fields.findIndex((field) => field.rhfKey === fromId);
+        const to = current.fields.findIndex((field) => field.rhfKey === toId);
+        if (from >= 0 && to >= 0 && from !== to) move(from, to);
+      }}
+      footerRow={readOnly ? undefined : <Button type="button" variant="ghost" size="sm"
+        onClick={() => append(emptyLineRow(fields.length, config) as never)}>
+        <Glyph name="plus" decorative />{t("lines.add")}
+      </Button>}
+    />
+    {footer ? <div className="pt-2">{footer(rows)}</div> : null}
+  </div>;
 }
 
 function rowMessages(
@@ -541,16 +219,4 @@ function rowMessages(
   fieldName: string,
 ): readonly string[] {
   return rowError?.fieldErrors[fieldName] ?? [];
-}
-
-function sortableTransformStyle(
-  transform: { x: number; y: number; scaleX: number; scaleY: number } | null,
-  transition: string | undefined,
-): React.CSSProperties {
-  return {
-    transform: transform
-      ? `translate3d(${Math.round(transform.x)}px, ${Math.round(transform.y)}px, 0)`
-      : undefined,
-    transition,
-  };
 }

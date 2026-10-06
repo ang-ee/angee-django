@@ -66,6 +66,10 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rowHref?: (row: TRow) => string;
   /** Authored and page-owned verbs rendered in the shared trailing action column. */
   rowActions?: readonly RowActionDeclaration<TRow>[];
+  /** Move a local row to another row's position; the list owns handles and drop targets. */
+  onReorder?: (fromId: string, toId: string) => void;
+  /** Content of a spanning table footer row, for example an add-record control. */
+  footerRow?: React.ReactNode;
   emptyContent?: ListEmptyContent;
   className?: string;
   presentation?: ResourceCollectionPresentation;
@@ -169,6 +173,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   onListStateChange,
   rowHref,
   rowActions,
+  onReorder,
+  footerRow,
   emptyContent,
   className,
   presentation = "page",
@@ -295,6 +301,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           renderRowActions={
             rowActionSurface.hasActions ? rowActionSurface.render : undefined
           }
+          onReorder={onReorder}
+          footerRow={footerRow}
           emptyContent={resolvedEmptyContent}
           fetching={fetching}
         />
