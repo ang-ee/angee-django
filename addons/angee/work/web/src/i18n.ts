@@ -26,6 +26,7 @@ export const enWorkMessages: Record<string, string> = {
   "queue.open.board": "Board",
   "queue.open.triage": "Triage",
   "queue.open.cycles": "Cycles",
+  "queue.settings": "Queue settings",
   "hub.triage.title": "Triage",
   "hub.triage.description": "Choose a queue with triage enabled.",
   "hub.triage.empty.title": "No triage queues",

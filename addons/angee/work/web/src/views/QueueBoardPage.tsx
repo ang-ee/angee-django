@@ -6,12 +6,14 @@ import {
   Page,
   PageBody,
   PageHeader,
+  useBreadcrumbLeafLabel,
   useRouteParam,
 } from "@angee/ui";
 import * as React from "react";
 
 import { useQueueContext } from "../context";
 import { useWorkT } from "../i18n";
+import { QueueSettingsLink } from "../queue-settings-link";
 import { RemovedTasks } from "../removed-tasks";
 import { queueStageFilters } from "../stage-filters";
 import { WorkTaskCard, type WorkTaskRow } from "../task-work";
@@ -23,11 +25,14 @@ export function QueueBoardPage(): React.ReactElement {
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const scale = queue.data?.work_queues_by_pk?.estimate_scale;
+  // The Boards hub's record page: the queue names the crumb after the hub.
+  useBreadcrumbLeafLabel(queue.data?.work_queues_by_pk?.name);
   return (
     <Page>
       <PageHeader
         title={t("board.title", { queue: name })}
         description={t("board.description")}
+        actions={<QueueSettingsLink queueId={queueId} />}
       />
       <PageBody gutter="none" scroll="hidden">
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}

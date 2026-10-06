@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listProps: null as Record<string, unknown> | null,
   removedProps: null as Record<string, unknown> | null,
   params: { queueId: "que_eng", id: "cyc_7" } as Record<string, string>,
+  leafLabel: undefined as string | undefined,
 }));
 
 vi.mock("@angee/projects", () => ({
@@ -19,6 +20,7 @@ vi.mock("@angee/projects", () => ({
 }));
 
 vi.mock("@angee/ui", () => ({
+  Button: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   Column: () => null,
   ErrorBanner: () => null,
   List: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
@@ -27,7 +29,12 @@ vi.mock("@angee/ui", () => ({
   },
   Page: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   PageBody: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  PageHeader: () => null,
+  PageHeader: ({ actions }: { actions?: React.ReactNode }) => <>{actions}</>,
+  TextLink: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href}>{children}</a>,
+  useBreadcrumbLeafLabel: (label?: string) => {
+    mocks.leafLabel = label;
+  },
+  useResourceRecordHref: () => (id: string) => `/work/queues/${id}`,
   ResourceList: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   useRouteHref: () => Object.assign(() => "/projects/tasks/task", { record: () => "/projects/tasks/task" }),
   useRouteParam: (name: string) => mocks.params[name],
@@ -81,6 +88,7 @@ import { QueueBoardPage } from "./QueueBoardPage";
 beforeEach(() => {
   mocks.listProps = null;
   mocks.removedProps = null;
+  mocks.leafLabel = undefined;
   mocks.params = { queueId: "que_eng", id: "cyc_7" };
 });
 
@@ -90,6 +98,12 @@ describe("work board stage lanes", () => {
   test("offers the queue's removed tasks beside its board", () => {
     render(<QueueBoardPage />);
     expect(mocks.removedProps).toMatchObject({ queue: "que_eng" });
+  });
+
+  test("links the board to its queue's settings record instead of leaving Work, and names its crumb", () => {
+    const { getByRole } = render(<QueueBoardPage />);
+    expect(getByRole("link", { name: "queue.settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
+    expect(mocks.leafLabel).toBe("Engineering");
   });
 
   test("keeps triage and duplicate stages out of both planning boards", () => {

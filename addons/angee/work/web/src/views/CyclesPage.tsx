@@ -5,6 +5,7 @@ import {
   Page,
   PageBody,
   PageHeader,
+  useBreadcrumbLeafLabel,
   useRouteParam,
   useRouteHref,
 } from "@angee/ui";
@@ -13,6 +14,7 @@ import * as React from "react";
 import { useQueueContext } from "../context";
 import { useCycleRowActions, type WorkCycleRow } from "../cycle-actions";
 import { useWorkT } from "../i18n";
+import { QueueSettingsLink } from "../queue-settings-link";
 import { CYCLE_MODEL } from "../resources";
 
 /** Incomplete cycle windows: current first, then upcoming, with close/rollover. */
@@ -23,12 +25,15 @@ export function CyclesPage(): React.ReactElement {
   const queue = useQueueContext(queueId);
   const name = queue.data?.work_queues_by_pk?.name ?? queueId;
   const actions = useCycleRowActions<WorkCycleRow>();
+  // The Cycles hub's record page: the queue names the crumb after the hub.
+  useBreadcrumbLeafLabel(queue.data?.work_queues_by_pk?.name);
 
   return (
     <Page>
       <PageHeader
         title={t("cycle.title", { queue: name })}
         description={t("cycle.description")}
+        actions={<QueueSettingsLink queueId={queueId} />}
       />
       <PageBody>
         {queue.error ? <ErrorBanner description={queue.error.message} /> : null}

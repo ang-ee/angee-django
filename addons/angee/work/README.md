@@ -31,3 +31,9 @@ writers. `removed_tasks(queue, parent)` lists only the concealed tasks the reade
 holds `restore` on, with their removal facts, and `RemovedTasks` renders that list;
 a restricted task stays with administrators. Clients label Decline as Reject
 where appropriate.
+
+A queue's triage, board and cycles pages are the record pages of the Triage,
+Boards and Cycles hubs, under their paths and anchors, so they render in Work
+wherever composition places the queue record. [`QueueSettingsLink`](web/src/queue-settings-link.tsx)
+opens that record from their headers; a suite that lifts queues into Settings
+keeps their configuration there and their work here.
