@@ -34,6 +34,8 @@ const resources = forms.map(({ resource }) => testDataResource(resource, {
     creatable: true, updatable: true, requiredOnCreate: false,
   })),
 }));
+// A saved party opens on its first pane, Identity, which lists the party's handles.
+resources.push(testDataResource("parties.PartyHandle"));
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://parties" });
 afterEach(() => {
