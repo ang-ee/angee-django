@@ -1293,6 +1293,18 @@ and current contracts before applying a historical example to a new deployment.
   retain their Django relation and widget semantics with `readable=False`.
   Expose enum and M2M line cells on the child node so their complete read shape is
   present in the final schema.
+- **Lines are owned parts, written as the user.** Declare `HasuraLines` only for
+  rows that exist as part of their parent and save with it; associated records
+  stay their own resource. The child writes run elevated because the parent
+  write authorizes them, which never makes them system work. A child whose
+  invariants separate users from system writers composes
+  [`RowLockMixin`](../../angee/base/mixins.py): `locked_fields()` names what its
+  state locks, user writes may not change those fields, delete the row or create
+  one, and `HasuraLines` checks the same lock before each elevated child write.
+  Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
+  guard a child on `is_sudo()` alone; [`Stage`](../../addons/angee/work/models.py)
+  is the reference. A nested insert only inserts beside children the parent's own
+  save provisions.
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.
@@ -1918,6 +1930,16 @@ SQL condition names its validation exception. The locked visibility verb and
 optimized `allowed_visibility` projection share those conditions and native
 permission scopes. Hidden domain facts stay inside the projection query.
 Message writers must still preserve publication invariants under the task lock.
+
+Task hand verbs follow the same shape. [`Task.action_blockers`](../../addons/angee/projects/models.py)
+names each row condition refusing a verb with its validation message; contributors
+extend it and `hand_actions` through `super()`, as
+[work's stage rules](../../addons/angee/work/models.py) do. Each verb calls
+`validate_action` after its idempotent replay, and the `task_actions` projection
+batches the same conditions with the verb's `write` scope. A control shows where
+its verb would act (the row's status or stage) and where `task_actions` offers it.
+A round's lift reads `can_open`, which composes the same
+`Round.opening_phase_condition` its verb checks.
 
 Decision admission, answers and withdrawal belong to the
 [decisions manager](../../addons/angee/decisions/managers.py). Asking owners

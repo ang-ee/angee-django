@@ -201,7 +201,7 @@ describe("SpacesPage", () => {
     // The tab bodies load lazily beside the page.
     await waitFor(() => expect(pageMocks.listViews[0]).toMatchObject({
       resource: "spaces.Membership",
-      scope: "local",
+      presentation: "embedded",
       baseFilter: { group: { exact: "grp_1" } },
     }));
     const rosterActions = pageMocks.listViews[0]?.rowActions as Array<Record<string, unknown>>;

@@ -20,11 +20,12 @@ import {
   Play,
   XCircle,
 } from "lucide-react";
-import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { PROJECT_MODEL, TASK_ACTION_FIELDS, TASK_MODEL } from "@angee/projects";
 import { ShareAccessRailGroup } from "@angee/iam";
 
 import { ProjectManagerAccessRole } from "./access-role";
 import { enWorkMessages } from "./i18n";
+import { QUEUE_FORM_SECTIONS } from "./queue-form";
 import { QUEUE_MODEL } from "./resources";
 import { StageStatusbar } from "./stage-statusbar";
 import { taskWorkFormSection } from "./task-work";
@@ -37,74 +38,56 @@ const workRoutes: readonly BaseAddonRoute[] = [
     lazyRouteComponent(() => import("./views/QueuesPage"), "QueuesPage"),
     QUEUE_MODEL,
   ),
-  {
-    name: "work.triage-hub",
-    path: "/work/triage",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "TriageHubPage",
-    ),
-  },
-  {
-    name: "work.boards-hub",
-    path: "/work/boards",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "BoardsHubPage",
-    ),
-  },
+  // Each hub lists the queues it serves, and a queue's operational page is the
+  // hub's record page: it replaces the list, inherits the hub's anchor and so
+  // renders in Work, while the queue record (its settings) may sit in Settings.
+  ...resourcePageRoutes(
+    "work.triage-hub",
+    "/work/triage",
+    lazyRouteComponent(() => import("./views/QueueHubPages"), "TriageHubPage"),
+    undefined,
+    {
+      menu: "work.triage-hub",
+      detailName: "work.triage",
+      param: "queueId",
+      detailComponent: lazyRouteComponent(() => import("./views/TriageInboxPage"), "TriageInboxPage"),
+    },
+  ),
+  ...resourcePageRoutes(
+    "work.boards-hub",
+    "/work/boards",
+    lazyRouteComponent(() => import("./views/QueueHubPages"), "BoardsHubPage"),
+    undefined,
+    {
+      menu: "work.boards-hub",
+      detailName: "work.board",
+      param: "queueId",
+      detailComponent: lazyRouteComponent(() => import("./views/QueueBoardPage"), "QueueBoardPage"),
+    },
+  ),
   {
     name: "work.cycles-hub",
     path: "/work/cycles",
     layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "CyclesHubPage",
-    ),
-  },
-  {
-    name: "work.board",
-    path: "/work/queues/$queueId/board",
-    layout: "console",
-    menu: "work.boards-hub",
-    component: lazyRouteComponent(
-      () => import("./views/QueueBoardPage"),
-      "QueueBoardPage",
-    ),
-  },
-  {
-    name: "work.triage",
-    path: "/work/queues/$queueId/triage",
-    layout: "console",
-    menu: "work.triage-hub",
-    component: lazyRouteComponent(
-      () => import("./views/TriageInboxPage"),
-      "TriageInboxPage",
-    ),
-  },
-  {
-    name: "work.cycles",
-    path: "/work/queues/$queueId/cycles",
-    layout: "console",
     menu: "work.cycles-hub",
+    indexComponent: lazyRouteComponent(() => import("./views/QueueHubPages"), "CyclesHubPage"),
+  },
+  {
+    // A queue's cycles are themselves a list whose cycle board replaces it.
     // Projection page (PipelinePage rule): a parameterized route must not
     // claim a resource — the collection href could never resolve at boot.
-    component: lazyRouteComponent(
-      () => import("./views/CyclesPage"),
-      "CyclesPage",
-    ),
+    name: "work.cycles",
+    path: "/work/cycles/$queueId",
+    layout: "console",
+    parent: "work.cycles-hub",
+    indexComponent: lazyRouteComponent(() => import("./views/CyclesPage"), "CyclesPage"),
   },
   {
     name: "work.cycle-board",
-    path: "/work/queues/$queueId/cycles/$id",
+    path: "/work/cycles/$queueId/$id",
+    layout: "console",
     parent: "work.cycles",
-    menu: "work.cycles-hub",
-    component: lazyRouteComponent(
-      () => import("./views/CycleBoardPage"),
-      "CycleBoardPage",
-    ),
+    component: lazyRouteComponent(() => import("./views/CycleBoardPage"), "CycleBoardPage"),
   },
 ];
 
@@ -161,9 +144,11 @@ const work = defineBaseAddon({
     [`${TASK_MODEL}#sections`]: {
       "work.task-fields": { sequence: 40, content: taskWorkFormSection },
     },
+    // The queue settings form's sections, narrowable per product route (Stages: work.queue-stages).
+    [`${QUEUE_MODEL}#sections`]: QUEUE_FORM_SECTIONS,
     // Every triage verb is a menu verb: it joins the form's one Actions menu.
     [`${TASK_MODEL}#actions-menu`]: {
-      "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
+      "work.task-triage-actions": { sequence: 40, requiredFields: TASK_ACTION_FIELDS, content: <TriageRecordActions /> },
     },
   },
   icons: {
@@ -182,6 +167,6 @@ const work = defineBaseAddon({
 
 export { estimateLabel } from "./estimates";
 export { CYCLE_MODEL, QUEUE_MODEL, STAGE_MODEL } from "./resources";
-export { useQueueRecordTabs } from "./queue-record-tabs";
+export { QUEUE_STAGES_SECTION, QueueSettingsForm, useQueueFormDeclaration } from "./queue-form";
 export { RemovedTasks, type RemovedTasksProps } from "./removed-tasks";
 export default work;

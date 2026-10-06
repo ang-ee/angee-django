@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 const mocks = vi.hoisted(() => ({
   decide: vi.fn(), reset: vi.fn(),
-  actions: [] as Array<{ id: string; permission?: string; confirm?: unknown }>,
+  actions: [] as Array<{ id: string; permission?: string; danger?: boolean; confirm?: unknown }>,
 }));
 vi.mock("@angee/metadata", () => ({
   holdsPermission: (row: { permissions?: readonly string[] } | null, permission: string) =>
@@ -91,6 +91,8 @@ describe("requester access cards", () => {
     expect(screen.getByText("Already has access").getAttribute("data-tone")).toBe("success");
     expect(screen.getByText(/alex@example.net is their sign-in identity/)).toBeTruthy();
     expect(screen.getByText(/Reset access removes that access/)).toBeTruthy();
+    // A danger verb with its own copy: the shared action owner confirms it in the danger tone.
+    expect(mocks.actions[0]?.danger).toBe(true);
     expect(mocks.actions[0]?.confirm).toEqual({
       title: "Reset requester access",
       body: "Reopen the access decision and remove this request's access? The account and its password will not change.",

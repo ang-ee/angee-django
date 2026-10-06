@@ -22,8 +22,8 @@ test("opens a workflow from the catalogue with its retained versions and recent 
   expect(await screen.findByText("retained_hash")).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
   expect(await screen.findByText("Failed")).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
-  expect(await screen.findByText("A retained review process.")).toBeTruthy();
+  // The workflow's own fields stay on the sheet above every pane.
+  expect(screen.getByText("A retained review process.")).toBeTruthy();
 });
 
 test("versions and recent runs are filtered by the open workflow using native list transport", async () => {
@@ -59,7 +59,7 @@ test("unreadable workflows show an empty state without a retry action", async ()
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
-test("writers default to Studio while readers retain Overview without authoring reads", async () => {
+test("writers default to Studio while readers open their first pane without authoring reads", async () => {
   const onRequest = vi.fn();
   const { unmount } = render(<CatalogueStory writer onRequest={onRequest} />);
   const studio = await screen.findByRole("tab", { name: "Studio" });
@@ -69,7 +69,7 @@ test("writers default to Studio while readers retain Overview without authoring 
   expect(studioPanel.className).toContain("flex-1");
   expect(studioPanel.className).toContain("overflow-hidden");
   expect(studioPanel.className).not.toContain("max-w-[1100px]");
-  // Full-bleed tabs keep the document header, so switching tabs never moves the header or tab strip.
+  // Full-bleed panes keep the document header, so switching panes never moves the header or strip.
   expect(screen.getByRole("heading", { name: "Record review" }).className).toContain("text-28");
   fireEvent.click(await screen.findByTestId("rf__node-entry"));
   fireEvent.change(await screen.findByRole("textbox", { name: "Key" }), { target: { value: "retained" } });
@@ -81,8 +81,8 @@ test("writers default to Studio while readers retain Overview without authoring 
   unmount();
   onRequest.mockClear();
   render(<CatalogueStory onRequest={onRequest} />);
-  const overview = await screen.findByRole("tab", { name: "Overview" });
-  await waitFor(() => expect(overview.getAttribute("aria-selected")).toBe("true"));
+  const versions = await screen.findByRole("tab", { name: "Versions" });
+  await waitFor(() => expect(versions.getAttribute("aria-selected")).toBe("true"));
   expect(screen.queryByRole("tab", { name: "Studio" })).toBeNull();
   expect(onRequest.mock.calls.some(([request]) => request.query.includes("workflow_step_choices"))).toBe(false);
 });

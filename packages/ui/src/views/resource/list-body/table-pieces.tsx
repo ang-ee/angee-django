@@ -93,6 +93,8 @@ export interface FlatListBodyProps<TRow extends Row> {
   activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
   onReorder?: (fromId: string, toId: string) => void;
+  /** Whether a row may move; a row that may not shows a lock where its handle would be. */
+  canReorderRow?: (row: TRow) => boolean;
   /** Content of one footer cell spanning the visible table columns. */
   footerRow?: React.ReactNode;
   emptyContent: ListEmptyContent;
@@ -124,6 +126,7 @@ export function FlatListBody<TRow extends Row>({
   activeRowId,
   draggableRow,
   onReorder,
+  canReorderRow,
   footerRow,
   emptyContent,
   fetching,
@@ -233,10 +236,12 @@ export function FlatListBody<TRow extends Row>({
                       reorder: onReorder ? {
                         type: reorderType,
                         onReorder: (fromId, toId) => {
-                          if (table.getCoreRowModel().rowsById[fromId]) onReorder(fromId, toId);
+                          const from = table.getCoreRowModel().rowsById[fromId];
+                          if (from && (canReorderRow?.(from.original) ?? true)) onReorder(fromId, toId);
                         },
                         previousId: reorderRows[reorderIndex - 1]?.id,
                         nextId: reorderRows[reorderIndex + 1]?.id,
+                        locked: canReorderRow ? !canReorderRow(row.original) : false,
                       } : undefined,
                     })
                   : null;

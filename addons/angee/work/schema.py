@@ -22,11 +22,11 @@ from angee.graphql.actions import (
     many_actions,
 )
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id, to_public_id
 from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_labels, user_label, user_public_id
 from angee.iam.permissions import request_from_info
@@ -71,6 +71,7 @@ class WorkQueueType(AngeeNode):
 
     parent: SpaceGroupType | None = actor_scoped_to_one("parent")
     default_stage: "WorkStageType | None" = actor_scoped_to_one("default_stage")
+    stages: list["WorkStageType"] = actor_scoped_to_many("stages")
 
 
 @strawberry_django.type(Stage)
@@ -88,6 +89,12 @@ class WorkStageType(AngeeNode):
     updated_at: auto
 
     queue: WorkQueueType | None = actor_scoped_to_one("queue")
+
+    @strawberry_django.field(only=["category"])
+    def locked_fields(self) -> list[str]:
+        """Return the fields the stage's own state locks (a system stage's name and category)."""
+
+        return list(cast(Any, self).locked_fields())
 
 
 @strawberry_django.type(Cycle)
@@ -493,6 +500,17 @@ class WorkActionMutation:
         return ActionResult(ok=True, message="Cycle closed.", id=target.sqid)
 
 
+# A queue's stages are its owned, ordered configuration: one section of the queue
+# form, saved with it. Row order is the position; system stages stay locked.
+_STAGE_LINES = HasuraLines(
+    field="stages",
+    model=Stage,
+    node=WorkStageType,
+    writable=("name", "category", "tone", "position", "rule_owned", "conceals"),
+    position_field="position",
+    defaults={"category": "unstarted", "tone": "neutral"},
+)
+
 _QUEUE_RESOURCE = hasura_model_resource(
     WorkQueueType,
     model=Queue,
@@ -565,9 +583,11 @@ _QUEUE_RESOURCE = hasura_model_resource(
         "parent": public_pk_decoder(apps.get_model("spaces", "Group")),
         "default_stage": public_pk_decoder(Stage),
     },
+    lines=_STAGE_LINES,
     write_backend=AngeeHasuraWriteBackend(
         Queue,
         public_id_fields=("parent", "default_stage"),
+        lines=_STAGE_LINES,
     ),
     # Queue catalogues are bounded configuration sets. Keep their presentation
     # in the browser so identifier keys use the shared natural text comparator

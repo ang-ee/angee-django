@@ -157,11 +157,12 @@ interface ActionBinding {
   /**
    * Typed-args form (F-a): open a dialog collecting these args, merge them with
    * the invoking record/selection context (explicit edit wins), then fire
-   * `submit`. Ignored without `submit`.
+   * `submit`. Ignored without `submit`; a `submit` verb without args opens the
+   * same dialog with none.
    */
   args?: ActionArgs | ((context: ActionFormContext) => ActionArgs);
   /**
-   * Fire the authored mutation for an `args` form and return its in-band
+   * Fire the authored mutation for the action form and return its in-band
    * `ActionOutcome` (compose `@angee/refine`'s `useAuthoredMutation` +
    * `extractActionOutcome`). The dialog binds `validationErrors` to the args and
    * stays open until `ok`; on `ok` it toasts `message` and closes. The collected
@@ -186,12 +187,13 @@ export interface ActionProps extends ActionBinding {
   disabled?: boolean;
   /** Explain a record action's disabled state beside its toolbar button; a function reads it from the loaded record and disables while it returns one. */
   disabledReason?: ReactNode | ((record: Row) => ReactNode);
+  /** A destructive verb: danger-toned, and confirmed before it runs on click (standard copy unless `confirm` names it). */
   danger?: boolean;
   /** Promote a frequent record verb out of the default Actions menu. */
   placement?: "menu" | "toolbar";
   /** The page's one primary verb: rendered as the primary button when it is on the toolbar and visible. */
   primary?: boolean;
-  /** Static confirmation copy, or copy derived from the loaded record. */
+  /** Static confirmation copy, or copy derived from the loaded record; a danger verb's copy takes the danger tone. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);
   /**
    * Show this action only when the open record matches — e.g. show "Disable"

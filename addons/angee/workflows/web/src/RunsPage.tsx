@@ -25,7 +25,7 @@ export function RunsList({ baseFilter, embedded = false }: {
     dataProviderName: "console", invalidateModels: RUN_MODELS, linkTo: RUN_MODEL,
   });
   return <ResourceList<StringIdRow> resource={RUN_MODEL} hideCreate baseFilter={baseFilter}
-    placement="inline" routed={!embedded} presentation={embedded ? "embedded" : undefined}
+    placement="inline" routed={!embedded} scope={embedded ? "local" : undefined}
     rowHref={embedded ? (row) => href("workflows.runs.record", { id: row.id }) : undefined}
     fields={["subject_model"]} defaultRecordTab={embedded ? undefined : "graph"} recordTabs={[
       { id: "graph", label: t("run.graph"), presentation: "full-bleed", keepMounted: true,

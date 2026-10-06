@@ -76,6 +76,7 @@ export function PartyAddresses(props: PartyAddressesProps): React.ReactElement {
   return (
     <DrawerResourceList
       resource={ADDRESS}
+      presentation="embedded"
       baseFilter={{ party: { exact: recordId } }}
       createDefaults={{ party: recordId }}
       hideCreate={formReadOnly}

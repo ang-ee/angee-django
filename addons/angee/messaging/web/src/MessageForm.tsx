@@ -21,6 +21,7 @@ const FILE_MODEL = "storage.File";
 // body / quoted / signature); regrouping by fragment.hash through the shared
 // grouping chooser turns the same view into the dedup/interconnection lens.
 const PART_GROUPS = { list: { field: "role" } } as const;
+const PART_CHROME = { search: true } as const;
 
 type PartRow = PartListRow;
 // The nested selection the part columns render from: the part's structural
@@ -110,9 +111,9 @@ function partColumns(
   ];
 }
 
-/** The message's structural content: its part rows as the shared nested data
- *  view — filter/sort/group chrome included — filtered to this record, grouped
- *  by role by default, regroupable by shared fragment for the dedup lens. */
+/** The message's structural content: its part rows as a compact embedded list
+ *  filtered to this record, grouped by role by default. Its search row stays on
+ *  so the grouping chooser can regroup by shared fragment for the dedup lens. */
 function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useMessagingT();
   const recordHref = useResourceRecordHrefLookup();
@@ -120,7 +121,8 @@ function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
   return (
     <ListView<PartRow>
       resource={PART_MODEL}
-      scope="local"
+      presentation="embedded"
+      chrome={PART_CHROME}
       fields={PART_FIELDS}
       baseFilter={{ message: { exact: recordId } }}
       columns={columns}

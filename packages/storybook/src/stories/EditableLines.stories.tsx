@@ -106,6 +106,42 @@ export const WidgetRowPatches: Story = {
   render: () => <EditableLinesDemo />,
 };
 
+/** A system row the backend locks keeps its place; only its unlocked cells edit. */
+export const LockedSystemRows: Story = {
+  render: () => <LockedLinesDemo />,
+};
+
+function LockedLinesDemo() {
+  const form = useForm<Record<string, unknown>>({
+    defaultValues: {
+      lines: [
+        { id: "line-system", label: "Intake", quantity: 1, position: 0, locked_fields: ["label"] },
+        { id: "line-one", label: "Widget", quantity: 2, position: 1, locked_fields: [] },
+        { id: "line-two", label: "Gadget", quantity: 5, position: 2, locked_fields: [] },
+      ],
+    },
+  });
+  return (
+    <RuntimeRegistryFixture runtime={{ widgets: defaultWidgets }}>
+      <ModalsHost>
+        <div className="max-w-5xl">
+          <EditableLines
+            control={form.control}
+            setValue={form.setValue}
+            name="lines"
+            lines={{
+              ...lines,
+              lockField: "locked_fields",
+              // Plain cells: the system row's label reads, its quantity still edits.
+              fields: lines.fields.map((field) => ({ ...field, widget: null })),
+            }}
+          />
+        </div>
+      </ModalsHost>
+    </RuntimeRegistryFixture>
+  );
+}
+
 function EditableLinesDemo() {
   const form = useForm<Record<string, unknown>>({
     defaultValues: {

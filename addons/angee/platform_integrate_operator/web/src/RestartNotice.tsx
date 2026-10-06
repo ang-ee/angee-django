@@ -5,17 +5,15 @@ import {
   useOperatorConnection,
 } from "@angee/operator/runtime";
 import { Banner, Button, TextLink, useRouteHref } from "@angee/ui";
-import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
-import { useRouterState } from "@tanstack/react-router";
+import { useChromePlace } from "@angee/ui/chrome/refine-menu";
 import { useEffect, type ReactNode } from "react";
 import { usePlatformIntegrateOperatorT } from "./i18n";
 
 /** Settings-only restart state, backed entirely by the daemon's durable receipt. */
 export function RestartNotice(): ReactNode {
   const t = usePlatformIntegrateOperatorT();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const searchStr = useRouterState({ select: (state) => state.location.searchStr });
-  const visible = useChromeMenuTree().isSettingsActive(`${pathname}${searchStr}`);
+  // The console's one place answer: a page renders in Settings by its route's anchor, not its URL alone.
+  const visible = useChromePlace().railPlace.scope === "settings";
   const routeHref = useRouteHref();
   const operationsHref = routeHref("operator.operations");
   const pending = useAuthoredQuery(PendingAddonChanges, undefined, {

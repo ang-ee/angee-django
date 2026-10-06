@@ -1,43 +1,25 @@
 import {
   Column,
-  DrawerResourceList,
-  Field,
-  Form,
-  Group,
   List,
   ResourceList,
-  SettingsSection,
-  SettingsShell,
-  useEnumOptions,
   useRouteHref,
   useRouteRecordId,
-  type RecordPanelContext,
   type RecordSmartButtonDescriptor,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
-import { useQueueRecordTabs } from "../queue-record-tabs";
 
 import { useWorkT } from "../i18n";
-import { QUEUE_MODEL, STAGE_MODEL } from "../resources";
+import { useQueueFormDeclaration } from "../queue-form";
+import { QUEUE_MODEL } from "../resources";
 
-const CUSTOM_STAGE_CATEGORIES = [
-  "BACKLOG",
-  "UNSTARTED",
-  "STARTED",
-  "COMPLETED",
-  "CANCELED",
-] as const;
-
-/** Queue collection and routed settings record. */
+/** Queue collection and routed settings record: one stacked form, its stages one ordered section. */
 export function QueuesPage(): React.ReactElement {
   const t = useWorkT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const recordId = useRouteRecordId();
-  const visibilityOptions = useEnumOptions(QUEUE_MODEL, "visibility");
-  const estimateOptions = useEnumOptions(QUEUE_MODEL, "estimate_scale");
-  const recordTabs = useQueueRecordTabs();
+  const form = useQueueFormDeclaration();
   const smartButtons = React.useMemo<readonly RecordSmartButtonDescriptor[]>(
     () =>
       ([
@@ -63,7 +45,6 @@ export function QueuesPage(): React.ReactElement {
       resource={QUEUE_MODEL}
       placement="inline"
       routed
-      recordTabs={recordTabs}
       recordSmartButtons={smartButtons}
     >
       <List resource={QUEUE_MODEL} order={{ key: "ASC" }}>
@@ -74,107 +55,7 @@ export function QueuesPage(): React.ReactElement {
         <Column field="estimate_scale" />
         <Column field="updated_at" />
       </List>
-      <Form resource={QUEUE_MODEL} layout="tabs">
-        <Field name="name" title />
-        <Group label={t("queue.group.identity")} columns={2}>
-          <Field name="key" />
-          <Field name="slug" />
-          <Field name="visibility" options={visibilityOptions} />
-          <Field name="parent" />
-        </Group>
-        <Field name="description" widget="textarea" body />
-        <Group label={t("queue.group.triage")} columns={2}>
-          <Field name="triage_enabled" />
-          <Field name="default_stage" />
-          <Field name="auto_archive_months" />
-          <Field name="auto_close_months" />
-        </Group>
-        <Group label={t("queue.group.cadence")} columns={2}>
-          <Field name="cycles_enabled" />
-          <Field name="cycle_weeks" />
-          <Field name="cycle_cooldown_weeks" />
-          <Field
-            name="cycle_start_day"
-            widget="integer"
-            description={t("queue.cycleStart.help")}
-          />
-          <Field name="upcoming_cycle_count" />
-        </Group>
-        <Group label={t("queue.group.estimates")} columns={2}>
-          <Field name="estimate_scale" options={estimateOptions} />
-          <Field name="estimate_allow_zero" />
-          <Field name="default_estimate" />
-        </Group>
-      </Form>
+      {form}
     </ResourceList>
   );
 }
-
-export function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = useWorkT();
-  const categoryOptions = useEnumOptions(STAGE_MODEL, "category").filter((option) =>
-    CUSTOM_STAGE_CATEGORIES.includes(
-      String(option.value).toUpperCase() as (typeof CUSTOM_STAGE_CATEGORIES)[number],
-    ),
-  );
-  return (
-    <SettingsShell maxWidth="1100" gap="8">
-      <SettingsSection
-        title={t("queue.stages.system.title")}
-        description={t("queue.stages.system.description")}
-      >
-        <List
-          resource={STAGE_MODEL}
-          scope="local"
-          baseFilter={{
-            queue: { exact: recordId },
-            category: { inList: ["TRIAGE", "DUPLICATE"] },
-          }}
-          order={{ position: "ASC" }}
-        >
-          <Column field="name" header={t("common.name")} />
-          <Column field="category" header={t("common.category")} />
-          <Column field="tone" header={t("common.tone")} />
-          <Column field="position" header={t("common.order")} />
-          <Column field="rule_owned" header={t("common.ruleOwned")} />
-          <Column field="conceals" header={t("common.conceals")} />
-        </List>
-      </SettingsSection>
-      <SettingsSection
-        title={t("queue.stages.custom.title")}
-        description={t("queue.stages.custom.description")}
-      >
-        <DrawerResourceList
-          resource={STAGE_MODEL}
-          createDefaults={{ queue: recordId }}
-        >
-          <List
-            resource={STAGE_MODEL}
-            baseFilter={{
-              queue: { exact: recordId },
-              category: { inList: CUSTOM_STAGE_CATEGORIES },
-            }}
-            order={{ position: "ASC" }}
-          >
-            <Column field="name" header={t("common.name")} />
-            <Column field="category" header={t("common.category")} />
-            <Column field="tone" header={t("common.tone")} />
-            <Column field="position" header={t("common.order")} />
-            <Column field="rule_owned" header={t("common.ruleOwned")} />
-            <Column field="conceals" header={t("common.conceals")} />
-          </List>
-          <Form resource={STAGE_MODEL}>
-            <Field name="name" title />
-            <Field name="queue" readOnly />
-            <Field name="category" options={categoryOptions} />
-            <Field name="tone" />
-            <Field name="position" />
-            <Field name="rule_owned" />
-            <Field name="conceals" label={t("common.conceals")} />
-          </Form>
-        </DrawerResourceList>
-      </SettingsSection>
-    </SettingsShell>
-  );
-}
-

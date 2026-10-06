@@ -15,11 +15,13 @@ export const CLIENT_LINE_KEY = "__angeeClientLineKey";
  * UPPERCASE wire member but its String line input takes the lowercase value).
  * `stringFields` marks the String-scalar columns — the one wire shape where a
  * blank `""` is a real value; every other blank cell is withheld from the line
- * input (see `lineToInput`).
+ * input (see `lineToInput`). `lockField` names the read-only row projection listing
+ * the fields a row's own state locks; it is never serialized.
  */
 export interface LineDiffConfig {
   idField: string;
   positionField: string | null;
+  lockField: string | null;
   fieldNames: readonly string[];
   relationFields: ReadonlySet<string>;
   multiRelationFields: ReadonlySet<string>;
@@ -34,6 +36,7 @@ export function lineDiffConfig(lines: DataResourceLinesMetadata): LineDiffConfig
   return {
     idField: "id",
     positionField: lines.positionField ?? null,
+    lockField: lines.lockField ?? null,
     fieldNames: fields.map((field) => field.name),
     relationFields: new Set(
       fields.filter((field) => field.kind === "relation").map((field) => field.name),
@@ -194,9 +197,20 @@ function emptyCellValue(name: string, config: LineDiffConfig): unknown {
   return "";
 }
 
-/** Duplicate a row for the composer's "duplicate" action, dropping its identity. */
+/**
+ * The fields a loaded row's own state locks — the backend row lock the child node
+ * projects. A row with any is a system row: it keeps its place, is never removed or
+ * duplicated, and its locked cells are read-only. A new row is never locked.
+ */
+export function lineLockedFields(row: Row | undefined, config: LineDiffConfig): readonly string[] {
+  const locked = config.lockField && row ? row[config.lockField] : undefined;
+  return Array.isArray(locked) ? locked.filter((name): name is string => typeof name === "string") : [];
+}
+
+/** Duplicate a row for the composer's "duplicate" action, dropping its identity and lock. */
 export function duplicateLineRow(row: Row, config: LineDiffConfig): Row {
   const { [config.idField]: _id, [CLIENT_LINE_KEY]: _clientKey, ...rest } = row;
+  if (config.lockField) delete rest[config.lockField];
   return { ...rest };
 }
 

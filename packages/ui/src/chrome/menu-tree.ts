@@ -346,17 +346,13 @@ export class MenuTree {
       : undefined;
   }
 
-  /** Whether the current path belongs to a root in the Settings place. */
-  isSettingsActive(pathname: string): boolean {
-    return this.activeAppRoot(pathname)?.group === "platform";
-  }
-
   /**
-   * The rail's place for the current path — the one answer every chrome
-   * surface asks instead of recombining `isSettingsActive`/`activeAppRoot`/
-   * root lists itself: which scope is active, which roots that scope shows,
-   * and which of them is the active one (`null` when the path belongs to
-   * neither, or to the other scope's roots).
+   * The rail's place for a match — the one answer every chrome surface asks
+   * instead of recombining `activeAppRoot`/root lists itself: which scope is
+   * active, which roots that scope shows, and which of them is the active one
+   * (`null` when the path belongs to neither, or to the other scope's roots).
+   * A page's place is its route-aware match (`useChromePlace`); a bare path
+   * knows no route anchor.
    */
   railPlace(location: string | MenuMatch | undefined, includeHidden = false): {
     scope: "apps" | "settings";
@@ -426,9 +422,18 @@ export class MenuTree {
     return this.match(pathname)?.item;
   }
 
-  /** Rank by path, params, sitting at or under the route anchor, depth, then pre-order. */
+  /**
+   * The menu item a page sits at. A route's declared anchor (`menuId`) names its
+   * place: the page's own destinations (its exact path with no contrary preset)
+   * come first, then the anchor and the items under it, even when the anchor's
+   * own target lies elsewhere, then other items' path prefixes. Within each,
+   * rank by path, params, sitting at or under the anchor, depth, then
+   * pre-order. An anchor absent from this tree (removed, confined away) leaves
+   * the path alone.
+   */
   match(path: string, search?: string | URLSearchParams, includeHidden = false, menuId?: string): MenuMatch | undefined {
-    return matchWithin(this.roots, path, search, includeHidden, menuId);
+    const anchor = menuId !== undefined && this.byId.has(menuId) ? menuId : undefined;
+    return matchWithin(this.roots, path, search, includeHidden, anchor);
   }
 
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
@@ -472,21 +477,30 @@ function matchWithin(
   const location = new URL(path, "https://angee.invalid");
   const params = new URLSearchParams(search ?? location.search);
   let best: { item: ChromeMenuNode; trail: readonly ChromeMenuNode[] } | undefined;
-  let bestRank = [-1, -1, -Infinity, -1, -1];
+  let bestRank: readonly number[] = [];
+  const consider = (item: ChromeMenuNode, trail: readonly ChromeMenuNode[], rank: readonly number[]): void => {
+    const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
+    if (firstDifference !== -1 && rank[firstDifference]! > (bestRank[firstDifference] ?? -Infinity)) {
+      best = { item, trail };
+      bestRank = rank;
+    }
+  };
   const visit = (item: ChromeMenuNode, ancestors: readonly ChromeMenuNode[]): void => {
     const trail = [...ancestors, item];
+    // The anchor names a place: the item itself or any item under it.
+    const anchored = menuId !== undefined && trail.some((node) => node.id === menuId);
     if (item.path && pathMatchesTarget(location.pathname, item.path)) {
       const targetParams = [...new URLSearchParams(item.search)];
       const equalParams = targetParams.filter(([key, value]) => params.getAll(key).includes(value)).length;
       const mismatches = targetParams.length - equalParams;
-      // The anchor names a place: the item itself or any item under it.
-      const anchored = menuId !== undefined && trail.some((node) => node.id === menuId);
-      const rank = [item.path.length, equalParams, -mismatches, Number(anchored), trail.length];
-      const firstDifference = rank.findIndex((value, index) => value !== bestRank[index]);
-      if (firstDifference !== -1 && rank[firstDifference]! > bestRank[firstDifference]!) {
-        best = { item, trail };
-        bestRank = rank;
-      }
+      // A destination of the page itself beats its anchor, which beats another item's path prefix.
+      const place = menuId === undefined ? 0
+        : item.path === location.pathname && mismatches === 0 ? 2
+          : Number(anchored);
+      consider(item, trail, [place, item.path.length, equalParams, -mismatches, Number(anchored), trail.length]);
+    } else if (item.id === menuId) {
+      // The anchor keeps the page in its place even where its own target lies elsewhere.
+      consider(item, trail, [1, -1, 0, 0, 1, trail.length]);
     }
     for (const child of item.children ?? []) visit(child, trail);
   };

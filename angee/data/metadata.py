@@ -255,7 +255,9 @@ class DataLinesMetadata:
     public ``id`` plus the editable child columns), and ``fields`` the per-column
     metadata (scalar/widget) the line cells render. ``position_field`` names the
     integer order column when the child carries one. ``defaults`` contains
-    backend-authored scalar values for a newly added row.
+    backend-authored scalar values for a newly added row. ``lock_field`` names
+    the child node's read-only list of the fields a row's own state locks; a row
+    with any is a system row the composer keeps in place.
     """
 
     field: str
@@ -264,6 +266,7 @@ class DataLinesMetadata:
     fields: tuple[DataResourceFieldMetadata, ...] = ()
     position_field: str | None = None
     defaults: dict[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
+    lock_field: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

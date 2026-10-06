@@ -17,18 +17,19 @@ from strawberry_django_hasura import SnakeNameConverter
 from angee.base.impl import ImplClassField
 from angee.data import metadata as data_contract
 from angee.data.field_classification import (
-    RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
-)
-from angee.data.field_classification import (
-    RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
-)
-from angee.data.field_classification import (
+    ENUM_FIELD_WIDGETS,
     is_archive_field,
     is_resource_field_widget,
     is_trash_field,
     money_currency_field,
     resource_field_kind,
     resource_field_widget,
+)
+from angee.data.field_classification import (
+    RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
+)
+from angee.data.field_classification import (
+    RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
 )
 from angee.graphql.introspection import surface_field_names, surface_name
 from graphql import (
@@ -585,7 +586,7 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
             f"resource metadata for {model_label} field '{field.name}' cannot declare "
             f"widget '{field.widget}' for relation fields."
         )
-    if field.kind == "enum" and field.widget not in {None, "select"}:
+    if field.kind == "enum" and field.widget is not None and field.widget not in ENUM_FIELD_WIDGETS:
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' cannot declare "
             f"widget '{field.widget}' for enum fields."

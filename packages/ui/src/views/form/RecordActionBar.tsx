@@ -9,7 +9,7 @@ import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
 import { ActionMenu, ActionTrigger } from "../../toolbars/ActionMenu";
 import { ActionMenuContext } from "../../ui/action-menu-context";
-import type { ActionDescriptor, ActionResult } from "../page";
+import type { ActionConfirm, ActionDescriptor, ActionResult } from "../page";
 import { useRuntimeViewAs } from "../../runtime";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useLatestRef } from "../../lib/use-latest-ref";
@@ -33,7 +33,9 @@ interface ActionMutationVariables {
  * Render a record's domain actions and run them against the open record.
  *
  * Each action either applies a declarative `set` patch (toggles, revoke, reset)
- * or calls an imperative `run` for a custom mutation. A `confirm` gates it; a
+ * or calls an imperative `run` for a custom mutation. A `confirm` gates it, and
+ * a `danger` verb that runs on click is always confirmed (its declared copy, or
+ * the standard copy titled by the verb); a
  * `prompt` collects input first — those values merge into the `set` patch or
  * reach `run` via its context. The patch/refresh come from the form (which owns
  * the field selection and re-seeds itself); errors surface as a toast and a
@@ -117,29 +119,23 @@ export function RecordActionBar({
   const runAction = React.useCallback(
     async (action: RecordActionDescriptor): Promise<void> => {
       if (blockedRef.current || action.disabled || disabledReason(action) || (action.permission && !holdsPermission(record, action.permission))) return;
-      if (action.confirm) {
-        const confirmation =
-          typeof action.confirm === "function" && record !== null
-            ? action.confirm(record)
-            : typeof action.confirm === "function"
-              ? null
-              : action.confirm;
-        if (confirmation === null) return;
+      const confirmation = actionConfirmation(action, record, t("action.confirmDanger"));
+      if (confirmation === null) return;
+      if (confirmation) {
         const confirmed = await confirm({
           title: confirmation.title,
           ...(confirmation.body !== undefined
             ? { body: confirmation.body }
             : {}),
-          ...(confirmation.danger !== undefined
-            ? { danger: confirmation.danger }
-            : {}),
+          danger: confirmation.danger ?? Boolean(action.danger),
           confirm: action.label,
         });
         if (!confirmed || blockedRef.current) return;
       }
-      // A typed-args action collects its args (and merges the record/selection
-      // context) in the dialog, which fires `submit` — not the string-only prompt.
-      if (action.args && action.submit) {
+      // A `submit` verb runs through its action form, as on a list row: the dialog
+      // collects any args (none when undeclared), merges the record/selection
+      // context and fires `submit` — never a record patch or the string-only prompt.
+      if (action.submit) {
         setFormAction({ action, fromMenu: menu !== null || action.placement !== "toolbar" });
         return;
       }
@@ -154,7 +150,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, blockedRef, confirm, prompt, record, menu],
+    [actionMutation, blockedRef, confirm, prompt, record, menu, t],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
@@ -238,6 +234,23 @@ export function RecordActionBar({
       </>}
     </>
   );
+}
+
+/**
+ * The confirmation a verb asks before it runs: its declared copy, or for a
+ * danger verb that runs on click the standard danger confirmation titled by
+ * the verb. A verb that opens a form or prompt confirms there. `null` means
+ * record-derived copy has no record yet; `undefined` means none applies.
+ */
+function actionConfirmation(
+  action: RecordActionDescriptor,
+  record: Row | null,
+  dangerBody: React.ReactNode,
+): ActionConfirm | null | undefined {
+  if (typeof action.confirm === "function") return record !== null ? action.confirm(record) : null;
+  if (action.confirm) return action.confirm;
+  if (!action.danger || action.submit || action.prompt) return undefined;
+  return { title: action.label, body: dangerBody };
 }
 
 function noop(): void {}

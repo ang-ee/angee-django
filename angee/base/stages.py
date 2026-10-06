@@ -15,7 +15,7 @@ from typing import Any, ClassVar, cast
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 
-from angee.base.fields import StateField
+from angee.base.fields import ToneField
 
 
 class StageTone(models.TextChoices):
@@ -46,7 +46,7 @@ class Stage(models.Model):
     default_stage_field_name: ClassVar[str] = "default_stage"
 
     name = models.CharField(max_length=160)
-    tone = StateField(choices_enum=StageTone, default=StageTone.NEUTRAL)
+    tone = ToneField(choices_enum=StageTone, default=StageTone.NEUTRAL)
     position = models.PositiveIntegerField(default=0)
 
     class Meta:

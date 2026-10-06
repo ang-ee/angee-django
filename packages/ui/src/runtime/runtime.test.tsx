@@ -104,6 +104,27 @@ describe("useResourceRecordHref", () => {
     expect(result.current.href?.("thr 1", { queue: { id: "other" } })).toBe("/messaging/threads/thr%201");
   });
 
+  test("a destination claiming several values takes a record holding any of them", () => {
+    const wrapper = wrapperFor({
+      routesByResource: {
+        "messaging.Thread": {
+          collection: "messaging.threads",
+          record: { name: "messaging.thread", param: "threadId" },
+          recordFallback: { name: "messaging.thread", param: "threadId" },
+          recordDestinations: [{ record: { name: "desk.thread", param: "id" }, match: { field: "kind", equals: ["bill", "refund"] } }],
+        },
+      },
+      routeHref: createRouteHref([
+        { name: "messaging.thread", path: "/messaging/threads/$threadId" },
+        { name: "desk.thread", path: "/desk/threads/$id" },
+      ]),
+    });
+    const { result } = renderHook(() => useResourceRecordHref("messaging.Thread"), { wrapper });
+    expect(result.current?.("t1", { kind: "bill" })).toBe("/desk/threads/t1");
+    expect(result.current?.("t1", { kind: "refund" })).toBe("/desk/threads/t1");
+    expect(result.current?.("t1", { kind: "receipt" })).toBe("/messaging/threads/t1");
+  });
+
   test("builds an encoded record href from the resource's composed route", () => {
     const wrapper = wrapperFor({
       routesByResource: {

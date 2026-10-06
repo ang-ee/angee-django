@@ -19,7 +19,7 @@ export function useProposalFormDeclaration(): React.ReactElement {
     useEnumOptions(PROPOSAL_MODEL, "confidence"),
   );
   return (
-    <Form resource={PROPOSAL_MODEL} layout="tabs" actions={actions}>
+    <Form resource={PROPOSAL_MODEL} actions={actions}>
       <Field name="display_name" title readOnly />
       <Field name="permissions" hidden readOnly />
       <Field name="revision" hidden readOnly />

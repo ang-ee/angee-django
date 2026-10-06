@@ -298,6 +298,30 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
  * `projection` keeps every candidate (impl children and all variants) for the
  * fields to fetch, each unplaced variant right after its original.
  */
+/** The addresses one record's container merges: the kind's, then each model's when it takes models. */
+function containerAddresses(composed: ComposedContainers, address: string, models: readonly string[]): readonly string[] {
+  if (!composed.declared[address]?.models) return [address];
+  const name = containerName(address);
+  return [address, ...models.map((model) => `${model}#${name}`)];
+}
+
+/**
+ * Every child the layers declared for a record's container, in id order and before
+ * any narrowing, `when`, `hide` or presence. An owner whose default depends on whether
+ * a child is declared at all (not on whether the page admits it) reads this.
+ */
+export function composedContainerChildren<TContent = unknown>(
+  composed: ComposedContainers,
+  address: string,
+  models: readonly string[] = [],
+): readonly ComposedContainerChild<TContent>[] {
+  if (!composed.declared[address]) return [];
+  // One id on a model and on its MTI parent (one addon's, as ids are namespaced): the model's own stands.
+  const byId = new Map(containerAddresses(composed, address, models)
+    .flatMap((at) => composed.children[at] ?? []).map((child) => [child.id, child]));
+  return orderById([...byId.values()]) as readonly ComposedContainerChild<TContent>[];
+}
+
 export function resolveContainer<TContent = unknown>(
   composed: ComposedContainers,
   address: string,
@@ -307,11 +331,8 @@ export function resolveContainer<TContent = unknown>(
   // (a story, a bare test) has no composed children for it, only the page's own.
   const declared = composed.declared[address];
   if (!declared) return positionSiblings(extra, `Children of "${address}"`) as readonly ComposedContainerChild<TContent>[];
-  const name = containerName(address);
-  const addresses = declared.models ? [address, ...models.map((model) => `${model}#${name}`)] : [address];
-  // One id on a model and on its MTI parent (one addon's, as ids are namespaced): the model's own stands.
-  const byId = new Map(addresses.flatMap((at) => composed.children[at] ?? []).map((child) => [child.id, child]));
-  const merged = positionSiblings([...orderById([...byId.values()]), ...extra], `Children of "${address}"`);
+  const addresses = containerAddresses(composed, address, models);
+  const merged = positionSiblings([...composedContainerChildren(composed, address, models), ...extra], `Children of "${address}"`);
   const rules = addresses.flatMap((at) => composed.rules[at] ?? [])
     .filter((rule) => matches(rule.when, scope))
     .map((rule, index) => ({ rule, index }))

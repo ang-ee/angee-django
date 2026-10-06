@@ -293,6 +293,10 @@ def _visibility_allowed(value: str, info: Any) -> Any:
     return Task.visibility_allowed_expression(current_actor(), value)
 
 
+def _task_action_allowed(action: str, info: Any) -> Any:
+    return Task.action_allowed_expression(current_actor(), action)
+
+
 @strawberry.type
 class TaskProjectionMixin:
     """Shared SQL scalar projections for public and console task types."""
@@ -315,6 +319,13 @@ class TaskProjectionMixin:
             TaskVisibility(value) for value in Task.TaskVisibility.values
             if getattr(self, f"_visibility_allowed_{value}")
         ]
+
+    @strawberry_django.field(annotate={
+        f"_task_action_{action}": partial(_task_action_allowed, action) for action in Task.hand_actions()
+    })
+    def task_actions(self) -> list[str]:
+        """Hand verbs the viewer may run on this row, from the verbs' own permission and blockers."""
+        return [action for action in Task.hand_actions() if getattr(self, f"_task_action_{action}")]
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
     def priority_rank(self) -> int:

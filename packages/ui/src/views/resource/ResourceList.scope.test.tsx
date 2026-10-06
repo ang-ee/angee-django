@@ -119,7 +119,7 @@ test("a native controlled child list isolates queries and record UI from its par
   await waitFor(() => expect(selectedRecordId).toBe("trigger-1"));
   const recordField = await screen.findByDisplayValue("Schedule");
   expect(recordField.closest('[data-record-presentation="workspace"]')).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  // The record's one pane renders beneath its sheet, without a strip.
   const longInspector = await screen.findByText("Long inspector");
   expect(longInspector.closest('[data-record-presentation="workspace"]')).toBeTruthy();
   expect(getOne).toHaveBeenCalledWith(expect.objectContaining({ resource: "triggers", id: "trigger-1",

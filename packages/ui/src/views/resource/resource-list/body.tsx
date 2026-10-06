@@ -71,7 +71,6 @@ export function ResourceListBody<TRow extends Row = Row>({
   recordTabs,
   recordPresentation,
   defaultRecordTab,
-  overviewTab,
   toolbarActions,
   cardActions,
   emptyContent,
@@ -326,7 +325,6 @@ export function ResourceListBody<TRow extends Row = Row>({
       onRecordTabChange={resolvedCreating ? undefined : recordController.onRecordTabChange}
       recordPresentation={recordPresentation}
       defaultRecordTab={defaultRecordTab}
-      overviewTab={overviewTab}
       onSaved={handleSaved}
       toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}

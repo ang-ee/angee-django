@@ -21,6 +21,7 @@ import { booleanToggleWidget, switchWidget } from "./switch";
 import { tagInputWidget } from "./tagInput";
 import { textareaWidget } from "./textarea";
 import { textWidget } from "./text";
+import { toneWidget } from "./tone";
 import { visibilityWidget } from "./visibility";
 import { userRefWidget } from "./userRef";
 import type { WidgetDefinition } from "./types";
@@ -145,6 +146,7 @@ export const defaultWidgets = {
   progressBar: progressBarWidget,
   statusbar: statusbarWidget,
   tagInput: tagInputWidget,
+  tone: toneWidget,
   "markdown.editor": markdownEditorWidget,
   "markdown.preview": markdownPreviewWidget,
   select: selectWidget,
