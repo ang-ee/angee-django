@@ -17,10 +17,12 @@ from django.utils import timezone
 from rebac import (
     PermissionDenied,
     current_actor,
+    generic_target,
     system_context,
     to_object_ref,
 )
 from rebac.backends import backend
+from rebac.field_backing import canonical_model
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
@@ -37,7 +39,7 @@ from angee.base.mixins import (
     RevisionMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin, canonical_record_model, canonical_record_target
+from angee.base.refs import RecordRefMixin, edge_target_models
 from angee.base.scoping import bind_actor, system_queryset
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import bind, require_binding_access, require_target_binding_access
@@ -273,13 +275,13 @@ class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[mis
 
 
 class LinkManager(AngeeManager):
-    """Own URL-keyed upserts on live project and task targets."""
+    """Own URL-keyed upserts on live project and task targets.
 
-    TARGET_RELATIONS = {
-        "projects.project": "project",
-        "projects.task": "task",
-    }
-    """Allowed target model labels mapped to their projects/link relation."""
+    permissions.zed backs the link's project and task relations with
+    its GenericForeignKey, so a link is created, read, written and deleted
+    with the matching permission on its target. Links are stored at
+    :func:`rebac.generic_target` and written under the actor.
+    """
 
     def create(self, **kwargs: Any) -> models.Model:
         """Create through the URL-keyed upsert contract."""
@@ -300,85 +302,40 @@ class LinkManager(AngeeManager):
         metadata: Mapping[str, Any] | None = None,
         **fields: Any,
     ) -> models.Model:
-        """Create or update one link per canonical target and URL."""
+        """Create or update one link per canonical target and URL.
 
-        relation = self.target_relation(target)
-        if not target.has_access("write"):
-            raise PermissionDenied("Write access to the target is required to create a link.")
-        actor = current_actor()
-        canonical = canonical_record_target(target)
+        The link's create requires write on the target through the relation
+        its type declares; a target type without one is refused under an actor,
+        and ValueError names an unsaved or untyped target.
+        """
+
+        key = generic_target(target).lookups(self.model, "target")
         values = {"title": title, "metadata": dict(metadata or {}), **fields}
         with transaction.atomic():
-            with system_context(reason="projects.link.upsert.lookup"):
-                link = self.filter(
-                    content_type=canonical.content_type,
-                    object_id=canonical.object_id,
-                    url=url,
-                ).first()
+            link = self.filter(url=url, **key).first()
             if link is None:
-                verified_actor = self.check_create({relation: (target,)})
-                link = self.model(target=target, url=url, **values)
+                link = self.model(url=url, **key, **values)
                 link.full_clean(validate_unique=False, validate_constraints=False)
-                link.sudo(reason="projects.link.upsert.create").save()
-                bind_actor(link, verified_actor)
-            else:
-                for name, value in values.items():
-                    setattr(link, name, value)
-                link.sudo(reason="projects.link.upsert.update").save(update_fields=(*values, "updated_at"))
-                bind_actor(link, actor)
+                return self.insert(link)
+            for name, value in values.items():
+                setattr(link, name, value)
+            link.save(update_fields=(*values, "updated_at"))
         return link
 
-    @classmethod
-    def target_relation(cls, target: models.Model) -> str:
-        """Return the one projects/link relation for an allowed target."""
+    def validate_target(self, target: models.Model) -> None:
+        """Reject a target outside the types the link schema declares."""
 
-        try:
-            return cls.TARGET_RELATIONS[target._meta.label_lower]
-        except KeyError as error:
-            raise ValidationError({"target": "Links may target only projects or tasks."}) from error
+        model = canonical_model(type(target))
+        if model is None or model._meta.label_lower not in edge_target_models(self.model):
+            raise ValidationError({"target": "Links may target only projects or tasks."})
 
-    @classmethod
-    def target_model(cls, model_label: str) -> type[models.Model]:
+    def target_model(self, model_label: str) -> type[models.Model]:
         """Return the installed model for an allowed link target label."""
 
-        normalized_label = str(model_label).strip().lower()
-        if normalized_label not in cls.TARGET_RELATIONS:
-            raise ValidationError({"target": "Links may target only projects or tasks."})
-        return apps.get_model(normalized_label)
-
-
-class ProjectBindingQuerySet(AngeeQuerySet[Any]):
-    """Explicit bindings whose deletion requires authority over both ends."""
-
-    def update(self, **kwargs: Any) -> int:
-        """Keep binding identity edits on the both-end authorization path."""
-
-        if self.model.binding_fields.intersection(kwargs):
-            raise ValueError("Project binding identities require authorization through save().")
-        return super().update(**kwargs)
-
-    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
-        """Refuse identity edits that bypass instance authorization."""
-
-        if self.model.binding_fields.intersection(fields):
-            raise ValueError("Project binding identities require authorization through save().")
-        return super().bulk_update(objs, fields, *args, **kwargs)
-
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
-        """Require instance authorization before creating access-bearing bindings."""
-
-        raise ValueError("Project bindings require both-end authorization through bind() or save().")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        """Require canonical unbind authority for every explicit bulk deletion."""
-
-        for binding in self.select_related("content_type"):
-            project = binding.project
-            target = binding.target
-            if target is None:
-                raise ValidationError({"target": "A live project binding target is required for deletion."})
-            require_binding_access(project=project, target=target)
-        return super().delete()
+        try:
+            return edge_target_models(self.model)[str(model_label).strip().lower()]
+        except KeyError as error:
+            raise ValidationError({"target": "Links may target only projects or tasks."}) from error
 
 
 class Project(
@@ -1413,21 +1370,18 @@ class Participant(AuditMixin, AngeeDataModel):
 
 
 class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
-    """One explicit projects-owned statement that a resource belongs to a project."""
+    """One explicit projects-owned statement that a resource belongs to a project.
+
+    The resource is stored at :func:`rebac.generic_target`. ``permissions.zed``
+    backs one relation per bindable type with ``target`` and requires share on
+    the project and the type's own grant authority to create or delete a
+    binding, so bindings are written under the actor through
+    :mod:`angee.projects.access`; a type no relation names is refused. A
+    binding is not moved: the library refuses a retargeting save under an actor.
+    """
 
     runtime = True
     sqid_prefix = "pbd_"
-    binding_fields = frozenset({"project", "project_id", "content_type", "content_type_id", "object_id"})
-    allowed_target_models = frozenset(
-        {
-            "knowledge.vault",
-            "messaging.channel",
-            "messaging.thread",
-            "storage.drive",
-            "storage.folder",
-        }
-    )
-    """Concrete input models accepted before MTI target canonicalization."""
 
     project = models.ForeignKey(
         "projects.Project",
@@ -1438,7 +1392,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
 
-    objects = AngeeManager.from_queryset(ProjectBindingQuerySet)()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for explicit project resource bindings."""
@@ -1454,75 +1408,16 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         )
         indexes = (models.Index(fields=("content_type", "object_id")),)
 
-    @classmethod
-    def validate_target(cls, target: models.Model) -> None:
-        """Reject resources outside the single projects-owned binding declaration."""
-
-        target_label = target._meta.label_lower
-        for allowed_label in cls.allowed_target_models:
-            allowed_model = apps.get_model(allowed_label)
-            canonical_model = canonical_record_model(allowed_model)
-            if target_label == allowed_label:
-                return
-            if (
-                target_label == canonical_model._meta.label_lower
-                and allowed_model._base_manager.filter(pk=target.pk).exists()
-            ):
-                return
-        raise ValidationError(
-            {"target": "Project bindings may target only drives, folders, messaging channels, threads, or vaults."}
-        )
-
-    def clean(self) -> None:
-        """Require a live allowed target."""
-
-        super().clean()
-        if self.target is None:
-            raise ValidationError({"target": "A project binding target is required."})
-        self.validate_target(self.target)
-
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Canonicalize every persisted target through the projects binding owner."""
+        """Store the resource at its canonical identity (a channel as its integration)."""
 
         target = self.target
         if target is None:
             raise ValidationError({"target": "A project binding target is required."})
-        self.validate_target(target)
-        update_fields = kwargs.get("update_fields")
-        key_is_written = update_fields is None or bool(self.binding_fields.intersection(update_fields))
-        canonical = canonical_record_target(target)
-        if key_is_written:
-            if not self._state.adding:
-                previous = (
-                    type(self)
-                    ._base_manager.filter(pk=self.pk)
-                    .values_list("project_id", "content_type_id", "object_id")
-                    .first()
-                )
-                current = (self.project_id, canonical.content_type.pk, canonical.object_id)
-                if previous is not None and previous != current:
-                    previous_project_id, previous_content_type_id, previous_object_id = previous
-                    previous_project = (
-                        apps.get_model("projects", "Project").objects.filter(pk=previous_project_id).first()
-                    )
-                    if previous_project is None:
-                        raise PermissionDenied("Share access to the previous binding project is required.")
-                    previous_content_type = ContentType.objects.get_for_id(previous_content_type_id)
-                    previous_target = previous_content_type.get_object_for_this_type(pk=previous_object_id)
-                    require_binding_access(project=previous_project, target=previous_target)
-            require_binding_access(project=self.project, target=target)
+        canonical = generic_target(target)
         self.content_type = canonical.content_type
         self.object_id = canonical.object_id
         super().save(*args, **kwargs)
-
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
-        """Require canonical unbind authority for direct instance deletion."""
-
-        target = self.target
-        if target is None:
-            raise ValidationError({"target": "A live project binding target is required for deletion."})
-        require_binding_access(project=self.project, target=target)
-        return super().delete(*args, **kwargs)
 
     def __str__(self) -> str:
         """Return a readable project-to-resource binding label."""
@@ -1565,7 +1460,7 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         super().clean()
         if self.target is None:
             raise ValidationError({"target": "A project or task target is required."})
-        LinkManager.target_relation(self.target)
+        type(self).objects.validate_target(self.target)
 
     def __str__(self) -> str:
         """Return the link title or URL."""

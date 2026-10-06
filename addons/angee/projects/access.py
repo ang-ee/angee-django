@@ -1,4 +1,4 @@
-"""Authorize and persist live project-container bindings."""
+"""Persist live project-container bindings and gate the project's home folder."""
 
 from __future__ import annotations
 
@@ -6,15 +6,18 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import transaction
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, generic_target
 
 from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import canonical_record_target
 
 
 def require_binding_access(*, target: Any, project: Any) -> None:
-    """Require authority over both sides before project access can be widened."""
+    """Require authority over both sides before a project's home folder widens access.
+
+    The generic resource bindings carry this rule in ``projects/project_binding``
+    itself; the project's ``folder`` foreign key reaches the folder through the
+    same grant and keeps this explicit check.
+    """
 
     if not project.has_access("share"):
         raise PermissionDenied("Share access to the project is required to bind a resource.")
@@ -39,35 +42,24 @@ def _target_binding_permission(model: type[Any]) -> str:
 
 
 def bind(*, target: Any, project: Any) -> Any:
-    """Idempotently persist one canonical project-container binding."""
+    """Idempotently persist one canonical project-container binding under the actor.
+
+    The binding's ``create`` requires share on the project and the resource
+    type's own grant authority through the relation ``projects/project_binding``
+    declares for it; a type no relation names is refused.
+    """
 
     binding_model = apps.get_model("projects", "ProjectBinding")
     if project.pk is None or target.pk is None:
         raise ValidationError("A project binding requires saved project and target rows.")
-    require_binding_access(project=project, target=target)
-    binding_model.validate_target(target)
-    canonical = canonical_record_target(target)
-    with transaction.atomic():
-        with system_context(reason="projects.binding.bind"):
-            binding, _ = binding_model._base_manager.get_or_create(
-                project=project,
-                content_type=canonical.content_type,
-                object_id=canonical.object_id,
-            )
+    binding, _created = binding_model.objects.get_or_create(
+        project=project, **generic_target(target).lookups(binding_model, "target"),
+    )
     return binding
 
 
 def unbind(*, target: Any, project: Any) -> None:
-    """Remove one explicit binding while preserving every other evidence row."""
+    """Remove one explicit binding; its ``delete`` requires the same authority as ``bind``."""
 
     binding_model = apps.get_model("projects", "ProjectBinding")
-    require_binding_access(project=project, target=target)
-    binding_model.validate_target(target)
-    canonical = canonical_record_target(target)
-    with transaction.atomic():
-        with system_context(reason="projects.binding.unbind"):
-            binding_model._base_manager.filter(
-                project=project,
-                content_type=canonical.content_type,
-                object_id=canonical.object_id,
-            ).delete()
+    binding_model.objects.filter(project=project, **generic_target(target).lookups(binding_model, "target")).delete()

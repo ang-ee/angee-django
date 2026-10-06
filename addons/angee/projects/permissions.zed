@@ -1,7 +1,7 @@
 // Authorization schema for bounded projects and their work.
 // @rebac_package: projects
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 11
+// @rebac_schema_revision: 12
 
 definition projects/project {
     relation owner:  auth/user // rebac:field=owner
@@ -87,10 +87,13 @@ definition projects/participant {
     permission delete = project->write + admin->member
 }
 
-// Canonical reverse generic paths read the target directly from the link row.
+// A link names its target through its GenericForeignKey: one relation per
+// target type, backed by `target`, so every link permission follows the
+// project or task it is attached to. A target type no relation names is
+// refused under an actor.
 definition projects/link {
-    relation project: projects/project // rebac:field=project
-    relation task:    projects/task // rebac:field=task
+    relation project: projects/project // rebac:field=target
+    relation task:    projects/task // rebac:field=target
     relation admin:   angee/role // rebac:const=admin
 
     permission create = project->write + task->write + admin->member
@@ -99,12 +102,24 @@ definition projects/link {
     permission delete = project->write + task->write + admin->member
 }
 
+// A binding names its resource through its GenericForeignKey: one relation per
+// bindable type, backed by `target` (a channel binds as its integration).
+// Binding widens the resource to the project's members, so creating or
+// deleting one takes share on the project and the resource's own grant
+// authority: share where its type grants it, write otherwise. A binding is not
+// moved: unbind, then bind the other resource.
 definition projects/project_binding {
     relation project: projects/project // rebac:field=project
+    relation drive: storage/drive // rebac:field=target
+    relation folder: storage/folder // rebac:field=target
+    relation integration: integrate/integration // rebac:field=target
+    relation thread: messaging/thread // rebac:field=target
+    relation vault: knowledge/vault // rebac:field=target
     relation admin: angee/role // rebac:const=admin
 
-    permission create = project->write + admin->member
+    permission target_share = drive->share + folder->write + integration->write + thread->share + vault->share
+    permission create = project->share & target_share
     permission read = project->read + admin->member
-    permission write = project->write + admin->member
-    permission delete = project->write + admin->member
+    permission write = nil
+    permission delete = project->share & target_share
 }

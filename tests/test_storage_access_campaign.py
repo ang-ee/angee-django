@@ -279,6 +279,9 @@ def test_composed_edge_target_relations_pass_the_backing_check(composed_permissi
     for resource_type, relations in (
         ("storage/file_attachment", {"task", "drive", "mti_parent"}),
         ("knowledge/record_binding", {"task", "project", "record_vault", "mti_parent"}),
+        ("projects/link", {"project", "task"}),
+        ("projects/project_binding", {"drive", "folder", "integration", "thread", "vault"}),
+        ("portfolio/update", {"project", "initiative"}),
     ):
         definition = schema.get_definition(resource_type)
         assert definition is not None

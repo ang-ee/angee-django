@@ -216,14 +216,16 @@ def test_bound_vault_requires_share_to_bind_another_project(project_access_schem
         assert not source.has_access("share")
         assert vault.with_actor(writer).has_access("write")
         assert not vault.has_access("share")
-        with pytest.raises(PermissionDenied, match="Share access to the resource"):
-            bind(project=destination.with_actor(writer), target=vault)
+        # The binding's own `create` requires share on the vault: the edge gate refuses.
+        with actor_context(writer), pytest.raises(PermissionDenied):
+            bind(project=destination, target=vault)
         assert not vault.with_actor(reader).has_access("read")
         assert not ProjectBinding._base_manager.filter(project=destination).exists()
         for sharer in (owner, manager, admin):
             assert vault.with_actor(sharer).has_access("share")
             assert Vault.objects.with_actor(sharer).with_action("share").filter(pk=vault.pk).exists()
-        unbind(project=source.with_actor(manager), target=vault.with_actor(manager))
+        with actor_context(manager):
+            unbind(project=source, target=vault)
         assert not vault.with_actor(manager).has_access("share")
         assert vault.with_actor(owner).has_access("share")
 
@@ -281,7 +283,8 @@ def test_project_binding_grants_and_revokes_thread_message_access(
         project.folder = None
         project.save(update_fields=("folder", "updated_at"))
     assert folder.with_actor(editor).has_access("write")
-    unbind(project=project.with_actor(owner), target=folder.with_actor(owner))
+    with actor_context(owner):
+        unbind(project=project, target=folder)
     assert not folder.with_actor(editor).has_access("write")
     assert channel.with_actor(editor).has_access("write")
     assert thread.with_actor(editor).has_access("write")
@@ -306,8 +309,8 @@ def test_project_binding_grants_and_revokes_thread_message_access(
     assert not rolled_back.with_actor(editor).has_access("write")
     assert active_relationship_model().objects.filter(pk=leftover.pk).exists()
     assert channel.with_actor(editor).has_access("write")
-    with transaction.atomic():
-        unbind(project=project.with_actor(owner), target=channel.with_actor(owner))
+    with transaction.atomic(), actor_context(owner):
+        unbind(project=project, target=channel)
         assert not channel.with_actor(editor).has_access("write")
         assert not thread.with_actor(editor).has_access("write")
         assert not message.with_actor(editor).has_access("read")
@@ -346,10 +349,10 @@ def test_binding_edits_and_deletes_require_authority(project_access_schema: Any)
     with actor_context(outsider), pytest.raises(PermissionDenied):
         ProjectBinding.objects.filter(pk=binding.pk).delete()
     with actor_context(outsider), pytest.raises(PermissionDenied):
-        binding.delete()
+        binding.with_actor(outsider).delete()
     with actor_context(outsider), pytest.raises(PermissionDenied):
         binding.target = second
-        binding.save()
+        binding.with_actor(outsider).save()
 
 
 @pytest.mark.django_db(transaction=True)

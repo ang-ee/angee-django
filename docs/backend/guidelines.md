@@ -504,10 +504,13 @@ data through REBAC, never a queryset bypass.
 - **Container inheritance belongs to the resource and scope owners.** A
   resource's FK relations and arrows live in its own Zed definition. A scope
   contributes additional relations and arrows through its own
-  `permissions.extends.zed`; its binding writer mirrors the persisted evidence
-  and reconciles edits and deletion. See
-  [project bindings](../../addons/angee/projects/access.py). Binding a resource
-  widens access to its contents, so the binding owner must authorize both ends.
+  `permissions.extends.zed`. Binding a resource widens access to its contents,
+  so the binding edge's own `create` and `delete` require authority over both
+  ends: [project bindings](../../addons/angee/projects/permissions.zed) take
+  share on the project and the resource type's grant authority through the
+  relation declared for that type, and
+  [`projects.access.bind`](../../addons/angee/projects/access.py) writes them
+  under the actor.
 - **Declare direct sharing once.** Models declare `rebac_grantable`; the
   [record-access API](../../addons/angee/graphql/sharing.py) dispatches bulk
   grants and revocations through the model's checked methods. Addons do not

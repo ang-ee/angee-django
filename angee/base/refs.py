@@ -31,9 +31,11 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import ObjectRef, to_object_ref
-from rebac.resources import model_resource_type
+from rebac.resources import model_for_resource_type, model_resource_type
+from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
+from angee.base.permissions import effective_rebac_definition
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +306,30 @@ class RecordRefMixin(models.Model):
         """Return the referenced record's stable public id."""
 
         return self.record_ref.public_id
+
+
+def edge_target_models(edge: type[RecordRefMixin]) -> dict[str, type[models.Model]]:
+    """Return the target models ``edge``'s effective schema declares, by ``label_lower``.
+
+    One relation per target type, backed by the edge's generic pointer
+    (``// rebac:field=target``), names the types a polymorphic edge may hold
+    under an actor. Owners derive their accepted-target sets from this one
+    declaration instead of listing the types again.
+    """
+
+    definition = effective_rebac_definition(edge)
+    if definition is None:
+        return {}
+    pointer = edge.record_ref_field().name
+    targets: dict[str, type[models.Model]] = {}
+    for relation in definition.relations:
+        backing = relation.backing
+        if not isinstance(backing, FieldBinding) or backing.path != pointer or len(relation.allowed_subjects) != 1:
+            continue
+        model = model_for_resource_type(relation.allowed_subjects[0].type)
+        if model is not None:
+            targets[model._meta.label_lower] = model
+    return targets
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

@@ -31,6 +31,20 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Project links, project resource bindings and portfolio health reports
+  authorize their target in the REBAC schema: each edge's per-type relations are
+  backed by its `GenericForeignKey`, rows are stored at `rebac.generic_target`
+  and created, written and deleted under the actor. Links and reports derive
+  their accepted target types from the schema (`angee.base.refs.edge_target_models`)
+  instead of listing them; a binding requires share on the project and the
+  resource type's own grant authority on both create and delete, binds a channel
+  as its integration, and is never retargeted under an actor. Removed:
+  `LinkManager.TARGET_RELATIONS`/`target_relation`, `UpdateManager.TARGET_RELATIONS`
+  /`target_relation`/`target_model`, the update's stored relationship tuples,
+  `ProjectBinding.allowed_target_models`/`validate_target`, its
+  `ProjectBindingQuerySet` and the hand-rolled binding save/delete gates;
+  `projects.access.require_binding_access` now guards only the project's home
+  folder.
 - File attachments and knowledge record bindings authorize their target in the
   REBAC schema (django-zed-rebac 0.26.0 relations backed by the edge's
   `GenericForeignKey`) and are created and deleted under the actor. The app that
