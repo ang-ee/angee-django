@@ -18,7 +18,7 @@ export {
 export { ProjectPhaseControl } from "./project-phase";
 export { projectListDeclaration, useProjectListDeclaration, projectGanttSpec, projectRecordTabs, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, useProjectFormDeclaration, type ProjectFormSelection, type ProjectTabSelection } from "./project-declarations";
 export { taskRecordTabs, taskRecordTabsFor, useTaskListDeclaration } from "./task-declarations";
-export { useTaskFormDeclaration, type TaskFormSelection } from "./task-actions";
+export { TASK_ACTION_FIELDS, offersTaskAction, useTaskFormDeclaration, type TaskFormSelection } from "./task-actions";
 export { TaskBoardSurface, type TaskBoardSurfaceProps } from "./task-board-surface";
 
 const projectsRoutes: readonly BaseAddonRoute[] = [

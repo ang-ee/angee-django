@@ -10,19 +10,21 @@ const state = vi.hoisted(() => ({
   record: null as WorkTaskRow | null,
   recordId: "tsk_toolbar",
   formReadOnly: false,
-  queue: { triage_enabled: true } as { triage_enabled: boolean } | null,
-  task: null as { stage: { category?: string | null; rule_owned?: boolean | null } | null } | null,
+  task: null as { stage: { category?: string | null } | null } | null,
   start: vi.fn(),
   returnToTriage: vi.fn(),
   startPending: false,
   returnPending: false,
 }));
 
-vi.mock("@angee/projects", () => ({ TASK_MODEL: "projects.Task" }));
+vi.mock("@angee/projects", () => ({
+  TASK_MODEL: "projects.Task",
+  offersTaskAction: (record: { task_actions?: unknown }, action: string) =>
+    Array.isArray(record.task_actions) && record.task_actions.includes(action),
+}));
 vi.mock("@angee/refine", () => ({ extractActionOutcome: vi.fn() }));
 vi.mock("./documents", () => ({ AcceptTaskDocument: {}, DeclineTaskDocument: {} }));
 vi.mock("./context", () => ({
-  useQueueContext: () => ({ data: { work_queues_by_pk: state.queue } }),
   useTaskContext: () => ({ data: state.task ? { project_tasks_by_pk: state.task } : null }),
 }));
 vi.mock("./i18n", () => ({ useWorkT: () => (key: string) => key }));
@@ -55,10 +57,10 @@ vi.mock("@angee/ui", () => ({
 import { TriageRecordActions } from "./triage-actions";
 
 beforeEach(() => {
-  state.record = { id: "tsk_toolbar", queue: { id: "que_work" }, stage: { category: "UNSTARTED" } };
+  state.record = { id: "tsk_toolbar", queue: { id: "que_work" }, stage: { category: "UNSTARTED" },
+    task_actions: ["start", "return_to_triage"] };
   state.task = null;
   state.formReadOnly = false;
-  state.queue = { triage_enabled: true };
   state.startPending = state.returnPending = false;
   state.start.mockReset();
   state.returnToTriage.mockReset();
@@ -90,15 +92,17 @@ describe("task record Start and Return to triage", () => {
     expect(screen.queryAllByRole("button")).toEqual([]);
   });
 
-  test.each([false, null])("requires an enabled queue for Return (%s)", (enabled) => {
-    state.queue = enabled === null ? null : { triage_enabled: enabled };
+  test("Return follows the row's task_actions, never a client queue read", () => {
+    state.record = { ...state.record!, task_actions: ["start"] };
     render(<TriageRecordActions />);
     expect(screen.queryByRole("button", { name: "triage.action.return" })).toBeNull();
     expect(screen.getByRole("button", { name: "task.action.start" })).toBeTruthy();
   });
 
-  test.each(["BACKLOG", "UNSTARTED", "STARTED", "COMPLETED"])("rule-owned %s hides both hand actions", (category) => {
-    state.task = { stage: { category, rule_owned: true } };
+  test.each(["BACKLOG", "UNSTARTED", "STARTED", "COMPLETED"])("a %s task its owner admits no hand verb for shows none", (category) => {
+    // For example a rule-owned stage: the server withholds both verbs from task_actions.
+    state.record = { ...state.record!, task_actions: [] };
+    state.task = { stage: { category } };
     render(<TriageRecordActions />);
     expect(screen.queryAllByRole("button")).toEqual([]);
   });

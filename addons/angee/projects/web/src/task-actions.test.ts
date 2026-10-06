@@ -1,6 +1,14 @@
 import { describe, expect, test } from "vitest";
 
-import { dropReason } from "./task-actions";
+import { dropReason, offersTaskAction } from "./task-actions";
+
+describe("task verb admission", () => {
+  test("reads only the row's server projection", () => {
+    expect(offersTaskAction({ id: "t", task_actions: ["drop", "reopen"] }, "drop")).toBe(true);
+    expect(offersTaskAction({ id: "t", task_actions: ["reopen"] }, "drop")).toBe(false);
+    expect(offersTaskAction({ id: "t", status: "OPEN", permissions: ["write"] }, "drop")).toBe(false);
+  });
+});
 
 describe("task drop reason validation", () => {
   const options = [{ value: "DEFERRED", label: "Deferred" }];

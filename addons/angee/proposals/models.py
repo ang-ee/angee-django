@@ -498,13 +498,24 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             opening_policy=RoundOpeningPolicy.DRAFTS_AND_TRACKS,
         )
 
+    @staticmethod
+    def opening_phase_condition() -> models.Q:
+        """The target project's current phase follows ``opens_after``; a round without one has no phase gate."""
+        follows = models.F("opens_after__sort_order")
+        return (
+            models.Q(opens_after__isnull=True)
+            | models.Q(project__current_milestone__sort_order__gt=follows)
+            | models.Q(project__isnull=True, task__project__current_milestone__sort_order__gt=follows)
+        )
+
     @classmethod
     def can_open_expression(cls, actor: Any) -> models.Expression:
-        """Offer disclosure to managers until the round has an opening receipt."""
+        """Offer disclosure to managers until the round has an opening receipt, once its phase has come."""
         if actor is None:
             return models.Value(False)
         rows = cls.objects.with_actor(actor).with_action("manage").scoped_for_aggregate()
-        return models.Exists(rows.filter(pk=models.OuterRef("pk"), opened_at__isnull=True))
+        unopened = rows.filter(cls.opening_phase_condition(), opened_at__isnull=True)
+        return models.Exists(unopened.filter(pk=models.OuterRef("pk")))
 
     @classmethod
     def can_admit_expression(cls, actor: Any) -> models.Expression:
@@ -1018,7 +1029,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         return None
 
     def open(self, expected_revision: int | None = None) -> Self:
-        """Lift disclosure once, preserving a canceled round's terminal state."""
+        """Lift disclosure once its phase has come, preserving a canceled round's terminal state."""
         if not self.has_access("manage"):
             raise PermissionDenied("Round management is required.")
         with transaction.atomic():
@@ -1026,6 +1037,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.opened_at is None:
+                if not system_queryset(type(self)).filter(type(self).opening_phase_condition(), pk=self.pk).exists():
+                    raise ValidationError({"opens_after": "Lift the round after its opening phase."})
                 if locked.status == RoundStatus.COLLECTING:
                     locked._mark_opened()
                 elif locked.status == RoundStatus.CANCELED:
