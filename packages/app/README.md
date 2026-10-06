@@ -37,8 +37,19 @@ the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
 alters a node of an addon it depends on, and the deployment's `ANGEE_UI.menus`
 may alter any node last. `include: [id | { id, flatten }]` places other apps
 under a node (an aggregator); a flattened app keeps its routes and trail but
-shows its items as the aggregator's own. `remove: true` takes a node and its
-subtree out and makes the pages only it reached unavailable: they stay
+shows its items as the aggregator's own. `include` absorbs: the app leaves its
+place on the rail. `mount` borrows: a node `{ parent, mount: "<route>", path }`
+gets an alias of that route under its app, named after the node (`<id>`, and
+`<id>.record` for the route's record child), while the source app keeps its
+page. The alias reuses the route's page, detail page and model, so nothing is
+exported or re-declared; its path is the app's `path` (`/<app id>` by default,
+since an app's own target may itself be a mount) joined with the node's. A
+node targets one of `route`, `mount` and `to`; an addon mounts only routes of
+addons it depends on. The node's `defaultResourceView` and `recordMatch` go onto
+the alias, and inside it `useRouteHref()` builds the mounted route's names as
+the alias's, so the page's own links stay in the borrowing app. `remove: true`
+takes a node and its subtree out and makes the pages only it reached
+unavailable: they stay
 registered, redirect home, and drop out of record links and claims (a
 `route.menu` anchor counts as a reference; a surviving reference keeps a page
 available, and `routeHref.maybe` returns nothing for unavailable pages).
@@ -78,9 +89,11 @@ removed children with who removed them, and the layer behind each child field.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
-remain unique. A same-model route may declare `recordMatch` for its records;
-`useResourceRecordHref` and `useResourceRecordHrefLookup` select a matching route,
-then the canonical route. Explicit route names use `useRouteHref()`.
+remain unique. A same-model route (or a mount) may declare `recordMatch` for its
+records; `useResourceRecordHref` and `useResourceRecordHrefLookup` open a record
+at the match its row satisfies, from every app, then at the active app's own
+claim, then at the canonical route. Two matches on one resource and condition
+fail composition. Explicit route names use `useRouteHref()`.
 In a confined app, explicit Settings `route`/`params` targets admit those owner
 records and descendants, while other records in the foreign app remain outside
 the confinement. See the [frontend guideline](../../docs/frontend/guidelines.md)
@@ -113,9 +126,11 @@ An addon can specialize existing copy and declare named resource views:
 }
 ```
 
-The referenced app root, route, menu IDs, message keys and metadata fields or
-filterable predicates must exist. Duplicate vocabulary scopes fail composition.
-App scope precedes route scope; nearer route ancestors win. Scoped field labels override
+The referenced app (a root or an included app, flattened ones too), route, menu
+IDs, message keys and metadata fields or filterable predicates must exist.
+Duplicate vocabulary scopes fail composition. A page composes the scopes of
+every app on its trail, outermost first, then route scopes; nearer route
+ancestors win. Scoped field labels override
 authored labels without altering wire metadata. A field may declare
 `{ label: "Priority", tones: { HIGH: "warning" } }` in place of a string label;
 the scoped map colors that field's badge, and route maps extend app maps.

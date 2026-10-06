@@ -129,7 +129,37 @@ describe("app resource projection", () => {
     expect(href(selected["teams.Team"]!.record!.name, { id: "t1" })).toBe("/teams/t1");
     expect(projection.resourceRoutes()["records.Record"]?.record?.name).toBe("records.all.record");
     expect(selected["records.Record"]?.recordDestinations).toEqual([{ record: { name: "desk.review.record", param: "recordId" }, match: { field: "queue.id", equals: "queue-a" } }]);
-    expect(selected["records.Record"]?.recordFallback?.name).toBe("records.all.record");
+    // A row no match claims opens at the app's own claim, not at the matching route the page sits under.
+    expect(selected["records.Record"]?.recordFallback?.name).toBe("desk.incoming.record");
+  });
+
+  test("a record match claims its rows from every app; the app's own claim, then the canonical route, takes the rest", () => {
+    const projection = new AppRouteProjection(routes, menuTree);
+    const destinations = [{ record: { name: "desk.review.record", param: "recordId" }, match: { field: "queue.id", equals: "queue-a" } }];
+    expect(projection.resourceRoutes()["records.Record"]).toEqual({
+      collection: "records.all", record: { name: "records.all.record", param: "id" },
+      recordDestinations: destinations, recordFallback: { name: "records.all.record", param: "id" },
+    });
+    expect(projection.resourceRoutes("teams")["records.Record"]).toMatchObject({ recordDestinations: destinations, recordFallback: { name: "records.all.record" } });
+    expect(projection.resourceRoutes("desk")["records.Record"]).toMatchObject({ recordDestinations: destinations, recordFallback: { name: "desk.incoming.record" } });
+    // Resources no match claims carry no destinations.
+    expect(projection.resourceRoutes()["teams.Team"]?.recordDestinations).toBeUndefined();
+  });
+
+  test("two record matches on one resource and condition fail at boot, whichever apps declare them", () => {
+    const claimed: readonly BaseAddonRoute[] = [
+      ...routes,
+      ...resourcePageRoutes("mine.records", "/mine", Page, undefined, { recordModel: "records.Record", recordMatch: { field: "queue.id", equals: "queue-a" } }),
+    ];
+    const tree = (extra: readonly ChromeMenuItem[]) =>
+      MenuTree.from(resolveMenuRouteTargets([...menus, ...extra], createRouteHref(claimed)) as readonly ChromeMenuItem[]);
+    expect(() => new AppRouteProjection(claimed, tree([{ id: "mine", route: "mine.records" }])))
+      .toThrow(/Resource "records.Record" has duplicate record match "queue.id=queue-a"/);
+    const other = claimed.map((route) => route.name === "mine.records" ? { ...route, recordMatch: { field: "queue.id", equals: "queue-b" } } : route);
+    expect(() => new AppRouteProjection(other, tree([{ id: "mine", route: "mine.records" }]))).not.toThrow();
+    expect(() => new AppRouteProjection([
+      { name: "mine.records", path: "/mine", recordModel: "records.Record", recordMatch: { field: "queue.id", equals: "queue-a" } },
+    ], MenuTree.from([]))).toThrow(/declares recordMatch without a record child/);
   });
 
   test("confines menu and admits named owner records through their ancestor route", () => {

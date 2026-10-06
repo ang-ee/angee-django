@@ -63,8 +63,9 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
   The shared `createAngeeI18nInstance` initializer in `@angee/ui/runtime`
   configures that instance and the provider-less binding's English defaults;
   i18next owns plural selection and interpolation in both cases.
-- App copy belongs to manifest `vocabulary` scopes: a menu root, optionally a
-  route whose descendants inherit the override. The app validates existing
+- App copy belongs to manifest `vocabulary` scopes: an app (a root or an
+  included app), optionally a route whose descendants inherit the override; a
+  page composes every app on its trail, outermost first. The app validates existing
   message, model, field and menu keys; metadata projects presentation labels
   without changing query or model identity. Use host `createApp.i18n` for global
   copy, and scoped vocabulary for another addon's copy within an app. Native
@@ -1267,12 +1268,12 @@ Hard-won traps — the wise learn from others' mistakes
   other addons' menus only through the `menus` dict's declared verbs (include,
   flatten, remove, hide, only, position), along their dependencies; see
   [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
-  another addon's items.
+  another addon's items or routes.
   `route.menu` identifies a route's owning item when references are ambiguous.
-  Multiple references within one root do not throw; without an anchor they
-  provide no menu-derived trail or metadata. References from different roots
-  still throw under a perspective; confinement does not choose an owner for
-  the route. `useChromePlace()` shares one memoized
+  Multiple references do not throw; without an anchor they provide no
+  menu-derived trail or metadata, and references from different roots leave the
+  route with no owning root. To give another app its own copy of a page, mount
+  it. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
   trail. Match path length and search params first, then whether the item sits at
@@ -1282,6 +1283,39 @@ Hard-won traps — the wise learn from others' mistakes
   destination for native breadcrumbs. A more specific preset or parameterized
   target wins over an anchor. Breadcrumbs occupy the
   sheet strip below the top bar; pane toggles stay in the top bar.
+- **An addon composes other addons under its own app by absorbing or
+  borrowing.** Absorb with `include`: the included app moves under the
+  composing node and leaves its place on the rail (the PM suite). Borrow with
+  `mount`: the composing addon declares its own node,
+  `"x.people": { parent: "x", mount: "iam.users", path: "people" }`, and
+  [`mountRoutes`](../../packages/app/src/mounts.ts) emits an alias route named
+  after it (`x.people`, plus `x.people.record` for the mounted route's record
+  child) at its app's `path` joined with the node's. The app is the node's
+  nearest ancestor declared at the top of the rail, so a mount keeps its path
+  when another addon includes that app; an app's `path` defaults to `/<app id>`,
+  since its own target may itself be a mount. The alias reuses the mounted route's
+  lazy page, detail page, layout and model (as `recordModel`, so the canonical
+  claim stays with its owner); the source app keeps its own page. A node targets
+  one of `route` (a link), `mount` (a borrowed page) and `to` (an external URL),
+  and an addon mounts only routes of addons it depends on. The alias is a real
+  route anchored to its node, so `useActiveRoute`, `when: { route }`, route
+  vocabulary and the menu trail are the borrowing app's. Inside the alias
+  family `useRouteHref()` composes [`aliasRouteHref`](../../packages/ui/src/runtime/route-href.ts):
+  the mounted route's names build the alias's (`iam.users` → `x.people`), so the
+  borrowed page's own links stay in the borrowing app. The node's
+  `defaultResourceView` and `recordMatch` go onto the alias.
+- **Record ownership has one order.** A record link opens at the `recordMatch`
+  claim its row matches, from every app; otherwise at the active app's own
+  claim; otherwise at the canonical route
+  ([`AppRouteProjection.resourceRoutes`](../../packages/app/src/resource-projection.ts)).
+  Two claims on one resource with the same field and value fail at boot; a row
+  two different claims match fails where it renders. Lists read every claimed
+  field (`useResourceRecordMatchFields`) so the row can choose.
+- **Words and `when: { app }` follow the whole app trail.** A page's trail
+  holds its root and every included app on the way, flattened ones too.
+  Vocabulary composes the scopes of every app on it, outermost first, then route
+  scopes, and a vocabulary `app` may name any of those apps; a container
+  condition's `app` matches any of them.
 - **Keep the navigation accordion and selectable ARIA tree distinct.**
   `AppRailTree` owns app-chrome parent activation, expansion, routing, and
   temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard

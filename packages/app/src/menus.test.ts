@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { compileMenus, type CompiledMenuItem, type MenuLayer } from "./menus";
+import { compileMenus, type CompiledMenuItem, type MenuDeclarations, type MenuLayer } from "./menus";
 import { DEPLOYMENT_LAYER_ID } from "./shell";
 
 const projects: MenuLayer = {
@@ -232,6 +232,58 @@ describe("compileMenus", () => {
     const product: MenuLayer = { id: "product", dependsOn: ["pm", "projects"], menus: { "projects.tasks": { hide: true } } };
     const pmNode = compileMenus([projects, work, pm, product]).navigation[0]!;
     expect(pmNode.children?.find((item) => item.id === "projects.tasks")).toMatchObject({ hidden: true });
+  });
+
+  test("a mount links to its alias under its app's path; the source app keeps its own page", () => {
+    const iam: MenuLayer = { id: "iam", routes: [{ name: "iam.users" }], menus: { iam: {}, "iam.users": { parent: "iam", route: "iam.users" } } };
+    const deskMenus: MenuDeclarations = {
+      desk: {},
+      "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People", defaultResourceView: "desk.staff" },
+      "desk.admin": { parent: "desk" },
+      "desk.admin.users": { parent: "desk.admin", mount: "iam.users", path: "/admin/users/", recordMatch: { field: "kind", equals: "admin" } },
+    };
+    const desk: MenuLayer = { id: "desk", dependsOn: ["iam"], menus: deskMenus };
+    const compiled = compileMenus([iam, desk]);
+    expect(compiled.mounts).toEqual([
+      { id: "desk.people", route: "iam.users", path: "/desk/people", by: "desk", defaultResourceView: "desk.staff" },
+      { id: "desk.admin.users", route: "iam.users", path: "/desk/admin/users", by: "desk", recordMatch: { field: "kind", equals: "admin" } },
+    ]);
+    // The node routes to its alias, which carries its default view; mount fields never reach the chrome.
+    const items = compiled.logical[1]!.children as CompiledMenuItem[];
+    expect(items[0]).toEqual({ id: "desk.people", label: "People", route: "desk.people" });
+    expect(items[1]?.children).toEqual([{ id: "desk.admin.users", route: "desk.admin.users" }]);
+    expect(compiled.logical[0]?.children).toEqual([{ id: "iam.users", route: "iam.users" }]);
+    // An app's path sets its mounts' base, which stays when another addon includes the app.
+    expect(compileMenus([iam, { ...desk, menus: { ...deskMenus, desk: { path: "/work" } } }]).mounts[0]?.path).toBe("/work/people");
+    const suite: MenuLayer = { id: "suite", dependsOn: ["desk"], menus: { suite: { include: ["desk"] } } };
+    expect(compileMenus([iam, desk, suite]).mounts[0]?.path).toBe("/desk/people");
+    // Removing a mount takes its alias with it.
+    const product: MenuLayer = { id: "product", dependsOn: ["desk"], menus: { "desk.people": { remove: true } } };
+    const removed = compileMenus([iam, desk, product]);
+    expect(removed.removed).toContainEqual({ id: "desk.people", route: "desk.people", by: "product", parent: "desk", label: "People" });
+    expect(removed.mounts.map((mount) => mount.id)).toEqual(["desk.people", "desk.admin.users"]);
+  });
+
+  test("a node targets one of route, mount and to; a mount takes a path under an app and a route its addon depends on", () => {
+    const iam: MenuLayer = { id: "iam", routes: [{ name: "iam.users" }], menus: { iam: { route: "iam.users" } } };
+    const desk = (menus: MenuDeclarations, dependsOn: readonly string[] = ["iam"]): MenuLayer[] =>
+      [iam, { id: "desk", dependsOn, menus: { desk: {}, ...menus } }];
+    const people = { parent: "desk", mount: "iam.users", path: "people" };
+    expect(() => compileMenus(desk({ "desk.people": people }))).not.toThrow();
+    expect(() => compileMenus(desk({ "desk.people": { ...people, route: "iam.users" } }))).toThrow(/"desk.people" declares both route and mount/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, to: "https://example.com" } }))).toThrow(/declares both mount and to/);
+    expect(() => compileMenus(desk({ "desk.people": { parent: "desk", mount: "iam.users" } }))).toThrow(/mounts "iam.users" with no path/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, params: { id: "1" } } }))).toThrow(/with params/);
+    expect(() => compileMenus(desk({ "desk.people": { parent: "desk", route: "iam.users", recordMatch: { field: "kind", equals: "staff" } } })))
+      .toThrow(/sets recordMatch, which only a mount claims/);
+    expect(() => compileMenus(desk({ "desk.people": { parent: "desk", route: "iam.users", path: "people" } })))
+      .toThrow(/sets path, which only an app or a mount has/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, recordMatch: { field: "kind" } } } as unknown as MenuDeclarations)))
+      .toThrow(/recordMatch must be \{ field, equals \} strings/);
+    expect(() => compileMenus(desk({ "desk.people": { mount: "iam.users", path: "people" } }))).toThrow(/outside an app/);
+    expect(() => compileMenus(desk({ "desk.people": { ...people, mount: "iam.ghost" } }))).toThrow(/mounts unknown route "iam.ghost"/);
+    expect(() => compileMenus(desk({ "desk.people": people }, [])))
+      .toThrow(/Addon "desk" mounts route "iam.users" of "iam", which it does not depend on/);
   });
 
   test("the deployment places a node back at the top and refuses malformed entries", () => {

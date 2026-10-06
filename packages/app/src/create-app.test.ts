@@ -45,7 +45,7 @@ import {
 } from "@angee/ui/views/resource-view-model";
 import { ResourceQuery, useModelMetadata, type DataResourceMetadata } from "@angee/metadata";
 import type { ContainersDeclaration } from "@angee/ui/runtime";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
@@ -223,7 +223,7 @@ describe("createApp confinement", () => {
     expect(() => createApp({ ...input, confineTo: "requests" })).not.toThrow();
   });
 
-  test("requires explicit menu ownership only when confined route roots disagree", () => {
+  test("a route two roots reference belongs to neither until route.menu names one", () => {
     const shared: BaseAddon = {
       id: "requests",
       routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
@@ -237,7 +237,8 @@ describe("createApp confinement", () => {
       schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
     };
     expect(() => createApp(input)).not.toThrow();
-    expect(() => createApp({ ...input, confineTo: "requests" })).toThrow(/different menu roots/);
+    // Ownerless, the page is no confined root's own, so it cannot be its home.
+    expect(() => createApp({ ...input, confineTo: "requests" })).toThrow(/outside menu root "requests"/);
     const explicit = {
       ...shared,
       routes: shared.routes?.map((route) => ({ ...route, menu: "requests" })),
@@ -2299,6 +2300,61 @@ test("a container's when.app matches every app on the page's trail, flattened on
   try {
     await app.router.navigate({ to: "/projects/tasks" });
     await waitFor(() => expect(seen.apps).toEqual(["pm", "projects"]));
+  } finally { root.unmount(); host.remove(); }
+});
+
+test("a mount serves the mounted page in the borrowing app, which keeps its links, words and anchor; matching records open there from every app", async () => {
+  const seen: { route?: string | null; app?: string | null; menu?: string | null; apps?: readonly string[]; list?: string;
+    record?: string; staff?: string; other?: string; label?: string } = {};
+  function Probe(): ReactNode {
+    const runtime = useAppRuntime();
+    const href = useRouteHref();
+    const lookup = useResourceRecordHrefLookup();
+    Object.assign(seen, {
+      route: runtime.activeRouteName, app: runtime.activeApp, menu: runtime.activeMenuId, apps: runtime.containerScope?.apps,
+      list: href("iam.users"), record: href("iam.users.record", { id: "u1" }),
+      staff: lookup("iam.User", "u2", { kind: "staff" }), other: lookup("iam.User", "u3", { kind: "guest" }),
+      label: runtime.vocabulary.resources["iam.User"]?.label,
+    });
+    return null;
+  }
+  const addons: BaseAddon[] = [
+    { id: "iam", routes: resourcePageRoutes("iam.users", "/iam/users", Probe, "iam.User", { menu: "iam.users" }),
+      menus: { iam: {}, "iam.users": { parent: "iam", route: "iam.users" } } },
+    { id: "desk", dependsOn: ["iam"],
+      routes: [{ name: "desk.home", path: "/desk/home", component: EmptyPage }],
+      menus: {
+        desk: { route: "desk.home" },
+        "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People" },
+        "desk.staff": { parent: "desk", mount: "iam.users", path: "staff", recordMatch: { field: "kind", equals: "staff" } },
+      },
+      vocabulary: [{ app: "desk", resources: { "iam.User": { label: "Colleague" } } }] },
+  ];
+  const input: CreateAppInput = {
+    ...testAppInput(addons, { console: { requireAuth: false } }),
+    schemas: testSchemasWithConsoleResources([
+      testDataResource("iam.User", { query: testResourceQuery({ fields: { kind: testQueryField("kind") } }) }),
+    ]),
+  };
+  // Only an addon depending on the route's owner may mount it.
+  expect(() => createApp({ ...input, addons: [addons[0]!, { ...addons[1]!, dependsOn: [] }] }))
+    .toThrow(/Addon "desk" mounts route "iam.users" of "iam", which it does not depend on/);
+  history.replaceState(null, "", "/desk/people");
+  const app = createApp(input);
+  expect(routesByFullPath(app.router).has("/desk/people/$id")).toBe(true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await waitFor(() => expect(seen).toMatchObject({
+      route: "desk.people", app: "desk", menu: "desk.people", apps: ["desk"], label: "Colleague",
+      list: "/desk/people", record: "/desk/people/u1", staff: "/desk/staff/u2", other: "/desk/people/u3",
+    }));
+    await app.router.navigate({ to: "/iam/users" });
+    await waitFor(() => expect(seen).toMatchObject({
+      route: "iam.users", app: "iam", menu: "iam.users", apps: ["iam"], label: undefined,
+      list: "/iam/users", record: "/iam/users/u1", staff: "/desk/staff/u2", other: "/iam/users/u3",
+    }));
   } finally { root.unmount(); host.remove(); }
 });
 

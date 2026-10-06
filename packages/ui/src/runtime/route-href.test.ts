@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { UnknownRouteError, createRouteHref } from "./route-href";
+import { UnknownRouteError, aliasRouteHref, createRouteHref } from "./route-href";
 
 const routeHref = createRouteHref([
   { name: "notes.list", path: "/notes" },
@@ -70,6 +70,29 @@ describe("routeHref", () => {
       .toBe("/notes?model=notes.Note&page=2");
     expect(routeHref("notes.list", undefined, { filter: "", empty: "", absent: undefined }))
       .toBe("/notes?filter=&empty=");
+  });
+
+  test("inside an alias family, the mounted route's names build the alias's", () => {
+    const href = createRouteHref([
+      { name: "iam.users", path: "/iam/users" },
+      { name: "iam.users.record", path: "/iam/users/$id" },
+      { name: "desk.people", path: "/desk/people" },
+      { name: "desk.people.record", path: "/desk/people/$id" },
+    ], { unavailable: new Set(["iam.users"]) });
+    const mounted = aliasRouteHref(href, new Map([
+      ["iam.users", "desk.people"],
+      ["iam.users.record", "desk.people.record"],
+    ]));
+    expect(mounted("iam.users")).toBe("/desk/people");
+    expect(mounted("iam.users.record", { id: "a/b" }, { tab: "roles" })).toBe("/desk/people/a%2Fb?tab=roles");
+    // The alias's own availability decides `maybe`, not the mounted route's.
+    expect(mounted.maybe("iam.users")).toBe("/desk/people");
+    expect(href.maybe("iam.users")).toBeUndefined();
+    // Names outside the family build unchanged and keep failing fast.
+    expect(mounted("desk.people")).toBe("/desk/people");
+    expect(mounted.maybe("missing.route")).toBeUndefined();
+    expect(() => mounted("missing.route")).toThrow(UnknownRouteError);
+    expect(() => mounted("iam.users.record")).toThrow('Route "desk.people.record" is missing params: id.');
   });
 
   test.each(["/files/$", "/files/{-$id}", "/files/prefix{$id}"])(

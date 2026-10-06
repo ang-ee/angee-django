@@ -331,6 +331,11 @@ other console routes home. Declared by an addon, selected by the shell.
 (`include`), like the `angee.pm` suite. A **flattened** include shows the app's
 items as the aggregator's own while the app keeps its routes and words.
 
+**Mount** — a menu node that borrows another addon's page (`mount: "<route>"`):
+an alias route named after the node, under the node's app, reusing the page.
+Unlike an include, which absorbs an app and takes it off the rail, the source
+app keeps its page.
+
 **Layer** — one composed addon manifest, ordered by its addon dependencies; the
 deployment layer comes last. Menus, containers and the shell resolve layer by
 layer.

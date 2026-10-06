@@ -44,15 +44,16 @@ export function mostSpecific(
   return candidates.filter((id) => !candidates.some((other) => other !== id && ancestors.get(other)?.has(id)));
 }
 
-/** Refuse an alteration of something owned by an addon the altering layer does not depend on. */
+/** Refuse an alteration (or a mount) of something owned by an addon the altering layer does not depend on. */
 export function assertMayAlter(
   ancestors: ReadonlyMap<string, ReadonlySet<string>>,
   layer: string,
   owner: string,
   what: string,
+  verb = "alters",
 ): void {
   if (owner !== layer && !ancestors.get(layer)?.has(owner)) {
-    throw new Error(`Addon "${layer}" alters ${what} of "${owner}", which it does not depend on.`);
+    throw new Error(`Addon "${layer}" ${verb} ${what} of "${owner}", which it does not depend on.`);
   }
 }
 

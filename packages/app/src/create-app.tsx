@@ -65,9 +65,11 @@ import {
   useAppRuntime,
   useActiveRoute,
   DEFAULT_LOGIN_PATH,
+  aliasRouteHref,
   createRouteHref,
   type AppRuntime,
   type ComposedContainers,
+  type RouteHref,
   type RuntimeResourceRoutes,
   type RuntimeVocabulary,
 } from "@angee/ui/runtime";
@@ -133,6 +135,7 @@ import { chatterRouteIndex } from "./chatter-routes";
 import { explainComposition, type CompositionExplanation } from "./explain";
 import { developmentMode } from "@angee/ui/lib/development-mode";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
+import { mountRoutes } from "./mounts";
 import {
   compareCodePoint,
   authRouteError,
@@ -284,7 +287,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
         canonicalModelLabel(modelLabelInventory, spelling),
     },
   );
-  const routes = resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]);
+  // Mounts add their alias routes before any projection reads the routes.
+  const mounted = mountRoutes(resolveRoutePaths(composed.routes as readonly BaseAddonRoute[]), composed.menuComposition.mounts);
+  const routes = mounted.routes;
   for (const route of routes) {
     if (!route.recordMatch) continue;
     const model = route.recordModel ?? route.resource;
@@ -319,6 +324,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
     : routeHref;
+  // Inside a mount, the mounted route's names build its alias's: the borrowed page's own links stay in the borrowing app.
+  const mountedRouteHrefs = new Map<string, RouteHref>(mounted.families.flatMap((family) => {
+    const href = aliasRouteHref(runtimeRouteHref, family);
+    return [...family.values()].map((alias) => [alias, href] as const);
+  }));
   const navigationTree = projection.navigationTree;
   validateContainerConditions(composed.containers, {
     routes: routesByName,
@@ -395,7 +405,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     mergeI18n(enUiBundle, composed.i18n), composed.vocabulary,
     modelLabelInventory, menuTree, routes,
   );
-  const defaultVocabulary = vocabularyForRoute(confineTo);
+  const defaultVocabulary = vocabularyForRoute(confineTo === undefined ? [] : [confineTo]);
   const i18n = defaultVocabulary.i18n;
 
   // The static composition; the session fields (auth, logoutAction,
@@ -504,11 +514,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const match = projection.activeMenu(pathname, activeRoute?.name, searchStr);
     const activeMenuId = match?.item.id ?? null;
     const app = projection.activeApp(pathname, activeRoute?.name, searchStr);
-    const words = vocabularyForRoute(app, activeRoute?.name);
+    const trail = projection.appTrail(pathname, activeRoute?.name, searchStr);
+    // Words compose along the whole app trail, outermost first, as `when: { app }` matches it.
+    const words = vocabularyForRoute(trail, activeRoute?.name);
     const publicRoute = activeRoute?.layout === "public"
       || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
     // Public routes and sign-in sit outside every app, so app-scoped narrowing never reaches them.
-    const appTrail = publicRoute ? "" : projection.appTrail(pathname, activeRoute?.name, searchStr).join("\0");
+    const appTrail = publicRoute ? "" : trail.join("\0");
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
       const menuResourceViewIds = new Set<string>();
@@ -517,6 +529,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         for (const id of menuPresetIdsByRoute.get(route.name) ?? []) menuResourceViewIds.add(id);
         route = route.parent ? routesByName.get(route.parent) : undefined;
       }
+      const routeNames = routeTrail(activeRoute);
       return {
         ...runtime,
         i18n: words.i18n.instance,
@@ -524,11 +537,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
         menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
-        routeHref: runtimeRouteHref,
+        routeHref: routeNames.map((name) => mountedRouteHrefs.get(name)).find((href) => href !== undefined) ?? runtimeRouteHref,
         composition: explain,
         containerScope: {
           apps: appTrail ? appTrail.split("\0") : [],
-          routes: routeTrail(activeRoute),
+          routes: routeNames,
           perspective: confineTo !== undefined ? composed.shell.perspective?.id ?? null : null,
         },
         activeRouteName: activeRoute?.name ?? null,

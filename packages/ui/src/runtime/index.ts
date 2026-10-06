@@ -82,6 +82,7 @@ export {
   RECORD_NAVIGATION_SEARCH_KEY,
   RECORD_TAB_SEARCH_KEY,
   RECORD_SEARCH_KEYS,
+  aliasRouteHref,
   createRouteHref,
   routeParameterName,
   routeSearchString,
