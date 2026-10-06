@@ -17,6 +17,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from angee.base.fields import StateField
+from angee.base.mixins import RowLockMixin
 from angee.base.models import AngeeDataModel
 
 
@@ -144,3 +145,39 @@ class DocumentLine(InputStampMixin, AngeeDataModel):
         app_label = "linesdemo"
         db_table = "test_linesdemo_line"
         ordering = ("position", "pk")
+
+
+class PinnedLine(RowLockMixin, AngeeDataModel):
+    """A document part whose pinned rows are system rows (the row-lock handle).
+
+    A pinned row's ``label`` is locked: editable lines may change its quantity
+    and order, but not its label, and may neither remove a pinned row nor create
+    one. ``pinned`` itself is never a writable line column; only system writers
+    (the tests' ``system_context`` seeding) set it.
+    """
+
+    sqid_prefix = "pln_"
+    locked_rows_label = "Pinned lines"
+
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,
+        related_name="pinned_lines",
+    )
+    label = models.CharField(max_length=200)
+    quantity = models.IntegerField(default=1)
+    position = models.IntegerField(default=0)
+    pinned = models.BooleanField(default=False)
+
+    class Meta(AngeeDataModel.Meta):
+        """Concrete row-locked child-line model; authorized through its document."""
+
+        abstract = False
+        app_label = "linesdemo"
+        db_table = "test_linesdemo_pinned_line"
+        ordering = ("position", "pk")
+
+    def locked_fields(self) -> tuple[str, ...]:
+        """Lock a pinned row's label."""
+
+        return ("label",) if self.pinned else ()

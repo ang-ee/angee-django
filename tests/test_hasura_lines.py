@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -33,7 +33,7 @@ from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
-from tests.linesdemo.models import Document, DocumentLine, Product, Tag
+from tests.linesdemo.models import Document, DocumentLine, PinnedLine, Product, Tag
 
 
 @strawberry_django.type(DocumentLine)
@@ -743,3 +743,223 @@ def test_rich_save_round_trips_enum_and_m2m_diff(composed_tables):
         # The enum stored its lowercase model value; the M2M swapped red → blue+green.
         assert line.kind == "service"
         assert set(line.tags.values_list("name", flat=True)) == {"Blue", "Green"}
+
+
+@strawberry_django.type(PinnedLine)
+class PinnedLineType(AngeeNode):
+    """GraphQL projection of a row-locked document part, with its lock."""
+
+    label: auto
+    quantity: auto
+    position: auto
+
+    @strawberry_django.field(only=["pinned"])
+    def locked_fields(self) -> list[str]:
+        return list(self.locked_fields())
+
+
+@strawberry_django.type(Document, name="PinnedDocumentType")
+class PinnedDocumentType(AngeeNode):
+    """GraphQL projection of a document with its ordered, row-locked parts."""
+
+    title: auto
+
+    @strawberry_django.field
+    def pinned_lines(self) -> list[PinnedLineType]:
+        return list(self.pinned_lines.order_by("position", "pk"))
+
+
+_PINNED_LINES = HasuraLines(
+    field="pinned_lines",
+    model=PinnedLine,
+    node=PinnedLineType,
+    writable=("label", "quantity", "position"),
+)
+
+_PINNED_SCHEMA = GraphQLSchemas(
+    [
+        SchemaAddon(
+            {
+                "public": {
+                    "query": [
+                        (
+                            pinned := hasura_model_resource(
+                                PinnedDocumentType,
+                                model=Document,
+                                name="pinned_documents",
+                                filterable=["id", "title"],
+                                sortable=["title"],
+                                aggregatable=["id"],
+                                writable=["title"],
+                                lines=_PINNED_LINES,
+                                id_column="sqid",
+                            )
+                        ).query
+                    ],
+                    "mutation": [pinned.mutation],
+                    "types": [PinnedDocumentType, PinnedLineType, *pinned.types],
+                }
+            }
+        )
+    ]
+).build("public")
+
+_SAVE_PINNED = """
+mutation($pk: ID!, $lines: [pinned_documents_pinned_lines_insert_input!]) {
+  pinned_documents_save(pk: $pk, lines: $lines) {
+    id
+    pinned_lines { id label quantity position locked_fields }
+  }
+}
+"""
+
+
+def _pinned_document(owner: Any) -> tuple[Document, PinnedLine, PinnedLine]:
+    """Seed a document with one system (pinned) part and one ordinary part."""
+
+    with system_context(reason="seed"):
+        doc = Document.objects.create(title="Document")
+        pinned = PinnedLine.objects.create(document=doc, label="Base", quantity=1, position=0, pinned=True)
+        free = PinnedLine.objects.create(document=doc, label="Extra", quantity=1, position=1)
+    _grant_owner(doc, owner)
+    return doc, pinned, free
+
+
+def _pinned_rows(doc: Document) -> list[tuple[str, int, int, bool]]:
+    with system_context(reason="test read"):
+        return list(doc.pinned_lines.order_by("position", "pk").values_list("label", "quantity", "position", "pinned"))
+
+
+def test_lines_save_edits_unlocked_cells_of_a_locked_row(composed_tables):
+    """A locked row keeps its locked cell but its other cells and its order stay editable."""
+
+    owner = create_user("owner")
+    doc, pinned, free = _pinned_document(owner)
+    data = result_data(execute_schema(
+        _PINNED_SCHEMA,
+        _SAVE_PINNED,
+        {
+            "pk": doc.public_id,
+            "lines": [
+                {"id": free.public_id, "label": "Extra", "quantity": 1, "position": 0},
+                {"id": pinned.public_id, "label": "Base", "quantity": 5, "position": 1},
+            ],
+        },
+        user=owner,
+    ))
+    assert [row["locked_fields"] for row in data["pinned_documents_save"]["pinned_lines"]] == [[], ["label"]]
+    assert _pinned_rows(doc) == [("Extra", 1, 0, False), ("Base", 5, 1, True)]
+
+
+@pytest.mark.parametrize(
+    ("lines", "message"),
+    [
+        # Changing a locked cell of a system row.
+        (lambda pinned, free: [
+            {"id": pinned.public_id, "label": "Renamed", "quantity": 1, "position": 0},
+            {"id": free.public_id, "label": "Extra", "quantity": 1, "position": 1},
+        ], "cannot change"),
+        # Removing a system row by omission.
+        (lambda pinned, free: [
+            {"id": free.public_id, "label": "Extra", "quantity": 1, "position": 0},
+        ], "cannot be deleted"),
+    ],
+    ids=["change-locked-cell", "remove-locked-row"],
+)
+def test_lines_save_refuses_to_bypass_a_row_lock(composed_tables, lines, message):
+    """The parent-authorized elevation never lets a line alter or remove a system row."""
+
+    owner = create_user("owner")
+    doc, pinned, free = _pinned_document(owner)
+    before = _pinned_rows(doc)
+    variables = {"pk": doc.public_id, "lines": lines(pinned, free)}
+    result = execute_schema(_PINNED_SCHEMA, _SAVE_PINNED, variables, user=owner)
+    assert result.errors is not None
+    assert message in result.errors[0].message
+    assert _pinned_rows(doc) == before
+
+
+def test_lines_cannot_create_a_system_row(composed_tables):
+    """A new line is a user write, so it can never become a system row."""
+
+    owner = create_user("owner")
+    with system_context(reason="seed"):
+        doc = Document.objects.create(title="Document")
+    _grant_owner(doc, owner)
+    candidate = PinnedLine(document=doc, label="Forged", pinned=True)
+    with pytest.raises(ValidationError, match="system-provisioned"):
+        candidate.validate_row_lock(None)
+    # ``pinned`` is not a writable line column, so the wire cannot even ask for it.
+    result = execute_schema(
+        _PINNED_SCHEMA,
+        _SAVE_PINNED,
+        {"pk": doc.public_id, "lines": [{"label": "Forged", "quantity": 1, "position": 0, "pinned": True}]},
+        user=owner,
+    )
+    assert result.errors is not None
+    assert _pinned_rows(doc) == []
+
+
+def test_system_writers_keep_owning_locked_rows(composed_tables):
+    """Outside lines the model guard still distinguishes users from system writers."""
+
+    owner = create_user("owner")
+    doc, pinned, _free = _pinned_document(owner)
+    with actor_context(owner):
+        row = PinnedLine._base_manager.get(pk=pinned.pk)
+        row.label = "Renamed"
+        with pytest.raises(ValidationError, match="cannot change"):
+            row.save()
+        with pytest.raises(ValidationError, match="cannot be deleted"):
+            PinnedLine._base_manager.get(pk=pinned.pk).delete()
+    with system_context(reason="provision"):
+        row = PinnedLine._base_manager.get(pk=pinned.pk)
+        row.label = "Reprovisioned"
+        row.save()
+    assert _pinned_rows(doc)[0][0] == "Reprovisioned"
+
+
+def test_row_locked_lines_advertise_their_lock_field():
+    """The lines contract names the node's lock projection for the composer."""
+
+    (resource,) = [m for m in _PINNED_SCHEMA.angee_resources if m.model_label == "linesdemo.Document"]
+    assert resource.lines is not None
+    assert resource.lines.lock_field == "locked_fields"
+    assert "locked_fields" not in {field.name for field in resource.lines.fields}
+    (plain,) = [m for m in _SCHEMA.angee_resources if m.model_label == "linesdemo.Document"]
+    assert plain.lines is not None and plain.lines.lock_field is None
+
+
+def test_row_locked_lines_require_the_node_lock_projection():
+    """A row-locked child whose node omits ``locked_fields`` fails at schema build."""
+
+    @strawberry_django.type(PinnedLine, name="UnlockedPinnedLineType")
+    class UnlockedPinnedLineType(AngeeNode):
+        label: auto
+        quantity: auto
+        position: auto
+
+    resource = hasura_model_resource(
+        PinnedDocumentType,
+        model=Document,
+        name="unlocked_documents",
+        filterable=["id", "title"],
+        sortable=["title"],
+        aggregatable=["id"],
+        writable=["title"],
+        lines=HasuraLines(
+            field="pinned_lines",
+            model=PinnedLine,
+            node=UnlockedPinnedLineType,
+            writable=("label", "quantity", "position"),
+        ),
+        id_column="sqid",
+    )
+    with pytest.raises(ImproperlyConfigured, match="locked_fields"):
+        GraphQLSchemas([
+            SchemaAddon({"public": {
+                "query": [resource.query],
+                "mutation": [resource.mutation],
+                "types": [PinnedDocumentType, UnlockedPinnedLineType, *resource.types],
+            }})
+        ]).build("public")
