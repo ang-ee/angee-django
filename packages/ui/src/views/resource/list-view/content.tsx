@@ -1,8 +1,9 @@
 import * as React from "react";
 import { MAX_PAGE_SIZE, useAngeeAggregate } from "@angee/refine";
-import { ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { ResourceQuery, modelLabelSegment, useModelMetadata } from "@angee/metadata";
 import type { ModelFieldMetadata, Row } from "@angee/metadata";
 import { useUiT } from "../../../i18n";
+import { titleCase } from "../../../lib/titleCase";
 import { LoadingPanel } from "../../../fragments/LoadingPanel";
 import { BoardView } from "../BoardView";
 import { GroupedBoardBody } from "../board/grouped";
@@ -13,7 +14,7 @@ import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../re
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, ListEmpty, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
-import type { BoardCardSpec, CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
+import { listChromeState, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody } from "../board/cards";
 import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 import { createLabelForResource } from "../resource-view-utils";
@@ -82,7 +83,7 @@ export function ListViewContent<TRow extends Row = Row>({
   toolbarWrap,
   tableLayout = "auto",
   headerVisibility = "visible",
-  selectable = true,
+  selectable: declaredSelectable,
   renderGroupLabel,
   renderItem,
   surface,
@@ -181,6 +182,14 @@ export function ListViewContent<TRow extends Row = Row>({
     <DeclaredBoardCardBody columns={declaredCardColumns} modelMetadata={modelMetadata} row={row} />,
   [declaredCardColumns, modelMetadata]);
   const resolvedRenderCard = renderCard ?? (boardCard ? boardCardBody : undefined);
+  const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
+    groupingEnabled: !renderItem && !boardGroupingPinned, maxGroupDepth });
+  const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: search.queryDirty });
+  const selectable = declaredSelectable ?? !resolvedChrome.compact;
+  const heading = chrome?.heading ?? (resolvedChrome.compact
+    ? { label: modelMetadata?.pluralLabel ?? modelMetadata?.label ?? titleCase(modelLabelSegment(resource)) }
+    : undefined);
+  const visibleFields = resolvedChrome.columnChooser ? surface.visibleFields : [];
   const contributedUtilities = (
     <ResourceViewUtilities
       modelBacked={!source}
@@ -194,10 +203,8 @@ export function ListViewContent<TRow extends Row = Row>({
       }}
     />
   );
-  const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
-    groupingEnabled: !renderItem && !boardGroupingPinned, maxGroupDepth });
   const toolbar: ResourceToolbarProps = {
-    search, chrome, wrap: toolbarWrap, actions: toolbarActions,
+    search, chrome: resolvedChrome, wrap: toolbarWrap, actions: toolbarActions,
     utilityActions: contributedUtilities, availableViews, pager: surface.list,
     view: resourceView.state.view, searchDeclaration, modelMetadata,
     createLabel: createLabel ?? createLabelForResource(resource, t, modelMetadata?.label),
@@ -211,9 +218,10 @@ export function ListViewContent<TRow extends Row = Row>({
 
   return (
     <ResourceListFrame
-      heading={chrome?.heading}
+      heading={heading}
       className={className}
       presentation={presentation}
+      compact={resolvedChrome.compact}
       toolbar={toolbar}
       selection={selectable ? {
         count: surface.selectedIds.size,
@@ -290,7 +298,7 @@ export function ListViewContent<TRow extends Row = Row>({
           table={surface.table}
           tableColumns={surface.tableColumns}
           visibleColumnCount={surface.visibleColumnCount}
-          visibleFields={chrome?.columnChooser === false ? [] : surface.visibleFields}
+          visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
           measures={surface.measures}
@@ -359,7 +367,7 @@ export function ListViewContent<TRow extends Row = Row>({
           allPageSelected={surface.allPageSelected}
           somePageSelected={surface.somePageSelected}
           onPageSelectionChange={surface.setPageSelection}
-          visibleFields={chrome?.columnChooser === false ? [] : surface.visibleFields}
+          visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
           groupStack={effectiveGroupStack}
@@ -389,7 +397,7 @@ export function ListViewContent<TRow extends Row = Row>({
           allPageSelected={surface.allPageSelected}
           somePageSelected={surface.somePageSelected}
           onPageSelectionChange={surface.setPageSelection}
-          visibleFields={chrome?.columnChooser === false ? [] : surface.visibleFields}
+          visibleFields={visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           resourceView={resourceView}
           groupStack={effectiveGroupStack}

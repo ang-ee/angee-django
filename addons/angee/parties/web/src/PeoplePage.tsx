@@ -10,6 +10,7 @@ import {
 } from "./documents";
 import { IdentityTab } from "./IdentityTab";
 import { PartyAddresses } from "./PartyAddresses";
+import { PersonRelationshipsTab } from "./PersonRelationships";
 import { usePartiesT } from "./i18n";
 import { usePartyContactActions } from "./party-contact-actions";
 
@@ -17,10 +18,12 @@ import { personFields } from "./PersonForm";
 
 const MODEL = "parties.Person";
 
-type RelatedRow = StringIdRow;
+type HandleRow = StringIdRow;
 
-function handleColumns(t: ReturnType<typeof usePartiesT>): readonly ListColumn<RelatedRow>[] {
-  return [
+/** The person's handles: an embedded list filtered to this party. */
+function PersonHandlesTab({ recordId }: Pick<RecordPanelContext, "recordId">): React.ReactElement {
+  const t = usePartiesT();
+  const columns = React.useMemo<readonly ListColumn<HandleRow>[]>(() => [
     { field: "platform" },
     { field: "value", render: (row) => <span className="font-medium text-fg">{String(row.value ?? "")}</span> },
     { field: "label" },
@@ -29,97 +32,16 @@ function handleColumns(t: ReturnType<typeof usePartiesT>): readonly ListColumn<R
       header: t("person.handlePreferred"),
       render: (row) => (row.is_preferred ? t("common.yes") : ""),
     },
-  ];
-}
-
-/**
- * One related collection on the Person detail — the person's handles or addresses — a local-scoped ListView filtered to this party, the same
- * shared list primitive the routed pages use (toolbar/empty/error affordances).
- */
-function PartyRelatedTab({
-  recordId,
-  resource,
-  fields,
-  columns,
-  emptyContent,
-}: RecordPanelContext & {
-  resource: string;
-  fields: readonly string[];
-  columns: readonly ListColumn<RelatedRow>[];
-  emptyContent: string;
-}): React.ReactElement {
+  ], [t]);
   return (
-    <ListView<RelatedRow>
-      resource={resource}
-      scope="local"
-      fields={fields}
+    <ListView<HandleRow>
+      resource="parties.Handle"
+      presentation="embedded"
+      fields={["id", "platform", "value", "label", "is_preferred"]}
       baseFilter={{ party: { exact: recordId } }}
       columns={columns}
-      emptyContent={emptyContent}
+      emptyContent={t("person.empty.handles")}
     />
-  );
-}
-
-/**
- * Both readings of the person's typed edges in one tab: rows anchored on this
- * card (the counterparty is their *kind* — "Mother: Jane", including free-text
- * relatives who are not directory entries) and rows anchored on other cards
- * that name this person (rendered through the kind's inverse label, falling
- * back to the forward name for symmetric kinds).
- */
-function RelationshipsTab({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = usePartiesT();
-  const anchoredColumns = React.useMemo<readonly ListColumn<RelatedRow>[]>(
-    () => [
-      { field: "kind.name", header: t("relationship.kind") },
-      {
-        field: "other_party.display_name",
-        header: t("relationship.person"),
-        render: (row) => {
-          const typed = row as { other_party?: { display_name?: string } | null; other_name?: string };
-          return <>{typed.other_party?.display_name || typed.other_name || ""}</>;
-        },
-      },
-      { field: "started_at" },
-      { field: "ended_at" },
-    ],
-    [t],
-  );
-  const inboundColumns = React.useMemo<readonly ListColumn<RelatedRow>[]>(
-    () => [
-      {
-        field: "kind.name",
-        header: t("relationship.kind"),
-        render: (row) => {
-          const kind = (row as { kind?: { name?: string; inverse_name?: string } }).kind;
-          return <>{kind?.inverse_name || kind?.name || ""}</>;
-        },
-      },
-      { field: "party.display_name", header: t("relationship.person") },
-      { field: "started_at" },
-      { field: "ended_at" },
-    ],
-    [t],
-  );
-  return (
-    <div className="flex flex-col gap-4">
-      <ListView<RelatedRow>
-        resource="parties.Relationship"
-        scope="local"
-        fields={["id", "kind.name", "other_party.display_name", "other_name", "started_at", "ended_at"]}
-        baseFilter={{ party: { exact: recordId } }}
-        columns={anchoredColumns}
-        emptyContent={t("person.empty.relationships")}
-      />
-      <ListView<RelatedRow>
-        resource="parties.Relationship"
-        scope="local"
-        fields={["id", "kind.name", "kind.inverse_name", "party.display_name", "started_at", "ended_at"]}
-        baseFilter={{ other_party: { exact: recordId } }}
-        columns={inboundColumns}
-        emptyContent={t("person.empty.inboundRelationships")}
-      />
-    </div>
   );
 }
 
@@ -130,15 +52,7 @@ function personRecordTabs(
     {
       id: "handles",
       label: t("person.tabs.handles"),
-      render: (context) => (
-        <PartyRelatedTab
-          {...context}
-          resource="parties.Handle"
-          fields={["id", "platform", "value", "label", "is_preferred"]}
-          columns={handleColumns(t)}
-          emptyContent={t("person.empty.handles")}
-        />
-      ),
+      render: (context) => <PersonHandlesTab {...context} />,
     },
     {
       id: "identity",
@@ -153,7 +67,7 @@ function personRecordTabs(
     {
       id: "relationships",
       label: t("person.tabs.relationships"),
-      render: (context) => <RelationshipsTab {...context} />,
+      render: (context) => <PersonRelationshipsTab {...context} />,
     },
     {
       id: "addresses",

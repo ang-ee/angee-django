@@ -96,13 +96,7 @@ export const enProposalsMessages: Record<string, string> = {
   "proposal.tabs.answers": "Answers",
   "proposal.tabs.reviews": "Reviews",
   "proposal.answers.empty": "No topic answers yet.",
-  "proposal.reviews.mine.title": "Your review",
-  "proposal.reviews.mine.description":
-    "Create or update your own evaluator assessment.",
-  "proposal.reviews.mine.signedOut": "Sign in to edit your review.",
-  "proposal.reviews.readable.title": "Readable reviews",
-  "proposal.reviews.readable.description":
-    "Reviews returned by the server for this proposal.",
+  "proposal.reviews.mine": "Mine",
   "proposal.reviews.empty": "No readable reviews yet.",
   "proposal.action.submit": "Submit",
   "proposal.action.withdraw": "Withdraw",

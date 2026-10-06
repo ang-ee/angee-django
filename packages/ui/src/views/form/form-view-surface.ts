@@ -86,8 +86,16 @@ export interface RecordFieldFocusOptions {
 }
 
 export interface OverviewTabOptions {
-  /** On forms without body tabs, hide Overview and default to the first record tab. */
+  /** On forms without body tabs, hide Overview while the record shows a tab of its own. */
   hidden?: boolean;
+}
+
+/** One visible tab: a body tab, Overview, or a saved-record tab. */
+export interface FormViewTab {
+  id: string;
+  label: TabLabel;
+  icon?: React.ReactNode;
+  badge?: React.ReactNode;
 }
 
 export interface RecordPanelContext {
@@ -159,8 +167,8 @@ export interface UseFormViewSurfaceProps {
   /**
    * Initial tab, or a rule choosing it from the record. A rule runs once per record, when the
    * record and its tab fields have loaded; a later change to the record does not move the tab.
-   * The routed tab and the viewer's own choice win over either. Unavailable ids fall back to
-   * the first body tab, or Overview.
+   * The routed tab and the viewer's own choice win over either. An id that is not visible falls
+   * back to the first visible tab.
    */
   defaultRecordTab?: string | ((record: Row) => string | undefined);
   /** Labelled, non-collapsible groups join the form's single tab strip. */
@@ -172,8 +180,8 @@ export interface UseFormViewSurfaceProps {
     render: (context: RecordToolbarContext) => React.ReactNode;
   }[];
   linesTabLabel?: React.ReactNode;
-  /** Without an Overview tab an unavailable tab id falls back to the first record tab. */
-  overviewHidden?: boolean;
+  /** Overview visibility on forms without body tabs. */
+  overviewTab?: OverviewTabOptions;
   deleteAction?: RecordDeleteAction;
   deleteVisibleWhen?: (record: Row) => boolean;
 }
@@ -198,6 +206,7 @@ export interface FormViewSurface
   statusField: FieldDescriptor | undefined;
   bodyField: FieldDescriptor | undefined;
   sections: readonly FormSectionModel[];
+  /** The tabs layout's body sections: tabs beside a strip, stacked under their headings without one. */
   bodyTabSections: readonly FormSectionModel[];
   railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
@@ -207,7 +216,12 @@ export interface FormViewSurface
   recordPanelContext: RecordPanelContext | null;
   recordToolbarContext: RecordToolbarContext;
   recordTabList: readonly RecordTabDescriptor[];
+  /** The visible tabs in strip order; the active tab is always one of them. */
+  tabs: readonly FormViewTab[];
+  /** Whether the tab strip shows: only with two or more visible tabs. */
   tabbed: boolean;
+  /** A default-tab rule has not chosen for this record yet: no record panel mounts until it does. */
+  recordTabPending: boolean;
   visibleDeleteAction: RecordDeleteAction | undefined;
 }
 
@@ -239,7 +253,7 @@ export function useFormViewSurface({
   layout = "stacked",
   bodyTabs,
   linesTabLabel,
-  overviewHidden = false,
+  overviewTab,
   deleteAction,
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
@@ -756,10 +770,18 @@ export function useFormViewSurface({
     }),
     bodyTabSections,
   );
-  const fallbackRecordTab = bodyTabSections[0]?.key ?? (overviewHidden && recordTabList[0] ? recordTabList[0].id : FORM_VIEW_OVERVIEW_TAB_ID);
-  const activeRecordTab = bodyTabSections.some((section) => section.key === requestedRecordTab) || recordTabList.some((tab) => tab.id === requestedRecordTab)
-    ? requestedRecordTab
-    : fallbackRecordTab;
+  // Overview is the field tab of a form without body tabs; hidden, it yields to the record's own tabs.
+  const overviewShown = bodyTabSections.length === 0 && !(overviewTab?.hidden && recordTabList.length > 0);
+  const tabs: readonly FormViewTab[] = [
+    ...bodyTabSections.map(({ key, label, icon, badge }) => ({ id: key, label, icon, badge })),
+    ...(overviewShown ? [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: t("form.tabOverview") }] : []),
+    ...recordTabList,
+  ];
+  // A routed, chosen or default tab that is not visible (dropped by `visibleWhen`, a permission,
+  // a create form or a hidden Overview) falls back to the first visible one. Never empty: without
+  // body or record tabs, Overview shows.
+  const fallbackRecordTab = tabs[0]!.id;
+  const activeRecordTab = tabs.some((tab) => tab.id === requestedRecordTab) ? requestedRecordTab : fallbackRecordTab;
   const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
   const focusSectionsRef = useLatestRef({ sections: bodyTabSections, fallback: fallbackRecordTab });
   const [focusRequest, setFocusRequest] = React.useState(0);
@@ -818,7 +840,12 @@ export function useFormViewSurface({
     recordPanelContext,
     recordToolbarContext,
     recordTabList,
-    tabbed: bodyTabSections.length > 0 || (recordPanelContext != null && recordTabList.length > 0),
+    tabs,
+    // A strip of one tab only repeats its label: that tab renders as the body under its heading.
+    tabbed: tabs.length > 1,
+    // Until a rule chooses, the fallback is a placeholder: mounting its panel would flash it.
+    recordTabPending: recordTab === undefined && localRecordTab === null && !isCreate
+      && typeof defaultRecordTab === "function" && ruledRecordTab?.key !== ruledRecordKey,
     visibleDeleteAction,
   };
 }

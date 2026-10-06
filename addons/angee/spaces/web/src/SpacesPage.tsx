@@ -218,7 +218,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
     <>
       <ListView<MembershipRow>
         resource="spaces.Membership"
-        scope="local"
+        presentation="embedded"
         fields={[
           "id", "party.display_name", "role", "is_confirmed", "source", "created_at",
           "permissions", "notification_policy", "subtype_keys",

@@ -305,7 +305,11 @@ shared UI copy through an addon bundle.
   callback that reads the latest execution context from a ref (`useLatestRef`).
   Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
   navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Page tests use
+  projection, route transitions, DnD policy, and domain actions. Context another
+  addon owns beside a page's list is that addon's pane component, published with
+  `usePrimaryPane` rather than stacked as a second list:
+  [My Work](../../addons/angee/projects/web/src/views/MyWorkPage.tsx) publishes
+  messaging's `ActivityAgendaPane`. Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
 - Chatter publishers compose by owner for their mounted lifetime. Panels mount
@@ -450,17 +454,30 @@ shared UI copy through an addon bundle.
   still fail fast in every environment.
   A scoped create verb uses a server-projected parent record for its permission;
   the create label comes
-  from resource vocabulary. `chrome` may hide the view switcher, pager, or column
-  chooser without changing query state; `chrome.heading` declares label, hint,
-  and audience around the live count. A nonselectable list hides Share but keeps
-  other contributed utilities.
-- **Two-collection settings pages are a sanctioned family, not a double toolbar.**
-  A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
-  `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
-  templates; storage settings: drives + backends). Each section is a *distinct*
-  collection and owns its own data-controls/toolbar row — that is correct
-  uniformity, not the double-toolbar defect. The defect is *two* chrome rows
-  stacked over the *same* collection; one collection gets exactly one controls row.
+  from resource vocabulary. Each declared `chrome` key (`viewSwitcher`, `pager`,
+  `columnChooser`, `search`) overrides the presentation's default without
+  changing query state; `chrome.heading` declares label, hint, and audience
+  around the live count. A nonselectable list hides Share but keeps other
+  contributed utilities.
+- **An embedded list is compact by default.** `presentation="embedded"` on
+  `ListView`/`List`/`ResourceList`/`DrawerResourceList` replaces the control band
+  with one heading row: the resource vocabulary's label (or `chrome.heading`) ·
+  the live count, then `toolbarActions` and Create. The view switcher, column
+  chooser and row selection stay hidden; search and pager return inline once the
+  collection outgrows its page, leaves page one or carries a query beyond its
+  default. `chrome.heading: false` hands the heading to a host that already
+  shows the label and count, such as a dashboard widget; any other declared
+  `chrome` key or `selectable` overrides the compact default. See
+  [`listChromeState`](../../packages/ui/src/views/resource/resource-view-types.ts).
+- **One collection is one list.** Never split a collection across two lists —
+  not by foreign-key direction, by a subset such as the viewer's own rows, or by
+  a category. Declare one list and express the split as a column, a search
+  shortcut or a row lock (Person relationships carry a direction column;
+  proposal reviews a "Mine" shortcut). Parts saved with their parent are
+  `lines=` rows in `EditableLines`, not a list. Distinct collections may stack:
+  related collections inside a record as compact embedded lists, page-level
+  configuration collections as `SettingsSection`s that each keep their own
+  controls row (storage settings: drives + backends).
 - **The data view's client/server boundary is a row-model choice, not a fork.**
   Where list operations (filter/sort/paginate/group) resolve follows the
   established data-grid pattern — AG Grid's named *row models*, TanStack's
@@ -579,6 +596,14 @@ shared UI copy through an addon bundle.
   tabs share one strip in that order; header fields and stacked groups stay visible.
   Overview appears only on forms without body tabs. `defaultRecordTab` and controlled
   `recordTab` address either kind; field reveal selects its owning body tab.
+- **A strip needs two tabs.** [The form surface](../../packages/ui/src/views/form/form-view-surface.ts)
+  counts the tabs that will show — body tabs, Overview unless `overviewTab.hidden`,
+  and the record tabs left after `visibleWhen`, permissions and the record's
+  implementation — and shows a strip only for two or more. One visible tab renders
+  no strip: its panel is the record body under the header, introduced by a
+  `SectionHeading` with the tab's label, in the column and presentation its strip
+  would have used; a single labelled group in `layout="tabs"` stacks. A routed,
+  chosen or default tab that is not visible falls back to the first visible tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the overview's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget
@@ -600,11 +625,15 @@ shared UI copy through an addon bundle.
   child holding a direct `<Tab>` declaration. Canonical parent sections are
   inherited by concrete child forms; contribute once at the owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
   which evaluates the loaded record; fields omitted by a child projection are
-  read from the canonical resource. Use `useRecordChromeContext()` inside
-  the panel to scope an embedded `ListView` with resource filters. The model's
-  Hasura resource owns filter/order/group/facet capabilities; the list owns
-  controls, paging and `rowActions`, including confirmations for generated action
-  callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  read from the canonical resource. Inside the panel, use
+  `useRecordChromeContext()` and scope a related collection with a base filter
+  on a `presentation="embedded"` list, which brings compact chrome and local
+  state. The model's Hasura resource owns filter/order/group/facet capabilities;
+  the list owns its heading row, paging and `rowActions`, including
+  confirmations for generated action callbacks. See
+  [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  A large browsable set inside a record (child runs, trigger events, a project's
+  tasks) keeps the full list: the default presentation with `scope="local"`.
   A product narrows a form's sections and verbs per app or route with `only`
   under `when` on `form#sections`, `form#actions` and `form#actions-menu`; a
   container nobody narrows keeps all its children and `only: []` keeps none.
@@ -1331,13 +1360,26 @@ Hard-won traps — the wise learn from others' mistakes
   it. `useChromePlace()` shares one memoized
   `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
   Chrome currently selects the nearest visible app on that match's
-  trail. Match path length and search params first, then whether the item sits at
-  or under the route's menu anchor (inherited by record children), then depth
-  and pre-order: an anchor on an app root keeps the page on its own item there. The route projection
+  trail, and every place reader (rail, top bar, Settings-only notices) asks
+  `useChromePlace().railPlace`, never a bare path.
+- **A page renders in the place of the menu node it declares.** A route's
+  `route.menu` anchor (inherited by record children) wins over another item's
+  path prefix, even when the anchor's own target lies elsewhere. Only the
+  page's own destinations beat its anchor: an item targeting its exact path, as
+  a more specific preset or parameterized target. Then rank by path length,
+  search params, sitting at or under the anchor, depth and pre-order; an anchor
+  on an app root keeps the page on its own item there. The route projection
   publishes the winning `activeMenuId`; the Refine router binding uses that same
-  destination for native breadcrumbs. A more specific preset or parameterized
-  target wins over an anchor. Breadcrumbs occupy the
-  sheet strip below the top bar; pane toggles stay in the top bar.
+  destination for native breadcrumbs. Breadcrumbs occupy the sheet strip below
+  the top bar; pane toggles stay in the top bar. A route whose anchor and path
+  fall in different places (an app and Settings, as when composition lifts the
+  page its path nests under into Settings) fails composition
+  ([`AppRouteProjection`](../../packages/app/src/resource-projection.ts)),
+  naming the route, its anchor and the item its path nests under: give the
+  route a path under its anchor's. Operational pages keep their app's chrome;
+  configuration stays in Settings, reached from the gear or an explicit link on
+  the operational page that composes the resource's record href (the work
+  queues' "Queue settings", which the PM suite calls "Team settings").
 - **An addon composes other addons under its own app by absorbing or
   borrowing.** Absorb with `include`: the included app moves under the
   composing node and leaves its place on the rail (the PM suite). Borrow with

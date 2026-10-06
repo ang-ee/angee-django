@@ -913,6 +913,49 @@ describe("ResourceList", () => {
     expect(screen.queryByRole("button", { name: "Visible fields" })).toBeNull();
   });
 
+  test("an embedded ListView is compact while one page holds its collection", async () => {
+    const onCreate = vi.fn();
+    render(<TestUrlState><ListView resource="notes.Note" columns={columns} presentation="embedded"
+      onCreate={onCreate} toolbarActions={<button type="button">Import</button>} /></TestUrlState>);
+    expect(await screen.findByText("First")).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "Note" });
+    const row = heading.parentElement!.parentElement!;
+    expect(row.textContent).toContain("· 4");
+    expect(within(row).getByRole("button", { name: "Import" })).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "New note" }));
+    expect(onCreate).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("region", { name: "Data controls" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Search options" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Visible fields" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Select row" })).toBeNull();
+  });
+
+  test("an embedded ListView shows search and pager once the collection outgrows its page", async () => {
+    render(<TestUrlState><ListView resource="notes.Note" columns={columns} presentation="embedded"
+      pageSize={2} /></TestUrlState>);
+    expect(await screen.findByText("First")).toBeTruthy();
+    const controls = screen.getByRole("region", { name: "Data controls" });
+    expect(within(controls).getByRole("button", { name: "Search options" })).toBeTruthy();
+    expect(within(controls).getByRole("button", { name: "Next page" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Visible fields" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "Select row" })).toBeNull();
+  });
+
+  test("declared chrome and selection override the embedded defaults", async () => {
+    render(<TestUrlState><ListView resource="notes.Note" columns={columns} presentation="embedded" selectable
+      chrome={{ heading: { label: "Linked notes" }, viewSwitcher: true, columnChooser: true, search: true }} /></TestUrlState>);
+    expect(await screen.findByText("First")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Linked notes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Search options" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Board view" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Visible fields" })).toBeTruthy();
+    expect(screen.getAllByRole("checkbox", { name: "Select row" }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+  });
+
   test("parses List child columns and forwards props into the list renderer", async () => {
     const captured: { current: ListViewProps<Row> | null } = { current: null };
     const CapturingList: ListComponent<Row> = (props) => {

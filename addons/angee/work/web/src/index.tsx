@@ -37,74 +37,56 @@ const workRoutes: readonly BaseAddonRoute[] = [
     lazyRouteComponent(() => import("./views/QueuesPage"), "QueuesPage"),
     QUEUE_MODEL,
   ),
-  {
-    name: "work.triage-hub",
-    path: "/work/triage",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "TriageHubPage",
-    ),
-  },
-  {
-    name: "work.boards-hub",
-    path: "/work/boards",
-    layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "BoardsHubPage",
-    ),
-  },
+  // Each hub lists the queues it serves, and a queue's operational page is the
+  // hub's record page: it replaces the list, inherits the hub's anchor and so
+  // renders in Work, while the queue record (its settings) may sit in Settings.
+  ...resourcePageRoutes(
+    "work.triage-hub",
+    "/work/triage",
+    lazyRouteComponent(() => import("./views/QueueHubPages"), "TriageHubPage"),
+    undefined,
+    {
+      menu: "work.triage-hub",
+      detailName: "work.triage",
+      param: "queueId",
+      detailComponent: lazyRouteComponent(() => import("./views/TriageInboxPage"), "TriageInboxPage"),
+    },
+  ),
+  ...resourcePageRoutes(
+    "work.boards-hub",
+    "/work/boards",
+    lazyRouteComponent(() => import("./views/QueueHubPages"), "BoardsHubPage"),
+    undefined,
+    {
+      menu: "work.boards-hub",
+      detailName: "work.board",
+      param: "queueId",
+      detailComponent: lazyRouteComponent(() => import("./views/QueueBoardPage"), "QueueBoardPage"),
+    },
+  ),
   {
     name: "work.cycles-hub",
     path: "/work/cycles",
     layout: "console",
-    component: lazyRouteComponent(
-      () => import("./views/QueueHubPages"),
-      "CyclesHubPage",
-    ),
-  },
-  {
-    name: "work.board",
-    path: "/work/queues/$queueId/board",
-    layout: "console",
-    menu: "work.boards-hub",
-    component: lazyRouteComponent(
-      () => import("./views/QueueBoardPage"),
-      "QueueBoardPage",
-    ),
-  },
-  {
-    name: "work.triage",
-    path: "/work/queues/$queueId/triage",
-    layout: "console",
-    menu: "work.triage-hub",
-    component: lazyRouteComponent(
-      () => import("./views/TriageInboxPage"),
-      "TriageInboxPage",
-    ),
-  },
-  {
-    name: "work.cycles",
-    path: "/work/queues/$queueId/cycles",
-    layout: "console",
     menu: "work.cycles-hub",
+    indexComponent: lazyRouteComponent(() => import("./views/QueueHubPages"), "CyclesHubPage"),
+  },
+  {
+    // A queue's cycles are themselves a list whose cycle board replaces it.
     // Projection page (PipelinePage rule): a parameterized route must not
     // claim a resource — the collection href could never resolve at boot.
-    component: lazyRouteComponent(
-      () => import("./views/CyclesPage"),
-      "CyclesPage",
-    ),
+    name: "work.cycles",
+    path: "/work/cycles/$queueId",
+    layout: "console",
+    parent: "work.cycles-hub",
+    indexComponent: lazyRouteComponent(() => import("./views/CyclesPage"), "CyclesPage"),
   },
   {
     name: "work.cycle-board",
-    path: "/work/queues/$queueId/cycles/$id",
+    path: "/work/cycles/$queueId/$id",
+    layout: "console",
     parent: "work.cycles",
-    menu: "work.cycles-hub",
-    component: lazyRouteComponent(
-      () => import("./views/CycleBoardPage"),
-      "CycleBoardPage",
-    ),
+    component: lazyRouteComponent(() => import("./views/CycleBoardPage"), "CycleBoardPage"),
   },
 ];
 

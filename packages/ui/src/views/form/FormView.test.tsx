@@ -463,8 +463,10 @@ describe("FormView", () => {
       <Field name="title" title />
       <Group label="Details" collapsible defaultOpen={false}><Field name="wordCount" /></Group>
       <Group label="Schedule"><Field name="reminderAt" /></Group>
+      <Group label="Place"><Field name="location" /></Group>
     </Form>);
     expect(await screen.findByRole("tab", { name: "Schedule" })).toBeTruthy();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Schedule", "Place"]);
     expect(screen.queryByRole("tab", { name: "Details" })).toBeNull();
     const details = screen.getByRole("button", { name: "Details" });
     expect(details.getAttribute("aria-expanded")).toBe("false");
@@ -544,12 +546,14 @@ describe("FormView", () => {
       { id: "notes", label: "Notes", render: () => <NotesPane /> },
       { id: "activity", label: "Activity", render: () => <p>Activity pane</p> },
     ];
-    renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewTab={{ hidden: true }}
       defaultRecordTab={rule} recordTabs={tabs}>
       <Field name="title" title />
     </FormView>);
     expect(await screen.findByText("Activity pane")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
+    // Two visible tabs keep the strip, without the hidden Overview.
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Notes", "Activity"]);
     // The fallback (first) tab never rendered before the rule's choice.
     expect(fallbackRenders).toBe(0);
     fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
@@ -557,7 +561,7 @@ describe("FormView", () => {
     expect(rule).toHaveBeenCalledTimes(1);
     cleanup();
 
-    renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewHidden
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" overviewTab={{ hidden: true }}
       defaultRecordTab={rule} recordTab="notes" recordTabs={tabs}>
       <Field name="title" title />
     </FormView>);
@@ -567,24 +571,106 @@ describe("FormView", () => {
 
   test("create forms expose only body tabs and invalid defaults select their first tab", async () => {
     renderWithProviders(<FormView resource="notes.Note" layout="tabs" defaultRecordTab="missing"
-      bodyTabs={[{ id: "summary", label: "Summary", render: () => <p>Body summary</p> }]}
+      bodyTabs={[
+        { id: "summary", label: "Summary", render: () => <p>Body summary</p> },
+        { id: "outline", label: "Outline", render: () => <p>Body outline</p> },
+      ]}
       recordTabs={[{ id: "pane", label: "Pane", render: () => <p>Saved panel</p> }]}>
       <Field name="title" title />
     </FormView>, undefined, undefined, formChildren({ "notes.Note#sections": {
       "notes.pane": { content: <Tab id="contributed" label="Contributed"><p>Saved contribution</p></Tab> },
     } }));
     expect(await screen.findByText("Body summary")).toBeTruthy();
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Outline"]);
     expect(screen.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe("true");
   });
 
-  test("forms without body tabs retain the file preview's hidden Overview option", async () => {
+  test("a hidden Overview and one record tab render that panel as the body under its heading, without a strip", async () => {
+    const activeStates = vi.fn();
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} overviewTab={{ hidden: true }}
-      recordTabs={[{ id: "preview", label: "Preview", render: () => <p>Record preview</p> }]} />);
-    expect(await screen.findByText("Record preview")).toBeTruthy();
-    expect(screen.getAllByRole("tablist")).toHaveLength(1);
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Preview"]);
-    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+      recordTabs={[{ id: "preview", label: "Preview", badge: 2, keepMounted: true, render: ({ active }) => {
+        activeStates(active);
+        return <input aria-label="Preview draft" defaultValue="Original" />;
+      } }]} />);
+    const draft = await screen.findByRole("textbox", { name: "Preview draft" });
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Preview" }).parentElement?.textContent).toBe("Preview2");
+    expect(activeStates).toHaveBeenLastCalledWith(true);
+    // The hidden Overview stays out; the panel follows the form inside the record's one sheet.
+    expect(screen.queryByLabelText("Reminder")).toBeNull();
+    expect(draft.closest("form")).toBeNull();
+    expect(draft.closest(".bg-sheet")?.className).toContain("min-h-full");
+    expect(document.querySelector("form")?.className ?? "").not.toContain("min-h-full");
+    // A retained draft survives the record re-rendering around it.
+    fireEvent.change(draft, { target: { value: "Unsaved draft" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Renamed" } });
+    expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Preview draft" })).toBe(draft);
+    expect(draft).toHaveProperty("value", "Unsaved draft");
+  });
+
+  test.each(["workspace", "full-bleed"] as const)("a lone %s record tab keeps its fill presentation under its heading", async (kind) => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} overviewTab={{ hidden: true }}
+      recordPresentation={kind === "workspace" ? "workspace" : "document"}
+      recordTabs={[{ id: "editor", label: "Editor", keepMounted: true,
+        ...(kind === "full-bleed" ? { presentation: "full-bleed" as const } : {}),
+        render: () => <div data-testid="lone-canvas" className="h-full">Canvas</div> }]} />);
+    const canvas = await screen.findByTestId("lone-canvas");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Editor" })).toBeTruthy();
+    const panel = canvas.closest(".flex-1")!;
+    expect(panel.className).toContain(kind === "full-bleed" ? "overflow-hidden" : "overflow-auto");
+    expect(panel.innerHTML).not.toContain("max-w-[1100px]");
+    expect(panel.parentElement?.className).toContain("h-full");
+    expect(canvas.closest("form")).toBeNull();
+  });
+
+  test.each([false, true])("a routed tab hidden by visibleWhen falls back to the one visible tab (second visible: %s)", async (secondVisible) => {
+    sdkMocks.record = { ...sdkMocks.record, wordCount: secondVisible ? 5 : 3 };
+    const onRecordTabChange = vi.fn();
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} overviewTab={{ hidden: true }}
+      recordTab="activity" onRecordTabChange={onRecordTabChange}
+      recordTabs={[
+        { id: "preview", label: "Preview", render: ({ active }) => <p>Preview panel {String(active)}</p> },
+        { id: "activity", label: "Activity", visibleWhen: (record) => record.wordCount !== 3,
+          render: () => <p>Activity panel</p> },
+      ]} />);
+    await screen.findByDisplayValue("First");
+    if (secondVisible) {
+      // Two visible tabs keep the strip and the routed tab.
+      expect(await screen.findByText("Activity panel")).toBeTruthy();
+      expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Preview", "Activity"]);
+      expect(screen.getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.queryByRole("heading", { name: "Preview" })).toBeNull();
+    } else {
+      expect(await screen.findByText("Preview panel true")).toBeTruthy();
+      expect(screen.queryByRole("tablist")).toBeNull();
+      expect(screen.getByRole("heading", { name: "Preview" })).toBeTruthy();
+      expect(screen.queryByText("Activity panel")).toBeNull();
+    }
+    expect(onRecordTabChange).not.toHaveBeenCalled();
+  });
+
+  test("a tabs layout with one labelled group stacks it under its heading", async () => {
+    renderWithProviders(<Form resource="notes.Note" id="note-1" layout="tabs">
+      <Field name="title" label="Title" title />
+      <Group label="Schedule"><Field name="location" label="Location" /></Group>
+    </Form>);
+    expect(await screen.findByLabelText("Location")).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Schedule" })).toBeTruthy();
+  });
+
+  test("a lone body tab renders under its heading without a strip", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" layout="tabs"
+      bodyTabs={[{ id: "summary", label: "Summary", render: () => <p>Body summary</p> }]}>
+      <Field name="title" title />
+    </FormView>);
+    expect(await screen.findByText("Body summary")).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Summary" })).toBeTruthy();
   });
 
   test("rejects record ids colliding with body tab ids", () => {
@@ -3120,9 +3206,8 @@ describe("FormView", () => {
     );
 
     await screen.findByLabelText("Title");
-    // The descriptor factory constructs the panel element as FormView renders;
-    // the returned component itself stays inert until its tab is activated.
-    expect(renderPanel).toHaveBeenCalled();
+    // An inactive tab's factory is not even called; its component mounts when the tab opens.
+    expect(renderPanel).not.toHaveBeenCalled();
     expect(mountPanel).not.toHaveBeenCalled();
     expect(screen.queryByText("Activity panel")).toBeNull();
 
@@ -3618,6 +3703,7 @@ describe("FormView", () => {
           ...defaultModel("NoteType", "notes.Note"),
           fields: {
             title: { name: "title", kind: "scalar", scalar: "String" },
+            summary: { name: "summary", kind: "scalar", scalar: "String" },
             deadline: { name: "deadline", kind: "scalar", scalar: "DateTime" },
           },
           resource: {
@@ -3634,8 +3720,10 @@ describe("FormView", () => {
 
     renderWithProviders(
       <FormView resource="notes.Note" layout="tabs">
+        {/* Two groups with fields of their own make two body tabs (the title moves to the header). */}
         <Group label="Overview">
           <Field name="title" label="Title" />
+          <Field name="summary" label="Summary" />
         </Group>
         <Group label="Schedule">
           <Field name="deadline" label="Deadline" />

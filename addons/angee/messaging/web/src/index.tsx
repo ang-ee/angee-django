@@ -21,10 +21,7 @@ import {
 
 export { CHANNEL_MODEL, LogRecordActivityDocument } from "./documents";
 export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
-export {
-  ActivityAgendaList,
-  type ActivityAgendaListProps,
-} from "./ActivityAgendaList";
+export { ActivityAgendaPane } from "./ActivityAgendaPane";
 export {
   defineChannelBridgeAddon,
   defineChannelPollBridgeAddon,

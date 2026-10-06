@@ -28,7 +28,8 @@ import {
   type BaseMenuItem,
   type ChromeMenuItem,
 } from "@angee/ui/chrome/menu-tree";
-import { useChromeMenuItems } from "@angee/ui/chrome/refine-menu";
+import { ChromePlaceProvider, useChromeMenuItems, useChromePlace } from "@angee/ui/chrome/refine-menu";
+import { testDataResource } from "@angee/metadata/testing";
 import { trailingRouteParamName } from "./route-paths";
 import { compileContainers } from "./containers";
 import { CORE_CONTAINERS } from "./core-containers";
@@ -202,6 +203,15 @@ export interface CapturedChromeProps {
   /** The rendered trail from refine's resource/router breadcrumb owner. */
   trail: readonly CapturedBreadcrumbItem[];
   menus: readonly ChromeMenuItem[];
+  /** The console's shared place: the matched menu item, its scope and active root. */
+  place: CapturedChromePlace;
+}
+
+/** Where the chrome puts the page, as `useChromePlace` answers it. */
+export interface CapturedChromePlace {
+  item: string | null;
+  scope: "apps" | "settings";
+  root: string | null;
 }
 
 /** Serializable chrome assertion shape used by addon chrome pins. */
@@ -224,6 +234,8 @@ export interface CaptureChromeOptions {
   /** The app to select, as `?app=` would: a menu root id or an `ANGEE_UI.shell.apps` name. */
   app?: string;
   schemas?: CreateAppInput["schemas"];
+  /** Model labels the console schema exposes, for addons whose routes or vocabulary name them. */
+  resources?: readonly string[];
 }
 
 /** Mount createApp and capture chrome after React commits the active layout. */
@@ -232,10 +244,9 @@ export async function captureChrome({
   path,
   app,
   schemas = TEST_SCHEMAS,
+  resources,
 }: CaptureChromeOptions): Promise<CapturedChrome> {
   const captures: CapturedChromeProps[] = [];
-  const host = document.createElement("div");
-  document.body.append(host);
   history.replaceState(null, "", path);
 
   function CaptureChrome(): ReactNode {
@@ -244,12 +255,14 @@ export async function captureChrome({
       ...(item.href ? { to: item.href } : {}),
     }));
     const menus = useChromeMenuItems();
+    const { match, railPlace } = useChromePlace();
     useEffect(() => {
       captures.push({
         trail,
         menus,
+        place: { item: match?.item.id ?? null, scope: railPlace.scope, root: railPlace.activeRootId },
       });
-    }, [menus, trail]);
+    }, [match, menus, railPlace, trail]);
     return createElement(
       "div",
       null,
@@ -264,21 +277,36 @@ export async function captureChrome({
     );
   }
 
-  const root = createApp({
+  // The console's one place answer, as `ConsoleLayout` provides it.
+  function CapturePlace(): ReactNode {
+    return createElement(ChromePlaceProvider, { children: createElement(CaptureChrome) });
+  }
+
+  // Composition errors throw here, before anything is mounted.
+  const created = createApp({
     addons,
     layouts: {
-      console: { chrome: CaptureChrome, requireAuth: false },
+      console: { chrome: CapturePlace, requireAuth: false },
       public: {
         chrome: PassthroughChrome,
         requireAuth: false,
         schema: "public",
       },
     },
-    schemas,
+    schemas: resources === undefined ? schemas : {
+      ...schemas,
+      console: {
+        ...(schemas.console ?? TEST_SCHEMAS.console),
+        metadata: { angee: { resources: resources.map((label) => testDataResource(label)) } },
+      },
+    },
     defaultSchema: "console",
     subscriptionSchema: "console",
     location: { search: app === undefined ? "" : `?${new URLSearchParams({ app })}` },
-  }).mount(host);
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = created.mount(host);
 
   try {
     await waitFor(() => {
@@ -295,7 +323,7 @@ export async function captureChrome({
   return {
     root,
     host,
-    props: () => captures.at(-1) ?? { trail: [], menus: [] },
+    props: () => captures.at(-1) ?? { trail: [], menus: [], place: { item: null, scope: "apps", root: null } },
     cleanup: () => {
       root.unmount();
       host.remove();

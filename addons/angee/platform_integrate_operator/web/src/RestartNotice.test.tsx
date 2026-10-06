@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   operation: null as Record<string, unknown> | null,
   refetch: vi.fn(),
   run: vi.fn(),
-  isSettingsActive: vi.fn(() => true),
+  scope: "settings" as "apps" | "settings",
 }));
 
 vi.mock("@angee/refine", () => ({
@@ -48,12 +48,7 @@ vi.mock("@angee/ui", () => ({
 }));
 
 vi.mock("@angee/ui/chrome/refine-menu", () => ({
-  useChromeMenuTree: () => ({ isSettingsActive: mocks.isSettingsActive }),
-}));
-
-vi.mock("@tanstack/react-router", () => ({
-  useRouterState: ({ select }: { select: (state: { location: { pathname: string; searchStr: string } }) => string }) =>
-    select({ location: { pathname: "/settings/platform", searchStr: "?preset=operator" } }),
+  useChromePlace: () => ({ railPlace: { scope: mocks.scope } }),
 }));
 
 vi.mock("./i18n", () => ({
@@ -67,13 +62,16 @@ beforeEach(() => {
   mocks.operation = null;
   mocks.refetch.mockClear();
   mocks.run.mockClear();
-  mocks.isSettingsActive.mockClear();
+  mocks.scope = "settings";
 });
 
 describe("RestartNotice", () => {
-  test("matches Settings with both location pathname and search", () => {
-    render(<RestartNotice />);
-    expect(mocks.isSettingsActive).toHaveBeenCalledWith("/settings/platform?preset=operator");
+  test("shows only where the console's place is Settings, as the route's anchor decides", () => {
+    mocks.connection = { restartJob: "restart-application" };
+    mocks.operation = { id: "run-1", rootJob: "restart-application", chainedRestart: true, status: "RUNNING", currentStep: "Restarting web", nodes: [] };
+    mocks.scope = "apps";
+    const { container } = render(<RestartNotice />);
+    expect(container.firstChild).toBeNull();
   });
 
   test("renders nothing when connection and receipt are both absent", () => {

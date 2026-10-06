@@ -31,6 +31,8 @@ import { useResourceViewKindContent, useResourceViewKinds } from "../views/resou
 export interface ResourceToolbarChrome {
   viewSwitcher?: boolean;
   pager?: boolean;
+  /** The search box, its shortcuts and group-by. */
+  search?: boolean;
 }
 
 export interface ResourceToolbarProps {
@@ -122,7 +124,6 @@ export function ResourceToolbar({
   const [toolbarRef, roomy] = useContainerQuery<HTMLElement>(576);
   const favorites = search.catalog.favorites;
   const onFavoriteSelect = (favorite: ResourceViewFavorite) => search.applyFavorite(favorite.id);
-  const resolvedCreateLabel = createLabel ?? t("resourceToolbar.create");
   // The active kind's applicability gates the data controls: the calendar shows
   // none of filter/pager/group-by; a surface that names no kind keeps them all.
   const capabilities = resourceViewKindCapabilities(view, useResourceViewKindContent(view)?.capabilities);
@@ -138,16 +139,11 @@ export function ResourceToolbar({
       )}
     >
       <div className="resource-toolbar-actions">
-        {onCreate ? (
-          <Button type="button" variant="primary" size="sm" onClick={onCreate}>
-            <Glyph name="plus" className="glyph" />
-            {resolvedCreateLabel}
-          </Button>
-        ) : null}
+        {onCreate ? <ResourceCreateButton label={createLabel} onCreate={onCreate} /> : null}
         {actions}
         {viewControls ? <ResourceViewControls {...viewControls} /> : null}
       </div>
-      {capabilities.filter ? (
+      {capabilities.filter && chrome?.search !== false ? (
         <div
           className="resource-toolbar-query flex min-w-0 flex-wrap items-center gap-2"
         >
@@ -180,6 +176,20 @@ export function ResourceToolbar({
         {chrome?.viewSwitcher !== false ? viewSwitcher : null}
       </div>
     </section>
+  );
+}
+
+/** A collection's create command, in the toolbar or an embedded list's heading row. */
+export function ResourceCreateButton({ label, onCreate }: {
+  label?: ReactNode;
+  onCreate: () => void;
+}): ReactElement {
+  const t = useUiT();
+  return (
+    <Button type="button" variant="primary" size="sm" onClick={onCreate}>
+      <Glyph name="plus" className="glyph" />
+      {label ?? t("resourceToolbar.create")}
+    </Button>
   );
 }
 

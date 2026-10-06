@@ -158,7 +158,7 @@ function ProjectParticipantsTab({ recordId }: RecordPanelContext): React.ReactEl
   return (
     <ListView
       resource={PARTICIPANT_MODEL}
-      scope="local"
+      presentation="embedded"
       fields={["id", "party.display_name", "kind", "created_at"]}
       baseFilter={{ project: { exact: recordId } }}
       columns={[

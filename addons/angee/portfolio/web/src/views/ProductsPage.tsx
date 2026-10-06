@@ -83,7 +83,7 @@ function ProductReleasesTab({ recordId }: RecordPanelContext): React.ReactElemen
   const t = usePortfolioT();
   const statusOptions = useEnumOptions(RELEASE_MODEL, "status");
   return (
-    <DrawerResourceList resource={RELEASE_MODEL} createDefaults={{ product: recordId }}>
+    <DrawerResourceList resource={RELEASE_MODEL} presentation="embedded" createDefaults={{ product: recordId }}>
       <List
         resource={RELEASE_MODEL}
         baseFilter={{ product: { exact: recordId } }}
@@ -115,7 +115,7 @@ function ProductProjectsTab({ recordId }: RecordPanelContext): React.ReactElemen
   return (
     <List<ProjectRow>
       resource={PROJECT_MODEL}
-      scope="local"
+      presentation="embedded"
       baseFilter={{ product: { exact: recordId } }}
       order={{ sort_order: "ASC" }}
       rowHref={(row) => routeHref("projects.projects.record", { id: row.id })}

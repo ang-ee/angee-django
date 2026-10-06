@@ -28,7 +28,6 @@ import {
   useFormViewSurface,
   type RecordPanelContext,
   type RecordTabDescriptor,
-  type OverviewTabOptions,
   type RecordPresentation,
   type RecordToolbarContext,
   type UseFormViewSurfaceProps,
@@ -105,8 +104,6 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   lineFooter?: (context: RecordToolbarContext) => React.ReactNode;
   /** Record chrome density and height behavior. */
   recordPresentation?: RecordPresentation;
-  /** Overview visibility on forms without body tabs. */
-  overviewTab?: OverviewTabOptions;
   className?: string;
 }
 
@@ -130,7 +127,7 @@ export const FormView = Object.assign(FormViewComponent, {
 });
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
-  const surface = useFormViewSurface({ ...props, overviewHidden: props.overviewTab?.hidden });
+  const surface = useFormViewSurface(props);
   return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
 }
 
@@ -157,7 +154,6 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     lineRelationFilters,
     lineFooter,
     recordPresentation = "document",
-    overviewTab,
     publishBreadcrumbLabel = false,
     hideRecordChrome = false,
     className,
@@ -180,7 +176,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     recordPanelContext,
     recordToolbarContext,
     recordTabList,
+    tabs,
     tabbed,
+    recordTabPending,
     visibleDeleteAction,
     loading,
     pending,
@@ -224,22 +222,20 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
   const hasBodyTabs = surface.bodyTabSections.length > 0;
-  const overviewActive = !tabbed || (hasBodyTabs
-    ? surface.bodyTabSections.some((section) => section.key === activeRecordTab)
-    : activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID);
-  const orderedTabs = [
-    ...(hasBodyTabs ? surface.bodyTabSections.map((section) => ({ ...section, id: section.key }))
-      : overviewTab?.hidden && recordTabList.length > 0 ? []
-      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: t("form.tabOverview") }]),
-    ...recordTabList,
-  ];
+  // One visible saved-record tab gets no strip: its panel is the record body under its own heading.
+  const loneRecordTab = tabbed ? undefined : recordTabList[0];
+  // Saved-record panels follow the form, so one root around both is the record's sheet.
+  const panelled = tabbed || loneRecordTab !== undefined;
+  const overviewActive = !recordTabList.some((tab) => tab.id === activeRecordTab);
   const tabStrip = <Tabs.List>
-    {orderedTabs.map((tab) => <Tabs.Tab key={tab.id} value={tab.id}
-      icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}>
+    {tabs.map((tab) => <Tabs.Tab key={tab.id} value={tab.id} icon={renderGlyph(tab.icon)}>
       <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
-        count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
+        count={tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
     </Tabs.Tab>)}
   </Tabs.List>;
+  const loneTabHeading = (headingClass: string) => loneRecordTab
+    ? <SectionHeading label={resolveTabLabel(loneRecordTab.label, i18n)} count={loneRecordTab.badge} className={headingClass} />
+    : null;
   const overview = awaitingRecord ? (
     <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
       <Skeleton shape="text" className="h-6 w-2/3" />
@@ -278,14 +274,31 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const overviewWithFormExtras = recordChromeContext
     ? <RecordChromeProvider value={recordChromeContext}>{overviewContent}</RecordChromeProvider>
     : overviewContent;
+  const panelFills = (tab: RecordTabDescriptor) => recordPresentation === "workspace" || tab.presentation === "full-bleed";
   const renderRecordPanel = (tab: RecordTabDescriptor) => {
-    if (!recordPanelContext || awaitingRecord) return null;
+    if (!recordPanelContext || awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === tab.id;
-    const content = withRail(tab.render({ ...recordPanelContext, active }), active, recordPresentation === "workspace" || tab.presentation === "full-bleed");
+    // Only the active tab, or one asked to stay mounted, has content: the strip's own selection
+    // can trail the record's for a render, and an inactive panel must not mount meanwhile.
+    if (!active && !tab.keepMounted) return null;
+    const content = withRail(tab.render({ ...recordPanelContext, active }), active, panelFills(tab));
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
       : content;
   };
+  // Tabbed, each saved-record tab is a tab panel; a lone one is the plain body region after the form.
+  const recordPanels = recordTabList.map((tab) => {
+    const panelClass = panelFills(tab)
+      ? cn("min-h-0 flex-1 pt-0", tab.presentation === "full-bleed" ? "overflow-hidden" : "overflow-auto")
+      : cn(FORM_VIEW_COLUMN_CLASS, "pb-12");
+    const panel = <ControlBandProvider host={undefined}>{renderRecordPanel(tab)}</ControlBandProvider>;
+    return tabbed
+      ? <Tabs.Panel key={tab.id} value={tab.id} keepMounted={tab.keepMounted} className={panelClass}>{panel}</Tabs.Panel>
+      : <div key={tab.id} className={panelClass}>{panel}</div>;
+  });
+  const recordRoot = (rootClass: string, children: React.ReactNode) => tabbed
+    ? <Tabs value={activeRecordTab} onValueChange={setActiveRecordTab} variant="card" className={rootClass}>{children}</Tabs>
+    : <div className={rootClass}>{children}</div>;
   const formTitle = awaitingRecord ? t("form.loading") : typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
   // A declared context line replaces the generic subtitle even when it says nothing for this record.
@@ -378,12 +391,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     />
   </>;
 
-  // The sheet fills the content area once, around the whole record: a tabbed
-  // record's other panels follow the form, so there the Tabs root owns it.
+  // The sheet fills the content area once, around the whole record: saved-record
+  // panels follow the form, so there the record root owns it.
   const sheetClass = cn("min-h-full bg-sheet", className);
   const formElement = (
     <form
-      className={tabbed ? undefined : sheetClass}
+      className={panelled ? undefined : sheetClass}
       onKeyDown={handleFormKeyDown}
       onSubmit={(event) => {
         void submitForm(event);
@@ -394,14 +407,14 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         className={cn(
           FORM_VIEW_COLUMN_CLASS,
           "flex flex-col gap-6 pt-6",
-          tabbed && activeRecordTab !== FORM_VIEW_OVERVIEW_TAB_ID
+          panelled && activeRecordTab !== FORM_VIEW_OVERVIEW_TAB_ID
             ? "pb-4"
             : "pb-12",
         )}
       >
         {recordHeader()}
         {errorBanners}
-        {tabbed && !hasBodyTabs ? (
+        {loneRecordTab ? loneTabHeading("border-b border-border-subtle pb-1") : tabbed && !hasBodyTabs ? (
           <>
             {tabStrip}
             <Tabs.Panel
@@ -419,7 +432,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     </form>
   );
 
-  if (recordPresentation === "workspace" && !tabbed) {
+  if (recordPresentation === "workspace" && !panelled) {
     return (
       <div className={cn("flex h-full min-h-0 flex-col bg-sheet", className)}>
         <form
@@ -446,60 +459,42 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   }
 
   // Keep one panel tree across presentations so retained editor drafts survive tab changes.
-  if (tabbed && (recordPresentation === "workspace" || recordTabList.some((tab) => tab.presentation === "full-bleed"))) {
+  if (panelled && (recordPresentation === "workspace" || recordTabList.some((tab) => tab.presentation === "full-bleed"))) {
     const compactHeader = recordPresentation === "workspace";
     const workspace = recordPresentation === "workspace"
       || recordTabList.some((tab) => tab.id === activeRecordTab && tab.presentation === "full-bleed");
-    return (
-      <Tabs
-        value={activeRecordTab}
-        onValueChange={setActiveRecordTab}
-        variant="card"
-        className={cn("bg-sheet", workspace ? "flex h-full min-h-0 flex-col" : "min-h-full", className)}
+    return recordRoot(cn("bg-sheet", workspace ? "flex h-full min-h-0 flex-col" : "min-h-full", className), <>
+      <form
+        className={workspace ? "contents" : undefined}
+        onKeyDown={handleFormKeyDown}
+        onSubmit={(event) => {
+          void submitForm(event);
+        }}
       >
-        <form
-          className={workspace ? "contents" : undefined}
-          onKeyDown={handleFormKeyDown}
-          onSubmit={(event) => {
-            void submitForm(event);
-          }}
+        {controlBand}
+        <div className={compactHeader ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex-none flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
+          {recordHeader(compactHeader)}
+          {errorBanners}
+          {hasBodyTabs ? overviewWithFormExtras
+            : loneRecordTab ? loneTabHeading(compactHeader ? "mt-2 pb-2" : "border-b border-border-subtle pb-1")
+            : <div className={compactHeader ? "mt-2" : undefined}>{tabStrip}</div>}
+        </div>
+        {tabbed && !hasBodyTabs ? <Tabs.Panel
+          value={FORM_VIEW_OVERVIEW_TAB_ID}
+          keepMounted={recordPresentation !== "workspace"}
+          className="min-h-0 flex-1 overflow-auto pt-0"
         >
-          {controlBand}
-          <div className={compactHeader ? "flex-none border-b border-border-subtle px-4 pt-3" : cn(FORM_VIEW_COLUMN_CLASS, "flex-none flex flex-col gap-6 pt-6", activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID ? "pb-6" : "pb-4")}>
-            {recordHeader(compactHeader)}
-            {errorBanners}
-            {hasBodyTabs ? overviewWithFormExtras : <div className={compactHeader ? "mt-2" : undefined}>{tabStrip}</div>}
-          </div>
-          {!hasBodyTabs ? <Tabs.Panel
-            value={FORM_VIEW_OVERVIEW_TAB_ID}
-            keepMounted={recordPresentation !== "workspace"}
-            className="min-h-0 flex-1 overflow-auto pt-0"
-          >
-            <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6", workspace ? "py-6" : "pb-12")}>{overviewWithFormExtras}</div>
-          </Tabs.Panel> : null}
-        </form>
-        {recordTabList.map((tab) => (
-          <Tabs.Panel
-            key={tab.id}
-            value={tab.id}
-            keepMounted={tab.keepMounted}
-            className={recordPresentation === "workspace" || tab.presentation === "full-bleed"
-              ? cn("min-h-0 flex-1 pt-0", tab.presentation === "full-bleed" ? "overflow-hidden" : "overflow-auto")
-              : cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}
-          >
-            <ControlBandProvider host={undefined}>
-              {renderRecordPanel(tab)}
-            </ControlBandProvider>
-          </Tabs.Panel>
-        ))}
-        {overviewActive
-          ? recordExtrasPanel
-          : null}
-      </Tabs>
-    );
+          <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6", workspace ? "py-6" : "pb-12")}>{overviewWithFormExtras}</div>
+        </Tabs.Panel> : null}
+      </form>
+      {recordPanels}
+      {overviewActive
+        ? recordExtrasPanel
+        : null}
+    </>);
   }
 
-  if (!tabbed) {
+  if (!panelled) {
     return (
       <>
         {formElement}
@@ -508,22 +503,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     );
   }
 
-  return (
-    <Tabs value={activeRecordTab} onValueChange={setActiveRecordTab} variant="card" className={sheetClass}>
-      {formElement}
-      {recordTabList.map((tab) => (
-        <Tabs.Panel
-          key={tab.id}
-          value={tab.id}
-          keepMounted={tab.keepMounted}
-          className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}
-        >
-          <ControlBandProvider host={undefined}>
-            {renderRecordPanel(tab)}
-          </ControlBandProvider>
-        </Tabs.Panel>
-      ))}
-      {recordExtrasPanel}
-    </Tabs>
-  );
+  return recordRoot(sheetClass, <>
+    {formElement}
+    {recordPanels}
+    {recordExtrasPanel}
+  </>);
 }

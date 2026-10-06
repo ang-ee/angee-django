@@ -107,7 +107,7 @@ function CircleMembershipList({
     <>
       <ListView<MembershipRow>
         resource="parties.CircleMember"
-        scope="local"
+        presentation="embedded"
         fields={[
           "id",
           anchor === "person" ? "circle.name" : "party.display_name",

@@ -172,6 +172,13 @@ test("editable lines lead the single strip and field reveal returns from a recor
   expect(screen.getByRole("tab", { name: "Lines" }).getAttribute("aria-selected")).toBe("true");
 });
 
+test("editable lines alone in a tabs layout stack under their tab label without a strip", async () => {
+  await fixture({ publicView: true, formProps: { layout: "tabs", linesTabLabel: "Order lines" } });
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(screen.getByRole("heading", { name: "Order lines" })).toBeTruthy();
+  expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
+});
+
 test("new documents render Add line and create their draft lines in one native nested insert", async () => {
   const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
   const f = await fixture({ isCreate: true, publicView: true, create: async () => ({ data: saved }) });
