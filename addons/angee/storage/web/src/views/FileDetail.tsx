@@ -49,6 +49,7 @@ export function FileDetail({
         <Field name="created_by_label" label={t("file.author")} widget="userRef" readOnly />
         <Field name="upload_state" label={t("file.stage")} readOnly />
         <Field name="visibility" label={t("file.visibility")} widget="statusBadge" readOnly />
+        <Field name="tags" />
       </Group>
     </FormView>
   );

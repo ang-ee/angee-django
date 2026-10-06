@@ -2,7 +2,8 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
-import tags from "./index";
+import tags, { TAGS_WIDGET } from "./index";
+import { tagsWidget } from "./TagsField";
 
 describe("angee.tags addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -34,11 +35,9 @@ describe("angee.tags addon manifest", () => {
     });
   });
 
-  test("contributes the record-scoped Tags chatter tab and declares the Tags page's containers", () => {
-    // `?chatterTab=tags` links keep resolving through the alias.
-    expect(tags.containers?.["record#aside"]).toMatchObject({
-      "tags.tags": { sequence: 15, content: { label: "Tags", icon: "tag", aliases: ["tags"] } },
-    });
-    expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields", "record#aside"]);
+  test("registers the tags field widget and declares only the Tags page's containers", () => {
+    // Tags are a placeable field, never a record chatter tab.
+    expect(tags.widgets?.[TAGS_WIDGET]).toBe(tagsWidget);
+    expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields"]);
   });
 });

@@ -5,7 +5,7 @@ name = "angee.knowledge"
 description = "A markdown-first knowledge base — vaults of pages with versioned markdown bodies"
 keywords = ["knowledge", "rag", "embeddings"]
 category = "Data"
-depends_on = ["angee.iam", "angee.messaging"]
+depends_on = ["angee.iam", "angee.messaging", "angee.tags"]
 dependencies = [
   "markdown-it-py>=4.2",
 ]

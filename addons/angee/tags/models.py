@@ -12,21 +12,24 @@ exactly as storage consumers attach a file.
 **Scope.** Tags are reference vocabulary readable by every non-anonymous actor
 through the native ``authenticated`` permission. No reader tuple is stored.
 
-**Party tags** compose this addon without any ``parties`` change: a party is
-tagged by attaching to its ``Party`` row (the canon's explicit-attach path). The
-ergonomic reverse accessor (``GenericRelation("tags.TagAssignment")`` on
-``Party``) is a ``parties``-owned decision — adding it makes ``parties`` depend
-on ``tags`` for every composing project, so it lands in ``parties`` (model +
-``addon.toml`` dependency together) only when that dependency is wanted. Declare
-that reverse relation on ``Party`` itself — the topmost REBAC-typed MTI ancestor
-the canonical edge keys on (:func:`rebac.generic_target`), never
-on a ``Person``/``Organization`` child — so the delete collector filters at the same
-content type the write used (the placement invariant in :mod:`angee.base.refs`).
+**Tags show only where an owner places them.** Any row can be tagged through
+the explicit-attach path, but a model's tags are *read* through the owner's
+own declarations: the owning addon depends on ``angee.tags``, declares the
+reverse accessor ``tag_assignments = GenericRelation("tags.TagAssignment")`` on
+the model (a private field — no column, no migration — that also lets the
+delete collector cascade the edges), composes
+:class:`angee.tags.schema.TaggedNode` onto the model's console node type, and
+places the ``tags`` field on its record form and list. The tags addon never
+names another addon's model. Declare the reverse relation on the topmost
+REBAC-typed MTI ancestor the canonical edge keys on
+(:func:`rebac.generic_target`), never on a child, so the delete collector
+filters at the same content type the write used (the placement invariant in
+:mod:`angee.base.refs`).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -83,7 +86,22 @@ class Tag(ArchiveMixin, AngeeDataModel):
         return self.name
 
 
-class TagAssignmentManager(AngeeManager):
+class TagAssignmentQuerySet(AngeeQuerySet[Any]):
+    """Chainable read scopes for the polymorphic tag edge."""
+
+    def for_record(self, record: models.Model) -> TagAssignmentQuerySet:
+        """Return the edges on one row, keyed by its canonical generic target."""
+
+        return cast(TagAssignmentQuerySet, self.filter(**generic_target(record).lookups(self.model, "target")))
+
+    def by_tag(self) -> TagAssignmentQuerySet:
+        """Order edges as their tags list: the tag model's own ordering, through ``tag``."""
+
+        tag_model = self.model._meta.get_field("tag").related_model
+        return cast(TagAssignmentQuerySet, self.order_by(*(f"tag__{name}" for name in tag_model._meta.ordering)))
+
+
+class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  # type: ignore[misc]
     """Owns the polymorphic tag edge: target resolution, attach, and detach.
 
     The write protocol: the target and every tag resolve **under the ambient
@@ -121,7 +139,7 @@ class TagAssignmentManager(AngeeManager):
         target = self.resolve_target(target_type, target_id)
         if target is None:
             return self.none()
-        return self.filter(content_type=target.content_type, object_id=target.object_id)
+        return self.filter(**target.lookups(self.model, "target"))
 
     def attach(self, target_type: str, target_id: str, tag_ids: list[str]) -> list[Any]:
         """Attach each tag to the target row, idempotently per edge.
@@ -136,13 +154,9 @@ class TagAssignmentManager(AngeeManager):
         if target is None:
             raise ValueError("tag target not found")
         tag_rows = [self._tag_for_id(tag_id) for tag_id in tag_ids]
+        lookups = target.lookups(self.model, "target")
         with system_context(reason="tags.assignment.attach"):
-            return [
-                self.get_or_create(
-                    tag=tag_row, content_type=target.content_type, object_id=target.object_id
-                )[0]
-                for tag_row in tag_rows
-            ]
+            return [self.get_or_create(tag=tag_row, **lookups)[0] for tag_row in tag_rows]
 
     def detach(self, target_type: str, target_id: str, tag_ids: list[str]) -> int:
         """Detach each tag from the target row; return the number of edges removed.
@@ -156,9 +170,7 @@ class TagAssignmentManager(AngeeManager):
             raise ValueError("tag target not found")
         tag_pks = [self._tag_for_id(tag_id).pk for tag_id in tag_ids]
         with system_context(reason="tags.assignment.detach"):
-            deleted, _by_model = self.filter(
-                content_type=target.content_type, object_id=target.object_id, tag_id__in=tag_pks
-            ).delete()
+            deleted, _by_model = self.filter(tag_id__in=tag_pks, **target.lookups(self.model, "target")).delete()
         return deleted
 
     def _tag_for_id(self, tag_id: str) -> Any:

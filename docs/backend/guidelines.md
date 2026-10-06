@@ -517,6 +517,17 @@ data through REBAC, never a queryset bypass.
   define private share mutations. Metadata projects the grant surface and the
   subject resource's public identity field; the API converts selected public
   subjects to canonical PK references before validating and writing grants.
+- **Tags are read through their owner.** A taggable model's addon depends on
+  `angee.tags`, declares `tag_assignments = GenericRelation("tags.TagAssignment")`
+  on the model (a private field: no column, no migration, and the delete
+  collector cascades the edges), composes
+  [`TaggedNode`](../../addons/angee/tags/schema.py) onto the console node — or a
+  console `type_extensions` donor when the node is shared with the public
+  schema — and places the field in its web fragment. The native prefetch hint
+  batches every row's readable edges and tags once per page under the actor's
+  scope; metadata projects a read-only `list` relation to `tags.Tag`, and the
+  `tag`/`untag` mutations remain the only write path. The tags addon names no
+  other addon's model.
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
   delegates to native REBAC checks. An explicit actor stays bound to the instance;
   omitting it preserves native instance and ambient scope precedence. Verbs resolve

@@ -90,6 +90,7 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
         <Field name="start_date_resolution" options={startResolutionOptions} />
         <Field name="target_date" />
         <Field name="target_date_resolution" options={targetResolutionOptions} />
+        <Field name="tags" />
       </Group> : null}
       {(selection.groups ?? ["planning", "details"]).includes("details") ? <Group label={t("project.group.details")} columns={2} collapsible defaultOpen={false}>
         <Field name="owns_items" />
@@ -190,6 +191,7 @@ export function useProjectListDeclaration(options: Partial<Omit<ListProps, "reso
     <Column field="lead" />
     <Column field="target_date" />
     <Column field="updated_at" />
+    <Column field="tags" hiddenByDefault />
     </>}
   </List>;
 }

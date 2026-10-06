@@ -1,14 +1,10 @@
 import { createNamespaceT } from "@angee/ui";
 
-// Only the keys the pane/page resolve — the shell/chatter chrome labels live on
-// the manifest (index.tsx), and metadata-labelled columns/fields need none.
+// Only the keys the field widget and page resolve — the shell chrome labels live
+// on the manifest (index.tsx), and metadata-labelled columns/fields need none.
 export const enTagsMessages: Record<string, string> = {
-  "pane.assigned": "Tags",
-  "pane.empty.record": "Open a record to manage its tags.",
-  "pane.empty.none": "No tags yet.",
-  "pane.add": "Add",
-  "pane.add.empty": "Every tag is applied.",
-  "pane.error": "Could not load tags.",
+  "field.label": "Tags",
+  "field.unsaved": "Save the record to add tags.",
   "col.name": "Name",
   "col.color": "Color",
   "form.details": "Details",

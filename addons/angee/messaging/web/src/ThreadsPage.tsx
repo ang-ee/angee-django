@@ -45,6 +45,7 @@ export function ThreadsPage(): React.ReactElement {
         <Column field="modality" />
         <Column field="message_count" header={t("threads.messageCount")} />
         <Column field="last_message_at" />
+        <Column field="tags" hiddenByDefault />
       </List>
       <Form resource={MODEL} title={({ record }) => threadTitle(record, t("threads.noTitle"))}>
         {/* The title is a pointer at a shared content-addressed fragment, derived
@@ -57,6 +58,7 @@ export function ThreadsPage(): React.ReactElement {
               verbs (which write the value) rather than an editable enum field. */}
           <Field name="visibility" readOnly />
           <Field name="message_count" readOnly />
+          <Field name="tags" />
         </Group>
         <Action
           id="vis-private"

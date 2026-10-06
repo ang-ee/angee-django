@@ -1390,6 +1390,8 @@ class Thread(OwnerMixin, AngeeDataModel):
     host that opts in flips :meth:`broadcasts_changes` on for its thread only.
     """
 
+    tag_assignments = GenericRelation("tags.TagAssignment")
+
     objects = ThreadManager()
 
     class Meta:
@@ -1956,6 +1958,7 @@ class Message(TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
     received_at = models.DateTimeField(null=True, blank=True)
     edit_history = models.JSONField(blank=True, default=list)
     metadata = models.JSONField(blank=True, default=dict)
+    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = MessageManager()
 

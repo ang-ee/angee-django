@@ -190,6 +190,14 @@ class SchemaImportTests(WorkCase):
         self.assertIn("stage__position", self.Task.hasura_sortable_fields)
         self.assertIn("active_stage", schema._MILESTONE_EXTENSION_PUBLIC_ID_FIELDS)
 
+    def test_projects_console_nodes_compose_tags(self):
+        from angee.projects import schema
+        from angee.tags.schema import TaggedNode
+
+        for node in (schema.ConsoleTaskType, schema.ConsoleProjectType):
+            self.assertTrue(issubclass(node, TaggedNode))
+            self.assertIn("tags", {field.python_name for field in node.__strawberry_definition__.fields})
+
 
 class DuplicateLinkTests(WorkCase):
     def test_duplicate_merge_rekeys_links_without_relationship_writes(self):

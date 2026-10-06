@@ -439,6 +439,7 @@ class Project(
         object_id_field="object_id",
         related_query_name="project",
     )
+    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = ProjectManager()
 
@@ -902,6 +903,7 @@ class Task(
         related_query_name="task",
     )
     file_attachments = GenericRelation("storage.FileAttachment", related_query_name="task")
+    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = TaskManager()
 

@@ -12,6 +12,7 @@ depends_on = [
   "angee.parties",
   "angee.scheduling",
   "angee.storage",
+  "angee.tags",
 ]
 
 [resources]

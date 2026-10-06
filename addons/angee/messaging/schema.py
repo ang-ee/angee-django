@@ -52,6 +52,7 @@ from angee.messaging.managers import MessageQuerySet, message_subtype_options, s
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
+from angee.tags.schema import TaggedNode
 
 Integration = apps.get_model("integrate", "Integration")
 Handle = apps.get_model("parties", "Handle")
@@ -390,7 +391,7 @@ class RecordMessageReactionGroupType:
 
 
 @strawberry_django.type(Message)
-class MessageType(TrashedRefMixin, AngeeNode):
+class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     """GraphQL projection of a message; its managers see trash stamps and ``delete``."""
 
     display_name: str = strawberry_django.field(
@@ -642,7 +643,7 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Thread)
-class ThreadType(AngeeNode):
+class ThreadType(TaggedNode, AngeeNode):
     """GraphQL projection of a thread."""
 
     display_name: str = strawberry_django.field(

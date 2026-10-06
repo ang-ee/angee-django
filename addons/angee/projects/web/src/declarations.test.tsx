@@ -55,7 +55,9 @@ describe("composable standard project and task declarations", () => {
     expect(props.defaultGroups?.gantt).toBeNull();
     expect(props.gantt).toBe(projectGanttSpec);
     expect(projectGanttSpec.linked).toEqual({ resource: MILESTONE_MODEL, lane: "project" });
-    expect(parsePageColumns(props.children).map(({ field }) => field)).toEqual(["title", "current_milestone", "status", "lead", "target_date", "updated_at"]);
+    const columns = parsePageColumns(props.children);
+    expect(columns.map(({ field }) => field)).toEqual(["title", "current_milestone", "status", "lead", "target_date", "updated_at", "tags"]);
+    expect(columns.find(({ field }) => field === "tags")?.hiddenByDefault).toBe(true);
     expect(parsePageFacets(props.children).map(({ field }) => field)).toEqual(["lead"]);
   });
 
@@ -113,7 +115,7 @@ describe("composable standard project and task declarations", () => {
     expect(parsePageActions(projectProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
     expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual([
       "title", "revision", "status", "current_milestone", "owner", "lead", "start_date",
-      "start_date_resolution", "target_date", "target_date_resolution", "body",
+      "start_date_resolution", "target_date", "target_date_resolution", "tags", "body",
     ]);
 
     const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], contextLine: line }));

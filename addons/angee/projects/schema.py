@@ -40,6 +40,7 @@ from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
 from angee.storage.schema import FolderType
+from angee.tags.schema import TaggedNode
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")
@@ -240,7 +241,7 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Project)
-class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
+class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, AngeeNode):
     """Console project projection with a label-bearing lead relation."""
 
     title: auto
@@ -391,7 +392,7 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Task)
-class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
+class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNode):
     """Console task projection with label-bearing user relations."""
 
     display_name: str = strawberry_django.field(

@@ -330,6 +330,8 @@ def test_for_target_returns_the_targets_edges(party_edge: SimpleNamespace) -> No
         objects.attach(*party_edge.party_address, [party_edge.tag.sqid])
         assert objects.for_target(*party_edge.party_address).count() == 1
         assert objects.for_target("nope/nope", "whatever").count() == 0
+        # The row-level address resolves the same edge set as the public one.
+        assert list(objects.for_record(party_edge.party)) == list(objects.for_target(*party_edge.party_address))
         assert objects.get().has_access("read")
     with actor_context(AnonymousUser()):
         assert not objects.exists()

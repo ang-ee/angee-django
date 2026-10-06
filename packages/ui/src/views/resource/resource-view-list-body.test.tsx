@@ -203,6 +203,31 @@ test("to-many relation cells link each retained record label without another rea
   }
 });
 
+test("a to-many relation whose backend widget has no cell still renders the linked chips", () => {
+  const tag = testDataResource("tags.Tag", { recordRepresentation: "name" });
+  const { Provider, clearClients } = createUiTestProviders({ resources: [tag] });
+  const runtime = {
+    widgets: { "angee.tags.tags": { read: () => <span>form widget</span> } },
+    routeHref: createRouteHref([{ name: "tags", path: "/tags" }, { name: "tags.record", path: "/tags/$id" }]),
+    routesByResource: { "tags.Tag": { collection: "tags", record: { name: "tags.record", param: "id" } } },
+  };
+  try {
+    render(<Provider><AppRuntimeProvider runtime={runtime}>
+      <ListCellContent
+        column={{ field: "tags", widget: "angee.tags.tags", relationList: {
+          model: "tags.Tag", identityPath: "id", labelPath: "name",
+        } }}
+        row={{ tags: [{ id: "tag_1", name: "Urgent" }] }}
+      />
+    </AppRuntimeProvider></Provider>);
+    expect(screen.getByRole("link", { name: "Urgent" }).getAttribute("href")).toBe("/tags/tag_1");
+    expect(screen.queryByText("form widget")).toBeNull();
+  } finally {
+    cleanup();
+    clearClients();
+  }
+});
+
 test("renders query enum labels from wire values and preserves declared row aliases", () => {
   const queryField = testQueryField("wire_status", {
     kind: "enum",

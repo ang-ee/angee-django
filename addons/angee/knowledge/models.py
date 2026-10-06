@@ -19,7 +19,7 @@ from typing import Any, ClassVar, cast
 
 import reversion
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
@@ -421,6 +421,7 @@ class Page(TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
     )
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
+    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = PageManager()
 

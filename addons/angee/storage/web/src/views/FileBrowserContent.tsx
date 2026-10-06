@@ -163,6 +163,7 @@ export function FileBrowserContent({
           <span className="text-fg-muted">{formatDate(row.updated_at)}</span>
         )}
       />
+      <Column<StorageFileRow> field="tags" hiddenByDefault />
     </List>
   );
 
