@@ -173,15 +173,17 @@ function fixture(filter: ResourceViewFilter) {
 }
 
 test("embedded rows show search and a pager only once they outgrow a page", () => {
-  const view = (props: { presentation: "embedded" | "page"; pageSize?: number }) =>
-    render(<ToastProvider><RowsListView scope="local" rows={rows} columns={columns} {...props} /></ToastProvider>);
-  view({ presentation: "embedded" });
+  const many = Array.from({ length: 60 }, (_, index) => ({ id: String(index + 1), name: `Row ${index + 1}`, status: "active" }));
+  const view = (presentation: "embedded" | "page", list = rows) =>
+    render(<ToastProvider><RowsListView scope="local" rows={list} columns={columns} presentation={presentation} /></ToastProvider>);
+  view("embedded");
   expect(screen.queryByPlaceholderText(/^Filter/)).toBeNull();
   cleanup();
-  view({ presentation: "embedded", pageSize: 2 });
+  // Past the default page size the list is browsed, so search and the pager return.
+  view("embedded", many);
   expect(screen.getByPlaceholderText(/^Filter/)).toBeTruthy();
   cleanup();
-  view({ presentation: "page" });
+  view("page");
   expect(screen.getByPlaceholderText(/^Filter/)).toBeTruthy();
 });
 
