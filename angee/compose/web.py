@@ -32,8 +32,12 @@ CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
 
 WEB_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 DEFAULT_WEB_ROOT = "../../web"
-UI_LAYER_KEYS = frozenset({"menus", "containers", "shell", "perspectives"})
+UI_LAYER_KEYS = frozenset({"menus", "containers", "shell"})
 """Manifest keys the deployment's ``ANGEE_UI`` setting may declare; ``@angee/app`` validates their values."""
+SHELL_KEYS = frozenset({"brand", "theme", "apps", "hosts"})
+"""``ANGEE_UI.shell``: the brand and theme with no app selected, named apps, and the app each hostname selects."""
+SHELL_APP_KEYS = frozenset({"rail", "brand", "theme", "home"})
+"""One ``ANGEE_UI.shell.apps`` entry: its rail of menu root ids and the brand, theme and home it shows."""
 
 
 class WebRuntime:
@@ -142,10 +146,61 @@ class WebRuntime:
         unknown = sorted(set(ui) - UI_LAYER_KEYS)
         if unknown:
             raise ImproperlyConfigured(f"ANGEE_UI declares unknown keys {unknown}; allowed: {sorted(UI_LAYER_KEYS)}")
+        if "shell" in ui:
+            WebRuntime._validate_shell(ui["shell"])
         try:
             return cast(dict[str, Any], json.loads(json.dumps(ui, sort_keys=True)))
         except (TypeError, ValueError) as error:
             raise ImproperlyConfigured("ANGEE_UI must contain only JSON values") from error
+
+    @staticmethod
+    def _validate_shell(shell: object) -> None:
+        """Refuse a malformed ``ANGEE_UI.shell`` at build time.
+
+        Its shape only: ``@angee/app`` checks at boot that rails name top-level
+        menu roots, app names differ from root ids, homes lie inside their rails,
+        brand marks are registered icons and themes are installed.
+        """
+
+        def mapping(value: object, where: str, keys: frozenset[str] | None = None) -> Mapping[str, Any]:
+            if not isinstance(value, Mapping):
+                raise ImproperlyConfigured(f"{where} must be a mapping")
+            unknown = sorted(set(value) - keys) if keys is not None else []
+            if unknown:
+                raise ImproperlyConfigured(f"{where} declares unknown keys {unknown}; allowed: {sorted(keys or ())}")
+            return value
+
+        def text(value: object, where: str) -> None:
+            if not isinstance(value, str) or not value.strip():
+                raise ImproperlyConfigured(f"{where} must be a non-empty string")
+
+        def facts(value: Mapping[str, Any], where: str) -> None:
+            if "brand" in value:
+                brand = mapping(value["brand"], f"{where}.brand", frozenset({"name", "mark"}))
+                for key in ("name", "mark"):
+                    text(brand.get(key), f"{where}.brand.{key}")
+            if "theme" in value:
+                text(value["theme"], f"{where}.theme")
+
+        settings = mapping(shell, "ANGEE_UI.shell", SHELL_KEYS)
+        facts(settings, "ANGEE_UI.shell")
+        for name, app in mapping(settings.get("apps", {}), "ANGEE_UI.shell.apps").items():
+            where = f"ANGEE_UI.shell.apps.{name}"
+            declared = mapping(app, where, SHELL_APP_KEYS)
+            rail = declared.get("rail")
+            roots = rail if isinstance(rail, (list, tuple)) else ()
+            if not roots or not all(isinstance(root, str) and root for root in roots):
+                raise ImproperlyConfigured(f"{where}.rail must be a non-empty list of menu root ids")
+            if len(set(roots)) != len(roots):
+                raise ImproperlyConfigured(f"{where}.rail lists a root twice")
+            facts(declared, where)
+            if "home" in declared:
+                text(declared["home"], f"{where}.home")
+        for host, key in mapping(settings.get("hosts", {}), "ANGEE_UI.shell.hosts").items():
+            where = f'ANGEE_UI.shell.hosts["{host}"]'
+            if not isinstance(host, str) or host != host.lower():
+                raise ImproperlyConfigured(f"{where} must be a lower-case hostname")
+            text(key, where)
 
     @staticmethod
     def _package_name(addon: AppConfig, web: Mapping[str, Any]) -> str | None:

@@ -355,14 +355,51 @@ def test_web_runtime_carries_the_deployment_ui_layer() -> None:
     """``ANGEE_UI`` reaches the web runtime as the last layer; unknown keys fail composition."""
 
     addon = make_addon(name="tests.addon", web={"package": "@demo/addon"})
-    ui = {"shell": {"home": "addon.home", "perspective": None}}
+    ui = {
+        "shell": {
+            "brand": {"name": "Suite", "mark": "suite"},
+            "theme": "suite.light",
+            "apps": {"payables": {"rail": ("accounting", "files"), "home": "accounting.bills"}},
+            "hosts": {"payables.example.test": "payables", "work.example.test": "pm"},
+        }
+    }
 
-    assert json.loads(WebRuntime((addon,), ui=ui).manifest_json())["deployment"] == ui
+    deployment = json.loads(WebRuntime((addon,), ui=ui).manifest_json())["deployment"]
+    assert deployment["shell"]["apps"]["payables"]["rail"] == ["accounting", "files"]
+    assert deployment["shell"]["hosts"] == {"payables.example.test": "payables", "work.example.test": "pm"}
     assert "deployment" not in json.loads(WebRuntime((addon,), ui={}).manifest_json())
     with pytest.raises(ImproperlyConfigured, match="unknown keys \\['rail'\\]"):
         WebRuntime((addon,), ui={"rail": {}})
+    with pytest.raises(ImproperlyConfigured, match="unknown keys \\['perspectives'\\]"):
+        WebRuntime((addon,), ui={"perspectives": {"pm": {"root": "pm"}}})
     with pytest.raises(ImproperlyConfigured, match="must be a mapping"):
         WebRuntime((addon,), ui=["shell"])
+
+
+@pytest.mark.parametrize(
+    ("shell", "message"),
+    [
+        (["pm"], "ANGEE_UI.shell must be a mapping"),
+        ({"home": "pm.home"}, "ANGEE_UI.shell declares unknown keys \\['home'\\]"),
+        ({"perspective": None}, "ANGEE_UI.shell declares unknown keys \\['perspective'\\]"),
+        ({"brand": {"name": "Suite"}}, "ANGEE_UI.shell.brand.mark must be a non-empty string"),
+        ({"brand": {"name": "Suite", "mark": "suite", "tone": "x"}}, "ANGEE_UI.shell.brand declares unknown keys"),
+        ({"theme": " "}, "ANGEE_UI.shell.theme must be a non-empty string"),
+        ({"apps": {"ap": {"rail": []}}}, "ANGEE_UI.shell.apps.ap.rail must be a non-empty list of menu root ids"),
+        ({"apps": {"ap": {"rail": "accounting"}}}, "ANGEE_UI.shell.apps.ap.rail must be a non-empty list"),
+        ({"apps": {"ap": {"rail": ["accounting", "accounting"]}}}, "ANGEE_UI.shell.apps.ap.rail lists a root twice"),
+        ({"apps": {"ap": {"rail": ["accounting"], "hosts": {}}}}, "ANGEE_UI.shell.apps.ap declares unknown keys"),
+        ({"apps": {"ap": {"rail": ["accounting"], "home": ""}}}, "ANGEE_UI.shell.apps.ap.home must be a non-empty"),
+        ({"hosts": {"AP.example.test": "ap"}}, 'shell.hosts\\["AP.example.test"\\] must be a lower-case hostname'),
+        ({"hosts": {"ap.example.test": None}}, 'shell.hosts\\["ap.example.test"\\] must be a non-empty string'),
+    ],
+)
+def test_web_runtime_refuses_a_malformed_deployment_shell(shell: object, message: str) -> None:
+    """``ANGEE_UI.shell`` fails the build when its shape would select the wrong app; ``@angee/app`` checks the rest."""
+
+    addon = make_addon(name="tests.addon", web={"package": "@demo/addon"})
+    with pytest.raises(ImproperlyConfigured, match=message):
+        WebRuntime((addon,), ui={"shell": shell})
 
 
 def test_web_runtime_projects_external_codegen_entries() -> None:

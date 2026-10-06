@@ -807,7 +807,7 @@ def test_project_template_defaults_to_local_addon_installer() -> None:
 
 
 def test_project_web_host_leaves_home_and_confinement_to_the_composed_shell() -> None:
-    """Products declare home and perspective; the rendered host passes neither."""
+    """App roots declare their home and ``ANGEE_UI.shell`` selects the app; the rendered host passes neither."""
 
     project = ROOT / "templates" / "projects" / "web"
     answers = yaml.safe_load((project / "copier.yml").read_text())
