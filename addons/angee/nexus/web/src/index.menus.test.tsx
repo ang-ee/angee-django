@@ -80,7 +80,7 @@ describe("Nexus menu aggregation", () => {
     expect(explain.menus.provenance.posts?.route).toBe("posts");
   });
 
-  test.each([undefined, "nexus"])("composes the live rail, selected app's top bar and Settings (confineTo=%s)", async (confineTo) => {
+  test.each([undefined, "nexus"])("composes the live rail, selected app's top bar and Settings (?app=%s)", async (app) => {
     // Compose the real Messaging and Parties declarations; the leaf contracts
     // above stand in for Spaces and Posts without importing undeclared web deps.
     const owners = [parties, { ...messaging, dependsOn: ["parties"] }, ...upstream.slice(2)];
@@ -93,14 +93,15 @@ describe("Nexus menu aggregation", () => {
     } };
     const { explain } = createApp({ addons: liveAddons, schemas, layouts: {
       console: { requireAuth: false }, public: { requireAuth: false, schema: "public" },
-    }, defaultSchema: "console", confineTo });
+    }, defaultSchema: "console", location: { search: app ? `?app=${app}` : "" } });
     expect(explain.menus.diagnostics).toEqual([]);
     expect(explain.menus.unavailable).toEqual({});
     expect(explain.menus.provenance["messaging.channels"]).toMatchObject({ parent: "messaging", group: "messaging" });
     expect(explain.menus.provenance["parties.directories"]).toMatchObject({ parent: "parties", group: "parties" });
-    // One mounted console per confinement: the rail, top-bar selection and Settings
+    expect(explain.selection.home).toBe(app ? "nexus.inbox" : undefined);
+    // One mounted console per selection: the rail, top-bar selection and Settings
     // are facts of the composed menu tree, not of the path it was mounted on.
-    const captured = await captureChrome({ addons: liveAddons, path: "/nexus/inbox", confineTo, schemas });
+    const captured = await captureChrome({ addons: liveAddons, path: "/nexus/inbox", ...(app ? { app } : {}), schemas });
     try {
       const tree = MenuTree.from(captured.props().menus);
       const root = tree.railMenuItems()[0]!;

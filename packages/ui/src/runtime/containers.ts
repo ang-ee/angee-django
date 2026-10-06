@@ -78,12 +78,11 @@ export interface ResourceViewKindContent {
   render?: ComponentType<{ resource: string }>;
 }
 
-/** When a render-time verb applies: an app or route on the active trail, or the perspective. */
+/** When a render-time verb applies: an app or route on the active trail. */
 export interface ContainerCondition {
   app?: string | readonly string[];
   /** The route or any route below it. */
   route?: string | readonly string[];
-  perspective?: string | readonly string[];
 }
 
 /** One child of a container: the owner's typed content plus the fields every container honours. */
@@ -194,13 +193,12 @@ export interface ComposedContainers {
   diagnostics: readonly string[];
 }
 
-/** Where the page is, for `when`: its apps, its routes and the perspective. */
+/** Where the page is, for `when`: its apps and its routes. */
 export interface ContainerScope {
   /** Every app on the page's menu trail, outermost first, flattened ones too (G-8). */
   apps: readonly string[];
   /** The page's route and its parent routes, nearest first. */
   routes: readonly string[];
-  perspective: string | null;
 }
 
 const warnedAddresses = new Set<string>();
@@ -233,7 +231,7 @@ export function containersFromChildren(
     children: composed,
   };
 }
-const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [], perspective: null };
+const EMPTY_SCOPE: ContainerScope = { apps: [], routes: [] };
 
 /** Split an address into its node and container name. */
 export function containerName(address: string): string {
@@ -273,8 +271,7 @@ function matches(condition: ContainerCondition | undefined, scope: ContainerScop
   if (!condition) return true;
   const any = (wanted: string | readonly string[] | undefined, present: readonly string[]): boolean =>
     wanted === undefined || (typeof wanted === "string" ? [wanted] : wanted).some((id) => present.includes(id));
-  return any(condition.app, scope.apps) && any(condition.route, scope.routes)
-    && any(condition.perspective, scope.perspective ? [scope.perspective] : []);
+  return any(condition.app, scope.apps) && any(condition.route, scope.routes);
 }
 
 /**

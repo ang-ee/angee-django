@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { compileMenus, type CompiledMenuItem, type MenuLayer } from "./menus";
-import { DEPLOYMENT_LAYER_ID } from "./shell";
+import { DEPLOYMENT_LAYER_ID } from "./layers";
 
 const projects: MenuLayer = {
   id: "projects",
@@ -64,7 +64,7 @@ describe("compileMenus", () => {
     expect(removedApp.removed).toEqual([{ id: "parties", route: "parties.people", by: "product", parent: "nexus", app: true }]);
     expect(() => compileMenus([{ id: "desk", menus: { desk: { app: true } } } as unknown as MenuLayer]))
       .toThrow(/unknown key "app"/);
-    // Only a Settings root may be personal: one every perspective keeps.
+    // Only a Settings root may be personal: one every selected app keeps.
     expect(compileMenus([{ id: "look", menus: { look: { group: "platform", personal: true } } }]).navigation[0]?.personal).toBe(true);
     expect(() => compileMenus([{ id: "look", menus: { look: { personal: true } } }])).toThrow(/is personal, which only a Settings root/);
     expect(() => compileMenus([{ id: "look", menus: { look: {}, "look.theme": { parent: "look", group: "platform", personal: true } } }]))
@@ -232,6 +232,58 @@ describe("compileMenus", () => {
     const product: MenuLayer = { id: "product", dependsOn: ["pm", "projects"], menus: { "projects.tasks": { hide: true } } };
     const pmNode = compileMenus([projects, work, pm, product]).navigation[0]!;
     expect(pmNode.children?.find((item) => item.id === "projects.tasks")).toMatchObject({ hidden: true });
+  });
+
+  test("a root declares where it lands, its brand and its theme; a dependent and the deployment override them", () => {
+    const desk: MenuLayer = { id: "desk", menus: {
+      desk: { label: "Desk", home: "desk.inbox", brand: { name: "Desk", mark: "desk" }, theme: "desk.light" },
+      "desk.inbox": { parent: "desk", route: "desk.inbox" },
+    } };
+    const product: MenuLayer = { id: "product", dependsOn: ["desk"], menus: { desk: { home: "desk.board", theme: "product.dark" } } };
+    const deployment: MenuLayer = { id: DEPLOYMENT_LAYER_ID, dependsOn: ["desk", "product"], menus: {
+      desk: { brand: { name: "Pinned", mark: "pin" } },
+    } };
+    const compiled = compileMenus([desk, product, deployment]);
+    expect(compiled.logical[0]).toMatchObject({ home: "desk.board", brand: { name: "Pinned", mark: "pin" }, theme: "product.dark" });
+    expect(compiled.navigation[0]).toMatchObject({ home: "desk.board", brand: { name: "Pinned", mark: "pin" }, theme: "product.dark" });
+    expect(compiled.provenance.desk).toMatchObject({ home: "product", brand: DEPLOYMENT_LAYER_ID, theme: "product" });
+    // Two unrelated layers setting one still collide.
+    const other: MenuLayer = { id: "other", dependsOn: ["desk"], menus: { desk: { home: "desk.other" } } };
+    expect(() => compileMenus([desk, product, other])).toThrow(/Unrelated addons "product" and "other" both set menu "desk" home/);
+    // The legacy list declares them too.
+    expect(compileMenus([{ id: "notes", menus: [{ id: "notes", home: "notes.all", brand: { name: "Notebook", mark: "book" },
+      children: [{ id: "notes.all", route: "notes.all" }] }] }]).logical[0]).toMatchObject({ home: "notes.all", brand: { name: "Notebook", mark: "book" } });
+  });
+
+  test("only a root carries home, brand and theme; an included app drops its own", () => {
+    expect(() => compileMenus([{ id: "desk", menus: { desk: {}, "desk.inbox": { parent: "desk", home: "desk.inbox" } } }]))
+      .toThrow(/"desk.inbox" sets home, which only a root \(no parent\) may/);
+    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", children: [{ id: "desk.inbox", theme: "desk.light" }] }] }]))
+      .toThrow(/"desk.inbox" sets theme, which only a root/);
+    const included = compileMenus([
+      { id: "work", menus: {
+        work: { home: "work.inbox", brand: { name: "Work", mark: "work" } },
+        "work.inbox": { parent: "work", route: "work.inbox" },
+      } },
+      { id: "suite", dependsOn: ["work"], menus: { suite: { home: "work.inbox", include: ["work"] } } },
+    ]);
+    const work = included.logical[0]!.children!.find((item) => item.id === "work")!;
+    expect(work).toMatchObject({ app: true });
+    expect(work).not.toHaveProperty("home");
+    expect(work).not.toHaveProperty("brand");
+    expect(included.logical[0]).toMatchObject({ id: "suite", home: "work.inbox" });
+    // appRoot is gone: the rail lists every root, or the selected app's.
+    expect(() => compileMenus([{ id: "desk", menus: { desk: { appRoot: true } } } as unknown as MenuLayer])).toThrow(/unknown key "appRoot"/);
+  });
+
+  test("refuses a malformed root brand, home or theme", () => {
+    for (const brand of [{ name: "Desk" }, { name: " ", mark: "desk" }, { name: "Desk", mark: "desk", tone: "brand" }, "Desk"]) {
+      expect(() => compileMenus([{ id: "desk", menus: { desk: { brand } } } as unknown as MenuLayer]))
+        .toThrow(/brand must be \{ name, mark \} with a non-empty name and mark/);
+    }
+    expect(() => compileMenus([{ id: "desk", menus: [{ id: "desk", brand: { name: "", mark: "desk" } }] }])).toThrow(/brand must be/);
+    expect(() => compileMenus([{ id: "desk", menus: { desk: { home: 7 } } } as unknown as MenuLayer])).toThrow(/home must be a string/);
+    expect(() => compileMenus([{ id: "desk", menus: { desk: { theme: false } } } as unknown as MenuLayer])).toThrow(/theme must be a string/);
   });
 
   test("the deployment places a node back at the top and refuses malformed entries", () => {

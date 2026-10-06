@@ -20,8 +20,8 @@ describe("angee.pm", () => {
     expect(pm.menus?.["projects.board"]).toEqual({ remove: true });
   });
 
-  it("declares the pm perspective without selecting it, so installing the suite leaves the console's shell alone", () => {
-    expect(pm.perspectives).toEqual({ pm: { root: "pm", home: "projects.my-work" } });
+  it("lands the pm root on My Work when it is selected, and selects nothing itself", () => {
+    expect(pm.menus?.pm?.home).toBe("projects.my-work");
     expect(pm.shell).toBeUndefined();
   });
 });

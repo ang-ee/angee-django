@@ -86,9 +86,10 @@ export type ResourceRecordHrefLookup = (
  * there is no separate provider per registry.
  */
 export interface AppRuntime {
+  /** The selected app's brand, else the deployment's; rail, sign-in and document title show it. */
   brand: RuntimeBrand | null;
-  /** Host-selected menu root; this constrains navigation, never server access. */
-  confineTo: string | null;
+  /** The selected app's rail roots, null showing every root; this shapes navigation, never server access. */
+  rail: readonly string[] | null;
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
@@ -119,7 +120,7 @@ export interface AppRuntime {
   themes: readonly ThemeContribution[];
   /** The composed containers every container owner renders from. */
   containers?: ComposedContainers;
-  /** The page's apps, routes and perspective, which container conditions read. */
+  /** The page's apps and routes, which container conditions read. */
   containerScope?: ContainerScope;
   /** How the composition came out; developer mode shows it. */
   composition?: RuntimeComposition | null;
@@ -208,7 +209,7 @@ const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
 
 const EMPTY_RUNTIME: AppRuntime = {
   brand: null,
-  confineTo: null,
+  rail: null,
   widgets: {},
   statusTones: {},
   i18n: null,
@@ -276,7 +277,7 @@ export function useAppRuntime(): AppRuntime {
   return RuntimeContext.useMaybe() ?? EMPTY_RUNTIME;
 }
 
-/** The product identity contributed by the composed app, if any. */
+/** The selected app's identity, if any. */
 export function useRuntimeBrand(): RuntimeBrand | null {
   return useAppRuntime().brand ?? null;
 }

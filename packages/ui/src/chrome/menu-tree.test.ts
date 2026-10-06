@@ -151,13 +151,25 @@ describe("match", () => {
 
 test("confinement selects one root for the rail and palette without mutating composition", () => {
   const tree = MenuTree.from([...MENU, { id: "notes.extra", parentId: "notes", to: "/notes/extra" }]);
-  const confined = tree.confineTo("notes");
+  const confined = tree.confineTo(["notes"]);
   expect(confined.railMenuItems().map((node) => node.id)).toEqual(["notes"]);
   expect(confined.navigableItems().map(({ item }) => item.id)).toEqual(["notes.all", "notes.archive", "notes.extra"]);
   expect(confined.settingsEntry()).toBeUndefined();
   expect(tree.roots).toHaveLength(3);
-  expect(() => tree.confineTo("missing")).toThrow(/Unknown menu root/);
-  expect(() => tree.confineTo("notes.all")).toThrow(/Unknown menu root/);
+  expect(() => tree.confineTo(["missing"])).toThrow(/Unknown menu root "missing"/);
+  expect(() => tree.confineTo(["notes", "notes.all"])).toThrow(/Unknown menu root "notes.all"/);
+});
+
+test("a rail of several roots keeps them in the rail's order, a Settings root among them as an app", () => {
+  const tree = MenuTree.from([...MENU,
+    { id: "platform", label: "Platform", group: "platform", to: "/settings/platform" },
+    { id: "appearance", label: "Appearance", group: "platform", personal: true, to: "/settings/appearance" }]);
+  const rail = tree.confineTo(["single", "platform", "notes"]);
+  expect(rail.railMenuItems().map((node) => node.id)).toEqual(["single", "platform", "notes"]);
+  expect(rail.byId.get("platform")?.isApp).toBe(true);
+  expect(rail.settingsMenuItems().map((node) => node.id)).toEqual(["appearance"]);
+  expect(rail.byId.has("operator")).toBe(false);
+  expect(rail.activeAppRoot("/operator/services")).toBeUndefined();
 });
 
 test("confinement keeps personal Settings roots, such as appearance, beside the root's own", () => {
@@ -165,7 +177,7 @@ test("confinement keeps personal Settings roots, such as appearance, beside the 
     { id: "appearance", label: "Appearance", group: "platform", personal: true, to: "/settings/appearance" },
     { id: "platform", label: "Platform", group: "platform", to: "/settings/platform" },
     { id: "notes.settings", parentId: "notes", label: "Notes settings", group: "platform", to: "/notes/settings" }]);
-  const confined = tree.confineTo("notes");
+  const confined = tree.confineTo(["notes"]);
   expect(confined.settingsMenuItems().map((node) => node.id)).toEqual(["notes.settings", "appearance"]);
   expect(confined.railMenuItems().map((node) => node.id)).toEqual(["notes"]);
 });
@@ -185,7 +197,7 @@ test.each([false, true])("lifts nested platform nodes into Settings (confined=%s
     ] },
     { id: "appearance", group: "platform", personal: true, to: "/appearance" },
   ]);
-  const navigation = confined ? logical.confineTo("suite") : logical.withSettingsPlace();
+  const navigation = confined ? logical.confineTo(["suite"]) : logical.withSettingsPlace();
   expect(navigation.railMenuItems().map((node) => node.id)).toEqual(["suite"]);
   expect(navigation.byId.get("suite")?.appChildren().map((node) => node.id)).toEqual(["mail"]);
   expect(navigation.byId.get("mail")?.menuItems().map((node) => node.id)).toEqual(["mail.messages"]);
@@ -336,20 +348,7 @@ describe("navigableItems", () => {
 });
 
 describe("railMenuItems", () => {
-  test("filters to authored app roots when refine projection marks them", () => {
-    const ids = MenuTree.from([
-      { id: "agents", label: "Agents", to: "/agents", appRoot: true },
-      { id: "agents.menu", label: "Agents", to: "/agents" },
-      { id: "agents.list", label: "Agents", to: "/agents" },
-      { id: "notes", label: "Notes", to: "/notes", appRoot: true },
-    ])
-      .railMenuItems()
-      .map((item) => item.id);
-
-    expect(ids).toEqual(["agents", "notes"]);
-  });
-
-  test("keeps legacy direct menu fixtures when no app root markers exist", () => {
+  test("lists every root", () => {
     const ids = MenuTree.from([
       { id: "agents", label: "Agents", to: "/agents" },
       { id: "notes", label: "Notes", to: "/notes" },
@@ -362,20 +361,18 @@ describe("railMenuItems", () => {
 
   test("separates platform roots into the Settings place in declaration order", () => {
     const tree = MenuTree.from([
-      { id: "notes", label: "Notes", to: "/notes", appRoot: true },
+      { id: "notes", label: "Notes", to: "/notes" },
       {
         id: "iam",
         label: "Permissions",
         group: "platform",
-        appRoot: true,
         children: [{ id: "iam.users", to: "/iam/users" }],
       },
-      { id: "files", label: "Files", to: "/files", appRoot: true },
+      { id: "files", label: "Files", to: "/files" },
       {
         id: "platform",
         label: "Platform",
         group: "platform",
-        appRoot: true,
         children: [{ id: "platform.models", to: "/platform/models" }],
       },
     ]);

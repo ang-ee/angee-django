@@ -16,7 +16,7 @@ function AppearanceMenuItem() {
 export default defineBaseAddon({
   id: "appearance",
   routes: [{ name: "appearance.settings", path: "/settings/appearance", component: lazyRouteComponent(() => import("./views/AppearanceSettingsPage"), "AppearanceSettingsPage") }],
-  // Personal: the user menu links here, so every perspective keeps it in Settings.
+  // Personal: the user menu links here, so every selected app keeps it in Settings.
   menus: [{ id: "appearance", label: "Appearance", icon: "appearance", group: "platform", personal: true, route: "appearance.settings" }],
   i18n: { appearance: enAppearanceMessages },
   icons: { appearance: Palette },

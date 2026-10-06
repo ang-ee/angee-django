@@ -22,7 +22,7 @@ const FRAMEWORK = "framework";
 const ENTRY_KEYS: ReadonlySet<string> = new Set(["only", "except", "force", "when", "unique", "models"]);
 const CHILD_KEYS: ReadonlySet<string> = new Set(["content", "sequence", "before", "after", "permission", "requiredFields", "impl", "variant", "key"]);
 const ALTERATION_KEYS: ReadonlySet<string> = new Set(["sequence", "before", "after", "remove", "hide"]);
-const CONDITION_KEYS: ReadonlySet<string> = new Set(["app", "route", "perspective"]);
+const CONDITION_KEYS: ReadonlySet<string> = new Set(["app", "route"]);
 
 type Entry = Record<string, unknown> & { only?: readonly string[]; except?: readonly string[]; force?: true; when?: ContainerCondition; unique?: "key"; models?: true };
 

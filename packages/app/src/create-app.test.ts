@@ -19,6 +19,7 @@ import {
 import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import { ControlBand, ControlBandProvider } from "@angee/ui/layouts/ControlBand";
 import { resourcePageRoutes } from "./define-base-addon";
+import type { ShellSettings } from "./define-addon";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -162,7 +163,7 @@ describe("route-owned chrome", () => {
   });
 });
 
-describe("createApp confinement", () => {
+describe("createApp selection", () => {
   const addons: readonly BaseAddon[] = [{
     id: "requests",
     routes: [
@@ -174,35 +175,106 @@ describe("createApp confinement", () => {
       { name: "public.page", path: "/public-page", layout: "public", component: EmptyPage },
     ],
     menus: [
-      { id: "requests", children: [{ id: "requests.all", route: "requests.all" }] },
+      { id: "requests", home: "requests.all", children: [{ id: "requests.all", route: "requests.all" }] },
       { id: "files", route: "files.all" },
     ],
   }];
+  const layouts = { console: { requireAuth: false }, public: { requireAuth: false } } as const;
+  const deployment = (shell: ShellSettings): BaseAddon => ({ id: "deployment", dependsOn: ["requests"], shell });
 
-  test("rejects an unknown root and a home outside the selected root", () => {
-    const input = testAppInput(addons, {
-      console: { requireAuth: false },
-      public: { requireAuth: false },
+  test("?app= wins over the hostname, which wins over nothing; an unknown ?app= falls back and says why", () => {
+    const shell = deployment({ apps: { both: { rail: ["files", "requests"] } }, hosts: { "files.localhost": "files" } });
+    const input = { ...testAppInput([...addons, shell], layouts) };
+    const select = (location: CreateAppInput["location"]) => createApp({ ...input, location }).explain.selection;
+    expect(select({ search: "?app=both", hostname: "files.localhost" })).toMatchObject({
+      app: "both", rail: ["files", "requests"], sources: { app: "?app=both", rail: "ANGEE_UI.shell.apps.both" },
     });
-    expect(() => createApp({ ...input, confineTo: "unknown" })).toThrow(/Unknown menu root/);
-    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(
-      'Home "/files" (createApp home) is outside menu root "requests", to which createApp confineTo confines the console.',
-    );
-    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/outside menu root "requests"/);
+    expect(select({ search: "", hostname: "files.localhost" })).toMatchObject({
+      app: "files", rail: ["files"], sources: { app: 'ANGEE_UI.shell.hosts["files.localhost"]' },
+    });
+    expect(select({ search: "?app=nowhere", hostname: "files.localhost" })).toMatchObject({
+      app: "files", diagnostics: ["?app=nowhere names no menu root and no ANGEE_UI.shell.apps entry, so it selects nothing."],
+    });
+    expect(select({ search: "?app=nowhere", hostname: "elsewhere.localhost" })).toMatchObject({ app: null, rail: null, brand: null });
+    expect(select({ search: "" })).toMatchObject({ app: null, rail: null, diagnostics: [] });
+    // Without a location the page's own URL selects.
+    const { location: _location, ...unlocated } = input;
+    history.replaceState(null, "", "/files?app=requests");
+    try {
+      expect(createApp(unlocated).explain.selection.app).toBe("requests");
+    } finally {
+      history.replaceState(null, "", "/");
+    }
   });
 
-  test("a shell home outside its perspective names the layers that set them and the fix", () => {
-    const [requests] = addons;
-    const input = testAppInput([{
-      ...requests!,
-      perspectives: { focus: { root: "requests", home: "requests.all" } },
-      shell: { perspective: "focus", home: "files.all" },
-    }], { console: { requireAuth: false }, public: { requireAuth: false } });
-    expect(() => createApp(input)).toThrow(
-      'Home "/files" (addon "requests") is outside menu root "requests", to which perspective "focus" (addon "requests") '
-      + 'confines the console. Set shell.home to a page under "requests" or stop selecting the perspective; '
-      + 'ANGEE_UI.shell can pin either.',
+  test("checks every root, app and host at boot, selected or not", () => {
+    const input = (menus: BaseAddon["menus"], shell?: ShellSettings): CreateAppInput => testAppInput(
+      [{ ...addons[0]!, menus }, ...(shell ? [deployment(shell)] : [])], layouts);
+    const files = { id: "files", route: "files.all" };
+    const requests = (home: string) => ({ id: "requests", home, children: [{ id: "requests.all", route: "requests.all" }] });
+    expect(() => createApp(input([requests("files.all"), files]))).toThrow(
+      'Menu root "requests" home "files.all" lies outside its rail (requests), in menu root "files".',
     );
+    expect(() => createApp(input([requests("account"), files]))).toThrow(
+      'Menu root "requests" home "account" lies outside its rail (requests), in no single menu root; anchor the route with route.menu.',
+    );
+    const valid = [requests("requests.all"), files];
+    expect(() => createApp(input(valid, { apps: { focus: { rail: ["requests"], home: "files.all" } } }))).toThrow(
+      'ANGEE_UI.shell.apps.focus home "files.all" lies outside its rail (requests), in menu root "files".',
+    );
+    expect(() => createApp(input(valid, { apps: { focus: { rail: ["requests", "requests.all"] } } }))).toThrow(
+      'ANGEE_UI.shell.apps.focus rail names "requests.all", which is not a top-level menu root.',
+    );
+    expect(() => createApp(input(valid, { apps: { files: { rail: ["requests"] } } }))).toThrow(
+      'ANGEE_UI.shell.apps names "files", a menu root id; name the app apart from the roots.',
+    );
+    expect(() => createApp(input(valid, { hosts: { "requests.localhost": "nothing" } }))).toThrow(
+      'ANGEE_UI.shell.hosts["requests.localhost"] selects "nothing", which is neither a menu root id nor an ANGEE_UI.shell.apps name.',
+    );
+    expect(() => createApp(input(valid, { hosts: { "Requests.localhost": "requests" } }))).toThrow(
+      'ANGEE_UI.shell.hosts["Requests.localhost"] must be a lower-case hostname.',
+    );
+    expect(() => createApp(input(valid, { apps: { focus: { rail: [] } } }))).toThrow(
+      "ANGEE_UI.shell.apps.focus.rail must be a non-empty list of menu root ids.",
+    );
+    expect(() => createApp(input(valid, { rail: ["requests"] } as unknown as ShellSettings))).toThrow(
+      'ANGEE_UI.shell has unknown key "rail".',
+    );
+    expect(() => createApp(input(valid, { apps: { focus: { rail: ["requests"], home: "requests.all" } }, hosts: { "requests.localhost": "focus" } })))
+      .not.toThrow();
+  });
+
+  test("a named app takes its own brand, theme and home, else its first rail root's", () => {
+    const icons = { mark: () => null };
+    const withMark = { ...addons[0]!, icons };
+    const select = (shell: ShellSettings, search: string) => createApp({
+      ...testAppInput([withMark, deployment(shell)], layouts), location: { search },
+    }).explain.selection;
+    expect(select({ apps: { focus: { rail: ["requests", "files"] } } }, "?app=focus")).toEqual({
+      app: "focus",
+      rail: ["requests", "files"],
+      brand: { name: "Requests", mark: "requests" },
+      home: "requests.all",
+      sources: {
+        app: "?app=focus",
+        rail: "ANGEE_UI.shell.apps.focus",
+        brand: 'menu root "requests" label and icon',
+        home: 'menu root "requests"',
+      },
+      diagnostics: [],
+    });
+    expect(select({ apps: { focus: { rail: ["files", "requests"], brand: { name: "Focus", mark: "mark" }, home: "requests.all" } } }, "?app=focus"))
+      .toMatchObject({
+        brand: { name: "Focus", mark: "mark" }, home: "requests.all",
+        sources: { brand: "ANGEE_UI.shell.apps.focus", home: "ANGEE_UI.shell.apps.focus" },
+      });
+    // A bare root selects itself; the deployment's brand is only for nothing selected.
+    expect(select({ brand: { name: "Desk", mark: "mark" } }, "?app=files")).toMatchObject({
+      app: "files", rail: ["files"], brand: { name: "Files", mark: "files" },
+    });
+    expect(select({ brand: { name: "Desk", mark: "mark" } }, "")).toMatchObject({
+      app: null, rail: null, brand: { name: "Desk", mark: "mark" }, sources: { brand: "ANGEE_UI.shell.brand" },
+    });
   });
 
   test("accepts a root and first child sharing the resource route", () => {
@@ -220,15 +292,15 @@ describe("createApp confinement", () => {
       schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
     };
     expect(() => createApp(input)).not.toThrow();
-    expect(() => createApp({ ...input, confineTo: "requests" })).not.toThrow();
+    expect(() => createApp({ ...input, location: { search: "?app=requests" } })).not.toThrow();
   });
 
-  test("requires explicit menu ownership only when confined route roots disagree", () => {
+  test("a route two roots reference has no owner unless route.menu anchors it, selected or not", () => {
     const shared: BaseAddon = {
       id: "requests",
       routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
       menus: [
-        { id: "requests", route: "requests.all" },
+        { id: "requests", route: "requests.all", home: "requests.all" },
         { id: "files", route: "requests.all" },
       ],
     };
@@ -236,21 +308,20 @@ describe("createApp confinement", () => {
       ...testAppInput([shared], { console: { requireAuth: false } }),
       schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
     };
-    expect(() => createApp(input)).not.toThrow();
-    expect(() => createApp({ ...input, confineTo: "requests" })).toThrow(/different menu roots/);
+    expect(() => createApp(input)).toThrow(/home "requests.all" lies outside its rail \(requests\), in no single menu root/);
     const explicit = {
       ...shared,
       routes: shared.routes?.map((route) => ({ ...route, menu: "requests" })),
     };
-    expect(() => createApp({ ...input, addons: [explicit], confineTo: "requests" })).not.toThrow();
+    expect(() => createApp({ ...input, addons: [explicit] })).not.toThrow();
+    expect(() => createApp({ ...input, addons: [explicit], location: { search: "?app=files" } })).not.toThrow();
   });
 
-  test("projects only the confined root into both navigation sources", async () => {
+  test("projects only the selected rail into both navigation sources", async () => {
     const captured = await captureChrome({
       addons,
       path: "/requests/item-1",
-      home: "requests.all",
-      confineTo: "requests",
+      app: "requests",
     });
     try {
       const tree = MenuTree.from(captured.props().menus);
@@ -261,16 +332,33 @@ describe("createApp confinement", () => {
     }
   });
 
-  test("redirects other roots while preserving public and unowned chrome routes", async () => {
-    history.replaceState(null, "", "/files");
-    const app = createApp({
-      ...testAppInput(addons, {
-        console: { requireAuth: false },
-        public: { requireAuth: false },
-      }),
-      confineTo: "requests",
-      home: "requests.all",
-    });
+  test("a page only a removed menu item reached still redirects home, with an app selected or not", async () => {
+    const trimmed: readonly BaseAddon[] = [...addons, { id: "trim", dependsOn: ["requests"], menus: { files: { remove: true } } }];
+    for (const search of ["", "?app=requests"]) {
+      history.replaceState(null, "", "/files/item-1");
+      const app = createApp({ ...testAppInput(trimmed, layouts), location: { search } });
+      expect(app.explain.menus.unavailable).toEqual({
+        "files.all": 'menu item "files" was removed',
+        "files.record": 'its parent route "files.all" is unavailable',
+      });
+      const host = document.createElement("div");
+      document.body.append(host);
+      const root = app.mount(host);
+      try {
+        await waitFor(() => expect(window.location.pathname).toBe("/requests"));
+        await app.router.navigate({ to: "/account" });
+        expect(window.location.pathname).toBe("/account");
+      } finally {
+        root.unmount();
+        host.remove();
+      }
+    }
+  });
+
+  test("lands on the selected app's home and leaves every route outside its rail reachable", async () => {
+    history.replaceState(null, "", "/");
+    const app = createApp({ ...testAppInput(addons, layouts), location: { search: "?app=requests" } });
+    expect(app.explain.home).toBe("/requests");
     const host = document.createElement("div");
     document.body.append(host);
     const root = app.mount(host);
@@ -285,7 +373,9 @@ describe("createApp confinement", () => {
       await app.router.navigate({ to: "/account" });
       expect(window.location.pathname).toBe("/account");
       await app.router.navigate({ to: "/files/item-1" });
-      expect(window.location.pathname).toBe("/requests");
+      expect(window.location.pathname).toBe("/files/item-1");
+      await app.router.navigate({ to: "/files" });
+      expect(window.location.pathname).toBe("/files");
     } finally {
       root.unmount();
       host.remove();
@@ -301,13 +391,12 @@ describe("createApp developer mode", () => {
     function Probe(): ReactNode {
       const runtime = useAppRuntime();
       seen.route = runtime.activeRouteName;
-      seen.home = runtime.composition?.effective.home;
+      seen.home = runtime.composition?.home;
       return null;
     }
-    const app = createApp({
-      ...testAppInput([{ id: "desk", routes: [{ name: "desk.home", path: "/desk", component: Probe }], menus: [{ id: "desk", route: "desk.home" }] }]),
-      home: "desk.home",
-    });
+    const app = createApp(
+      testAppInput([{ id: "desk", routes: [{ name: "desk.home", path: "/desk", component: Probe }], menus: [{ id: "desk", route: "desk.home" }] }]),
+    );
     const host = document.createElement("div");
     document.body.append(host);
     const root = app.mount(host);
@@ -315,7 +404,7 @@ describe("createApp developer mode", () => {
       await waitFor(() => expect(window.location.pathname).toBe("/desk"));
       expect(window.sessionStorage.getItem("angee:developer-mode")).toBe("1");
       await waitFor(() => expect(seen).toEqual({ route: "desk.home", home: "/desk" }));
-      expect(app.explain.effective.home).toBe("/desk");
+      expect(app.explain.home).toBe("/desk");
     } finally {
       root.unmount();
       host.remove();
@@ -451,7 +540,6 @@ describe("createApp schema binding", () => {
       ],
       defaultSchema: "console",
       subscriptionSchema: "console",
-      home: "/public-page",
       layouts: {
         public: {
           chrome: TestChrome,
@@ -533,7 +621,6 @@ describe("createApp addon data providers", () => {
       ],
       defaultSchema: "console",
       subscriptionSchema: "console",
-      home: "/operator-page",
       layouts: {
         console: { chrome: TestChrome, requireAuth: false },
       },
@@ -619,7 +706,6 @@ describe("createApp auth routing", () => {
       ],
       defaultSchema: "console",
       subscriptionSchema: "console",
-      home: "/private",
       loginPath: "/sign-in",
       layouts: {
         public: {
@@ -652,7 +738,7 @@ describe("createApp auth routing", () => {
     }
   });
 
-  test("a signed-out visit to / signs in to come back to /, not to the declared home", async () => {
+  test("a signed-out visit to / signs in to come back to /, not to the home it would land on", async () => {
     history.replaceState(null, "", "/");
     const app = createApp({
       ...testAppInput([{ id: "desk", routes: [
@@ -662,7 +748,6 @@ describe("createApp auth routing", () => {
         public: { chrome: TestChrome, requireAuth: false, schema: "public" },
         console: { chrome: TestChrome, requireAuth: true },
       }),
-      home: "desk.home",
       loginPath: "/sign-in",
     });
     const host = document.createElement("div");
@@ -699,7 +784,7 @@ describe("createApp auth routing", () => {
         console: { url: "https://example.test/graphql/console/", fetch },
       },
     });
-    expect(app.explain.effective.home).toBe("/notes");
+    expect(app.explain.home).toBe("/notes");
     const host = document.createElement("div");
     document.body.append(host);
     const length = history.length;
@@ -876,7 +961,7 @@ describe("createApp route menu refs", () => {
     }
   });
 
-  test("marks authored menu roots so repeated crumbs do not become rail apps", async () => {
+  test("keeps repeated crumbs under their authored root so they do not become rail apps", async () => {
     const captured = await captureChrome({
       path: "/agents",
       addons: [
@@ -917,8 +1002,6 @@ describe("createApp route menu refs", () => {
       const tree = MenuTree.from(captured.props().menus);
 
       expect(tree.railMenuItems().map((item) => item.id)).toEqual(["agents"]);
-      expect(tree.byId.get("agents")?.appRoot).toBe(true);
-      expect(tree.byId.get("agents.home")?.appRoot).toBeUndefined();
       expect(tree.trailFor("agents.home").map((item) => item.id)).toEqual([
         "agents",
         "agents.group",
@@ -1601,13 +1684,10 @@ describe("createApp route tree", () => {
     document.body.append(host);
     history.replaceState(null, "", "/first?debug=1");
     const loadHome = vi.fn(async () => ({ HomePage: () => createElement("p", null, "Home page") }));
-    const app = createApp({
-      ...testAppInput([{ id: "pages", routes: [
-        { name: "first", path: "/first", component: () => createElement("p", null, "First page") },
-        { name: "home", path: "/home", component: lazyRouteComponent(loadHome, "HomePage") },
-      ] }]),
-      home: "home",
-    });
+    const app = createApp(testAppInput([{ id: "pages", routes: [
+      { name: "first", path: "/first", component: () => createElement("p", null, "First page") },
+      { name: "home", path: "/home", component: lazyRouteComponent(loadHome, "HomePage") },
+    ], menus: [{ id: "home", route: "home" }] }]));
     const root = app.mount(host);
     try {
       await waitFor(() => expect(host.textContent).toContain("First page"));
@@ -1684,7 +1764,7 @@ describe("createApp route tree", () => {
   test.each([
     { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/third" } },
     { label: "default app", preferences: { "chrome.rail": { defaultItemId: "desk" } } },
-  ])("a confined app sends / to its own home and ignores the $label preference", async ({ preferences }) => {
+  ])("a selected app sends / to its own home and ignores the $label preference", async ({ preferences }) => {
     const host = document.createElement("div");
     document.body.append(host);
     history.replaceState(null, "", "/");
@@ -1697,10 +1777,9 @@ describe("createApp route tree", () => {
       ...testAppInput([{
         id: "pages",
         routes: [page("first"), page("second"), page("third")],
-        menus: [{ id: "desk", children: [{ id: "first", route: "first" }, { id: "second", route: "second" }, { id: "third", route: "third" }] }],
+        menus: [{ id: "desk", home: "second", children: [{ id: "first", route: "first" }, { id: "second", route: "second" }, { id: "third", route: "third" }] }],
       }]),
-      confineTo: "desk",
-      home: "second",
+      location: { search: "?app=desk" },
       schemas: {
         public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
         console: { ...TEST_SCHEMAS.console, fetch: identityFetch },
@@ -2064,6 +2143,8 @@ function testAppInput(
     schemas: TEST_SCHEMAS,
     defaultSchema: "console",
     subscriptionSchema: "console",
+    // Nothing selected unless a test says so, whatever URL an earlier test left.
+    location: { search: "" },
   };
 }
 
@@ -2195,7 +2276,7 @@ test("a menu preset is admitted on its target route beside the route default", a
   }
 });
 
-test("confined app links, vocabulary and Settings follow one projection across navigation", async () => {
+test("a selected app's links, vocabulary and Settings follow one projection; pages outside its rail stay reachable in its home app", async () => {
   const record = testDataResource("records.Record", {
     fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
       aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
@@ -2224,7 +2305,7 @@ test("confined app links, vocabulary and Settings follow one projection across n
     menus: [
       { id: "records", route: "records.all" },
       { id: "teams", route: "teams.all" },
-      { id: "desk", appRoot: true, children: [
+      { id: "desk", home: "desk.incoming", children: [
         { id: "desk.incoming", route: "desk.incoming" },
         { id: "desk.review", route: "desk.review" },
         { id: "desk.settings", group: "platform", children: [
@@ -2242,8 +2323,9 @@ test("confined app links, vocabulary and Settings follow one projection across n
   const app = createApp({
     ...testAppInput([addon], { console: { requireAuth: false } }),
     schemas: testSchemasWithConsoleResources([record, testDataResource("teams.Team")]),
-    confineTo: "desk", home: "desk.incoming",
+    location: { search: "?app=desk" },
   });
+  expect(app.explain.selection).toMatchObject({ app: "desk", rail: ["desk"], home: "desk.incoming" });
   const host = document.createElement("div");
   document.body.append(host);
   const root = app.mount(host);
@@ -2253,29 +2335,31 @@ test("confined app links, vocabulary and Settings follow one projection across n
     await waitFor(() => expect(observed).toMatchObject({ href: "/desk/review/r%2F2", collection: "/desk/review", title: "Reviews", field: "Question", label: "Review", menu: "Questions" }));
     await app.router.navigate({ to: "/teams/team-1" });
     expect(window.location.pathname).toBe("/teams/team-1");
+    // No route is guarded: another root's pages open, and sit in the app's home root.
     await app.router.navigate({ to: "/teams/team-2" });
-    await waitFor(() => expect(window.location.pathname).toBe("/desk/incoming"));
+    expect(window.location.pathname).toBe("/teams/team-2");
+    await waitFor(() => expect(observed).toMatchObject({ collection: "/desk/incoming", title: "Incoming", label: "Request" }));
     await app.router.navigate({ to: "/records/r1" });
-    expect(window.location.pathname).toBe("/desk/incoming");
+    expect(window.location.pathname).toBe("/records/r1");
+    await waitFor(() => expect(observed).toMatchObject({ href: "/desk/incoming/r%2F2", collection: "/desk/incoming", title: "Incoming" }));
   } finally { root.unmount(); host.remove(); }
 });
 
-test("a container condition naming an unknown route, app or perspective fails at boot", () => {
+test("a container condition naming an unknown route or app fails at boot; perspective is no condition", () => {
   const input = (when: Record<string, string>): CreateAppInput => testAppInput([{
     id: "desk",
     routes: [{ name: "desk.home", path: "/desk", component: EmptyPage }],
     menus: [{ id: "desk", route: "desk.home" }],
-    perspectives: { focus: { root: "desk", home: "desk.home" } },
     containers: { "form#chrome": [
       { "desk.share": { content: createElement("span", null, "Share") } },
       { only: [], when },
     ] },
   }]);
   expect(() => createApp(input({ route: "desk.home" }))).not.toThrow();
-  expect(() => createApp(input({ app: "desk", perspective: "focus" }))).not.toThrow();
+  expect(() => createApp(input({ app: "desk", route: "desk.home" }))).not.toThrow();
   expect(() => createApp(input({ route: "desk.hmoe" }))).toThrow(/Addon "desk" narrows "form#chrome" on unknown route "desk.hmoe"/);
   expect(() => createApp(input({ app: "dsk" }))).toThrow(/narrows "form#chrome" in unknown app "dsk"/);
-  expect(() => createApp(input({ perspective: "facus" }))).toThrow(/narrows "form#chrome" in unknown perspective "facus"/);
+  expect(() => createApp(input({ perspective: "desk" }))).toThrow(/unknown condition "perspective"/);
 });
 
 test("a container's when.app matches every app on the page's trail, flattened ones too; a page is no app", async () => {
@@ -2292,7 +2376,7 @@ test("a container's when.app matches every app on the page's trail, flattened on
   ];
   expect(() => createApp(testAppInput(addons({ app: "projects" })))).not.toThrow();
   expect(() => createApp(testAppInput(addons({ app: "projects.tasks" })))).toThrow(/in unknown app "projects.tasks"/);
-  const app = createApp({ ...testAppInput(addons({ app: "pm" })), home: "projects.tasks" });
+  const app = createApp(testAppInput(addons({ app: "pm" })));
   const host = document.createElement("div");
   document.body.append(host);
   const root = app.mount(host);

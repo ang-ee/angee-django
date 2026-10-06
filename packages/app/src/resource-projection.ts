@@ -9,7 +9,6 @@ import type { ResourceProps } from "@refinedev/core";
 import type { ResourceMutationOperations } from "@angee/refine";
 import {
   MenuTree,
-  pathMatchesTarget,
   type ChromeMenuNode,
   type MenuMatch,
 } from "@angee/ui/chrome/menu-tree";
@@ -74,7 +73,6 @@ export function refineRouteResourceProjection(
 ): RefineRouteResourceProjection {
   const resourcesByIdentifier = new Map<string, ResourceProps>();
   const metadataByResource: Record<string, RefineResourceMetadata> = {};
-  const appRootIds = new Set(navigationTree.appRoots().map((item) => item.id));
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const childrenByParentName = childRoutesByParentName(routes);
 
@@ -86,7 +84,6 @@ export function refineRouteResourceProjection(
         resourcesByIdentifier,
         item,
         menuTrail[index - 1],
-        appRootIds.has(item.id),
         menuRouteShowPath(item, routesByName, childrenByParentName),
         breadcrumbTrail.at(-2),
       );
@@ -159,10 +156,12 @@ export function resourceRouteIndex(
   return byResource;
 }
 
-/** One projection for app resource claims, navigation membership and admission. */
+/** One projection for app resource claims, navigation membership and route availability. */
 export class AppRouteProjection {
   readonly navigationTree: MenuTree;
   readonly canonical: Readonly<Record<string, RuntimeResourceRoutes>>;
+  /** The root pages outside a selected app's rail sit in: its home's root, else its first. */
+  readonly homeApp: string | undefined;
   private readonly roots = new Map<string, string | undefined>();
   private readonly claims = new Map<string, Map<string, RuntimeResourceRoutes[]>>();
   private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
@@ -172,21 +171,25 @@ export class AppRouteProjection {
   readonly unavailable: ReadonlyMap<string, string>;
 
   /**
-   * `menuTree` is the logical tree (route ownership, trails); `navigation` is what
-   * the chrome shows (defaults to the logical tree); `removed` lists the menu
-   * nodes composition removed, which decides route availability.
+   * `menuTree` is the logical tree (route ownership, trails); `selection` is the
+   * selected app's rail and home route, without which every root shows;
+   * `navigation` is what the chrome shows (defaults to the logical tree);
+   * `removed` lists the menu nodes composition removed, which decides route
+   * availability. Each rail root claims its own resource routes.
    */
   constructor(
     readonly routes: readonly BaseAddonRoute[],
     readonly menuTree: MenuTree,
-    readonly confineTo?: string,
+    readonly selection?: { rail: readonly string[]; home?: string },
     options: { navigation?: MenuTree; removed?: readonly { id: string; route?: string }[] } = {},
   ) {
     const navigation = options.navigation ?? menuTree;
-    this.navigationTree = confineTo === undefined ? navigation.withSettingsPlace() : navigation.confineTo(confineTo);
+    this.navigationTree = selection === undefined ? navigation.withSettingsPlace() : navigation.confineTo(selection.rail);
     this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
-    const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
+    const home = selection?.home !== undefined ? this.routesByName.get(selection.home) : undefined;
+    this.homeApp = selection && ((home && this.rootFor(home)) ?? selection.rail[0]);
+    const appIds = new Set(selection?.rail ?? []);
     const canonical: BaseAddonRoute[] = [];
     // Menu order selects the app's fallback when it has several views of a model.
     const order = [...menuTree.byId.values()].map((item) => item.route);
@@ -235,15 +238,12 @@ export class AppRouteProjection {
     if (this.roots.has(route.name)) return this.roots.get(route.name);
     if (visited.has(route.name)) throw new Error(`Route "${route.name}" creates a parent cycle.`);
     visited.add(route.name);
-    // Record children inherit their collection owner; an app's Settings link
-    // admits that target without transferring ownership of the foreign route.
+    // Record children inherit their collection owner; a route several roots
+    // reference without a `route.menu` anchor has no owner.
     const parent = route.parent ? this.routesByName.get(route.parent) : undefined;
     const selected = route.menu ? menuNodeForRoute(route, this.menuTree) : undefined;
     const refs = selected ? [selected] : this.menuTree.itemsForRoute(route.name);
     const roots = new Set(refs.map((item) => this.menuTree.trailFor(item.id)[0]?.id));
-    if (roots.size > 1 && this.confineTo !== undefined && !parent) {
-      throw new Error(`Route "${route.name}" is referenced by different menu roots; declare route.menu.`);
-    }
     const root = parent && !selected ? this.rootFor(parent, visited)
       : roots.size === 1 ? roots.values().next().value : undefined;
     this.roots.set(route.name, root);
@@ -262,20 +262,28 @@ export class AppRouteProjection {
     return this.navigationTree.match(pathname, search, false, this.menuAnchor(routeName)?.id);
   }
 
-  /** The logical root a page sits in; lifting a node into Settings does not change it. */
+  /**
+   * The logical root a page sits in; lifting a node into Settings does not change
+   * it. A page outside a selected app's rail sits in the app's home root.
+   */
   activeApp(pathname: string, routeName?: string, search?: string): string | undefined {
-    return this.confineTo ?? this.menuTree.match(pathname, search, false, this.menuAnchor(routeName)?.id)?.trail[0]?.id;
+    const root = this.menuTree.match(pathname, search, false, this.menuAnchor(routeName)?.id)?.trail[0]?.id;
+    return this.inRail(root) ? root : this.homeApp;
   }
 
   /**
    * The apps a container `when: { app }` matches on this path, outermost first:
-   * every app on its menu trail. Under a confinement only the root's own count;
-   * a page another root owns (a Settings link) sits in the root alone.
+   * every app on its menu trail. A page outside a selected app's rail sits in the
+   * app's home root alone.
    */
   appTrail(pathname: string, routeName?: string, search?: string): readonly string[] {
     const trail = this.menuTree.appTrail(pathname, search, this.menuAnchor(routeName)?.id).map((item) => item.id);
-    if (this.confineTo === undefined) return trail;
-    return trail[0] === this.confineTo ? trail : [this.confineTo];
+    return this.inRail(trail[0]) ? trail : [this.homeApp!];
+  }
+
+  /** Whether a root shows on the rail: any root when no app is selected. */
+  private inRail(root: string | undefined): boolean {
+    return this.selection === undefined || (root !== undefined && this.selection.rail.includes(root));
   }
 
   /** Collection defaults are inherited by its record children. */
@@ -304,41 +312,19 @@ export class AppRouteProjection {
     }
     return result;
   }
-
-  allows(route: BaseAddonRoute, pathname: string): boolean {
-    if (this.unavailable.has(route.name)) return false;
-    if (this.confineTo === undefined) return true;
-    const root = this.rootFor(route);
-    if (root === undefined || root === this.confineTo) return true;
-    return [...this.navigationTree.byId.values()].some((item) => {
-      const target = item.route ? this.routesByName.get(item.route) : undefined;
-      return target && this.rootFor(target) !== this.confineTo
-        && pathMatchesTarget(pathname, item.target);
-    });
-  }
 }
 
 function addMenuRouteResource(
   resourcesByIdentifier: Map<string, ResourceProps>,
   item: ChromeMenuNode,
   parent: ChromeMenuNode | undefined,
-  appRoot: boolean,
   showPath: string | undefined,
   breadcrumbParent: ChromeMenuNode | undefined,
 ): void {
   const target = item.target;
   if (!target || target === "#") return;
   const identifier = menuRouteResourceIdentifier(item.id);
-  const existing = resourcesByIdentifier.get(identifier);
-  if (existing) {
-    if (appRoot) {
-      existing.meta = {
-        ...existing.meta,
-        appRoot: true,
-      };
-    }
-    return;
-  }
+  if (resourcesByIdentifier.has(identifier)) return;
   resourcesByIdentifier.set(identifier, {
     name: identifier,
     identifier,
@@ -351,7 +337,6 @@ function addMenuRouteResource(
       menuOrder: resourcesByIdentifier.size,
       // Refine's list may borrow a descendant's target; chrome needs the own target.
       menuTarget: item.to ?? null,
-      ...(appRoot ? { appRoot: true } : {}),
       ...(item.app === true ? { app: true } : {}),
       ...(item.description ? { description: item.description } : {}),
       ...(item.group ? { group: item.group } : {}),

@@ -7,7 +7,6 @@ import { chromeMenuItemsFromRefine } from "@angee/ui/chrome/refine-menu";
 import type { TreeMenuItem } from "@refinedev/core";
 import { compileMenus, type MenuLayer } from "./menus";
 import { explainComposition } from "./explain";
-import { resolveShell } from "./shell";
 import { chatterRouteIndex } from "./chatter-routes";
 import { testDataResource } from "@angee/metadata/testing";
 import { resolveRoutePaths } from "./route-paths";
@@ -26,7 +25,7 @@ const routes: readonly BaseAddonRoute[] = [
 const menus: readonly ChromeMenuItem[] = [
   { id: "records", route: "records.all" },
   { id: "teams", route: "teams.all" },
-  { id: "desk", appRoot: true, children: [
+  { id: "desk", children: [
     { id: "desk.home", route: "desk.home" },
     { id: "desk.incoming", route: "desk.incoming" },
     { id: "desk.review", route: "desk.review" },
@@ -80,6 +79,7 @@ describe("app resource projection", () => {
     const projection = new AppRouteProjection(routes, logical, undefined, {
       navigation: MenuTree.from(resolveMenuRouteTargets(compiled.navigation, href)),
     });
+    expect(projection.homeApp).toBeUndefined();
     expect(projection.navigationTree.settingsMenuItems().map(({ id }) => id)).toEqual(["mail.channels"]);
     expect(projection.navigationTree.byId.get("mail")?.menuItems().map(({ id }) => id)).toEqual(["mail.messages"]);
     expect(projection.navigationTree.railPlace("/mail/channels/one")).toMatchObject({ scope: "settings", activeRootId: "mail.channels" });
@@ -93,7 +93,6 @@ describe("app resource projection", () => {
     const mail = projected.find((item) => item.meta?.menuId === "mail")!;
     const messages = projected.find((item) => item.meta?.menuId === "mail.messages")!;
     expect(mail.meta).toMatchObject({ app: true, parent: "menu:suite" });
-    expect(mail.meta?.appRoot).toBeUndefined();
     expect(messages.meta?.app).toBeUndefined();
     const refineNode = (resource: typeof mail, children: TreeMenuItem[] = []): TreeMenuItem => ({
       name: resource.name, key: resource.identifier ?? resource.name,
@@ -120,7 +119,7 @@ describe("app resource projection", () => {
     expect(() => resolveRoutePaths([{ name: "cycle", path: "/cycle", parent: "cycle" }])).toThrow(/cycle/);
   });
   test("retains canonical routes and selects the active collection within an app", () => {
-    const projection = new AppRouteProjection(routes, menuTree);
+    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"] });
     expect(projection.resourceRoutes()["records.Record"]?.collection).toBe("records.all");
     expect(projection.resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
     const selected = projection.resourceRoutes("desk", "desk.review.record");
@@ -132,23 +131,28 @@ describe("app resource projection", () => {
     expect(selected["records.Record"]?.recordFallback?.name).toBe("records.all.record");
   });
 
-  test("confines menu and admits named owner records through their ancestor route", () => {
-    const projection = new AppRouteProjection(routes, menuTree, "desk");
+  test("confines the menu to the rail; a page outside it sits in the home app, a page inside in its own root", () => {
+    const projection = new AppRouteProjection(routes, menuTree, { rail: ["desk"], home: "desk.incoming" });
+    expect(projection.homeApp).toBe("desk");
     expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["desk"]);
     expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");
-    const teamList = routes.find((route) => route.name === "teams.all")!;
-    const teamRecord = routes.find((route) => route.name === "teams.all.record")!;
-    expect(projection.allows(teamList, "/teams/team-1")).toBe(true);
-    expect(projection.allows(teamRecord, "/teams/team-1")).toBe(true);
-    expect(projection.allows(teamRecord, "/teams/team-2")).toBe(false);
-    expect(projection.allows(teamList, "/teams")).toBe(false);
-    expect(projection.allows(routes[0]!, "/records/r1")).toBe(false);
-    expect(projection.allows(routes.at(-1)!, "/account")).toBe(true);
     expect(projection.navigationTree.activeItem("/desk/review/r1")?.id).toBe("desk.review");
-    // A personal Settings root stays reachable under the confinement; other Settings roots do not.
+    // The rail keeps the personal Settings roots; other roots leave the navigation, not the router.
     expect(projection.navigationTree.settingsMenuItems().map((item) => item.id)).toEqual(["desk.settings", "appearance"]);
-    expect(projection.allows(routes.find((route) => route.name === "appearance")!, "/settings/appearance")).toBe(true);
-    expect(projection.allows(routes.find((route) => route.name === "platform")!, "/settings/platform")).toBe(false);
+    expect(projection.navigationTree.byId.has("platform")).toBe(false);
+    expect(projection.activeApp("/desk/review/r1")).toBe("desk");
+    expect(projection.activeApp("/records/r1")).toBe("desk");
+    expect(projection.activeApp("/settings/platform")).toBe("desk");
+    expect(projection.appTrail("/records/r1")).toEqual(["desk"]);
+    // A rail of several roots: each keeps its own pages; the home app is its first root without a home.
+    const both = new AppRouteProjection(routes, menuTree, { rail: ["records", "desk"] });
+    expect(both.homeApp).toBe("records");
+    expect(both.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["records", "desk"]);
+    expect(both.activeApp("/records/r1")).toBe("records");
+    expect(both.activeApp("/desk/incoming")).toBe("desk");
+    expect(both.activeApp("/account")).toBe("records");
+    expect(both.resourceRoutes("records")["records.Record"]?.collection).toBe("records.all");
+    expect(both.resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
   });
 
   test("the app trail lists every app a page sits in, flattened ones too (G-8)", () => {
@@ -170,17 +174,17 @@ describe("app resource projection", () => {
     expect(projection.appTrail("/elsewhere")).toEqual([]);
     // A Settings root is no app.
     expect(projection.appTrail("/settings/look")).toEqual([]);
-    // Under a confinement the root's own apps count; a page another root owns sits in the root alone.
-    const confined = new AppRouteProjection(appRoutes, tree, "pm");
-    expect(confined.appTrail("/projects/tasks")).toEqual(["pm", "projects"]);
-    expect(confined.appTrail("/settings/look")).toEqual(["pm"]);
+    // Under a selected app a rail root's own apps count; a page outside the rail sits in the home root alone.
+    const selected = new AppRouteProjection(appRoutes, tree, { rail: ["pm"] });
+    expect(selected.appTrail("/projects/tasks")).toEqual(["pm", "projects"]);
+    expect(selected.appTrail("/settings/look")).toEqual(["pm"]);
     expect(tree.appIds()).toEqual(new Set(["projects", "messaging", "pm"]));
   });
 
-  test("confineTo supplies the app scope even without an explicit appRoot marker", () => {
-    const tree = MenuTree.from(resolveMenuRouteTargets(menus.map((item) => ({ ...item, appRoot: undefined })), createRouteHref(routes)) as readonly ChromeMenuItem[]);
-    const projection = new AppRouteProjection(routes, tree, "desk");
-    expect(projection.resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
+  test("only rail roots claim their own resource routes; elsewhere two routes of one resource collide", () => {
+    expect(new AppRouteProjection(routes, menuTree, { rail: ["desk"] }).resourceRoutes("desk")["records.Record"]?.collection).toBe("desk.incoming");
+    expect(() => new AppRouteProjection(routes, menuTree, { rail: ["teams"] })).toThrow(/claims resource "records.Record" already claimed/);
+    expect(() => new AppRouteProjection(routes, menuTree)).toThrow(/claims resource "records.Record" already claimed/);
   });
 
   test("a collection-only app projection retains canonical record fallback", () => {
@@ -190,9 +194,9 @@ describe("app resource projection", () => {
     ];
     const tree = MenuTree.from([
       { id: "records", route: "records.all", to: "/records" },
-      { id: "desk", route: "desk.all", to: "/desk", appRoot: true },
+      { id: "desk", route: "desk.all", to: "/desk" },
     ]);
-    const selected = new AppRouteProjection(collectionRoutes, tree).resourceRoutes("desk");
+    const selected = new AppRouteProjection(collectionRoutes, tree, { rail: ["desk"] }).resourceRoutes("desk");
     expect(selected["records.Record"]?.collection).toBe("desk.all");
     expect(selected["records.Record"]?.record?.name).toBe("records.all.record");
   });
@@ -234,7 +238,7 @@ describe("menu alterations in the route projection", () => {
       { id: "desk.settings", group: "platform", children: [{ id: "desk.team", route: "teams.all.record", params: { id: "team-1" } }] },
     ] }] },
     { id: "suite", dependsOn: ["desk", "records", "teams"], menus: {
-      suite: { label: "Suite", appRoot: true, include: [{ id: "desk", flatten: true }, "records"] },
+      suite: { label: "Suite", include: [{ id: "desk", flatten: true }, "records"] },
       "desk.review": { remove: true },
       "desk.cycles-hub": { remove: true },
       "desk.incoming": { hide: true },
@@ -254,15 +258,8 @@ describe("menu alterations in the route projection", () => {
     expect(unavailable.get("desk.review")).toBe('menu item "desk.review" was removed');
   });
 
-  test("the guard refuses unavailable routes, also without a perspective", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, undefined, { navigation, removed: compiled.removed });
-    expect(projection.allows(route("desk.cycles"), "/desk/queues/q1/cycles")).toBe(false);
-    expect(projection.allows(route("desk.cycle"), "/desk/queues/q1/cycles/c1")).toBe(false);
-    expect(projection.allows(route("desk.incoming"), "/desk/incoming")).toBe(true);
-  });
-
   test("claims and record destinations skip removed pages; hidden pages keep their claims", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, removed: compiled.removed });
+    const projection = new AppRouteProjection(deskRoutes, logical, { rail: ["suite"] }, { navigation, removed: compiled.removed });
     expect(projection.rootFor(route("desk.incoming"))).toBe("suite");
     const selected = projection.resourceRoutes("suite");
     expect(selected["records.Record"]?.collection).toBe("desk.incoming");
@@ -271,7 +268,7 @@ describe("menu alterations in the route projection", () => {
   });
 
   test("navigation flattens the included app and drops hidden items; the logical tree keeps them", () => {
-    const projection = new AppRouteProjection(deskRoutes, logical, "suite", { navigation, removed: compiled.removed });
+    const projection = new AppRouteProjection(deskRoutes, logical, { rail: ["suite"] }, { navigation, removed: compiled.removed });
     expect(projection.navigationTree.railMenuItems().map((item) => item.id)).toEqual(["suite"]);
     expect(projection.navigationTree.byId.get("suite")?.targetedChildren.map((item) => item.id)).toEqual(["desk.home", "records"]);
     expect(projection.navigationTree.settingsEntry()?.target).toBe("/teams/team-1");
@@ -282,7 +279,7 @@ describe("menu alterations in the route projection", () => {
 });
 
 describe("composition explanation", () => {
-  test("collects shell provenance, menu removals, hidden nodes and unavailable routes with reasons", () => {
+  test("collects the selection, menu removals, hidden nodes and unavailable routes with reasons", () => {
     const layers: MenuLayer[] = [
       { id: "desk", menus: [{ id: "desk", children: [{ id: "desk.home", route: "desk.home" }, { id: "desk.review", route: "desk.review" }] }] },
       { id: "suite", dependsOn: ["desk"], menus: { "desk.review": { remove: true }, "desk.home": { hide: true } } },
@@ -290,15 +287,16 @@ describe("composition explanation", () => {
     const compiled = compileMenus(layers);
     const href = createRouteHref(routes);
     const logical = MenuTree.from(resolveMenuRouteTargets(compiled.logical, href) as readonly ChromeMenuItem[]);
-    const explanation = explainComposition(resolveShell(layers), compiled, unavailableRoutes(routes, logical, compiled.removed), { home: "/desk", confineTo: null });
+    const selection = { app: null, rail: null, brand: null, sources: {}, diagnostics: [] };
+    const explanation = explainComposition(selection, compiled, unavailableRoutes(routes, logical, compiled.removed), "/desk");
     expect(explanation.menus.removed).toEqual([{ id: "desk.review", route: "desk.review", by: "suite", parent: "desk" }]);
     expect(explanation.menus.hidden).toEqual([{ id: "desk.home", by: "suite", reason: "hide" }]);
     expect(explanation.menus.unavailable).toEqual({
       "desk.review": 'menu item "desk.review" was removed',
       "desk.review.record": 'its parent route "desk.review" is unavailable',
     });
-    expect(explanation.shell).toEqual({ brand: null, perspective: null, provenance: {}, diagnostics: [] });
-    expect(explanation.effective).toEqual({ home: "/desk", confineTo: null });
+    expect(explanation.selection).toBe(selection);
+    expect(explanation.home).toBe("/desk");
   });
 });
 
@@ -311,7 +309,6 @@ describe("availability edge cases", () => {
     const tree = MenuTree.from(resolveMenuRouteTargets([{ id: "pm.inbox", route: "inbox" }], createRouteHref(anchored)) as readonly ChromeMenuItem[]);
     const projection = new AppRouteProjection(anchored, tree, undefined, { removed: [{ id: "decisions", route: "inbox" }] });
     expect(projection.unavailable.size).toBe(0);
-    expect(projection.allows(anchored[0]!, "/inbox")).toBe(true);
   });
   test("a removed anchor does not hand a parameterized route to one of its destinations", () => {
     const boards: readonly BaseAddonRoute[] = [{ name: "boards.board", path: "/boards/$key", menu: "boards" }];

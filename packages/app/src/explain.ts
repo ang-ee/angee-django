@@ -1,25 +1,22 @@
-import type { ComposedContainers, ContainerCondition, RuntimeComposition } from "@angee/ui/runtime";
+import type { ComposedContainers, ContainerCondition, RuntimeComposition, RuntimeSelection } from "@angee/ui/runtime";
 
 import type { CompiledMenus } from "./menus";
-import type { ResolvedShell } from "./shell";
 
-/** Why the composed shell, menus and containers look as they do, layer by layer: the facts developer mode shows. */
-export interface CompositionExplanation extends RuntimeComposition {
-  shell: ResolvedShell;
-}
+/** Why the selected app, menus and containers look as they do, layer by layer: the facts developer mode shows. */
+export type CompositionExplanation = RuntimeComposition;
 
 /** Assemble the composition's explanation from its owners' facts; nothing is re-derived here. */
 export function explainComposition(
-  shell: ResolvedShell,
+  selection: RuntimeSelection,
   menus: CompiledMenus,
   unavailable: ReadonlyMap<string, string>,
-  effective: CompositionExplanation["effective"],
+  home: string,
   containers?: ComposedContainers,
 ): CompositionExplanation {
   const { provenance, removed, hidden, diagnostics } = menus;
   return {
-    shell,
-    effective,
+    selection,
+    home,
     menus: { provenance, removed, hidden, unavailable: Object.fromEntries(unavailable), diagnostics },
     ...(containers ? {
       containers: {

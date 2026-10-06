@@ -10,27 +10,26 @@ schemas and returns the app to mount. `errorReporting` carries the host's Sentry
 DSN and environment; without a DSN no reporting SDK is loaded. See the
 [frontend guidelines](../../docs/frontend/guidelines.md).
 
-Products declare the shell. An addon's `shell: { home, brand, perspective }`
-names the product's home (where `/` lands unless the person chose otherwise,
-per the [frontend guidelines](../../docs/frontend/guidelines.md)), its
-`{ name, mark }` identity (the mark a registered glyph) and the selected perspective; `perspectives: { id: { root, home? } }`
-declares named confinements. A perspective projects its menu root into the rail
-and command palette and redirects console routes owned by other roots to home
-with replacement. Unowned console routes (account, profile, preferences) remain
-reachable, public layouts remain available, and the server still owns access.
-Unknown perspectives or roots, and homes outside the selected root, fail
-composition.
-
-Shell facts layer along `dependsOn`, which the composed runtime fills from
-`addon.toml`: among the addons declaring a shell, the one no other declarer
-depends on is the product, and its own fields override its dependencies' field
-by field. Unrelated products, or unrelated ancestors setting one field, fall
-back to the framework default (no brand, no perspective, no declared home) and
-record why in `composed.shell.diagnostics`. The deployment's
-`ANGEE_UI` setting (`{ shell, perspectives }`) applies last; `perspective: null`
-keeps the full console. `createApp`'s `home` and `confineTo` inputs and the
-top-level `brand` field remain as deprecated overrides. Addons cannot claim the
-`ui` translation namespace, which belongs to the rendered package.
+A top-level menu root is an app. Its menu entry may declare `home` (a route
+name inside the root, where `/` lands when the app is selected), `brand`
+(`{ name, mark }`, the mark a registered glyph; it defaults to the root's label
+and icon) and `theme` (an installed theme id). They layer like other menu
+fields, and an included app drops them. The deployment's `ANGEE_UI.shell`
+selects the app: `{ brand?, theme?, apps?: { <name>: { rail, brand?, theme?,
+home? } }, hosts?: { <hostname>: <root id | apps name> } }`. `selectApp` (in
+[`boot-app.tsx`](src/boot-app.tsx)) takes `?app=`, else the hostname's `hosts`
+entry, else nothing, which shows every root with `shell.brand` and
+`shell.theme`. A root id is the one-root app; a named app takes its own brand,
+theme and home, else its first rail root's. `createApp` reads `location`
+(default `window.location`) and projects the selected rail into the rail, the
+command palette and Refine's resources, keeping the personal Settings roots.
+Pages outside the rail stay reachable and sit in the selection's home root; no
+route is guarded. The runtime's `brand` and `rail`, and the appearance's default
+theme, come from the selection; the person's own theme still wins. Every root,
+app and host is checked at boot, selected or not, and an unknown `?app=` warns
+in development and falls back. Only the deployment layer declares `shell`.
+Addons cannot claim the `ui` translation namespace, which belongs to the
+rendered package.
 
 Addons shape the menu with a dict keyed by node id (`menus: { … }`). A key in
 the addon's own namespace (its id, or `<id>.…`) declares a node; any other key
@@ -58,8 +57,9 @@ signed-in user turns it on from the user menu, which stores it in their
 preferences, or for the browser session with `?debug=1` on any URL (`?debug=0`
 turns it off). The session choice, from the URL or the menu, wins over the
 stored preference until the tab closes. A debug button then sits beside the
-avatar: hovering it gives the page's route, app, perspective and home, and
-clicking it opens the composition (shell provenance, removed and hidden menu
+avatar: hovering it gives the page's route and app, the selected app and home,
+and clicking it opens the composition (where each selection fact came from,
+removed and hidden menu
 items, unavailable routes, findings, the layers behind each menu item, container
 narrowing, removed container children, and the layers behind each child). The
 expanded rail lists hidden items, marked "(hidden)", and removed items, struck
@@ -68,23 +68,22 @@ form field labels and list column headers show their technical field name. It
 reveals composition facts only, never records, and changes nothing the server
 allows.
 
-`createApp(...).explain` reports how the composition came out: the resolved
-shell with the layer behind each field, the effective home and confinement, the
-layer that set each menu node field, removed nodes and who removed them, hidden
-nodes (by `hide` or a layer's `only`), unavailable routes with the reason,
-diagnostics such as shell fallbacks and out-of-namespace menu ids (warned in
-development), and under `containers` each layer's narrowing per address, the
+`createApp(...).explain` reports how the composition came out: the `selection`
+(its app, rail, brand, theme and home, the source of each, and why a requested
+app fell back), the `home` `/` lands on, the layer that set each menu node
+field, removed nodes and who removed them, hidden nodes (by `hide` or a layer's
+`only`), unavailable routes with the reason, diagnostics such as
+out-of-namespace menu ids (warned in development), and under `containers` each layer's narrowing per address, the
 removed children with who removed them, and the layer behind each child field.
 
 An app root can declare a collection/record pair with `resourcePageRoutes` for
 an existing resource, using either `resource` or `recordModel`. Canonical claims
 remain unique. A same-model route may declare `recordMatch` for its records;
 `useResourceRecordHref` and `useResourceRecordHrefLookup` select a matching route,
-then the canonical route. Explicit route names use `useRouteHref()`.
-In a confined app, explicit Settings `route`/`params` targets admit those owner
-records and descendants, while other records in the foreign app remain outside
-the confinement. See the [frontend guideline](../../docs/frontend/guidelines.md)
-for the shared Settings place.
+then the canonical route. Explicit route names use `useRouteHref()`. With an
+app selected, each rail root claims its own routes; elsewhere claims stay
+canonical. See the [frontend guideline](../../docs/frontend/guidelines.md) for
+the shared Settings place.
 
 ## App vocabulary and shipped views
 
@@ -162,7 +161,7 @@ containers: {
 
 A child on a kind address (`form#sections`) shows on every model; one on a
 model address also shows on that model's MTI children. The name after `#` types
-the child through `ContainerKinds`. `when: { app, route, perspective }` applies
+the child through `ContainerKinds`. `when: { app, route }` applies
 `only`, `except` and `hide` on matching pages; children are declared and moved
 unconditionally. Each layer's `only` intersects with what it inherits and never
 filters children its dependents add; `only: []` keeps none, and `hide: false`

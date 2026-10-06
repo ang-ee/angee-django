@@ -110,5 +110,7 @@ export type {
   RemovedMenuItem,
   RuntimeBrand,
   RuntimeComposition,
+  RuntimeSelection,
+  RuntimeSelectionField,
   WidgetMap,
 } from "./contracts";

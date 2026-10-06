@@ -1,5 +1,5 @@
 import type { BaseMenuItem, ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
-import type { HiddenMenuItem, MenuItem, RemovedMenuItem } from "@angee/ui/runtime";
+import type { HiddenMenuItem, MenuItem, RemovedMenuItem, RuntimeBrand } from "@angee/ui/runtime";
 
 import { positionSiblings } from "@angee/ui/lib/position";
 
@@ -69,9 +69,11 @@ export interface CompiledMenus {
   diagnostics: readonly string[];
 }
 
+/** What an app root says about itself when it is selected: where it lands, its identity, its theme. */
+const ROOT_FIELDS = ["home", "brand", "theme"] as const satisfies readonly (keyof MenuEntry)[];
 const DECLARATION_FIELDS = [
   "label", "route", "params", "defaultResourceView", "to", "icon",
-  "appRoot", "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after",
+  "description", "group", "status", "tone", "personal", "parent", "sequence", "before", "after", ...ROOT_FIELDS,
 ] as const satisfies readonly (keyof MenuEntry)[];
 const OPERATION_FIELDS = ["include", "remove", "hide", "only", "force"] as const satisfies readonly (keyof MenuEntry)[];
 type EntryKey = (typeof DECLARATION_FIELDS)[number] | (typeof OPERATION_FIELDS)[number];
@@ -183,7 +185,7 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   };
   if (value.include !== undefined) strings("include", value.include);
   if (value.only !== undefined) strings("only", value.only);
-  for (const key of ["remove", "hide", "appRoot", "personal", "force"] as const) {
+  for (const key of ["remove", "hide", "personal", "force"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error(`${where}: ${key} must be true or false.`);
   }
   // Addons only narrow (G-14); the deployment may force an `only`, and says so.
@@ -193,11 +195,21 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   for (const key of ["sequence"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "number") throw new Error(`${where}: ${key} must be a number.`);
   }
-  for (const key of ["label", "route", "to", "icon", "before", "after"] as const) {
+  for (const key of ["label", "route", "to", "icon", "before", "after", "home", "theme"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "string") throw new Error(`${where}: ${key} must be a string.`);
   }
+  if (value.brand !== undefined) assertBrand(where, value.brand);
   if (value.parent !== undefined && value.parent !== null && typeof value.parent !== "string") {
     throw new Error(`${where}: parent must be a menu id or null.`);
+  }
+}
+
+/** A brand names its product and a glyph; the glyph's registration is checked at app boot. */
+export function assertBrand(where: string, brand: unknown): asserts brand is RuntimeBrand {
+  const fields = typeof brand === "object" && brand !== null && !Array.isArray(brand) ? brand as Record<string, unknown> : undefined;
+  if (!fields || Object.keys(fields).some((key) => key !== "name" && key !== "mark")
+    || [fields.name, fields.mark].some((value) => typeof value !== "string" || !value.trim())) {
+    throw new Error(`${where}: brand must be { name, mark } with a non-empty name and mark.`);
   }
 }
 
@@ -212,6 +224,7 @@ function declareLegacy(
   const id = item.id ?? item.route;
   if (!id) throw new Error(`Addon "${layer}" declares a menu item without id or route; menu id defaults require one of them.`);
   const { id: _id, children, parentId, ...rest } = item;
+  if (rest.brand !== undefined) assertBrand(`Menu item "${id}" of "${layer}"`, rest.brand);
   const owner = parent ?? parentId;
   if (id !== layer && !id.startsWith(`${layer}.`)) {
     diagnostics.push(`Addon "${layer}" declares menu item "${id}" outside its namespace ("${layer}" or "${layer}.…").`);
@@ -252,6 +265,11 @@ function resolve(
     if (node.fields.personal && (parent !== undefined || node.fields.group !== "platform")) {
       throw new Error(`Menu item "${node.id}" is personal, which only a Settings root (group "platform", no parent) may be.`);
     }
+    // An included app drops the root facts it declared as a root; no other nested node has any.
+    const rootField = ROOT_FIELDS.find((field) => node.fields[field] !== undefined);
+    if (rootField && parent !== undefined && !node.declaredRoot) {
+      throw new Error(`Menu item "${node.id}" sets ${rootField}, which only a root (no parent) may.`);
+    }
   }
   for (const node of nodes.values()) {
     const seen = new Set<string>();
@@ -288,12 +306,12 @@ function resolve(
   const survivors = (parent: string | undefined): Node[] =>
     (children.get(parent) ?? []).filter((node) => !removed.has(node.id));
 
-  // Included apps lose appRoot, but retain compiler-owned app identity unless
-  // flattened. An author nesting appRoot itself still fails tree validation.
+  // An included app is no longer a root: it drops its root facts but keeps
+  // compiler-owned app identity unless flattened.
   const emitted = (node: Node, drop: readonly Field[]): Record<string, unknown> => {
     const fields: Record<string, unknown> = { ...node.fields };
     for (const field of drop) delete fields[field];
-    if (parentOf(node) !== undefined && node.setBy.parent !== node.owner) delete fields.appRoot;
+    if (parentOf(node) !== undefined) for (const field of ROOT_FIELDS) delete fields[field];
     if (node.declaredRoot && parentOf(node) !== undefined && !node.fields.flatten) fields.app = true;
     return fields;
   };

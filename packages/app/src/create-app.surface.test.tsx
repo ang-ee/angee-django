@@ -57,8 +57,7 @@ test("an app condition narrows the app's routes and their record children, never
     layouts: { console: { requireAuth: false }, public: { requireAuth: false } },
     schemas: TEST_SCHEMAS,
     defaultSchema: "console",
-    confineTo: "desk",
-    home: "desk.home",
+    location: { search: "?app=desk" },
     loginPath: "/signin",
   });
   const host = document.createElement("div"); document.body.append(host);
@@ -95,7 +94,6 @@ test("a route condition holds on the route and the routes below it", async () =>
     layouts: { console: { requireAuth: false } },
     schemas: TEST_SCHEMAS,
     defaultSchema: "console",
-    home: "desk.home",
   });
   const host = document.createElement("div"); document.body.append(host);
   const root = app.mount(host);
@@ -133,8 +131,7 @@ test("an app narrows the record chrome with a conditional only on its own form#c
     layouts: { console: { requireAuth: false } },
     schemas: TEST_SCHEMAS,
     defaultSchema: "console",
-    confineTo: "desk",
-    home: "desk.home",
+    location: { search: "?app=desk" },
   });
   const host = document.createElement("div"); document.body.append(host);
   const root = app.mount(host);
@@ -148,21 +145,20 @@ test("an app narrows the record chrome with a conditional only on its own form#c
 });
 
 
-test("the app supplies in-app link navigation and keeps a query-bearing home destination out of the pathname", async () => {
+test("the app supplies in-app link navigation from the home it lands on", async () => {
   history.replaceState(null, "", "/");
   const app = createApp({
     addons: [{ id: "desk", routes: [
       { name: "desk.home", path: "/desk", component: () => <TextLink href="/records/7?preset=open">Follow record</TextLink> },
       { name: "desk.record", path: "/records/$id", component: () => <div>Record page</div> },
     ], menus: [{ id: "desk", route: "desk.home" }] }],
-    layouts: { console: { requireAuth: false } }, schemas: TEST_SCHEMAS, defaultSchema: "console", home: "/desk?preset=all",
+    layouts: { console: { requireAuth: false } }, schemas: TEST_SCHEMAS, defaultSchema: "console", location: { search: "" },
   });
   const host = document.createElement("div"); document.body.append(host);
   const root = app.mount(host);
   try {
     const link = await screen.findByRole("link", { name: "Follow record" });
     expect(app.router.state.location.pathname).toBe("/desk");
-    expect(app.router.state.location.search).toEqual({ preset: "all" });
     expect(fireEvent.click(link)).toBe(false);
     await screen.findByText("Record page");
     await waitFor(() => expect(app.router.state.location.pathname).toBe("/records/7"));

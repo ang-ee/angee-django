@@ -221,8 +221,8 @@ export interface CapturedChrome {
 export interface CaptureChromeOptions {
   addons: readonly BaseAddon[];
   path: string;
-  home?: string;
-  confineTo?: string;
+  /** The app to select, as `?app=` would: a menu root id or an `ANGEE_UI.shell.apps` name. */
+  app?: string;
   schemas?: CreateAppInput["schemas"];
 }
 
@@ -230,8 +230,7 @@ export interface CaptureChromeOptions {
 export async function captureChrome({
   addons,
   path,
-  home = path,
-  confineTo,
+  app,
   schemas = TEST_SCHEMAS,
 }: CaptureChromeOptions): Promise<CapturedChrome> {
   const captures: CapturedChromeProps[] = [];
@@ -278,8 +277,7 @@ export async function captureChrome({
     schemas,
     defaultSchema: "console",
     subscriptionSchema: "console",
-    home,
-    confineTo,
+    location: { search: app === undefined ? "" : `?${new URLSearchParams({ app })}` },
   }).mount(host);
 
   try {

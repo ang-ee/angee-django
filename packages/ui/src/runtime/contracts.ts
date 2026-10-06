@@ -10,10 +10,33 @@ import type { ResourceVocabulary } from "@angee/metadata";
 
 import type { RouteHrefParams } from "./route-href";
 
-/** Product identity declared once by an addon; mark names a registered glyph. */
+/** Product identity: a menu root's or the deployment's; mark names a registered glyph. */
 export interface RuntimeBrand {
   name: string;
   mark: string;
+}
+
+/** A field of the selected app; each records where it came from. */
+export type RuntimeSelectionField = "app" | "rail" | "brand" | "theme" | "home";
+
+/**
+ * The app the deployment selected, by `?app=` or by hostname: the roots its rail
+ * shows, its brand, its default theme and its home. Nothing selected shows every root.
+ */
+export interface RuntimeSelection {
+  /** The selected menu root id or `ANGEE_UI.shell.apps` name; null when nothing is selected. */
+  app: string | null;
+  /** The top-level menu roots the rail shows, in order; null shows every root. */
+  rail: readonly string[] | null;
+  brand: RuntimeBrand | null;
+  /** The theme a person who chose none sees; unset keeps the build default. */
+  theme?: string;
+  /** The route name `/` lands on; unset lands on the rail's first app. */
+  home?: string;
+  /** Where each field came from, named the way a person fixing it finds it. */
+  sources: Readonly<Partial<Record<RuntimeSelectionField, string>>>;
+  /** Why a requested app was not selected, such as an unknown `?app=`. */
+  diagnostics: readonly string[];
 }
 
 /** A menu item a layer removed: the route it referenced, the removing layer, the rail item it showed under, its label. */
@@ -39,16 +62,10 @@ export interface HiddenMenuItem {
  * holds composition facts only (ids, addon names, route names), never records.
  */
 export interface RuntimeComposition {
-  shell: {
-    home?: string;
-    brand: RuntimeBrand | null;
-    perspective: { id: string; root: string; home?: string } | null;
-    /** The layer that supplied each resolved shell field. */
-    provenance: Readonly<Partial<Record<string, string>>>;
-    diagnostics: readonly string[];
-  };
-  /** What the app runs with once deprecated `createApp` inputs override the shell. */
-  effective: { home: string; confineTo: string | null };
+  /** The selected app: its rail, brand, theme and home, and where each came from. */
+  selection: RuntimeSelection;
+  /** Where `/` lands for a person without preferences. */
+  home: string;
   menus: {
     /** The layer that set each menu item field, declarations included. */
     provenance: Readonly<Record<string, Readonly<Record<string, string>>>>;

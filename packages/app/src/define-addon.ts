@@ -34,11 +34,9 @@ import type {
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
-import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
-import { resolveShell, type PerspectiveDeclaration, type ResolvedShell, type ShellDeclaration } from "./shell";
 import { compileMenus, type CompiledMenus, type MenuDeclarations } from "./menus";
-import { layerAncestry } from "./layers";
+import { DEPLOYMENT_LAYER_ID, layerAncestry } from "./layers";
 import { compileContainers } from "./containers";
 import { CORE_CONTAINERS } from "./core-containers";
 import {
@@ -102,20 +100,49 @@ export interface LayoutProviderContribution {
   component: unknown;
 }
 
+/**
+ * A named app the deployment declares: a rail of top-level menu roots, with the
+ * brand, theme and home it shows when selected. Each unset one comes from its
+ * first rail root.
+ */
+export interface AppDeclaration {
+  /** Top-level menu root ids, in rail order. */
+  rail: readonly string[];
+  brand?: RuntimeBrand;
+  /** An installed theme id. */
+  theme?: string;
+  /** A route name inside the rail. */
+  home?: string;
+}
+
+/**
+ * The deployment's `ANGEE_UI.shell`. `?app=` or the hostname's `hosts` entry
+ * selects an app (a menu root id or an `apps` name); with nothing selected the
+ * rail shows every root, with this `brand` and `theme`.
+ */
+export interface ShellSettings {
+  brand?: RuntimeBrand;
+  /** An installed theme id; it also backs a selected app that names none. */
+  theme?: string;
+  /** Named rails; a name must not be a menu root id. */
+  apps?: Readonly<Record<string, AppDeclaration>>;
+  /** Lower-case hostname to the app it selects: a menu root id or an `apps` name. */
+  hosts?: Readonly<Record<string, string>>;
+}
+
 /** One addon's self-describing manifest. */
 export interface AddonManifest {
   id: string;
   /**
    * Ids of the manifests this one depends on, transitively. The composed runtime
-   * supplies them from `addon.toml`; shell facts layer along them.
+   * supplies them from `addon.toml`; menus and containers layer along them.
    */
   dependsOn?: readonly string[];
-  /** Home, brand and selected perspective, overriding the addons this one depends on. */
-  shell?: ShellDeclaration;
-  /** Named confinements a shell may select; ids are unique across addons. */
-  perspectives?: Readonly<Record<string, PerspectiveDeclaration>>;
-  /** @deprecated Declare `shell.brand`. */
-  brand?: RuntimeBrand;
+  /**
+   * The deployment layer's `ANGEE_UI.shell`; no addon declares it. An addon puts
+   * its app's home, brand and theme on its menu root.
+   */
+  shell?: ShellSettings;
   routes?: readonly AddonRoute[];
   /**
    * Menu nodes keyed by id: own-namespace keys declare, other keys alter a node of
@@ -165,9 +192,8 @@ export type ThemeManifestContribution =
 
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
-  /** Home, brand and perspective resolved across the addon layers. */
-  shell: ResolvedShell;
-  brand: RuntimeBrand | null;
+  /** The deployment's `ANGEE_UI.shell`, which selects the app; see `selectApp`. */
+  shell?: ShellSettings;
   routes: readonly AddonRoute[];
   /** The logical menu tree: owns routes, trails and the active app. */
   menus: readonly ComposedMenuItem[];
@@ -261,7 +287,12 @@ export function composeAddons(
 ): ComposedAddons {
   const canonicalizeModel = options.canonicalModelLabel;
   const ancestors = layerAncestry(addons);
-  const shell = resolveShell(addons, ancestors);
+  for (const addon of addons) {
+    if (addon.shell !== undefined && addon.id !== DEPLOYMENT_LAYER_ID) {
+      throw new Error(`Addon "${addon.id}" declares shell, which only the deployment's ANGEE_UI does; declare home, brand and theme on the addon's menu root.`);
+    }
+  }
+  const shell = addons.find((addon) => addon.id === DEPLOYMENT_LAYER_ID)?.shell;
   const routes: AddonRoute[] = [];
   const compiledMenus = compileMenus(addons, ancestors);
   const containers = compileContainers(addons, CORE_CONTAINERS, { ancestors, canonicalizeModel });
@@ -378,13 +409,8 @@ export function composeAddons(
     }
   }
 
-  if (shell.brand && !getIcon(icons, shell.brand.mark)) {
-    throw new Error(`Brand mark "${shell.brand.mark}" is not registered by any addon.`);
-  }
-
   return {
-    shell,
-    brand: shell.brand,
+    ...(shell ? { shell } : {}),
     routes,
     menus: compiledMenus.logical,
     menuComposition: compiledMenus,

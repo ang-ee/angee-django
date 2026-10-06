@@ -85,7 +85,7 @@ describe("AppMenu", () => {
   test("developer removed markers overflow first and remain disabled in declaration order", async () => {
     const resize = mockOverflow(400);
     const composition: RuntimeComposition = {
-      shell: { brand: null, perspective: null, provenance: {}, diagnostics: [] }, effective: { home: "/desk", confineTo: null },
+      selection: { app: null, rail: null, brand: null, sources: {}, diagnostics: [] }, home: "/desk",
       menus: { provenance: {}, hidden: [], unavailable: {}, diagnostics: [], removed: [
         { id: "old-a", label: "Old A", parent: "desk", by: "suite" },
         { id: "old-b", label: "Old B", parent: "desk", by: "suite" },

@@ -24,6 +24,8 @@ const nexus = defineBaseAddon({
     nexus: {
       label: "Nexus",
       icon: "nexus-inbox",
+      // Where a deployment selecting Nexus lands.
+      home: "nexus.inbox",
       // Each included app keeps its own group, so its pages stay a level down.
       include: ["messaging", "parties", "spaces", "posts"],
     },
@@ -32,7 +34,6 @@ const nexus = defineBaseAddon({
     "nexus.ties": { parent: "nexus", label: "Ties", route: "nexus.ties", icon: "radar", sequence: 30, hide: true },
     "nexus.cadences": { parent: "nexus", label: "Cadences", route: "nexus.cadences", icon: "cadence", sequence: 40 },
   },
-  perspectives: { nexus: { root: "nexus", home: "nexus.inbox" } },
   icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History, "nexus-inbox": Inbox },
   i18n: { nexus: enNexusMessages },
   // The cross-channel timeline rides the record chatter seam; the shell applies
