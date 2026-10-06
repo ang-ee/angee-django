@@ -230,7 +230,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const orderedTabs = [
     ...(hasBodyTabs ? surface.bodyTabSections.map((section) => ({ ...section, id: section.key }))
       : overviewTab?.hidden && recordTabList.length > 0 ? []
-      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: t("form.tabOverview") }]),
+      : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: surface.modelMetadata?.overviewLabel ?? t("form.tabOverview") }]),
     ...recordTabList,
   ];
   const tabStrip = <Tabs.List>
