@@ -31,6 +31,16 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- File attachments and knowledge record bindings authorize their target in the
+  REBAC schema (django-zed-rebac 0.26.0 relations backed by the edge's
+  `GenericForeignKey`) and are created and deleted under the actor. The app that
+  owns a target type declares it from its `permissions.extends.zed`, unioning the
+  type's arms into the edge's `target_write` (and, for bindings, `target_read`);
+  projects declares tasks (files, bindings) and projects (bindings). A target
+  type no relation names is now refused under an actor: consumers that attach
+  files to, or bind knowledge to, other record types must declare them. An
+  untyped target raises `ValueError` from `rebac.generic_target`, under system
+  context too. `FileAttachmentManager.authorized_target` is removed.
 - Hasura input-extension values that name no model field reach their model: the
   default write backend writes the row, then passes them to the cooperative
   `AngeeModel.apply_input_extensions` hook in the same transaction (create is now

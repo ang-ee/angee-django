@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils.module_loading import import_string
-from rebac import ObjectRef, system_context
+from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
 
 from angee.base.mixins import SqidMixin
@@ -459,6 +459,30 @@ def test_canonical_record_target_resolves_a_proxy_to_its_concrete_target(record_
     assert canonical_record_target(parent_proxy).content_type != ContentType.objects.get_for_model(
         MtiParentProxy, for_concrete_model=False
     )
+
+
+def test_canonical_record_target_keys_typed_rows_where_rebac_generic_target_does(record_ref_tables: None) -> None:
+    """Edges not yet on GenericForeignKey backing share storage's and knowledge's key.
+
+    Only an untyped row differs: REBAC refuses it, the remaining edges key it on
+    its concrete model.
+    """
+
+    del record_ref_tables
+    with system_context(reason="canonical record target parity"):
+        rows = (
+            MtiChild.objects.create(title="Child", detail="org"),
+            MtiParent.objects.create(title="Parent"),
+            MtiChildProxy.objects.create(title="Proxy child", detail="org"),
+            MtiParentProxy.objects.create(title="Proxy parent"),
+            RecordRefTypedTarget.objects.create(name="typed"),
+        )
+    for row in rows:
+        target = generic_target(row)
+        assert canonical_record_target(row) == CanonicalRecordTarget(target.content_type, target.object_id)
+    plain = RecordRefPlainTarget.objects.create(name="plain")
+    with pytest.raises(ValueError, match="no resource type"):
+        generic_target(plain)
 
 
 def test_canonical_record_target_rejects_a_multiple_mti_child(record_ref_tables: None) -> None:

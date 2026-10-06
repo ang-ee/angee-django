@@ -7,14 +7,15 @@ from django.core import signing
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.actors import NoActorResolvedError
+from rebac.backends import backend as rebac_backend
+from rebac.checks import check_field_backed_relations
 from rebac.errors import PermissionDenied
 from rebac.models import active_relationship_model
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
-from angee.base.refs import canonical_record_target
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
@@ -31,6 +32,7 @@ from tests.conftest import (
     create_user,
     execute_schema,
     result_data,
+    vault_for,
 )
 from tests.mtidemo.models import MtiChild, MtiChildProxy, MtiParent
 from tests.storage_campaign import relationship_storage as relationship_storage
@@ -53,7 +55,7 @@ def test_record_files_query_requires_record_and_file_read_and_reports_arm(
         attachment = FileAttachment.objects.attach(file, drive)
     with actor_context(drive.alice):
         drive.with_actor(drive.alice).grant_record_access("viewer", reader)
-    assert not FileAttachment.objects.has_record_arm(canonical_record_target(drive))
+    assert not FileAttachment.objects.has_record_arm(generic_target(drive))
     # The capability branch is isolated here; the native arm's actual presence
     # is covered by record upload tests, and the file edge still scopes itself.
     monkeypatch.setattr(FileAttachmentManager, "has_record_arm", lambda *_: True)
@@ -207,25 +209,81 @@ def test_download_rejects_legacy_and_malformed_actor_claims(drive: Any, actor_cl
         row.issue_download_token()
 
 
-@pytest.mark.parametrize("missing", ["file_read", "target_write", "untyped_target"])
-def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(drive: Any, missing: str) -> None:
+@pytest.mark.parametrize(
+    "missing", ["file_read", "file_write", "target_write", "undeclared_target", "untyped_target"],
+)
+def test_attach_rejects_missing_authority_even_with_sudo_loaded_inputs(
+    drive: Any, composed_permissions: None, missing: str,
+) -> None:
     row = _proxy_upload(drive, PNG_BYTES)
-    reader = create_user("attach-reader")
+    actor = create_user("attach-actor")
     with system_context(reason="test.storage.attach.seed"):
-        target = Drive.objects.create(backend=drive.backend, slug="target", name="Target", owner=reader)
+        target = Drive.objects.create(backend=drive.backend, slug="target", name="Target", owner=actor)
         row = File.objects.get(pk=row.pk)
+    with actor_context(drive.alice):
+        if missing == "file_write":
+            row.with_actor(drive.alice).grant_record_access("viewer", actor)
+        elif missing != "file_read":
+            drive.with_actor(drive.alice).grant_record_access("editor", actor)
+    expected: type[Exception] = PermissionDenied
     if missing == "target_write":
-        target = drive
-        with actor_context(drive.alice):
-            row.with_actor(drive.alice).grant_record_access("viewer", reader)
+        with system_context(reason="test.storage.attach.foreign"):
+            target = Drive.objects.create(
+                backend=drive.backend, slug="foreign", name="Foreign", prefix="foreign", owner=drive.alice,
+            )
+    elif missing == "undeclared_target":
+        # Writable by the actor, but no relation on storage/file_attachment names vaults.
+        target = vault_for(actor, name="Not attachable")
     elif missing == "untyped_target":
         target = MimeType._base_manager.first()
-        with actor_context(drive.alice):
-            row.with_actor(drive.alice).grant_record_access("viewer", reader)
-    with actor_context(reader), pytest.raises(PermissionDenied):
+        expected = ValueError
+    # file_write: the composed storage/file reads record files through their
+    # attachments (projects' task arm), so a new edge also needs write on the file.
+    with actor_context(actor), pytest.raises(expected):
         FileAttachment.objects.attach(row, target)
     with system_context(reason="test.storage.attach.inspect"):
         assert FileAttachment.objects.count() == 0
+
+
+def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
+    drive: Any, composed_permissions: None,
+) -> None:
+    row = _proxy_upload(drive, PNG_BYTES)
+    editor, reader = create_user("attach-editor"), create_user("attach-file-reader")
+    with system_context(reason="test.storage.attach.declared"):
+        target = Drive.objects.create(backend=drive.backend, slug="declared", name="Declared", owner=editor)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("editor", editor)
+        row.with_actor(drive.alice).grant_record_access("viewer", reader)
+    with actor_context(editor):
+        attachment = FileAttachment.objects.attach(row, target, label="Declared")
+        assert attachment.created_by_id == editor.pk
+        assert FileAttachment.objects.attach(row, target).pk == attachment.pk
+    with actor_context(reader):
+        with CaptureQueriesContext(connection) as queries:
+            listed = list(FileAttachment.objects.for_record(target).values_list("pk", flat=True))
+        assert listed == [attachment.pk]
+        table = connection.ops.quote_name(FileAttachment._meta.db_table)
+        assert sum(query["sql"].startswith(f"SELECT {table}.") for query in queries) == 1
+        # Edges delete under the actor through the scoped manager: file write is required.
+        with pytest.raises(PermissionDenied):
+            FileAttachment.objects.filter(pk=attachment.pk).delete()
+    with actor_context(editor):
+        assert FileAttachment.objects.filter(pk=attachment.pk).delete()[0] == 1
+    with system_context(reason="test.storage.attach.detached"):
+        assert not FileAttachment.objects.exists()
+
+
+def test_composed_edge_target_relations_pass_the_backing_check(composed_permissions: None) -> None:
+    schema = rebac_backend().schema()
+    for resource_type, relations in (
+        ("storage/file_attachment", {"task", "drive", "mti_parent"}),
+        ("knowledge/record_binding", {"task", "project", "record_vault", "mti_parent"}),
+    ):
+        definition = schema.get_definition(resource_type)
+        assert definition is not None
+        assert relations <= {relation.name for relation in definition.relations}
+    assert [issue for issue in check_field_backed_relations() if issue.id == "rebac.E009"] == []
 
 
 def test_attach_converges_on_canonical_parent_and_proxy_with_actor_scoped_result(drive: Any) -> None:

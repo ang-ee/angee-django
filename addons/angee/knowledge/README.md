@@ -3,8 +3,20 @@
 Knowledge contributes a **Pages** chatter tab for record routes. It lists
 actor-readable page bindings and embeds `KnowledgePageView`. Binding and
 unbinding use the existing role-keyed mutations, which require write access to
-both the page and target record. A record owner must still contribute its own
-`knowledge/record_binding` read arm; the binding grants no access by itself.
+both the page and target record. A record owner declares its type bindable from
+its `permissions.extends.zed` — one relation backed by the binding's `target`,
+unioned into `target_read` and `target_write`:
+
+```zed
+definition knowledge/record_binding {
+    relation record: example/record // rebac:field=target
+    permission target_read = record->read
+    permission target_write = record->write
+}
+```
+
+An undeclared type cannot be bound under an actor and its bindings stay
+unreadable; the binding grants no access by itself.
 
 The tab is the `record#aside/knowledge.pages` child. The rendered addon exports
 `recordPagesTab({ label, role, sequence, when, aliases })`, which returns a

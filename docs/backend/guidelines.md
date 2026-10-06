@@ -989,12 +989,20 @@ and current contracts before applying a historical example to a new deployment.
   and saves that write `email` apply it, so lookups and the person-email unique
   constraint compare the stored column without SQL transforms. `bulk_create` and
   queryset `update()` bypass it; normalize before writing email through them.
-- **Polymorphic edges write at the canonical MTI level.** Route their targets
-  through `angee.base.canonical_record_target`; compose `ThreadedModelMixin` and
-  reverse `GenericRelation`s on that same canonical ancestor. The edge owner
-  authorizes that canonical target: [`FileAttachmentManager.attach`](../../addons/angee/storage/models.py)
-  requires its `write` and fails closed, outside system context, for a target
-  without a REBAC type.
+- **Polymorphic edges authorize their target in the schema.** Back one relation
+  per target type with the edge's `GenericForeignKey`, contributed by the app
+  that owns the type (`relation task: projects/task // rebac:field=target`), and
+  write the edge's `create`, `read` and `delete` over them; the type's model must
+  be its own canonical model and its identity its primary key (`rebac.E009`).
+  Store targets with `rebac.generic_target(record)`, create and delete edges
+  under the actor, and list a record's edges with the scoped edge queryset
+  filtered by `generic_target(record).lookups(Edge, "target")`. Move an edge by
+  deleting and recreating it. A type without a relation is refused under an
+  actor; [file attachments](../../addons/angee/storage/permissions.zed) require
+  write on the target and [knowledge bindings](../../addons/angee/knowledge/permissions.zed)
+  both ends. Edges not yet on this backing still key on
+  `angee.base.canonical_record_target`; compose `ThreadedModelMixin` and reverse
+  `GenericRelation`s on the same canonical ancestor either way.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.

@@ -21,7 +21,7 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from django.test import RequestFactory
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, generic_target, system_context, to_object_ref, write_relationships
 from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
@@ -30,7 +30,6 @@ from strawberry.django.views import GraphQLView
 
 from angee.base.identity import public_id_of
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
-from angee.base.refs import canonical_record_target
 from angee.data.field_classification import is_archive_field, is_trash_field
 from angee.graphql import records
 from angee.graphql.views import graphql_endpoint
@@ -1564,7 +1563,7 @@ def test_attachment_locks_canonical_target_and_file_before_creation(
     row = _proxy_upload(drive, PNG_BYTES)
     with system_context(reason="storage attachment setup"):
         target = MtiChild.objects.create(title="Attached", detail="target")
-    canonical = canonical_record_target(target)
+    canonical = generic_target(target)
     locks: list[type[models.Model]] = []
     select_for_update = models.QuerySet.select_for_update
 

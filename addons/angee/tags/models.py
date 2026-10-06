@@ -86,13 +86,12 @@ class Tag(ArchiveMixin, AngeeDataModel):
 class TagAssignmentManager(AngeeManager):
     """Owns the polymorphic tag edge: target resolution, attach, and detach.
 
-    The write protocol (the ``storage.FileManager.draft`` shape): the target and
-    every tag resolve **under the ambient actor** — the REBAC-scoped lookups fail
-    fast on a row the actor cannot read, so nobody tags or untags what they cannot
-    see — and only the edge insert/delete itself runs under ``system_context``,
-    because ``tags/tag_assignment`` declares no ``create`` permission (rows enter
-    through gated call sites, the ``FileAttachment`` precedent) and the pre-insert
-    check has no row id to gate on.
+    The write protocol: the target and every tag resolve **under the ambient
+    actor** — the REBAC-scoped lookups fail fast on a row the actor cannot read,
+    so nobody tags or untags what they cannot see — and only the edge
+    insert/delete itself runs under ``system_context``, because
+    ``tags/tag_assignment`` declares no ``create`` permission (rows enter through
+    gated call sites) and the pre-insert check has no row id to gate on.
     """
 
     def resolve_target(self, target_type: str, target_id: str) -> CanonicalRecordTarget | None:
