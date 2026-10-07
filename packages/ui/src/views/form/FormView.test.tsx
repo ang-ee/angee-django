@@ -599,21 +599,23 @@ describe("FormView", () => {
     expect(draft).toHaveProperty("value", "Unsaved draft");
   });
 
-  test("a pane group fills its own pane ahead of the saved-record tabs, bound to the record's form", async () => {
+  test("a pane group follows the saved-record tabs in its own pane, bound to the record's form", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1"
       recordTabs={[{ id: "content", label: "Content", render: () => <p>Content panel</p> }]}>
       <Field name="title" label="Title" title />
       <Group label="Envelope" pane="envelope"><Field name="location" label="Location" /></Group>
     </FormView>);
+    // The saved-record tab leads and opens by default; the group's fields are not in the sheet.
+    expect(await screen.findByText("Content panel")).toBeTruthy();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Content", "Envelope"]);
+    expect(screen.queryByLabelText("Location")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Envelope" }));
+    // The strip names the group: its fields sit in the pane under no second heading.
     const location = await screen.findByLabelText("Location");
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Envelope", "Content"]);
-    // The strip names the group: its fields sit in the pane, not the sheet, under no second heading.
     expect(location.closest("[role='tabpanel']")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Envelope" })).toBeNull();
     fireEvent.change(location, { target: { value: "Lisbon" } });
     expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "Content" }));
-    expect(await screen.findByText("Content panel")).toBeTruthy();
   });
 
   test("rejects a pane group whose id collides with a record tab", () => {
