@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -99,4 +99,27 @@ test("ids seeded without their records are labelled from one bounded read", asyn
   const idReads = getList.mock.calls.filter(([params]) => params.filters?.some((filter) => filter.field === "id"));
   expect(idReads).toHaveLength(1);
   expect(idReads[0]![0].filters).toEqual([{ field: "id", operator: "in", value: ["tag-3"] }]);
+});
+
+test("with every record picked and nothing typed the field opens no empty list; a pick closes it", async () => {
+  const getList = vi.fn(async () => ({ data: [{ id: "tag-1", name: "Urgent" }, { id: "tag-2", name: "Billing" }], total: 2 }));
+  const change = vi.fn();
+  const { rerender } = render(<Provider dataProvider={{ getList }}>
+    <RelationMultiFieldWidget value={["tag-1"]} onChange={change} relation={relation} aria-label="Tags" />
+  </Provider>);
+  await typeQuery("bill");
+  fireEvent.click(await screen.findByRole("option", { name: "Billing" }));
+  expect(change).toHaveBeenCalledWith(["tag-1", "tag-2"]);
+  // The pick closes the list, so it reopens beneath the box's new edge.
+  await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+
+  rerender(<Provider dataProvider={{ getList }}>
+    <RelationMultiFieldWidget value={["tag-1", "tag-2"]} onChange={change} relation={relation} aria-label="Tags" />
+  </Provider>);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Tags" }), { key: "ArrowDown" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(screen.queryByText("No options")).toBeNull();
+  // Typing still offers to create.
+  await typeQuery("Follow up");
+  expect(await screen.findByRole("option", { name: "Create “Follow up”" })).toBeTruthy();
 });
