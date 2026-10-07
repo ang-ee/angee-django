@@ -95,21 +95,25 @@ test("picking a tag attaches it to the open record at once and removing a chip d
   expect(mocks.tag).toHaveBeenCalledOnce();
 });
 
-test("inline create saves a new tag and attaches it", async () => {
+test("Create “name” makes the tag at once and attaches it; Create and edit… opens its form", async () => {
   mocks.tag.mockResolvedValue({ tag: [] });
   const { create, Wrapper } = harness();
   render(<Wrapper><TagsField value={[]} field={{ label: "Tags" }} /></Wrapper>);
 
   // Create is the search's last option, never a button beside the field.
   expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
-  fireEvent.input(screen.getByRole("combobox", { name: "Tags" }), { target: { value: "Follow up" }, inputType: "insertText" });
+  const search = screen.getByRole("combobox", { name: "Tags" });
+  fireEvent.input(search, { target: { value: "Follow up" }, inputType: "insertText" });
   fireEvent.click(await screen.findByRole("option", { name: "Create “Follow up”" }));
-  const dialog = await screen.findByRole("dialog", { name: "New tag" });
-  expect(await within(dialog).findByLabelText("Name")).toHaveProperty("value", "Follow up");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
 
   await waitFor(() => expect(mocks.tag).toHaveBeenCalledWith({ targetType: "storage/file", targetId: "fil_1", tagIds: ["tag-new"] }));
   expect(create.mock.calls[0]?.[0]).toMatchObject({ variables: { name: "Follow up" } });
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.input(search, { target: { value: "Later" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Create and edit…" }));
+  const dialog = await screen.findByRole("dialog", { name: "New tag" });
+  expect(await within(dialog).findByLabelText("Name")).toHaveProperty("value", "Later");
 });
 
 test("a read-only form or reader renders linked chips only", () => {

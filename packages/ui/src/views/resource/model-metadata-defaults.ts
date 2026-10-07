@@ -8,6 +8,7 @@ import {
   isToOneRelationField,
   modelMetadataForLabel,
   modelFieldForPath,
+  recordColorField,
   relationModelLabelForField,
   relationRepresentationForPath,
 } from "@angee/metadata";
@@ -30,6 +31,8 @@ export interface RelationFieldInfo {
   labelField: string;
   /** A create mutation exists for the related model. */
   canCreate: boolean;
+  /** The related model's record colour field (`recordColorField`), filling its chips. */
+  colorField?: string;
 }
 
 // Server-owned fields a create form never edits. These are GraphQL wire field
@@ -169,10 +172,12 @@ export function relationFieldInfoForResource(
   model: ModelMetadata | null,
 ): RelationFieldInfo | null {
   if (!model?.resource.roots.list) return null;
+  const colorField = recordColorField(model);
   return {
     resource,
     labelField: model.resource.recordRepresentation ?? model.resource.query.identity.field,
     canCreate: Boolean(model.resource.roots.create),
+    ...(colorField ? { colorField } : {}),
   };
 }
 

@@ -1,6 +1,7 @@
 import { Combobox } from "@base-ui/react/combobox";
 import { useRef, useState, type ReactElement } from "react";
 
+import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { textRoleVariants } from "../ui/text";
@@ -20,12 +21,15 @@ import {
   type WidgetRenderProps,
 } from "./types";
 
-/** The picker item that offers to create a record named by the typed query. */
+/** The picker items that create a record named by the typed query: at once, or through its form. */
 const CREATE_ITEM = "\u0000create";
+const CREATE_AND_EDIT_ITEM = "\u0000create-and-edit";
 
 export interface Many2ManyEditProps extends WidgetRenderProps<readonly unknown[]> {
-  /** Offers "Create “query”" as the last option for a typed query no option matches. */
+  /** Offers "Create “query”" for a typed query no option matches, creating the record at once. */
   onCreate?: (query: string) => void;
+  /** Offers "Create and edit…" for a typed query no option matches, opening the create form. */
+  onCreateAndEdit?: (query: string) => void;
   /** The typed query, for an owner that searches the options server-side. */
   onSearchChange?: (query: string) => void;
 }
@@ -37,6 +41,7 @@ export function Many2ManyEdit({
   readOnly,
   controlRef,
   onCreate,
+  onCreateAndEdit,
   onSearchChange,
 }: Many2ManyEditProps): ReactElement {
   if (field?.controlProps?.presentation === "cell") {
@@ -44,14 +49,16 @@ export function Many2ManyEdit({
   }
   if (readOnly) return <Many2ManyRead value={relationIdList(value)} field={field} />;
   return <Many2ManyChipsEdit value={value} onChange={onChange} field={field} controlRef={controlRef}
-    onCreate={onCreate} onSearchChange={onSearchChange} />;
+    onCreate={onCreate} onCreateAndEdit={onCreateAndEdit} onSearchChange={onSearchChange} />;
 }
 
 /**
- * One field-shaped control: the picked records as removable chips, then an
- * inline search that adds the picked option as a chip, closing with
- * "Create “query”" when the owner can create. Base UI owns chip focus,
- * Backspace removal and keyboard navigation.
+ * One field-shaped control: the picked records as removable chips wearing their
+ * own colour, then an inline search that adds the picked option as a chip, and a
+ * caret that opens the options. A typed query no option matches closes the list
+ * with "Create “query”" (at once) and "Create and edit…" (the create form), as
+ * the owner allows. Base UI owns chip focus, Backspace removal and keyboard
+ * navigation.
  */
 function Many2ManyChipsEdit({
   value,
@@ -59,6 +66,7 @@ function Many2ManyChipsEdit({
   field,
   controlRef,
   onCreate,
+  onCreateAndEdit,
   onSearchChange,
 }: Many2ManyEditProps): ReactElement {
   const t = useUiT();
@@ -78,7 +86,12 @@ function Many2ManyChipsEdit({
   const matches = options.filter((option) => !selected.includes(option.value) && !option.disabled
     && (onSearchChange !== undefined || !needle || labelText(option).toLocaleLowerCase().includes(needle)));
   const exact = options.some((option) => labelText(option).trim().toLocaleLowerCase() === needle);
-  const offered = [...matches.map((option) => option.value), ...(onCreate && text && !exact ? [CREATE_ITEM] : [])];
+  const creatable = text !== "" && !exact;
+  const offered = [
+    ...matches.map((option) => option.value),
+    ...(onCreate && creatable ? [CREATE_ITEM] : []),
+    ...(onCreateAndEdit && creatable ? [CREATE_AND_EDIT_ITEM] : []),
+  ];
   // Nothing left to pick and nothing typed opens no list: an empty "No options" panel is a dead end.
   const shown = open && (offered.length > 0 || text !== "");
   const search = (next: string) => {
@@ -91,11 +104,13 @@ function Many2ManyChipsEdit({
       value={selected} items={[...selected, ...offered]} filteredItems={offered} filter={null}
       open={shown} onOpenChange={setOpen}
       inputValue={query} onInputValueChange={search}
-      itemToStringLabel={(item) => item === CREATE_ITEM ? text : optionTextLabel(optionLabel(options, item), item)}
+      itemToStringLabel={(item) => item === CREATE_ITEM || item === CREATE_AND_EDIT_ITEM
+        ? text : optionTextLabel(optionLabel(options, item), item)}
       onValueChange={(next, details) => {
         // Escape dismisses the search; it never clears the field.
         if (details.reason === "escape-key") { details.allowPropagation(); return; }
         if (next.includes(CREATE_ITEM)) onCreate?.(text);
+        else if (next.includes(CREATE_AND_EDIT_ITEM)) onCreateAndEdit?.(text);
         else onChange?.(next);
         search("");
         // A pick closes the list: the box may wrap onto another row, and the list reopens beneath it.
@@ -104,13 +119,17 @@ function Many2ManyChipsEdit({
       <Combobox.Chips ref={boxRef} className={chipInputVariants({ ...sizing, focus: "within", invalid: Boolean(controlProps["aria-invalid"]) })}>
         {selected.map((id) => {
           const label = optionLabel(options, id);
-          return <Combobox.Chip key={id} render={<RemovableChip tone="info" size="sm"
+          return <Combobox.Chip key={id} render={<RemovableChip tone="info" size="sm" color={optionColor(options, id)}
             removeLabel={optionTextLabel(label, t("many2many.record"))} onRemove={() => remove(id)} />}>
             {label}
           </Combobox.Chip>;
         })}
         <Combobox.Input {...controlProps} ref={controlRef} aria-label={widgetLabel(field, t("many2many.label"))}
           className="h-5 min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none" />
+        <Combobox.Trigger aria-label={t("many2many.options")} data-widget-affordance=""
+          className={styles.icon({ className: "ml-auto shrink-0 cursor-pointer" })}>
+          <Glyph name="chevron-down" />
+        </Combobox.Trigger>
       </Combobox.Chips>
       <Combobox.Portal>
         <Combobox.Positioner anchor={boxRef} className={PORTALED_CONTROL_LAYER} sideOffset={4}>
@@ -118,7 +137,8 @@ function Many2ManyChipsEdit({
             <Combobox.List className={styles.list()}>
               {(item: string) => <Combobox.Item key={item} value={item} className={styles.item()}>
                 <span className={styles.itemText()}>
-                  {item === CREATE_ITEM ? t("relation.create", { query: text }) : optionLabel(options, item)}
+                  {item === CREATE_ITEM ? t("relation.create", { query: text })
+                    : item === CREATE_AND_EDIT_ITEM ? t("relation.createAndEdit") : optionLabel(options, item)}
                 </span>
               </Combobox.Item>}
             </Combobox.List>
@@ -226,11 +246,15 @@ function Many2ManyChips({
     <ChipList
       items={values.map((id) => {
         const label = optionLabel(options, id);
-        return { id, label, text: optionTextLabel(label, t("many2many.record")) };
+        return { id, label, text: optionTextLabel(label, t("many2many.record")), color: optionColor(options, id) };
       })}
       onRemove={onRemove && ((id) => onRemove(values.filter((value) => value !== id)))}
     />
   );
+}
+
+function optionColor(options: readonly WidgetOption[], value: string): string | undefined {
+  return options.find((option) => option.value === value)?.color;
 }
 
 export const many2manyWidget = {

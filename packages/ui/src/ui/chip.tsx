@@ -3,6 +3,7 @@ import * as React from "react";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { hexColor, readableInk } from "../lib/hex-color";
 import { toneClass, type Fill, type Tone } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 import { Button } from "./button";
@@ -58,6 +59,8 @@ export type ChipProps = Omit<
     className?: string;
     tone?: ChipTone;
     variant?: Fill;
+    /** A record's own `#rrggbb` colour as the fill, with readable ink; replaces the tone. */
+    color?: string;
   };
 
 export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
@@ -69,18 +72,22 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
       size = "micro",
       tone = "neutral",
       variant = "soft",
+      color,
+      style,
       ...props
     },
     ref,
   ) {
+    const fill = hexColor(color);
     return (
       <span
         ref={ref}
         className={cn(
           chipVariants({ mono, shape, size }),
-          chipToneClass(tone, variant),
+          fill ? undefined : chipToneClass(tone, variant),
           className,
         )}
+        style={fill ? { backgroundColor: fill, color: readableInk(fill), ...style } : style}
         {...props}
       />
     );
@@ -116,7 +123,8 @@ export const RemovableChip = React.forwardRef<HTMLSpanElement, RemovableChipProp
           type="button"
           variant="ghost"
           size="iconSm"
-          className="size-4 rounded-full"
+          // The chip's ink, so the remove mark reads on a record's own colour too.
+          className="size-4 rounded-full text-current"
           aria-label={t("chip.remove", { label: removeLabel })}
           onClick={onRemove}
         >
@@ -134,6 +142,8 @@ export interface ChipListItem {
   label: React.ReactNode;
   /** Plain-text subject of the remove button when `label` is not text; defaults to `id`. */
   text?: string;
+  /** The item's own `#rrggbb` colour (a related record's `color`), filling its chip. */
+  color?: string;
 }
 
 export interface ChipListProps {
@@ -151,12 +161,12 @@ export function ChipList({ items, onRemove, className }: ChipListProps): React.R
   return (
     <span className={cn("inline-flex min-w-0 flex-wrap items-center gap-1", className)}>
       {items.map((item) => onRemove ? (
-        <RemovableChip key={item.id} tone="info" size="sm" removeLabel={item.text ?? item.id}
+        <RemovableChip key={item.id} tone="info" size="sm" color={item.color} removeLabel={item.text ?? item.id}
           onRemove={() => onRemove(item.id)}>
           {item.label}
         </RemovableChip>
       ) : (
-        <Chip key={item.id} tone="info" size="sm">{item.label}</Chip>
+        <Chip key={item.id} tone="info" size="sm" color={item.color}>{item.label}</Chip>
       ))}
     </span>
   );

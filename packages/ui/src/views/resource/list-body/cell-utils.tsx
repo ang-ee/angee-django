@@ -31,7 +31,7 @@ export function cellContent<TRow extends Row>(
     if (!Array.isArray(projected)) {
       throw new Error(`Relation list column "${column.field}" expected an array.`);
     }
-    const { model, identityPath, labelPath } = column.relationList;
+    const { model, identityPath, labelPath, colorPath } = column.relationList;
     return <RecordReferenceChips model={model} records={projected.map((item: unknown) => {
       if (item == null || typeof item !== "object") {
         throw new Error(`Relation list column "${column.field}" expected related records.`);
@@ -41,7 +41,8 @@ export function cellContent<TRow extends Row>(
       if (typeof id !== "string") {
         throw new Error(`Relation list column "${column.field}" expected a related record identity.`);
       }
-      return { id, label: label == null ? undefined : String(label) };
+      const color = colorPath ? rowValueAtPath(item as Row, colorPath) : undefined;
+      return { id, label: label == null ? undefined : String(label), color: typeof color === "string" ? color : undefined };
     })} />;
   }
   const labelPath = queryField?.relation?.labelPath;

@@ -27,10 +27,11 @@ export function RecordReference({ model, id, label, tab, search }: RecordReferen
 /** Related records as one chip each, every chip a {@link RecordReference}. */
 export function RecordReferenceChips({ model, records }: {
   model: string;
-  records: readonly { id: string; label?: string }[];
+  /** Each record's id, its label when loaded, and its own `#rrggbb` colour when its model has one. */
+  records: readonly { id: string; label?: string; color?: string }[];
 }): ReactElement {
-  return <ChipList items={records.map(({ id, label }) => ({
-    id, label: <RecordReference model={model} id={id} label={label} />,
+  return <ChipList items={records.map(({ id, label, color }) => ({
+    id, label: <RecordReference model={model} id={id} label={label} />, color,
   }))} />;
 }
 

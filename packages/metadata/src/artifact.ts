@@ -114,8 +114,8 @@ export interface SchemaFieldMetadata {
 export interface RelationRepresentationSelection {
   selectionPaths: readonly string[];
   displayPath: string;
-  /** Object-list cells need the related record's own identity and label paths. */
-  relationList?: { model: string; identityPath: string; labelPath: string };
+  /** Object-list cells need the related record's own identity, label and colour paths. */
+  relationList?: { model: string; identityPath: string; labelPath: string; colorPath?: string };
 }
 
 /** Named build/runtime failure for a relation whose representation cannot resolve. */
@@ -231,6 +231,16 @@ export function modelFieldForPath(
   return null;
 }
 
+/**
+ * A model's record colour: its readable `color` field when that field is a colour
+ * (the `color` widget a colour column declares). Chips of its related records use it
+ * as their fill; any other colour column, such as a branding colour, is ordinary data.
+ */
+export function recordColorField(model: ModelMetadata | null | undefined): string | undefined {
+  const field = model?.fields.color;
+  return field?.widget === "color" && field.readable !== false ? field.name : undefined;
+}
+
 /** Resolve an object relation's finalized scalar selection and display paths, including object lists. */
 export function relationRepresentationForPath(
   path: string,
@@ -245,12 +255,15 @@ export function relationRepresentationForPath(
     if (!targetLabel) return null;
     const target = requiredRelationTarget(targetLabel, path, metadata);
     const selection = representationSelection(path, target, metadata, new Set());
+    const colorPath = recordColorField(target);
     return {
       ...selection,
+      selectionPaths: colorPath ? [...selection.selectionPaths, `${path}.${colorPath}`] : selection.selectionPaths,
       relationList: {
         model: target.resource.modelLabel,
         identityPath: target.resource.query.identity.field,
         labelPath: selection.displayPath.slice(path.length + 1),
+        ...(colorPath ? { colorPath } : {}),
       },
     };
   }

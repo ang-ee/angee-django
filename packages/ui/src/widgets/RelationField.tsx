@@ -24,6 +24,8 @@ const RelationFieldCommandList = lazy(() => import("./RelationFieldCommandList")
 export interface RelationOption {
   value: string;
   label: string;
+  /** The related record's own `#rrggbb` colour, when its model has a record colour. */
+  color?: string;
 }
 
 export interface RelationSearchState {

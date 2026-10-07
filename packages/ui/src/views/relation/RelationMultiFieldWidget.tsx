@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
 import type { CrudFilter } from "@refinedev/core";
+import { useDebounce } from "use-debounce";
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
@@ -19,6 +20,7 @@ import {
   RelationRecordDialog,
   relationCreateTitle,
   useRelationForms,
+  useRelationQuickCreate,
   type RelationDialogState,
 } from "./RelationRecordDialog";
 import { relationSelectedOption, useRelationOptions, useRelationSelectedOptions } from "./relation-options";
@@ -45,9 +47,11 @@ export interface RelationMultiFieldWidgetProps {
    * Explicit inline-create configuration. Overrides the default derived from the
    * related model's metadata, exactly as `RelationFieldWidget` does; pass null to
    * offer no create. A typed query no option matches offers "Create “query”",
-   * which opens the related model's create form prefilled with it; `actionLabel`
-   * also exposes that form as a visible button, and a cell always shows it as an
-   * icon. The saved record joins the selection.
+   * which creates the record from that name at once when nothing else is required
+   * (`useRelationQuickCreate`), and "Create and edit…", which opens the related
+   * model's create form prefilled with it; `actionLabel` also exposes that form as
+   * a visible button, and a cell always shows it as an icon. The created record
+   * joins the selection.
    */
   create?: RelationCreateConfig | null;
   "aria-label"?: string;
@@ -78,8 +82,10 @@ export function RelationMultiFieldWidget({
 }: RelationMultiFieldWidgetProps): ReactElement {
   const t = useUiT();
   const [dialog, setDialog] = useState<RelationDialogState | null>(null);
-  const [searchText, setSearchText] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchText] = useDebounce(search, 250);
   const forms = useRelationForms(relation, create);
+  const quickCreate = useRelationQuickCreate(forms.create);
   const { options, list } = useRelationOptions(relation, {
     enabled: !readOnly,
     filters,
@@ -91,10 +97,10 @@ export function RelationMultiFieldWidget({
   // bare ids (seeded by an action, or past the first page) are read for theirs.
   const recordOptions = useMemo(
     () => (value ?? []).flatMap((record) => {
-      const option = relationSelectedOption(record, relation.labelField);
+      const option = relationSelectedOption(record, relation.labelField, relation.colorField);
       return option ? [option] : [];
     }),
-    [value, relation.labelField],
+    [value, relation.labelField, relation.colorField],
   );
   const ids = useMemo(() => relationIdList(value), [value]);
   const known = useMemo(() => [...recordOptions, ...options], [recordOptions, options]);
@@ -115,18 +121,25 @@ export function RelationMultiFieldWidget({
     [options, selectedOptions, ariaLabel, controlProps],
   );
   if (readOnly) {
-    return <RecordReferenceChips model={relation.resource} records={ids.map((id) => ({
-      id, label: selectedOptions.find((option) => option.value === id)?.label,
-    }))} />;
+    return <RecordReferenceChips model={relation.resource} records={ids.map((id) => {
+      const option = selectedOptions.find((item) => item.value === id);
+      return { id, label: option?.label, color: option?.color };
+    })} />;
   }
   const change = (next: readonly unknown[]): void => {
     onChange?.(next);
     onCommit?.();
   };
   // `Many2ManyEdit` owns the cell/form presentation split through `field.controlProps`.
+  const created = (id: string | undefined) => {
+    if (!id) return;
+    change(relationIdList([...(value ?? []), id]));
+    list.refetch();
+  };
   const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef}
-    onSearchChange={setSearchText}
-    onCreate={forms.create ? (query) => setDialog({ mode: "create", query }) : undefined} />;
+    onSearchChange={setSearch}
+    onCreate={quickCreate ? (query) => void quickCreate(query).then(created) : undefined}
+    onCreateAndEdit={forms.create ? (query) => setDialog({ mode: "create", query }) : undefined} />;
   if (!forms.create) return control;
   const cell = controlProps?.presentation === "cell";
   // The compact cell picker has no search to offer "Create …" from, so its create stays an icon.
@@ -153,10 +166,7 @@ export function RelationMultiFieldWidget({
         dialog={dialog}
         create={forms.create}
         onClose={() => setDialog(null)}
-        onCreated={(id) => {
-          change(relationIdList([...(value ?? []), id]));
-          list.refetch();
-        }}
+        onCreated={created}
       />
     </>
   );

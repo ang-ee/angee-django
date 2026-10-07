@@ -25,6 +25,7 @@ import {
 } from "./resource-view-utils";
 import {
   columnsWithMetadataDefaults,
+  relationFieldInfoForResource,
   fieldsWithMetadataDefaults,
   relationFieldInfo,
   relationFieldInfoForQueryField,
@@ -793,6 +794,29 @@ describe("relation column read expansion", () => {
     });
     expect(refineFieldsFromPaths(requestedFieldPaths([column!], undefined, schema.labels["decisions.Seat"]!)))
       .toEqual(["id", { assignees: ["id", "display_name"] }]);
+  });
+
+  test("a related model's record colour rides with its to-many chips", () => {
+    const file = testDataResource("storage.File", {
+      fields: [{ name: "tags", kind: "list", scalar: null, relationModelLabel: "tags.Tag",
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+      query: testResourceQuery({ fields: { tags: testQueryField("tags", { kind: "list", scalar: null, row: null }) } }),
+    });
+    const scalar = { kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
+      creatable: true, updatable: true, requiredOnCreate: false };
+    const tag = testDataResource("tags.Tag", {
+      recordRepresentation: "name",
+      fields: [{ ...scalar, name: "name", requiredOnCreate: true }, { ...scalar, name: "color", widget: "color" },
+        { ...scalar, name: "brand_color", widget: "color" }],
+    });
+    const schema = schemaFieldMetadataFromDataResources([file, tag]);
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "tags" }], schema.labels["storage.File"]!, schema);
+    // Only the field named `color` is the record colour; another colour column is ordinary data.
+    expect(column).toMatchObject({
+      selectionPaths: ["tags.id", "tags.name", "tags.color"],
+      relationList: { model: "tags.Tag", identityPath: "id", labelPath: "name", colorPath: "color" },
+    });
+    expect(relationFieldInfoForResource("tags.Tag", schema.labels["tags.Tag"]!)).toMatchObject({ colorField: "color" });
   });
 
   test("a to-many relation with a backend form widget keeps its linked-chip column", () => {

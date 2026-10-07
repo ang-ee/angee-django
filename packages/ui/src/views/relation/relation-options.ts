@@ -14,6 +14,7 @@ import {
   listQueryMeta,
   } from "@angee/refine";
 import { listBatchTarget } from "../resource/resource-operations";
+import { hexColor } from "../../lib/hex-color";
 import { useValueStable } from "../../lib/use-value-stable";
 import type {
   RelationOption,
@@ -196,6 +197,8 @@ export function useRelationOptions(
     searchFields,
   } = config;
   const labelField = optionLabelField ?? relation?.labelField ?? "id";
+  // A model's record colour rides along with its label, so its chips can wear it.
+  const colorField = optionLabelField ? undefined : relation?.colorField;
   const metadata = useModelMetadata(relation?.resource ?? "");
   const activeSearchFields = metadata
     ? ResourceQuery.from(metadata).textSearchFields(searchFields)
@@ -228,8 +231,8 @@ export function useRelationOptions(
   const stableWhere = useValueStable(where);
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
-    () => refineFieldsFromPaths(["id", labelField, ...(stableFields ?? [])]),
-    [stableFields, labelField],
+    () => refineFieldsFromPaths(["id", labelField, ...(colorField ? [colorField] : []), ...(stableFields ?? [])]),
+    [stableFields, labelField, colorField],
   );
   const meta = React.useMemo(() => {
     if (!stableWhere) return { fields };
@@ -270,11 +273,11 @@ export function useRelationOptions(
     [run.query.isFetching, run.query.error?.message, refetch, run.result.total],
   );
   const options = React.useMemo(() => {
-    const options = relationOptionsFromRows(rows, labelField, { sort });
+    const options = relationOptionsFromRows(rows, labelField, { sort, colorField });
     return labelSearch
       ? options.filter((option) => option.label.toLocaleLowerCase().includes(labelSearch))
       : options;
-  }, [labelField, labelSearch, rows, sort]);
+  }, [colorField, labelField, labelSearch, rows, sort]);
   return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 
@@ -288,6 +291,7 @@ export function useRelationOptions(
 export function relationSelectedOption(
   value: unknown,
   labelField: string,
+  colorField?: string,
 ): RelationOption | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -295,18 +299,18 @@ export function relationSelectedOption(
   const row = value as Row;
   const id = rowPublicId(row);
   if (!id) return undefined;
-  return { value: id, label: relationOptionLabel(row, labelField, id) };
+  return { value: id, label: relationOptionLabel(row, labelField, id), ...relationOptionColor(row, colorField) };
 }
 
 export function relationOptionsFromRows(
   rows: readonly Row[],
   labelField: string,
-  config: Pick<RelationOptionsConfig, "sort"> = {},
+  config: Pick<RelationOptionsConfig, "sort"> & { colorField?: string } = {},
 ): readonly RelationOption[] {
   const options = rows.flatMap((row) => {
     const value = rowPublicId(row) ?? "";
     if (!value) return [];
-    return [{ value, label: relationOptionLabel(row, labelField, value) }];
+    return [{ value, label: relationOptionLabel(row, labelField, value), ...relationOptionColor(row, config.colorField) }];
   });
   return config.sort
     ? [...options].sort((left, right) => left.label.localeCompare(right.label))
@@ -314,6 +318,11 @@ export function relationOptionsFromRows(
 }
 
 type RowRecord = BaseRecord & Row;
+
+function relationOptionColor(row: Row, colorField: string | undefined): { color?: string } {
+  const color = colorField ? hexColor(row[colorField]) : undefined;
+  return color ? { color } : {};
+}
 
 function relationOptionLabel(
   row: Row,
