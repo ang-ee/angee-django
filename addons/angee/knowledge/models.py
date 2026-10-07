@@ -19,7 +19,7 @@ from typing import Any, ClassVar, cast
 
 import reversion
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
@@ -56,6 +56,7 @@ from angee.base.refs import (
     concrete_child_models,
 )
 from angee.knowledge.retrieval import RetrievalBackend
+from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
 logger = logging.getLogger(__name__)
@@ -382,7 +383,7 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         return copies
 
 
-class Page(TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
+class Page(TaggedModel, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
@@ -421,7 +422,6 @@ class Page(TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
     )
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
-    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = PageManager()
 

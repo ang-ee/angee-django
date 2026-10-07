@@ -37,7 +37,7 @@ from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.core.exceptions import (
@@ -104,6 +104,7 @@ from angee.storage.uploads import (
     sha256_stream,
     truncate_filename,
 )
+from angee.tags.models import TaggedModel
 
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
 _STORAGE_CACHE_MAX_SIZE = 128
@@ -1212,7 +1213,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             locked.grant_record_access("viewer", user)
 
 
-class File(TrashMixin, OwnerMixin, AngeeDataModel):
+class File(TaggedModel, TrashMixin, OwnerMixin, AngeeDataModel):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.
@@ -1262,8 +1263,6 @@ class File(TrashMixin, OwnerMixin, AngeeDataModel):
         default=UploadState.DRAFT,
         editable=False,
     )
-
-    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = FileManager()
     unscoped_objects = AngeeUnscopedManager()

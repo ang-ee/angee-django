@@ -1225,17 +1225,16 @@ Hard-won traps — the wise learn from others' mistakes
   (a plain string array) stays the `tagInput`. This mirrors the to-one
   `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
   relation-list control.
-- **Tags show only where an owner places them, never as a chatter tab.** An
-  owner whose console node composes the backend's `TaggedNode` places
-  `<Field name="tags" />` on its record form and `<Column field="tags"
-  hiddenByDefault />` on its list. The field's backend metadata names the
-  `angee.tags.tags` widget, so no caller spells it: the
-  [tags field](../../addons/angee/tags/web/src/TagsField.tsx) composes
-  `RelationMultiFieldWidget` over `tags.Tag` (chips, inline search, "Create “…”"),
-  writes each pick and removal at once through the `tag`/`untag` verbs and
-  refreshes the record instead of joining the form's save, renders linked chips
-  on a read-only form, and a hint on a create form. The list cell keeps the
-  shared relation-list chips.
+- **Tags show only where an owner places them, never as a chatter tab, and save
+  with the record.** An owner composes the backend's `TaggedModel` on the model,
+  `TaggedNode` on its console node and `tags_input_extensions(resource)` on its
+  console insert and set inputs, then places `<Field name="tags" />` on its
+  record form and `<Column field="tags" hiddenByDefault />` on its list. Resource
+  metadata projects `tags` as a writable relation list to `tags.Tag`, so the form
+  edits it as its standard to-many chips field: a pick or removal dirties the
+  form, Save writes the id list with the row (the backend diffs the edges in the
+  row's transaction) and Discard drops it, on create forms too. No tags-specific
+  widget exists; the list cell keeps the shared relation-list chips.
 - **Resource relation pickers support server-backed search.** Compose
   `RelationFieldWidget`; its
   [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)

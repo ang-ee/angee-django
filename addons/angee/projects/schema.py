@@ -41,7 +41,7 @@ from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
 from angee.storage.schema import FolderType
-from angee.tags.schema import TaggedNode
+from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Project = apps.get_model("projects", "Project")
 Milestone = apps.get_model("projects", "Milestone")
@@ -1184,6 +1184,10 @@ _CONSOLE_PROJECTS_SCHEMA_BUCKET = _projects_schema_bucket(
     ConsoleTaskType,
 )
 _CONSOLE_PROJECTS_SCHEMA_BUCKET["types"].append(UserType)
+_CONSOLE_PROJECTS_SCHEMA_BUCKET["input_extensions"] = [
+    *tags_input_extensions(_CONSOLE_PROJECT_RESOURCE),
+    *tags_input_extensions(_CONSOLE_TASK_RESOURCE),
+]
 
 schemas = {
     "public": {**_PUBLIC_PROJECTS_SCHEMA_BUCKET},

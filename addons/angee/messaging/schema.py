@@ -52,7 +52,7 @@ from angee.messaging.managers import MessageQuerySet, message_subtype_options, s
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
-from angee.tags.schema import TaggedNode
+from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Integration = apps.get_model("integrate", "Integration")
 Handle = apps.get_model("parties", "Handle")
@@ -2363,6 +2363,7 @@ _MESSAGING_SCHEMA_BUCKET = {
 schemas = {
     "console": {
         **_MESSAGING_SCHEMA_BUCKET,
+        "input_extensions": [*tags_input_extensions(_MESSAGE_RESOURCE), *tags_input_extensions(_THREAD_RESOURCE)],
         "subscription": [
             changes(Channel, field="channelChanged"),
             changes(Message, field="messageChanged"),

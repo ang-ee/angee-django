@@ -65,3 +65,21 @@ def test_an_mti_child_reads_the_tags_keyed_on_its_canonical_ancestor() -> None:
         {"title": "Plan", "tags": [{"name": "Roadmap"}]},
         {"title": "Retro", "tags": []},
     ]
+
+
+def test_an_mti_child_save_keys_its_tags_on_its_canonical_ancestor() -> None:
+    owner = create_user("tags-mti-saver")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Plan", body="notes")
+    child = MarkdownPage._base_manager.get(pk=page.pk)
+    with system_context(reason="test.tags.mti.save.seed"):
+        tag = Tag.objects.create(name="Roadmap", color="")
+
+    with actor_context(owner):
+        child.apply_input_extensions(tags=[tag.sqid])
+
+    with system_context(reason="test.tags.mti.save.check"):
+        edges = list(TagAssignment.objects.for_record(page))
+    assert [edge.tag_id for edge in edges] == [tag.pk]
+    assert {edge.content_type.model_class() for edge in edges} == {Page}

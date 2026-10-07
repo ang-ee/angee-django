@@ -10,7 +10,10 @@ read), and only the gate-less edge insert/delete elevates. The mutations are
 additionally gated on the ``tags_admin`` role.
 
 Owners of taggable models compose :class:`TaggedNode` onto their console node
-type to read a row's tags as a batched, actor-scoped relation list.
+type to read a row's tags as a batched, actor-scoped relation list, and
+:func:`tags_input_extensions` onto that resource's insert and set inputs, so a
+record form edits ``tags`` like any field and the row's save writes them
+(:class:`~angee.tags.models.TaggedModel`).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from rebac import ObjectRef, current_actor
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.permission import BasePermission
+from strawberry.types import get_object_definition
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
@@ -87,13 +91,6 @@ class TagAssignmentType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
-TAGS_WIDGET = "angee.tags.tags"
-"""The registered web widget a form's ``<Field name="tags" />`` renders through.
-
-The owning addon's ``widgets`` contribution registers the identical key, so a
-form routes the field to it from resource metadata without naming it.
-"""
-
 _TAG_EDGES_ATTR = "_angee_tag_edges"
 """Where the batched prefetch parks each row's readable tag edges."""
 
@@ -129,18 +126,17 @@ def _prefetched_tag_edges(row: models.Model) -> Any:
 
 @strawberry.type
 class TaggedNode:
-    """Project a model's tags as a read-only relation list on its node type.
+    """Project a model's tags as a relation list on its node type.
 
     Compose alongside the node base, e.g. ``class FileType(TaggedNode, AngeeNode)``,
     or through a console ``type_extensions`` donor when the node type is shared
-    with another schema. The model declares the reverse accessor
-    ``tag_assignments = GenericRelation("tags.TagAssignment")`` (see
-    :mod:`angee.tags.models`). Resource metadata projects the field as a
-    readable ``list`` relation to ``tags.Tag`` that no input writes; the edge is
-    written through the ``tag`` / ``untag`` mutations.
+    with another schema; the model composes :class:`~angee.tags.models.TaggedModel`.
+    With :func:`tags_input_extensions` on the resource's inputs, resource metadata
+    projects ``tags`` as a writable ``list`` relation to ``tags.Tag``, which a
+    form edits as its standard to-many chips field and saves with the row.
     """
 
-    @strawberry_django.field(prefetch_related=[_tag_edges_prefetch], metadata={"angee_widget": TAGS_WIDGET})
+    @strawberry_django.field(prefetch_related=[_tag_edges_prefetch])
     def tags(self) -> list[TagType]:
         """Return the actor-readable tags on this row, in the tag vocabulary's order."""
 
@@ -151,6 +147,36 @@ class TaggedNode:
             # actor-scoped read for this row alone.
             edges = TagAssignment.objects.for_record(row).by_tag().rebac_select_related("tag")
         return cast(list[TagType], [edge.tag for edge in edges])
+
+
+@strawberry.input
+class TagsInput:
+    """The wanted tags of a written row, by public id; omitted, its tags stay as they are."""
+
+    tags: list[PublicID] | None = strawberry.UNSET
+
+
+def tags_input_extensions(resource: Any) -> list[type]:
+    """Return ``tags`` donors for ``resource``'s insert and set inputs, for an owner's ``input_extensions``.
+
+    The write backend hands the value to the written row's
+    :meth:`~angee.tags.models.TaggedModel.apply_input_extensions` in the row's
+    transaction, and resource metadata marks the field writable.
+    """
+
+    donors: list[type] = []
+    for surface, accepted in (
+        (resource.insert_input_type, resource.insertable_fields),
+        (resource.set_input_type, resource.updatable_fields),
+    ):
+        # A resource that takes no inserts (or no updates) has no such input to extend.
+        if surface is None or not accepted:
+            continue
+        name = get_object_definition(surface, strict=True).name
+        donors.append(strawberry.input(name=name, extend=True)(type(f"{name}_tags", (TagsInput,), {
+            "__doc__": f"The ``tags`` a ``{name}`` write saves with its row.",
+        })))
+    return donors
 
 
 _TAG_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")

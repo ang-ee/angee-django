@@ -34,7 +34,7 @@ from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
 from angee.storage.models import FileVisibility, UploadState
-from angee.tags.schema import TaggedNode
+from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Backend = apps.get_model("storage", "Backend")
 Drive = apps.get_model("storage", "Drive")
@@ -564,5 +564,6 @@ schemas = {
         ],
         "types": [*_SHARED_TYPES, BackendType, *_BACKEND_RESOURCE.types],
         "type_extensions": [FileTags],
+        "input_extensions": tags_input_extensions(_FILE_RESOURCE),
     },
 }
