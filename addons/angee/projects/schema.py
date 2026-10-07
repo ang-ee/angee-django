@@ -26,6 +26,7 @@ from angee.graphql.data import (
     declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
+    row_annotations,
 )
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
 from angee.graphql.inputs import InputReference, input_values
@@ -297,6 +298,20 @@ def _task_action_allowed(action: str, info: Any) -> Any:
     return Task.action_allowed_expression(current_actor(), action)
 
 
+_VISIBILITY_ANNOTATIONS = {
+    f"_visibility_allowed_{value}": partial(_visibility_allowed, value) for value in Task.TaskVisibility.values
+}
+_TASK_ACTION_ANNOTATIONS = {
+    f"_task_action_{action}": partial(_task_action_allowed, action) for action in Task.hand_actions()
+}
+
+
+def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
+    """The row's verb annotations: optimized on reads, read once for a mutation payload."""
+
+    return row_annotations(row, {name: make(info) for name, make in annotations.items()}, Task.system_queryset())
+
+
 @strawberry.type
 class TaskProjectionMixin:
     """Shared SQL scalar projections for public and console task types."""
@@ -310,22 +325,20 @@ class TaskProjectionMixin:
 
         return cast(Any, self).visibility_audience_label()
 
-    @strawberry_django.field(annotate={
-        f"_visibility_allowed_{value}": partial(_visibility_allowed, value) for value in Task.TaskVisibility.values
-    })
-    def allowed_visibility(self) -> list[TaskVisibility]:  # type: ignore[valid-type]
+    @strawberry_django.field(annotate=_VISIBILITY_ANNOTATIONS)
+    def allowed_visibility(self, info: strawberry.Info) -> list[TaskVisibility]:  # type: ignore[valid-type]
         """Choices returned by the same owner that validates visibility writes."""
+        allowed = _task_annotations(self, info, _VISIBILITY_ANNOTATIONS)
         return [
             TaskVisibility(value) for value in Task.TaskVisibility.values
-            if getattr(self, f"_visibility_allowed_{value}")
+            if allowed.get(f"_visibility_allowed_{value}")
         ]
 
-    @strawberry_django.field(annotate={
-        f"_task_action_{action}": partial(_task_action_allowed, action) for action in Task.hand_actions()
-    })
-    def task_actions(self) -> list[str]:
+    @strawberry_django.field(annotate=_TASK_ACTION_ANNOTATIONS)
+    def task_actions(self, info: strawberry.Info) -> list[str]:
         """Hand verbs the viewer may run on this row, from the verbs' own permission and blockers."""
-        return [action for action in Task.hand_actions() if getattr(self, f"_task_action_{action}")]
+        allowed = _task_annotations(self, info, _TASK_ACTION_ANNOTATIONS)
+        return [action for action in Task.hand_actions() if allowed.get(f"_task_action_{action}")]
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
     def priority_rank(self) -> int:

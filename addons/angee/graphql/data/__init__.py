@@ -10,6 +10,7 @@ from angee.graphql.data.hasura import (
     declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
+    row_annotations,
 )
 from angee.graphql.data.metadata import resource_type_name, resource_wire_field_name, resource_wire_field_names
 from angee.graphql.data.pydantic_resource import (
@@ -28,6 +29,7 @@ __all__ = [
     "hasura_pydantic_resource",
     "public_pk_decoder",
     "pydantic_node",
+    "row_annotations",
     "attach_hasura_resource_metadata",
     "resource_type_name",
     "resource_wire_field_name",
