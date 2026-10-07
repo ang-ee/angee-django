@@ -208,6 +208,21 @@ type JobState {
   id: ID!
   name: String!
   runtime: String!
+
+  """
+  The latest run the runtime holds: never-run, pending, running, completed,
+  failed, skipped (a dependency failed) or unknown (the runtime could not be
+  queried).
+  """
+  status: String!
+
+  """
+  Exit status of a completed or failed run, when the runtime reports one.
+  """
+  exitCode: Int
+
+  """Why a job failed without an exit status, or was skipped."""
+  reason: String
 }
 
 type KeyValue {
@@ -376,6 +391,12 @@ type ServiceState {
   runtime: String!
   status: String!
   health: String
+
+  """
+  Why a skipped service did not run: the failed job or service its dependency
+  chain stopped at, such as `job deps failed (exit 1)`.
+  """
+  reason: String
 }
 
 input ServiceTemplateUpdateInput {
@@ -586,6 +607,27 @@ type StackStatus {
   services: [ServiceState!]!
   jobs: [JobState!]!
   workspaces: [WorkspaceRef!]!
+  summary: StackSummary!
+}
+
+type StackSummary {
+  services: StatusCounts!
+  jobs: StatusCounts!
+}
+
+"""
+Counts of declared entries by observed outcome. total counts every entry;
+pending, stopped, never-run and unobserved entries count only there. failed
+counts entries that exited non-zero or could not start (a service stopped by a
+signal is not failed); skipped counts entries skipped because a dependency
+failed.
+"""
+type StatusCounts {
+  total: Int!
+  running: Int!
+  completed: Int!
+  failed: Int!
+  skipped: Int!
 }
 
 input String_comparison_exp {
@@ -795,12 +837,14 @@ input jobs_bool_exp {
   id: String_comparison_exp
   name: String_comparison_exp
   runtime: String_comparison_exp
+  status: String_comparison_exp
 }
 
 input jobs_order_by {
   id: order_by
   name: order_by
   runtime: order_by
+  status: order_by
 }
 
 enum order_by {

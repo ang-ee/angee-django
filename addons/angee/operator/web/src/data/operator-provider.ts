@@ -25,11 +25,14 @@ const OPERATOR_GRAPHQL_ENDPOINT = "/operator/graphql";
  * GraphQL endpoint, authed by the live bearer in {@link operatorToken}. Built
  * once at app composition; `bearerAuthFromGetter` reads the token per request so
  * a rotation never rebuilds it. The daemon SDL is the default Angee Hasura shape
- * (`idType: "String"`, `hasura-default`), so no provider-option override.
+ * (`idType: "String"`, `hasura-default`), so no provider-option override. The
+ * daemon writes its errors for the stack's operators (what failed, on which
+ * workspace, slot or job, and the remedy), so every message reaches the page.
  */
 export function createOperatorDataProvider(): OperatorDataProvider {
   return createAngeeHasuraDataProvider({
     url: OPERATOR_GRAPHQL_ENDPOINT,
     auth: bearerAuthFromGetter(operatorToken.get),
+    errorMessages: "all",
   });
 }

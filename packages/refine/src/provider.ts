@@ -44,6 +44,13 @@ export interface AngeeHasuraClientOptions {
   auth?: AuthFetch;
   csrfEndpoint?: string;
   fetch?: FetchFn;
+  /**
+   * Which server error messages reach the UI. `public` (the default) keeps only
+   * errors whose code the console marks public; `all` keeps every message and its
+   * extensions, for an admin surface whose server writes its errors for the people
+   * operating it (the operator daemon).
+   */
+  errorMessages?: "public" | "all";
 }
 
 export interface AngeeHasuraDataProviderOptions
@@ -95,7 +102,7 @@ export function createAngeeGraphQLClient(
     fetch: auth(baseFetch),
     headers: options.headers,
     responseMiddleware(response) {
-      if (response instanceof Error) throw boundedGraphQLTransportError(response);
+      if (response instanceof Error) throw boundedGraphQLTransportError(response, options.errorMessages);
     },
   });
 }
@@ -147,14 +154,18 @@ function hasFieldSelection(fields: unknown): boolean {
   return fields !== null && typeof fields === "object" && Object.keys(fields).length > 0;
 }
 
-export function boundedGraphQLTransportError(value: unknown): Error {
+export function boundedGraphQLTransportError(
+  value: unknown,
+  errorMessages: AngeeHasuraClientOptions["errorMessages"] = "public",
+): Error {
   const record = recordValue(value);
   if (!record || (!("request" in record) && !("response" in record))) {
     return new Error("Request failed.");
   }
   const response = recordValue(record.response);
+  const project = errorMessages === "all" ? serverGraphQLError : publicGraphQLError;
   const errors = Array.isArray(response?.errors)
-    ? response.errors.flatMap((error) => publicGraphQLError(error) ?? [])
+    ? response.errors.flatMap((error) => project(error) ?? [])
     : [];
   const message = errors.map((error) => error.message).join(" ") || "Request failed.";
   return Object.assign(new Error(message), {
@@ -169,6 +180,13 @@ export function boundedGraphQLTransportError(value: unknown): Error {
 export interface PublicGraphQLError {
   message: string;
   extensions: Record<string, unknown>;
+}
+
+/** Any server error with a message, extensions kept: for a client that shows every message. */
+function serverGraphQLError(value: unknown): PublicGraphQLError | null {
+  const error = recordValue(value);
+  if (typeof error?.message !== "string") return null;
+  return { message: error.message, extensions: recordValue(error.extensions) ?? {} };
 }
 
 export function publicGraphQLError(value: unknown): PublicGraphQLError | null {

@@ -213,6 +213,22 @@ describe("Angee Hasura provider defaults", () => {
     expect(JSON.stringify(normalized)).not.toContain(sentinel);
   });
 
+  test("an admin client keeps every server message and its extensions, still without request metadata", () => {
+    const failure = {
+      request: { query: "request-secret" },
+      response: { status: 200, errors: [{
+        message: 'Sync base for workspace "src": fetching source "arp" failed: ssh is not available.',
+        extensions: { code: "GIT_FAILED", cause: "ssh_unavailable", hint: "Mount the deploy SSH config." },
+      }] },
+    };
+    const normalized = boundedGraphQLTransportError(failure, "all");
+    expect(normalized.message).toBe('Sync base for workspace "src": fetching source "arp" failed: ssh is not available.');
+    expect(normalized).toMatchObject({ graphQLErrors: [{ extensions: { code: "GIT_FAILED", cause: "ssh_unavailable" } }] });
+    expect(JSON.stringify(normalized)).not.toContain("request-secret");
+    // The console default still hides it.
+    expect(boundedGraphQLTransportError(failure).message).toBe("Request failed.");
+  });
+
   test("bounds plain network errors", () => {
     expect(boundedGraphQLTransportError(new Error("fetch https://secret.invalid failed")).message)
       .toBe("Request failed.");
