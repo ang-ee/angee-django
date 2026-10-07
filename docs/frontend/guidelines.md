@@ -587,17 +587,24 @@ shared UI copy through an addon bundle.
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
   custom form component only when the declarative DSL genuinely cannot express it.
-- **A record's own fields are its sheet, never a tab.** `FormView` always renders
-  the header, body field and every group as the sheet; labelled groups are titled
-  sections, so group fields for reading order, not for tabs. Tabs exist only beneath
-  the sheet, for panes: the editable lines when no `<Group lines>` places them in
-  the sheet, then the saved-record tabs left after `visibleWhen`, permissions and
-  the record's implementation. Two or more panes get a strip; one renders without
-  one, beneath the sheet under a `SectionHeading` with its label. A full-bleed pane
+- **A record's own fields are its sheet; tabs live only beneath it.** `FormView`
+  renders the header, body field and every group as the sheet; labelled groups are
+  titled sections, so group fields for reading order. A group of secondary facts the
+  reader opens on demand (a message's envelope) may instead be a pane:
+  `<Group label=… pane="id">` renders its fields beneath the sheet as that pane,
+  bound to the record's form. Panes come in strip order: the editable lines when no
+  `<Group lines>` places them in the sheet, then pane groups, then the saved-record
+  tabs left after `visibleWhen`, permissions and the record's implementation; all
+  share one id namespace. Two or more panes get a strip; one renders without one,
+  beneath the sheet under a `SectionHeading` with its label. A full-bleed pane
   fills the height beneath the sheet, which then scrolls in its own region. `defaultRecordTab` (or its rule), a controlled
   `recordTab` and `?recordTab=` choose among the panes; an id that names no visible
   pane falls back to the first pane without rewriting the URL. Field reveal focuses
-  a sheet field in place and selects the lines pane for a line.
+  a sheet field in place and selects the pane holding a pane-group or line field.
+- **Never nest tabs.** A pane is the last level of tabs: its content carries no
+  strip of its own and no second heading row repeating what the pane names. An
+  embedded list that fills a pane sets `chrome: { heading: false }`; content that
+  needs its own sections is a sheet group or another pane, not tabs inside a tab.
 - **The form hero precedes secondary facts.** `FormView` places its status control
   above the title, except statusbar fields: these occupy the title row's right, wrap below on narrow widths, omit their label and body copy, and remain header badges in compact forms. Its lead body precedes the sheet's groups. A domain-owned
   status control declares `<Field status widget="…" />` and registers its widget
