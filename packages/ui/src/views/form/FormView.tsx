@@ -272,22 +272,22 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     </Tabs.Tab>)}
   </Tabs.List> : lonePane ? <SectionHeading label={resolveTabLabel(lonePane.label, i18n)} count={lonePane.badge}
     className="border-b border-border-subtle pb-1" /> : null;
-  const renderPane = (pane: FormViewPane) => {
+  const paneContent = (pane: FormViewPane): React.ReactNode => {
     if (awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === pane.id;
     if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLinesPane surface={surface} {...lineProps} />;
     const paneSection = surface.paneSections.find((section) => section.pane === pane.id);
-    if (paneSection) {
-      // A pane group's content reads the record like the sheet's sections do.
-      const group = <FormViewPaneGroup surface={surface} section={paneSection} />;
-      return recordChromeContext ? <RecordChromeProvider value={recordChromeContext}>{group}</RecordChromeProvider> : group;
-    }
+    if (paneSection) return <FormViewPaneGroup surface={surface} section={paneSection} />;
     const tab = recordTabById.get(pane.id);
     // Only the active pane, or one asked to stay mounted, has content: the strip's own selection
     // can trail the record's for a render, and an inactive pane must not mount meanwhile.
     if (!tab || !recordPanelContext || (!active && !tab.keepMounted)) return null;
-    const content = tab.render({ ...recordPanelContext, active });
-    return recordChromeContext
+    return tab.render({ ...recordPanelContext, active });
+  };
+  // Every pane reads the record the way the sheet's sections do.
+  const renderPane = (pane: FormViewPane) => {
+    const content = paneContent(pane);
+    return content != null && recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
       : content;
   };
