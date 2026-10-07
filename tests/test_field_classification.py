@@ -6,7 +6,8 @@ from typing import cast
 
 from django.db import models
 
-from angee.data.field_classification import RESOURCE_FIELD_SCALARS, is_to_one_relation
+from angee.base.fields import ColorField
+from angee.data.field_classification import RESOURCE_FIELD_SCALARS, is_to_one_relation, resource_field_widget
 
 
 def test_uuid_is_a_supported_resource_scalar() -> None:
@@ -31,3 +32,12 @@ def test_generated_field_projects_as_its_output_field_scalar() -> None:
         db_persist=True,
     )
     assert model_field_scalar(field) == "Boolean"
+
+
+def test_color_field_classifies_to_the_color_widget() -> None:
+    """A colour column renders the shared chooser without the owner naming a widget."""
+
+    field = ColorField(blank=True, default="")
+    assert field.max_length == 7
+    assert resource_field_widget(field, "scalar", scalar="String") == "color"
+    assert resource_field_widget(models.CharField(max_length=7), "scalar", scalar="String") is None

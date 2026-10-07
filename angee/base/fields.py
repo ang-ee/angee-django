@@ -40,6 +40,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
+from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 from django_choices_field import TextChoicesField
@@ -100,6 +101,34 @@ class ModelLabelField(models.CharField):
         value = self.normalize(super().pre_save(model_instance, add))
         setattr(model_instance, self.attname, value)
         return value
+
+
+HEX_COLOR_VALIDATOR = RegexValidator(r"^#[0-9a-fA-F]{6}$", "Enter a colour as #rrggbb.")
+"""The one colour form a colour column stores and the colour chooser writes."""
+
+
+class ColorField(models.CharField):
+    """A ``#rrggbb`` colour column, chosen with the shared colour widget.
+
+    Declared natively, e.g. ``ColorField(blank=True, default="")``; ``max_length``
+    defaults to the seven characters of a hex colour. Blank means "no colour".
+    Resource metadata classifies the column to the ``color`` widget, so owners
+    place the field and never name the widget.
+    """
+
+    angee_widget = "color"
+    angee_scalar_hint = "String"
+    default_validators = [HEX_COLOR_VALIDATOR]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("max_length", 7)
+        super().__init__(*args, **kwargs)
+
+    def deconstruct(self) -> tuple[str, str, list[Any], dict[str, Any]]:
+        name, path, args, kwargs = super().deconstruct()
+        if kwargs.get("max_length") == 7:
+            del kwargs["max_length"]
+        return name, path, args, kwargs
 
 
 def _derive_fernet(label: str) -> Fernet:

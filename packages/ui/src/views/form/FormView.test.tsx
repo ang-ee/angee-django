@@ -618,6 +618,21 @@ describe("FormView", () => {
     expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
   });
 
+  test("a pane group's content reads the record chrome like the sheet's sections", async () => {
+    function RecordProbe(): ReactElement {
+      const chrome = useRecordChromeContext();
+      return <span data-testid="pane-record">{chrome.resource}:{chrome.recordId}:{String(chrome.record?.title ?? "")}</span>;
+    }
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Group label="Details"><Field name="wordCount" /></Group>
+      <Group label="Audit" pane="audit" content={<RecordProbe />} />
+    </FormView>);
+    await screen.findByLabelText("Title");
+    // A lone pane renders beneath the sheet under its heading; its content sees the saved record.
+    expect((await screen.findByTestId("pane-record")).textContent).toBe(`notes.Note:note-1:${String(sdkMocks.record.title)}`);
+  });
+
   test("rejects a pane group whose id collides with a record tab", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {

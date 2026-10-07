@@ -42,7 +42,7 @@ from rebac import PermissionDenied, actor_context, current_actor
 from rebac.mixins import RebacModelBase
 
 from angee.base.actors import instance_actor
-from angee.base.fields import StateField
+from angee.base.fields import ColorField, StateField
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HierarchyMixin
@@ -1028,8 +1028,8 @@ class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
 
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
-    color = models.CharField(max_length=32, blank=True, default="")
-    """Display color token or hex for chips/dots; presentation only."""
+    color = ColorField(max_length=32, blank=True, default="")
+    """Display colour for chips/dots; presentation only."""
 
     icon = models.CharField(max_length=128, blank=True, default="")
     """Icon registry name for navigation; presentation only."""
