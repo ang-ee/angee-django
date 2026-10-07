@@ -277,7 +277,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     const active = activeRecordTab === pane.id;
     if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLinesPane surface={surface} {...lineProps} />;
     const paneSection = surface.paneSections.find((section) => section.pane === pane.id);
-    if (paneSection) return <FormViewPaneGroup surface={surface} section={paneSection} />;
+    if (paneSection) {
+      // A pane group's content reads the record like the sheet's sections do.
+      const group = <FormViewPaneGroup surface={surface} section={paneSection} />;
+      return recordChromeContext ? <RecordChromeProvider value={recordChromeContext}>{group}</RecordChromeProvider> : group;
+    }
     const tab = recordTabById.get(pane.id);
     // Only the active pane, or one asked to stay mounted, has content: the strip's own selection
     // can trail the record's for a render, and an inactive pane must not mount meanwhile.
