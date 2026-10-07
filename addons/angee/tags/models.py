@@ -37,6 +37,7 @@ from django.db import models
 from rebac import GenericTarget, generic_target, system_context
 from rebac.resources import model_for_resource_type
 
+from angee.base.fields import ColorField
 from angee.base.identity import instance_from_public_id
 from angee.base.mixins import (
     ArchiveMixin,
@@ -69,7 +70,7 @@ class Tag(ArchiveMixin, AngeeDataModel):
     sqid_prefix = "tag_"
 
     name = models.CharField(max_length=128)
-    color = models.CharField(max_length=32, blank=True, default="")
+    color = ColorField(max_length=32, blank=True, default="")
 
     objects = TagManager()
 

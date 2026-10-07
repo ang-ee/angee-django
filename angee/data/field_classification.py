@@ -22,7 +22,7 @@ RESOURCE_FIELD_SCALARS = frozenset(
 
 RESOURCE_FIELD_WIDGETS = frozenset({
     "select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility",
-    "tone",
+    "tone", "color",
 })
 """Widget vocabulary owned by backend data-resource metadata."""
 

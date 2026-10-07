@@ -2,6 +2,7 @@ import { useWidget, type WidgetMap } from "../runtime";
 
 import { booleanBadgeWidget } from "./booleanBadge";
 import { booleanWidget } from "./boolean";
+import { colorWidget } from "./color";
 import { colorDotWidget } from "./colorDot";
 import { comboboxWidget } from "./combobox";
 import { dateWidget } from "./date";
@@ -137,6 +138,7 @@ export const defaultWidgets = {
   boolean: booleanWidget,
   booleanBadge: booleanBadgeWidget,
   booleanToggle: booleanToggleWidget,
+  color: colorWidget,
   colorDot: colorDotWidget,
   date: dateWidget,
   json: jsonWidget,
