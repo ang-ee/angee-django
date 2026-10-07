@@ -1207,14 +1207,18 @@ Hard-won traps — the wise learn from others' mistakes
   `kind:"list"` field that carries a relation target (an M2M, e.g. a team's
   `members` or a line's `tags`) defaults to the `many2many` widget, on record forms
   and editable lines alike. Both render it through `relationListFieldInfo` +
-  `RelationMultiFieldWidget`: when editable, one field-shaped box holding the
-  picked records as removable chips and an inline search over the related model
-  (Base UI's multiple `Combobox`), whose last option for an unmatched query is
-  "Create “query”"; linked chips when read-only. Inline create derives from the
-  related model's metadata by the same rule as the to-one picker
-  (`useRelationForms`; pass `create={null}` to decline it) and opens the create
-  form prefilled with the query; nothing sits beside the box except an authored
-  `actionLabel` button (a lines cell, which has no search, keeps an icon create). Reads select the related records' identity and
+  `RelationMultiFieldWidget`: when editable, one field-shaped line holding the
+  picked records as removable chips, an inline search over the related model
+  (Base UI's multiple `Combobox`) and a caret; linked chips when read-only. A
+  related model whose `color` field is a colour (`recordColorField`) fills its
+  chips with each record's colour, in forms and list cells alike. Inline create
+  derives from the related model's metadata by the same rule as the to-one picker
+  (`useRelationForms`; pass `create={null}` to decline it): an unmatched query
+  offers "Create “query”", which creates the record from that name at once when
+  nothing else is required (`useRelationQuickCreate`), and "Create and edit…",
+  which opens the create form prefilled with it. Nothing sits beside the line
+  except an authored `actionLabel` button (a lines cell, which has no search,
+  keeps an icon create). Reads select the related records' identity and
   representation; writes send an array of public ids (`relationIdList`), from the
   form's `mutationData` or the lines diff. A form keeps a re-picked equal set as
   its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target

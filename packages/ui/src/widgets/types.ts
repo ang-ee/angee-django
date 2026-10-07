@@ -26,6 +26,8 @@ export interface VisibilityAction {
 export interface WidgetOption {
   value: string;
   label: ReactNode;
+  /** The option's own `#rrggbb` colour (a related record's `color`), filling its chip. */
+  color?: string;
   disabled?: boolean;
   /** A statusbar owner may mark a terminal or side option outside its path. */
   onPath?: boolean;

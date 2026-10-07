@@ -34,10 +34,13 @@ test("one chips field offers create for an unmatched query, from the related mod
   expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
   await typeQuery("urg");
   expect(await screen.findByRole("option", { name: "Urgent" })).toBeTruthy();
+  // A tag needs only its name: "Create" makes it at once, "Create and edit…" opens its form.
   expect(screen.getByRole("option", { name: "Create “urg”" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Create and edit…" })).toBeTruthy();
   await typeQuery("Follow up");
   expect(await screen.findByRole("option", { name: "Create “Follow up”" })).toBeTruthy();
-  expect(screen.queryByRole("option", { name: "Urgent" })).toBeNull();
+  // The search is debounced, as the to-one picker's is.
+  await waitFor(() => expect(screen.queryByRole("option", { name: "Urgent" })).toBeNull());
   // An exact match is picked, not created.
   await typeQuery("urgent");
   expect(await screen.findByRole("option", { name: "Urgent" })).toBeTruthy();
@@ -122,4 +125,18 @@ test("with every record picked and nothing typed the field opens no empty list; 
   // Typing still offers to create.
   await typeQuery("Follow up");
   expect(await screen.findByRole("option", { name: "Create “Follow up”" })).toBeTruthy();
+});
+
+test("Create “name” makes the record at once and adds it as a chip", async () => {
+  const getList = vi.fn(async () => ({ data: [], total: 0 }));
+  const create = vi.fn(async ({ variables }: { variables: Record<string, unknown> }) => ({ data: { id: "tag-new", ...variables } }));
+  const change = vi.fn();
+  render(<Provider dataProvider={{ getList, create }}>
+    <RelationMultiFieldWidget value={["tag-1"]} onChange={change} relation={relation} aria-label="Tags" />
+  </Provider>);
+  await typeQuery("Follow up");
+  fireEvent.click(await screen.findByRole("option", { name: "Create “Follow up”" }));
+  await waitFor(() => expect(change).toHaveBeenCalledWith(["tag-1", "tag-new"]));
+  expect(create.mock.calls[0]?.[0]).toMatchObject({ variables: { name: "Follow up" } });
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

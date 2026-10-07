@@ -1,19 +1,19 @@
 import type { ReactElement } from "react";
 
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { hexColor } from "../lib/hex-color";
 import { Input } from "../ui/input";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
-/** A `#rrggbb` colour, the only form the native picker and `ColorField` exchange. */
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
-
 function Swatch({ value, className }: { value: string | null | undefined; className?: string }): ReactElement {
-  const hex = typeof value === "string" && HEX_COLOR.test(value) ? value : undefined;
+  const t = useUiT();
+  const hex = hexColor(value);
   return (
     <span
       role="img"
-      aria-label={hex ?? "No colour"}
+      aria-label={hex ?? t("color.none")}
       className={cn("inline-block size-4 shrink-0 rounded-full border border-border", !hex && "border-dashed", className)}
       style={hex ? { backgroundColor: hex } : undefined}
     />
@@ -33,15 +33,16 @@ function ColorEdit({
   readOnly,
   controlRef,
 }: WidgetRenderProps<string>): ReactElement {
-  const hex = typeof value === "string" && HEX_COLOR.test(value) ? value : "#000000";
-  const label = widgetLabel(field, "Colour");
+  const t = useUiT();
+  const hex = hexColor(value) ?? "#000000";
+  const label = widgetLabel(field, t("color.label"));
   return (
     <span className="inline-flex w-full items-center gap-2">
       <input
         type="color"
         value={hex}
         disabled={readOnly}
-        aria-label={`${label} picker`}
+        aria-label={t("color.picker", { label })}
         className="size-7 shrink-0 cursor-pointer rounded-full border border-border bg-transparent p-0 disabled:cursor-default [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0.5"
         onChange={(event) => onChange?.(event.currentTarget.value)}
         onBlur={onCommit}

@@ -75,6 +75,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   return {
     ...actual,
     useInvalidate: () => vi.fn(async () => undefined),
+    useCreate: () => ({ mutateAsync: vi.fn(async () => ({ data: {} })) }),
     useOne: () => ({
       result: undefined,
       query: { isFetching: false, error: null },
@@ -590,7 +591,9 @@ describe("ActionFormDialog", () => {
     // The relation list offers it in its own search, never as a button beside it.
     expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
     fireEvent.input(await screen.findByRole("combobox", { name: "Documents" }), { target: { value: "Spec" }, inputType: "insertText" });
-    expect(await screen.findByRole("option", { name: "Create “Spec”" })).toBeTruthy();
+    // A document needs more than its name, so it is created through its form.
+    expect(await screen.findByRole("option", { name: "Create and edit…" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Create “Spec”" })).toBeNull();
   });
 
   test("offers no inline create without create even for creatable resources", async () => {

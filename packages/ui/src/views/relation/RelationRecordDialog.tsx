@@ -1,12 +1,15 @@
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import {
   modelLabelSegment,
   modelMetadataForLabel,
+  refineResourceName,
   rowPublicId,
   useModelMetadata,
   useSchemaFieldMetadata,
   type Row,
 } from "@angee/metadata";
+import { refineFieldsFromPaths } from "@angee/refine";
+import { useCreate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { useUiT } from "../../i18n";
 import { ControlBandProvider } from "../../layouts/ControlBand";
@@ -58,6 +61,38 @@ export function useRelationForms(
     return { resource, kinds: own ? [{ ...own, label: modelDisplayLabel(metadata, resource) }, ...kinds] : kinds };
   }, [canCreate, fields, labelField, metadata, resource, schema]);
   return { fields, create: create === undefined ? derived : create ?? undefined };
+}
+
+const QUICK_CREATE_FIELDS = refineFieldsFromPaths(["id"]);
+
+/**
+ * Create a related record from its name alone, Odoo's "Create “name”": offered for a
+ * single-kind create whose model requires nothing on create beyond the field the typed
+ * query prefills. The record is created at once through the create root the create form
+ * saves through, and its public id returned; anything more opens the create form.
+ */
+export function useRelationQuickCreate(
+  create: RelationCreateConfig | undefined,
+): ((query: string) => Promise<string | undefined>) | undefined {
+  const metadata = useModelMetadata(create?.resource ?? "");
+  const resource = metadata?.resource ?? null;
+  const mutation = useCreate<BaseRecord, HttpError>({
+    resource: refineResourceName(resource),
+    dataProviderName: resource?.schemaName,
+    meta: { fields: QUICK_CREATE_FIELDS },
+    invalidates: ["list", "many"],
+    successNotification: false,
+  });
+  const prefillField = create?.prefillField ?? "name";
+  const quick = Boolean(create && !create.kinds?.length && !create.submit && metadata?.fields[prefillField]?.creatable
+    && Object.values(metadata.fields).every((field) => !field.requiredOnCreate || field.name === prefillField));
+  const { mutateAsync } = mutation;
+  const defaultValues = create?.defaultValues;
+  const quickCreate = useCallback(async (query: string) => {
+    const result = await mutateAsync({ values: { ...defaultValues, [prefillField]: query } });
+    return rowPublicId(result.data as Row) ?? undefined;
+  }, [defaultValues, mutateAsync, prefillField]);
+  return quick ? quickCreate : undefined;
 }
 
 /** A model's metadata-derived inline create: offered with a create root and form fields. */

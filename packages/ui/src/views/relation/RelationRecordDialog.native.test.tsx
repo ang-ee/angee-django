@@ -134,10 +134,10 @@ test("the single picker's create switches kinds, saves the chosen kind and selec
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "New party" })).toBeNull());
 });
 
-/** Type an unmatched query into a chips field and pick its "Create “…”" option. */
+/** Type an unmatched query into a chips field and pick its "Create and edit…" option. */
 async function createFromSearch(label: string, query: string): Promise<void> {
   fireEvent.input(screen.getByRole("combobox", { name: label }), { target: { value: query }, inputType: "insertText" });
-  fireEvent.click(await screen.findByRole("option", { name: `Create “${query}”` }));
+  fireEvent.click(await screen.findByRole("option", { name: "Create and edit…" }));
 }
 
 test("the multi picker's create saves the default kind and adds it to the selection", async () => {

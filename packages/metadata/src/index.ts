@@ -24,6 +24,7 @@ export {
   modelMetadataForLabel,
   modelFieldForPath,
   relationModelLabelForField,
+  recordColorField,
   relationRepresentationForPath,
   resourceReadSelectionPaths,
   resourceOperationTarget,
