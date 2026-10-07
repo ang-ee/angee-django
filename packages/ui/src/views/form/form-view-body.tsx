@@ -396,10 +396,7 @@ export function FormViewSheet({
   const currentBodyField = bodyField
     ? resolveField(bodyField, bodyValues)
     : undefined;
-  const renderField = (field: FieldDescriptor): React.ReactNode => {
-    if (field.hidden) return null;
-    return <BoundFormField key={field.name} surface={surface} field={field} />;
-  };
+  const renderField = boundFieldRenderer(surface);
   // A declared `lines` group holds the editable lines in its place in the sheet.
   const sheetSections = sections.map((section) => section.key === EDITABLE_LINES_SECTION
     ? { ...section, render: () => <FormViewLines surface={surface} {...lineProps} /> } : section);
@@ -454,6 +451,22 @@ export function FormViewSheet({
       </div>
     </>
   );
+}
+
+/** A `pane` group's fields, bound to the record's form like the sheet's; the pane strip names it. */
+export function FormViewPaneGroup({
+  surface,
+  section,
+}: {
+  surface: FormViewSurface;
+  section: FormSectionModel;
+}): React.ReactElement | null {
+  return <FormSection section={{ ...section, label: undefined, collapsible: false }}
+    renderField={boundFieldRenderer(surface)} control={surface.form.control} requestedFocusPath={surface.requestedFocusPath} />;
+}
+
+function boundFieldRenderer(surface: FormViewSurface): (field: FieldDescriptor) => React.ReactNode {
+  return (field) => field.hidden ? null : <BoundFormField key={field.name} surface={surface} field={field} />;
 }
 
 function BoundFormField({

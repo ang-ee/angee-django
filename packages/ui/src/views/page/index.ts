@@ -247,6 +247,7 @@ function groupDescriptor(props: GroupProps): GroupDescriptor {
     ...(props.content !== undefined ? { content: props.content } : {}),
     ...(props.savedOnly !== undefined ? { savedOnly: props.savedOnly } : {}),
     ...(props.lines ? { lines: true } : {}),
+    ...(props.pane !== undefined ? { pane: props.pane } : {}),
     fields: parseDirectPageFields(props.children),
     actions: parsePageActions(props.children),
   }));

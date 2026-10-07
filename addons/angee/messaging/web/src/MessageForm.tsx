@@ -21,7 +21,8 @@ const FILE_MODEL = "storage.File";
 // body / quoted / signature); regrouping by fragment.hash through the shared
 // grouping chooser turns the same view into the dedup/interconnection lens.
 const PART_GROUPS = { list: { field: "role" } } as const;
-const PART_CHROME = { search: true } as const;
+// The Content pane names the list, so it carries no heading of its own.
+const PART_CHROME = { search: true, heading: false } as const;
 
 type PartRow = PartListRow;
 // The nested selection the part columns render from: the part's structural
@@ -176,7 +177,7 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
     <Field name="tags" />
-    <Group label={t("messages.groupEnvelope")} columns={2}>
+    <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
       <Field name="sender" readOnly />
       <Field name="sent_at" readOnly />
       <Field name="platform" readOnly />

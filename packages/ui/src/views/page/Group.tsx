@@ -22,6 +22,11 @@ export interface GroupProps {
    * carrying it is narrowed like any section; undeclared, they trail the form.
    */
   lines?: boolean;
+  /**
+   * The group is its own pane beneath the sheet, with this id, titled by `label`,
+   * instead of a sheet section. Its fields stay bound to the record's form.
+   */
+  pane?: string;
   children?: ReactNode;
 }
 
@@ -38,6 +43,8 @@ export interface GroupDescriptor {
   savedOnly?: boolean;
   /** The section holds the form's editable lines. */
   lines?: boolean;
+  /** The section is the pane with this id rather than part of the sheet. */
+  pane?: string;
   /** Projected record permission required to show this group; set from a contribution. */
   permission?: string;
   /** The container child that contributed it, when the record decides (its `impl` or a variant); set by FormView. */

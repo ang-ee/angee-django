@@ -67,6 +67,8 @@ export interface FormSectionModel {
   permission?: string;
   /** The container child behind it, shown only on records that admit that child. */
   containerChild?: string;
+  /** The pane this section fills instead of the sheet. */
+  pane?: string;
   sequence?: number;
   order?: number;
 }
@@ -93,6 +95,9 @@ export function formSections(
   if (groups.filter((group) => group.lines).length > 1) {
     throw new Error("A form declares its editable lines in one group.");
   }
+  if (groups.some((group) => group.lines && group.pane !== undefined)) {
+    throw new Error("A form's editable lines group cannot also be a pane.");
+  }
   const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
     if (isCreate && group.savedOnly) return [];
@@ -111,6 +116,7 @@ export function formSections(
         ...(group.content !== undefined ? { render: () => group.content } : {}),
         ...(group.permission !== undefined ? { permission: group.permission } : {}),
         ...(group.containerChild !== undefined ? { containerChild: group.containerChild } : {}),
+        ...(group.pane !== undefined ? { pane: group.pane } : {}),
         sequence: sequences[index],
         order: index,
       },

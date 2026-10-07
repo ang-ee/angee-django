@@ -34,6 +34,7 @@ import {
 import {
   FORM_VIEW_COLUMN_CLASS,
   FormViewLinesPane,
+  FormViewPaneGroup,
   FormViewRail,
   FormViewRecordHeader,
   FormViewSheet,
@@ -223,8 +224,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  // The sheet is the record's own fields, always shown; panes follow it. One pane renders
-  // without a strip, beneath the sheet under its own heading.
+  // The sheet is the record's own fields outside its pane groups, always shown; panes follow it.
+  // One pane renders without a strip, beneath the sheet under its own heading.
   const lonePane = tabbed ? undefined : panes[0];
   const recordTabById = new Map(recordTabList.map((tab) => [tab.id, tab]));
   const fullBleed = (pane: FormViewPane) => recordTabById.get(pane.id)?.presentation === "full-bleed";
@@ -275,6 +276,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     if (awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === pane.id;
     if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLinesPane surface={surface} {...lineProps} />;
+    const paneSection = surface.paneSections.find((section) => section.pane === pane.id);
+    if (paneSection) return <FormViewPaneGroup surface={surface} section={paneSection} />;
     const tab = recordTabById.get(pane.id);
     // Only the active pane, or one asked to stay mounted, has content: the strip's own selection
     // can trail the record's for a render, and an inactive pane must not mount meanwhile.

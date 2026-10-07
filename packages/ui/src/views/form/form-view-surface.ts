@@ -86,7 +86,7 @@ export interface RecordFieldFocusOptions {
   recordTabId?: string;
 }
 
-/** One pane beneath the sheet: the trailing editable lines or a saved-record tab. */
+/** One pane beneath the sheet: the trailing editable lines, a pane group or a saved-record tab. */
 export interface FormViewPane {
   id: string;
   label: TabLabel;
@@ -196,6 +196,8 @@ export interface FormViewSurface
   bodyField: FieldDescriptor | undefined;
   /** The sheet's sections, always shown; a declared `lines` group holds the editable lines. */
   sections: readonly FormSectionModel[];
+  /** The declared `pane` groups, each filling its own pane beneath the sheet. */
+  paneSections: readonly FormSectionModel[];
   /** The trailing editable lines' pane label. */
   linesLabel: React.ReactNode;
   /** The lines trail the form as its first pane: none of its sections, admitted or not, declares them. */
@@ -209,7 +211,7 @@ export interface FormViewSurface
   recordToolbarContext: RecordToolbarContext;
   /** The visible saved-record tabs. */
   recordTabList: readonly RecordTabDescriptor[];
-  /** The visible panes beneath the sheet, in strip order: trailing lines, then saved-record tabs. */
+  /** The visible panes beneath the sheet, in strip order: trailing lines, pane groups, then saved-record tabs. */
   panes: readonly FormViewPane[];
   /** Whether the pane strip shows: only with two or more panes. */
   tabbed: boolean;
@@ -710,7 +712,10 @@ export function useFormViewSurface({
     [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
   );
   const sectionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
-  const sections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
+  const shownSections = hasConditionalFields ? visibleSections(allSections, sectionValues) : allSections;
+  // A `pane` group fills its own pane beneath the sheet; every other section is the sheet.
+  const sections = React.useMemo(() => shownSections.filter((section) => section.pane === undefined), [shownSections]);
+  const paneSections = React.useMemo(() => shownSections.filter((section) => section.pane !== undefined), [shownSections]);
   const subtitleParts = React.useMemo(
     () =>
       recordSubtitleParts(
@@ -765,27 +770,33 @@ export function useFormViewSurface({
         render: () => tab.children,
       }];
     }),
+    paneSections.map((section) => section.pane!),
   );
-  // The record's own fields are always the sheet; panes beneath it hold what the record owns
-  // or relates to: the trailing editable lines first, then its saved-record tabs.
+  // The record's own fields are the sheet unless a group is declared as a pane; panes beneath it
+  // hold the trailing editable lines first, then pane groups, then its saved-record tabs.
   const panes: readonly FormViewPane[] = [
     ...(linesTrailing ? [{ id: EDITABLE_LINES_SECTION, label: linesLabel }] : []),
+    ...paneSections.map((section) => ({ id: section.pane!, label: section.label ?? section.pane!, badge: section.badge })),
     ...recordTabList,
   ];
   // A routed, chosen or default pane that is not visible (dropped by `visibleWhen`, a permission
   // or a create form, or an unknown id) falls back to the first pane without writing it back.
   const activeRecordTab = panes.some((pane) => pane.id === requestedRecordTab) ? requestedRecordTab : panes[0]?.id;
   const pendingFocusRef = React.useRef<{ path: string; recordTabId?: string } | null>(null);
-  const focusPanesRef = useLatestRef({ paneIds: panes.map((pane) => pane.id), linesPane: linesTrailing });
+  const focusPanesRef = useLatestRef({
+    paneIds: panes.map((pane) => pane.id),
+    linesPane: linesTrailing,
+    fieldPanes: new Map(paneSections.flatMap((section) => section.fields.map((field) => [field.name, section.pane!] as const))),
+  });
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
   const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
-    const { paneIds, linesPane } = focusPanesRef.current;
+    const { paneIds, linesPane, fieldPanes } = focusPanesRef.current;
     const linePath = save.linesField !== null
       && (path === save.linesField || path.startsWith(`${save.linesField}.`));
     // The sheet always shows; only a field in a pane selects that pane before it takes focus.
     const target = options?.recordTabId && paneIds.includes(options.recordTabId) ? options.recordTabId
-      : linesPane && linePath ? EDITABLE_LINES_SECTION : undefined;
+      : linesPane && linePath ? EDITABLE_LINES_SECTION : fieldPanes.get(path);
     pendingFocusRef.current = { path, recordTabId: target };
     setRequestedFocusPath(path);
     if (target !== undefined) setActiveRecordTab(target);
@@ -825,6 +836,7 @@ export function useFormViewSurface({
     statusField,
     bodyField,
     sections,
+    paneSections,
     linesLabel,
     linesTrailing,
     railGroups: visibleRailGroups,
@@ -872,16 +884,17 @@ function compareFormSections(
 function mergeRecordTabs(
   declared: readonly RecordTabDescriptor[],
   contributed: readonly RecordTabDescriptor[],
+  groupPanes: readonly string[],
 ): readonly RecordTabDescriptor[] {
   const tabs =
     contributed.length === 0 ? declared : [...declared, ...contributed];
   // All panes share one id namespace; the lines pane's id stays reserved even when absent.
   const seen = new Set<string>([EDITABLE_LINES_SECTION]);
-  for (const tab of tabs) {
-    if (seen.has(tab.id)) {
-      throw new Error(`FormView received duplicate record tab id "${tab.id}".`);
+  for (const id of [...groupPanes, ...tabs.map((tab) => tab.id)]) {
+    if (seen.has(id)) {
+      throw new Error(`FormView received duplicate record tab id "${id}".`);
     }
-    seen.add(tab.id);
+    seen.add(id);
   }
   return tabs;
 }
