@@ -593,8 +593,8 @@ shared UI copy through an addon bundle.
   reader opens on demand (a message's envelope) may instead be a pane:
   `<Group label=… pane="id">` renders its fields beneath the sheet as that pane,
   bound to the record's form. Panes come in strip order: the editable lines when no
-  `<Group lines>` places them in the sheet, then pane groups, then the saved-record
-  tabs left after `visibleWhen`, permissions and the record's implementation; all
+  `<Group lines>` places them in the sheet, then the saved-record tabs left after
+  `visibleWhen`, permissions and the record's implementation, then pane groups; all
   share one id namespace. Two or more panes get a strip; one renders without one,
   beneath the sheet under a `SectionHeading` with its label. A full-bleed pane
   fills the height beneath the sheet, which then scrolls in its own region. `defaultRecordTab` (or its rule), a controlled

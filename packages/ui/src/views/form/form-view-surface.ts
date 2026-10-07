@@ -211,7 +211,7 @@ export interface FormViewSurface
   recordToolbarContext: RecordToolbarContext;
   /** The visible saved-record tabs. */
   recordTabList: readonly RecordTabDescriptor[];
-  /** The visible panes beneath the sheet, in strip order: trailing lines, pane groups, then saved-record tabs. */
+  /** The visible panes beneath the sheet, in strip order: trailing lines, saved-record tabs, then pane groups. */
   panes: readonly FormViewPane[];
   /** Whether the pane strip shows: only with two or more panes. */
   tabbed: boolean;
@@ -773,11 +773,12 @@ export function useFormViewSurface({
     paneSections.map((section) => section.pane!),
   );
   // The record's own fields are the sheet unless a group is declared as a pane; panes beneath it
-  // hold the trailing editable lines first, then pane groups, then its saved-record tabs.
+  // hold the trailing editable lines first, then its saved-record tabs, then the pane groups'
+  // secondary facts.
   const panes: readonly FormViewPane[] = [
     ...(linesTrailing ? [{ id: EDITABLE_LINES_SECTION, label: linesLabel }] : []),
-    ...paneSections.map((section) => ({ id: section.pane!, label: section.label ?? section.pane!, badge: section.badge })),
     ...recordTabList,
+    ...paneSections.map((section) => ({ id: section.pane!, label: section.label ?? section.pane!, badge: section.badge })),
   ];
   // A routed, chosen or default pane that is not visible (dropped by `visibleWhen`, a permission
   // or a create form, or an unknown id) falls back to the first pane without writing it back.
