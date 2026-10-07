@@ -15,6 +15,7 @@ export interface GroupProps {
   defaultOpen?: boolean;
   /** Saved-record content following this group's declared fields. */
   content?: ReactNode;
+  /** Shown only on a saved record: a create form omits the group and its fields. */
   savedOnly?: boolean;
   /**
    * This section holds the form's editable lines. Declared, the lines render here,

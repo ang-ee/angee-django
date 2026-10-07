@@ -28,6 +28,7 @@ from strawberry.permission import BasePermission
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.refs import canonical_link_path
 from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
@@ -103,6 +104,8 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     Both querysets are actor-scoped, so an edge whose tag the actor cannot read
     never reaches the row, and the inner tag queryset carries the selected
     ``TagType`` hints. The REBAC optimizer stamps and rescopes the outer lookup.
+    A multi-table child's edges key on its canonical ancestor, which declares
+    ``tag_assignments``, so the lookup climbs the child's parent links to it.
     """
 
     actor = current_actor()
@@ -111,7 +114,17 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     edges = read_scoped_queryset(TagAssignment, actor).by_tag().prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )
-    return models.Prefetch("tag_assignments", queryset=edges, to_attr=_TAG_EDGES_ATTR)
+    links = canonical_link_path(field.origin_django_type.model) if field.origin_django_type else ()
+    return models.Prefetch("__".join((*links, "tag_assignments")), queryset=edges, to_attr=_TAG_EDGES_ATTR)
+
+
+def _prefetched_tag_edges(row: models.Model) -> Any:
+    """Return the edges the batched prefetch parked on ``row``'s canonical ancestor, if it ran."""
+
+    owner: models.Model | None = row
+    for link in canonical_link_path(type(row)):
+        owner = owner._state.fields_cache.get(link) if owner is not None else None
+    return getattr(owner, _TAG_EDGES_ATTR, None) if owner is not None else None
 
 
 @strawberry.type
@@ -132,7 +145,7 @@ class TaggedNode:
         """Return the actor-readable tags on this row, in the tag vocabulary's order."""
 
         row = cast(Any, self)
-        edges = getattr(row, _TAG_EDGES_ATTR, None)
+        edges = _prefetched_tag_edges(row)
         if edges is None:
             # An unoptimized root (a mutation payload, a hand-resolved row): one
             # actor-scoped read for this row alone.

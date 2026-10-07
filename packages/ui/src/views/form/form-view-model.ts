@@ -100,9 +100,10 @@ export function formSections(
   }
   const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
+    // A saved-only group's fields stay out of a create form, never falling back to the ungrouped section.
+    for (const field of group.fields) groupedNames.add(field.name);
     if (isCreate && group.savedOnly) return [];
     if (group.fields.length === 0 && group.content === undefined && !group.lines) return [];
-    for (const field of group.fields) groupedNames.add(field.name);
     return [
       {
         key: group.lines ? EDITABLE_LINES_SECTION : `group:${index}:${String(group.label ?? "")}`,

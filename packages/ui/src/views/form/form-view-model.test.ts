@@ -374,3 +374,11 @@ describe("formSections", () => {
     ])).toThrow("one group");
   });
 });
+
+test("a saved-only group's fields stay off a create form instead of falling back to the ungrouped section", () => {
+  const name = { name: "name" };
+  const archived = { name: "is_archived" };
+  const groups = [{ fields: [archived], actions: [], savedOnly: true }];
+  expect(formSections([name, archived], groups, [], true)).toEqual([{ key: "fields", fields: [name] }]);
+  expect(formSections([name, archived], groups, [], false).map((section) => section.fields)).toEqual([[name], [archived]]);
+});

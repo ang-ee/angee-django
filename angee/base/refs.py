@@ -190,6 +190,30 @@ def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]
         current = next(iter(parents), None)
 
 
+def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
+    """Return the primary-key parent links from ``model`` up to its canonical REBAC model.
+
+    A relation declared on the canonical model, such as the ``GenericRelation`` a
+    polymorphic edge keys on through :func:`rebac.generic_target`, is reached from a
+    multi-table child through these links: Django's generic relation would key the
+    child's rows on the child's own content type, which no edge stores. Empty for a
+    canonical model, a proxy of one, or an ungated model.
+    """
+
+    target = canonical_model(model)
+    if target is None:
+        return ()
+    chain = list(_pk_ancestor_chain(model._meta.concrete_model or model))
+    if target not in chain:
+        raise ValueError(f"{model._meta.label} does not share its primary key with {target._meta.label}.")
+    links = []
+    for step, parent in zip(chain, chain[1:], strict=False):
+        if step is target:
+            break
+        links.append(step._meta.parents[parent].name)
+    return tuple(links)
+
+
 class RecordRefMixin(models.Model):
     """Project a row reference from the model's single declared generic foreign key."""
 

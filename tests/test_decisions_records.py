@@ -1,5 +1,6 @@
 """Concern relations, proposals, attention and answers across unrelated owners."""
 
+import importlib
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -425,3 +426,18 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
         plain = result_data(execute_schema(schema, "{ attention_records { id } }", user=reviewer))
     assert len(plain["attention_records"]) == 3
     assert not any('decisions_decision' in item["sql"].lower() for item in captured)
+
+
+@pytest.mark.usefixtures("composed_tables")
+def test_attention_resolves_on_a_mutation_payload_the_optimizer_never_annotated():
+    """A created row's payload reads its contributed badge once instead of erroring."""
+
+    tags_schema = importlib.import_module("angee.tags.schema")
+    schema = addon_schema({"console": tags_schema.schemas["console"]}, "console")
+    admin = create_platform_admin("attention-payload-admin")
+    result = result_data(execute_schema(
+        schema,
+        'mutation { insert_tags_one(object: {name: "Follow up"}) { name has_open_decisions } }',
+        user=admin,
+    ))
+    assert result["insert_tags_one"] == {"name": "Follow up", "has_open_decisions": False}

@@ -1244,6 +1244,26 @@ def _resource_filter_annotation(
     return expression(queryset) if callable(expression) else expression
 
 
+def _resource_filter_value(
+    name: str, source: Callable[[strawberry.Info], models.QuerySet[Any]], expression: Any, output: Any,
+) -> Callable[..., Any]:
+    """Resolve a contributed scalar from the optimizer's annotation, or read it for one row.
+
+    A row loaded without the annotation (a mutation payload) is read once through
+    the same actor-scoped source the annotation uses.
+    """
+
+    def resolve(root: Any, info: strawberry.Info) -> Any:
+        if name in vars(root):
+            return vars(root)[name]
+        queryset = source(info)
+        annotation = expression(queryset) if callable(expression) else expression
+        return queryset.filter(pk=root.pk).annotate(**{name: annotation}).values_list(name, flat=True).first()
+
+    resolve.__annotations__["return"] = output
+    return resolve
+
+
 def _resource_filter_projection(
     node: type, model: type[models.Model], expressions: tuple[tuple[str, Any], ...],
     source: Callable[[strawberry.Info], models.QuerySet[Any]],
@@ -1253,14 +1273,16 @@ def _resource_filter_projection(
     if collisions := {field.python_name for field in definition.fields} & dict(expressions).keys():
         raise ImproperlyConfigured(f"{definition.name} shadows contributed resource fields: {sorted(collisions)}.")
     empty = model._default_manager.none()
+    outputs = {
+        name: field_type_map[type((expression(empty) if callable(expression) else expression).output_field)]
+        for name, expression in expressions
+    }
     attributes = {
-        "__annotations__": {
-            name: field_type_map[type((expression(empty) if callable(expression) else expression).output_field)]
-            for name, expression in expressions
-        },
+        "__annotations__": outputs,
         **{
             name: strawberry_django.field(
                 annotate={name: partial(_resource_filter_annotation, source, expression)},
+                resolver=_resource_filter_value(name, source, expression, outputs[name]),
             )
             for name, expression in expressions
         },

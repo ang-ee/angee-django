@@ -11,6 +11,7 @@ import {
   parsePageFields,
   type FormProps,
   type ListProps,
+  type RegisteredFormProps,
 } from "@angee/ui";
 
 vi.mock("../i18n", () => ({
@@ -28,20 +29,22 @@ vi.mock("@angee/ui", async (importOriginal) => {
 });
 afterEach(() => { contributed.byAddress = {}; });
 
+import { tagForm } from "./TagForm";
 import { TagsPage } from "./TagsPage";
 
 function pageDeclarationChildren(): { listChildren: ReactNode; formChildren: ReactNode } {
   const page = TagsPage();
-  const children = (page.props as { children?: ReactNode }).children;
-  const declarations = pageChildren(children);
-  const list = declarations
+  const pageProps = page.props as { children?: ReactNode; form?: unknown };
+  // The page shows the registered tag form, the same one a picker's "Create “…”" opens.
+  expect(pageProps.form).toBe(tagForm);
+  const list = pageChildren(pageProps.children)
     .map((child) => pageElementProps<ListProps>(child, "list"))
     .find((props): props is ListProps => Boolean(props));
-  const form = declarations
-    .map((child) => pageElementProps<FormProps>(child, "form"))
-    .find((props): props is FormProps => Boolean(props));
-  if (!list || !form) throw new Error("TagsPage must declare one list and one form");
-  return { listChildren: list.children, formChildren: form.children };
+  const form = (tagForm.Component as (props: RegisteredFormProps) => { props: FormProps })(
+    { resource: "tags.Tag" } as RegisteredFormProps,
+  );
+  if (!list) throw new Error("TagsPage must declare one list");
+  return { listChildren: list.children, formChildren: form.props.children };
 }
 
 describe("TagsPage", () => {
