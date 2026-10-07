@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -20,27 +20,47 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-test("offers inline create from the related model's metadata unless the caller declines it", () => {
-  const getList = vi.fn(async () => ({ data: [], total: 0 }));
-  const { rerender } = render(<Provider dataProvider={{ getList }}>
+async function typeQuery(query: string): Promise<void> {
+  fireEvent.input(screen.getByRole("combobox", { name: "Tags" }), { target: { value: query }, inputType: "insertText" });
+  await screen.findByRole("listbox");
+}
+
+test("one chips field offers create for an unmatched query, from the related model's metadata", async () => {
+  const getList = vi.fn(async () => ({ data: [{ id: "tag-1", name: "Urgent" }], total: 1 }));
+  render(<Provider dataProvider={{ getList }}>
     <RelationMultiFieldWidget value={[]} relation={relation} aria-label="Tags" />
   </Provider>);
-  expect(screen.getByRole("button", { name: "New tag" })).toBeTruthy();
+  // No create button beside the field: create is the search's last option.
+  expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
+  await typeQuery("urg");
+  expect(await screen.findByRole("option", { name: "Urgent" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Create “urg”" })).toBeTruthy();
+  await typeQuery("Follow up");
+  expect(await screen.findByRole("option", { name: "Create “Follow up”" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "Urgent" })).toBeNull();
+  // An exact match is picked, not created.
+  await typeQuery("urgent");
+  expect(await screen.findByRole("option", { name: "Urgent" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: /Create/ })).toBeNull();
+});
 
-  rerender(<Provider dataProvider={{ getList }}>
+test("a cell keeps an icon create; a declined or uncreatable relation offers none", async () => {
+  const getList = vi.fn(async () => ({ data: [], total: 0 }));
+  const { unmount } = render(<Provider dataProvider={{ getList }}>
     <RelationMultiFieldWidget controlProps={{ id: "tags", presentation: "cell" }} value={[]} relation={relation} aria-label="Tags" />
   </Provider>);
   expect(screen.getByRole("button", { name: "New tag" }).textContent).toBe("");
+  unmount();
 
-  rerender(<Provider dataProvider={{ getList }}>
-    <RelationMultiFieldWidget value={[]} relation={relation} create={null} aria-label="Tags" />
-  </Provider>);
-  expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
-
-  rerender(<Provider dataProvider={{ getList }}>
-    <RelationMultiFieldWidget value={[]} relation={{ ...relation, canCreate: false }} aria-label="Tags" />
-  </Provider>);
-  expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
+  for (const props of [{ create: null }, { relation: { ...relation, canCreate: false } }]) {
+    const view = render(<Provider dataProvider={{ getList }}>
+      <RelationMultiFieldWidget value={[]} relation={relation} aria-label="Tags" {...props} />
+    </Provider>);
+    await typeQuery("Follow up");
+    expect(await screen.findByText("No options")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Create/ })).toBeNull();
+    view.unmount();
+  }
 });
 
 test("read-only related records are linked chips with their loaded labels and no option read", () => {

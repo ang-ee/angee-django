@@ -44,8 +44,10 @@ export interface RelationMultiFieldWidgetProps {
   /**
    * Explicit inline-create configuration. Overrides the default derived from the
    * related model's metadata, exactly as `RelationFieldWidget` does; pass null to
-   * offer no create. A visible button (`actionLabel`, else `New <model>`) opens
-   * the related model's create form, and the saved record joins the selection.
+   * offer no create. A typed query no option matches offers "Create “query”",
+   * which opens the related model's create form prefilled with it; `actionLabel`
+   * also exposes that form as a visible button, and a cell always shows it as an
+   * icon. The saved record joins the selection.
    */
   create?: RelationCreateConfig | null;
   "aria-label"?: string;
@@ -54,9 +56,9 @@ export interface RelationMultiFieldWidgetProps {
 
 /**
  * The to-many analog of {@link RelationFieldWidget}: it fetches the related
- * model's rows and renders them as a multi-select of chips (the shared
- * `many2many` widget), reading related records or ids and writing the related
- * records' public ids. Read-only values are linked chips that follow each
+ * model's rows and renders them as one chips field (the shared `many2many`
+ * widget) whose inline search queries the related model, reading related
+ * records or ids and writing the related records' public ids. Read-only values are linked chips that follow each
  * record's route, and never query the option list. `FormView` and
  * `EditableLines` use it for a `kind: "list"` field whose relation target
  * resolved (`relationListFieldInfo`).
@@ -76,12 +78,14 @@ export function RelationMultiFieldWidget({
 }: RelationMultiFieldWidgetProps): ReactElement {
   const t = useUiT();
   const [dialog, setDialog] = useState<RelationDialogState | null>(null);
+  const [searchText, setSearchText] = useState("");
   const forms = useRelationForms(relation, create);
   const { options, list } = useRelationOptions(relation, {
     enabled: !readOnly,
     filters,
     where,
     sort: true,
+    searchText,
   });
   // Loaded related records carry their own labels, also outside the option page;
   // bare ids (seeded by an action, or past the first page) are read for theirs.
@@ -120,26 +124,31 @@ export function RelationMultiFieldWidget({
     onCommit?.();
   };
   // `Many2ManyEdit` owns the cell/form presentation split through `field.controlProps`.
-  const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef} />;
+  const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef}
+    onSearchChange={setSearchText}
+    onCreate={forms.create ? (query) => setDialog({ mode: "create", query }) : undefined} />;
   if (!forms.create) return control;
+  const cell = controlProps?.presentation === "cell";
+  // The compact cell picker has no search to offer "Create …" from, so its create stays an icon.
   const createLabel = forms.create.actionLabel ?? relationCreateTitle(forms.create, t);
+  const createButton = cell ? (
+    <Button type="button" variant="ghost" size="iconSm" className="shrink-0"
+      aria-label={optionTextLabel(createLabel, t("actions.create"))}
+      onClick={() => setDialog({ mode: "create", query: "" })}>
+      <Glyph decorative name="plus" />
+    </Button>
+  ) : forms.create.actionLabel ? (
+    <Button type="button" variant="secondary" size="sm" className="shrink-0"
+      onClick={() => setDialog({ mode: "create", query: "" })}>
+      {forms.create.actionLabel}
+    </Button>
+  ) : null;
   return (
     <>
-      <div className="flex min-w-0 items-start gap-1">
+      {createButton ? <div className="flex min-w-0 items-start gap-1">
         <div className="min-w-0 flex-1">{control}</div>
-        {controlProps?.presentation === "cell" ? (
-          <Button type="button" variant="ghost" size="iconSm" className="shrink-0"
-            aria-label={optionTextLabel(createLabel, t("actions.create"))}
-            onClick={() => setDialog({ mode: "create", query: "" })}>
-            <Glyph decorative name="plus" />
-          </Button>
-        ) : (
-          <Button type="button" variant="secondary" size="sm" className="shrink-0"
-            onClick={() => setDialog({ mode: "create", query: "" })}>
-            {createLabel}
-          </Button>
-        )}
-      </div>
+        {createButton}
+      </div> : control}
       <RelationRecordDialog
         dialog={dialog}
         create={forms.create}

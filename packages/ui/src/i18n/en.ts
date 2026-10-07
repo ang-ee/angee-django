@@ -651,7 +651,6 @@ export const enUiMessages: Record<string, string> = {
   "combobox.noOptions": "No options",
   "many2many.label": "Related records",
   "many2many.add": "Add record",
-  "many2many.allSelected": "All records selected",
   "many2many.record": "record",
   "tagInput.label": "Tags",
   "deletePreview.title": "Delete {count} records?",

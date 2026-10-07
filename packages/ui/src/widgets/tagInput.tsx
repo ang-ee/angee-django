@@ -1,24 +1,11 @@
 import { useState, type KeyboardEvent, type ReactElement } from "react";
 
 import { useUiT } from "../i18n";
-import { tv } from "../lib/variants";
 import { ChipList } from "../ui/chip";
-import { inputVariants } from "../ui/input";
+import { chipInputVariants } from "../ui/input";
 import { widgetControlPresentationProps } from "../ui/widget-control";
 import { widgetLabel } from "./label";
 import type { WidgetControlProps, WidgetDefinition, WidgetRenderProps } from "./types";
-
-const tagInputVariants = tv({
-  extend: inputVariants,
-  base: "flex flex-wrap items-center gap-1 py-1",
-  variants: {
-    size: {
-      sm: "h-auto min-h-btn-sm",
-      md: "h-auto min-h-input-h",
-      lg: "h-auto min-h-input-h-lg",
-    },
-  },
-});
 
 function TagInputEdit({
   value,
@@ -59,7 +46,7 @@ function TagInputEdit({
 
   return (
     <div
-      className={tagInputVariants({
+      className={chipInputVariants({
         ...widgetControlPresentationProps(presentation),
         focus: "within" as const,
         invalid: Boolean(controlProps["aria-invalid"]),

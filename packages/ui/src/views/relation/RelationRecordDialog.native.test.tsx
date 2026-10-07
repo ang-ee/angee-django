@@ -134,12 +134,18 @@ test("the single picker's create switches kinds, saves the chosen kind and selec
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "New party" })).toBeNull());
 });
 
+/** Type an unmatched query into a chips field and pick its "Create “…”" option. */
+async function createFromSearch(label: string, query: string): Promise<void> {
+  fireEvent.input(screen.getByRole("combobox", { name: label }), { target: { value: query }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: `Create “${query}”` }));
+}
+
 test("the multi picker's create saves the default kind and adds it to the selection", async () => {
   const { create, Wrapper } = harness();
   const change = vi.fn();
   render(<Wrapper><RelationMultiFieldWidget value={["parties-1"]} onChange={change} relation={partyRelation} aria-label="Parties" /></Wrapper>);
 
-  fireEvent.click(screen.getByRole("button", { name: "New party" }));
+  await createFromSearch("Parties", "Example Co");
   const dialog = await screen.findByRole("dialog", { name: "New party" });
   expect(within(dialog).getByRole("group", { name: "Kind" })).toBeTruthy();
   fireEvent.change(await within(dialog).findByLabelText("Display Name"), { target: { value: "Example Co" } });
@@ -153,8 +159,9 @@ test("a model without concrete kinds opens its own create form with no kind swit
   const { Wrapper } = harness();
   render(<Wrapper><RelationMultiFieldWidget value={[]} relation={tagRelation} aria-label="Tags" /></Wrapper>);
 
-  fireEvent.click(screen.getByRole("button", { name: "New tag" }));
+  await createFromSearch("Tags", "Follow up");
   const dialog = await screen.findByRole("dialog", { name: "New tag" });
-  expect(await within(dialog).findByLabelText("Name")).toBeTruthy();
+  // The typed query names the new record.
+  expect(await within(dialog).findByLabelText("Name")).toHaveProperty("value", "Follow up");
   expect(within(dialog).queryByRole("group", { name: "Kind" })).toBeNull();
 });

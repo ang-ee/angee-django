@@ -18,7 +18,7 @@ const TAG_MODEL = "tags.Tag";
 
 /**
  * The `tags` field widget: the open record's tags as the standard relation
- * multi-select over `tags.Tag` (removable chips, picker, inline "New tag"),
+ * chips field over `tags.Tag` (removable chips, inline search, "Create “…”"),
  * writing each pick and removal at once through the `tag` / `untag` edge
  * verbs rather than the form's save. Resource metadata routes a placed
  * `<Field name="tags" />` here (the backend declares the widget key on the

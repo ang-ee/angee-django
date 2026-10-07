@@ -84,10 +84,8 @@ test("picking a tag attaches it to the open record at once and removing a chip d
   render(<Wrapper><TagsField value={[urgent]} field={{ label: "Tags" }} /></Wrapper>);
 
   expect(screen.getByText("Urgent")).toBeTruthy();
-  // The picker stays disabled until the vocabulary read lands.
-  const trigger = await screen.findByRole("combobox", { name: "Tags" });
-  await waitFor(() => expect(trigger.hasAttribute("data-disabled")).toBe(false));
-  fireEvent.click(trigger);
+  // One chips field: the search sits inside it, beside the chips.
+  fireEvent.input(screen.getByRole("combobox", { name: "Tags" }), { target: { value: "Bill" }, inputType: "insertText" });
   choose(await screen.findByRole("option", { name: "Billing" }));
   await waitFor(() => expect(mocks.tag).toHaveBeenCalledWith({ targetType: "storage/file", targetId: "fil_1", tagIds: ["tag-2"] }));
   expect(mocks.untag).not.toHaveBeenCalled();
@@ -102,9 +100,12 @@ test("inline create saves a new tag and attaches it", async () => {
   const { create, Wrapper } = harness();
   render(<Wrapper><TagsField value={[]} field={{ label: "Tags" }} /></Wrapper>);
 
-  fireEvent.click(screen.getByRole("button", { name: "New tag" }));
+  // Create is the search's last option, never a button beside the field.
+  expect(screen.queryByRole("button", { name: "New tag" })).toBeNull();
+  fireEvent.input(screen.getByRole("combobox", { name: "Tags" }), { target: { value: "Follow up" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Create “Follow up”" }));
   const dialog = await screen.findByRole("dialog", { name: "New tag" });
-  fireEvent.change(await within(dialog).findByLabelText("Name"), { target: { value: "Follow up" } });
+  expect(await within(dialog).findByLabelText("Name")).toHaveProperty("value", "Follow up");
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
 
   await waitFor(() => expect(mocks.tag).toHaveBeenCalledWith({ targetType: "storage/file", targetId: "fil_1", tagIds: ["tag-new"] }));

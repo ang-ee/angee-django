@@ -1411,8 +1411,9 @@ describe("FormView", () => {
     expect(await screen.findByRole("button", { name: "Remove Ada" })).toBeTruthy();
     expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining(["members.id", "members.display_name"]));
     expect(screen.queryByRole("textbox", { name: "Members" })).toBeNull();
-    expect(screen.getByRole("button", { name: "New user" })).toBeTruthy();
-    await chooseOption("Members", "Grace");
+    // One chips field: create is the search's last option, not a button beside it.
+    expect(screen.queryByRole("button", { name: "New user" })).toBeNull();
+    await pickRelated("Members", "Grace");
     expect(await screen.findByRole("button", { name: "Remove Grace" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -1432,7 +1433,7 @@ describe("FormView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Remove Ada" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
-    await chooseOption("Members", "Ada");
+    await pickRelated("Members", "Ada");
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
     expect(screen.getAllByRole("button", { name: /^Remove / }).map((button) => button.getAttribute("aria-label")))
@@ -1446,7 +1447,7 @@ describe("FormView", () => {
       { name: "name", title: true }, { name: "members", label: "Members" },
     ]} />, teamMetadata());
 
-    await chooseOption("Members", "Ada");
+    await pickRelated("Members", "Ada");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
@@ -4103,10 +4104,10 @@ function teamMetadata(): TestSchemaMetadata {
 }
 
 /** Open a select by its accessible name once its options load, and pick one option. */
-async function chooseOption(label: string, option: string): Promise<void> {
-  const trigger = await screen.findByRole("combobox", { name: label });
-  await waitFor(() => expect(trigger.hasAttribute("data-disabled")).toBe(false));
-  fireEvent.click(trigger);
+/** Search a to-many chips field for a related record and pick it. */
+async function pickRelated(label: string, option: string): Promise<void> {
+  const search = await screen.findByRole("combobox", { name: label });
+  fireEvent.input(search, { target: { value: option }, inputType: "insertText" });
   const item = await screen.findByRole("option", { name: option });
   fireEvent.pointerDown(item, { pointerType: "mouse" });
   fireEvent.click(item);

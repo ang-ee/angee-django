@@ -27,6 +27,19 @@ export const inputVariants = tv({
   },
 });
 
+/** One input-shaped box holding a value's chips and the draft input, wrapping as it fills. */
+export const chipInputVariants = tv({
+  extend: inputVariants,
+  base: "flex flex-wrap items-center gap-1 py-1",
+  variants: {
+    size: {
+      sm: "h-auto min-h-btn-sm",
+      md: "h-auto min-h-input-h",
+      lg: "h-auto min-h-input-h-lg",
+    },
+  },
+});
+
 // `surface` (sheet/inset/plain) here is a search-input-local vocabulary that
 // diverges from the widget-control owner surface (sheet adds a hover border,
 // inset reveals a sheet fill on focus). The shared chrome — border, focus ring,

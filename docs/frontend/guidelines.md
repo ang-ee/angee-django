@@ -1207,10 +1207,14 @@ Hard-won traps — the wise learn from others' mistakes
   `kind:"list"` field that carries a relation target (an M2M, e.g. a team's
   `members` or a line's `tags`) defaults to the `many2many` widget, on record forms
   and editable lines alike. Both render it through `relationListFieldInfo` +
-  `RelationMultiFieldWidget`: fetched options and removable chips when editable,
-  linked chips when read-only, and inline create derived from the related model's
-  metadata by the same rule as the to-one picker (`useRelationForms`; pass
-  `create={null}` to decline it). Reads select the related records' identity and
+  `RelationMultiFieldWidget`: when editable, one field-shaped box holding the
+  picked records as removable chips and an inline search over the related model
+  (Base UI's multiple `Combobox`), whose last option for an unmatched query is
+  "Create “query”"; linked chips when read-only. Inline create derives from the
+  related model's metadata by the same rule as the to-one picker
+  (`useRelationForms`; pass `create={null}` to decline it) and opens the create
+  form prefilled with the query; nothing sits beside the box except an authored
+  `actionLabel` button (a lines cell, which has no search, keeps an icon create). Reads select the related records' identity and
   representation; writes send an array of public ids (`relationIdList`), from the
   form's `mutationData` or the lines diff. A form keeps a re-picked equal set as
   its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
@@ -1223,7 +1227,7 @@ Hard-won traps — the wise learn from others' mistakes
   hiddenByDefault />` on its list. The field's backend metadata names the
   `angee.tags.tags` widget, so no caller spells it: the
   [tags field](../../addons/angee/tags/web/src/TagsField.tsx) composes
-  `RelationMultiFieldWidget` over `tags.Tag` (chips, picker, inline "New tag"),
+  `RelationMultiFieldWidget` over `tags.Tag` (chips, inline search, "Create “…”"),
   writes each pick and removal at once through the `tag`/`untag` verbs and
   refreshes the record instead of joining the form's save, renders linked chips
   on a read-only form, and a hint on a create form. The list cell keeps the
