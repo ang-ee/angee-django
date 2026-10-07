@@ -13,14 +13,16 @@ exactly as storage consumers attach a file.
 through the native ``authenticated`` permission. No reader tuple is stored.
 
 **Tags show only where an owner places them.** Any row can be tagged through
-the explicit-attach path, but a model's tags are *read* through the owner's
-own declarations: the owning addon depends on ``angee.tags``, declares the
-reverse accessor ``tag_assignments = GenericRelation("tags.TagAssignment")`` on
-the model (a private field — no column, no migration — that also lets the
-delete collector cascade the edges), composes
-:class:`angee.tags.schema.TaggedNode` onto the model's console node type, and
-places the ``tags`` field on its record form and list. The tags addon never
-names another addon's model. Declare the reverse relation on the topmost
+the explicit-attach path, but a model's tags are *read and saved* through the
+owner's own declarations: the owning addon depends on ``angee.tags``, composes
+:class:`TaggedModel` onto the model (the reverse accessor — a private field, no
+column, no migration — that also lets the delete collector cascade the edges,
+and the ``tags`` input consumer), composes
+:class:`angee.tags.schema.TaggedNode` onto the model's console node type and
+:func:`angee.tags.schema.tags_input_extensions` onto its console insert and set
+inputs, and places the ``tags`` field on its record form and list. A form then
+edits tags like any field and the row's save writes them. The tags addon never
+names another addon's model. Compose :class:`TaggedModel` on the topmost
 REBAC-typed MTI ancestor the canonical edge keys on
 (:func:`rebac.generic_target`), never on a child, so the delete collector
 filters at the same content type the write used (the placement invariant in
@@ -29,9 +31,10 @@ filters at the same content type the write used (the placement invariant in
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, cast
 
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from rebac import GenericTarget, generic_target, system_context
@@ -174,6 +177,22 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
             deleted, _by_model = self.filter(tag_id__in=tag_pks, **target.lookups(self.model, "target")).delete()
         return deleted
 
+    def set_for(self, record: models.Model, tag_ids: Iterable[str]) -> None:
+        """Make ``record``'s tags exactly ``tag_ids``: attach the missing ones, detach the rest.
+
+        The record's own save authorized the change (an owner's insert or update
+        carrying the ``tags`` input); each tag still resolves under the ambient
+        actor, and only the edge writes elevate, as in :meth:`attach`.
+        """
+
+        wanted = {self._tag_for_id(tag_id).pk for tag_id in tag_ids}
+        lookups = generic_target(record).lookups(self.model, "target")
+        with system_context(reason="tags.assignment.set"):
+            current = set(self.filter(**lookups).values_list("tag_id", flat=True))
+            self.filter(tag_id__in=current - wanted, **lookups).delete()
+            for tag_pk in sorted(wanted - current):
+                self.create(tag_id=tag_pk, **lookups)
+
     def _tag_for_id(self, tag_id: str) -> Any:
         """Return the actor-readable tag row for one public id, or fail fast."""
 
@@ -227,6 +246,32 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Return a readable label for Django displays."""
 
         return f"{self.tag_id}->{self.content_type_id}:{self.object_id}"
+
+
+class TaggedModel(models.Model):
+    """A model whose rows carry tags saved with the row.
+
+    Declares the ``tag_assignments`` reverse accessor the tags read and the
+    delete collector use, and consumes the ``tags`` value an owner's
+    :func:`angee.tags.schema.tags_input_extensions` adds to its insert and set
+    inputs: the row's write hands it here after the row is saved, in the same
+    transaction. Compose it before the model base, on the topmost REBAC-typed
+    MTI ancestor.
+    """
+
+    tag_assignments = GenericRelation("tags.TagAssignment")
+
+    class Meta:
+        """Abstract taggable composition."""
+
+        abstract = True
+
+    def apply_input_extensions(self, *, tags: Iterable[str] | None = None, **values: Any) -> None:
+        """Make this row's tags exactly ``tags`` when given, then delegate the remaining values."""
+
+        if tags is not None:
+            type(self)._meta.get_field("tag_assignments").related_model.objects.set_for(self, tags)
+        super().apply_input_extensions(**values)  # type: ignore[misc]
 
 
 TagRole = role_anchor("tags/role", name="TagRole")

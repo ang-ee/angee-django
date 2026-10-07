@@ -52,7 +52,7 @@ from angee.knowledge.models import (
     StructuredEditError,
     UnsupportedPageKindError,
 )
-from angee.tags.schema import TaggedNode
+from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
@@ -771,5 +771,6 @@ schemas = {
             changes(RecordBinding, field="knowledgeRecordBindingChanged"),
         ],
         "type_extensions": [PageTags],
+        "input_extensions": tags_input_extensions(_PAGE_RESOURCE),
     },
 }

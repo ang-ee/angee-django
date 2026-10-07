@@ -84,6 +84,7 @@ from angee.messaging.managers import (
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
+from angee.tags.models import TaggedModel
 
 
 def _actor_user_id(instance: models.Model) -> Any | None:
@@ -1334,7 +1335,7 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(OwnerMixin, AngeeDataModel):
+class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1409,8 +1410,6 @@ class Thread(OwnerMixin, AngeeDataModel):
     thread resource's write surface. Default ``False`` keeps record chatter isolated; a
     host that opts in flips :meth:`broadcasts_changes` on for its thread only.
     """
-
-    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = ThreadManager()
 
@@ -1866,7 +1865,7 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
+class Message(TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1978,7 +1977,6 @@ class Message(TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
     received_at = models.DateTimeField(null=True, blank=True)
     edit_history = models.JSONField(blank=True, default=list)
     metadata = models.JSONField(blank=True, default=dict)
-    tag_assignments = GenericRelation("tags.TagAssignment")
 
     objects = MessageManager()
 

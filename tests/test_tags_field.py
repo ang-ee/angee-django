@@ -21,7 +21,7 @@ from rebac import actor_context, system_context
 import tests.test_storage  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.storage import schema as storage_schema
-from angee.tags.schema import TAGS_WIDGET, TaggedNode
+from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import File, SchemaAddon, create_user, execute_schema, result_data
 from tests.test_storage import drive as drive
@@ -79,16 +79,17 @@ def test_shared_public_nodes_stay_untagged() -> None:
     assert str(console.get_type("FileType").fields["tags"].type) == "[TagType!]!"
 
 
-def test_metadata_projects_tags_as_a_read_only_relation_list_with_the_tags_widget() -> None:
-    """The field reads as a ``list`` relation to ``tags.Tag`` that no insert or set input writes."""
+def test_metadata_projects_tags_as_a_writable_relation_list() -> None:
+    """The field is a ``list`` relation to ``tags.Tag`` the resource's set input writes, with no widget of its own."""
 
     metadata = next(item for item in _storage_schemas("console").resources("console") if item.model is File)
     field = next(field for field in metadata.fields if field.name == "tags")
 
-    assert (field.kind, field.relation_model_label, field.widget) == ("list", "tags.Tag", TAGS_WIDGET)
-    assert (field.readable, field.creatable, field.updatable) == (True, False, False)
+    assert (field.kind, field.relation_model_label, field.widget) == ("list", "tags.Tag", None)
+    # Files take no inserts through this resource, so only their set input carries tags.
+    assert (field.readable, field.creatable, field.updatable) == (True, False, True)
     assert "tags" not in metadata.create_fields
-    assert "tags" not in metadata.update_fields
+    assert "tags" in metadata.update_fields
 
 
 def test_a_reader_lists_each_rows_tags_in_one_batch_per_page(drive: Any) -> None:
@@ -145,3 +146,65 @@ def test_an_unoptimized_row_resolves_its_tags_with_one_scoped_read(drive: Any) -
     assert [tag.pk for tag in resolved] == [tag.pk for tag in tags]
     edge_table = TagAssignment._meta.db_table
     assert sum(edge_table in query["sql"] for query in captured.captured_queries) == 1
+
+
+_RETAG = """mutation Retag($id: String!, $tags: [ID!]) {
+  update_files_by_pk(pk_columns: {id: $id}, _set: {tags: $tags}) { id tags { name } }
+}"""
+_RENAME = """mutation Rename($id: String!) {
+  update_files_by_pk(pk_columns: {id: $id}, _set: {title: "Renamed"}) { id tags { name } }
+}"""
+
+
+def _saved_tag_names(row: Any) -> list[str]:
+    with system_context(reason="tags field save check"):
+        return [edge.tag.name for edge in TagAssignment.objects.for_record(row).by_tag().select_related("tag")]
+
+
+def test_a_record_save_writes_its_tags_and_an_omitted_value_leaves_them(drive: Any) -> None:
+    """The set input's ``tags`` becomes the row's tags in its save; a save without it changes none."""
+
+    files, tags = _tagged_files(drive, 1)
+    with system_context(reason="tags field save seed"):
+        billing = Tag.objects.create(name="Billing", color="")
+    schema = _storage_schemas("console").build("console")
+    variables = {"id": str(files[0].sqid), "tags": [str(tags[0].sqid), str(billing.sqid)]}
+
+    saved = result_data(execute_schema(schema, _RETAG, variables, user=drive.alice))
+    assert saved["update_files_by_pk"]["tags"] == [{"name": "Alpha"}, {"name": "Billing"}]
+    assert _saved_tag_names(files[0]) == ["Alpha", "Billing"]
+
+    renamed = result_data(execute_schema(schema, _RENAME, {"id": str(files[0].sqid)}, user=drive.alice))
+    assert renamed["update_files_by_pk"]["tags"] == [{"name": "Alpha"}, {"name": "Billing"}]
+
+    cleared = result_data(execute_schema(schema, _RETAG, {"id": str(files[0].sqid), "tags": []}, user=drive.alice))
+    assert cleared["update_files_by_pk"]["tags"] == []
+    assert _saved_tag_names(files[0]) == []
+
+
+def test_only_a_record_writer_saves_its_tags(drive: Any) -> None:
+    """Someone who cannot write the row cannot change its tags through its save."""
+
+    files, tags = _tagged_files(drive, 1)
+    outsider = create_user("tags-field-retag-outsider")
+    schema = _storage_schemas("console").build("console")
+    result = execute_schema(schema, _RETAG, {"id": str(files[0].sqid), "tags": []}, user=outsider)
+
+    assert result.errors or result.data == {"update_files_by_pk": None}
+    assert _saved_tag_names(files[0]) == [tag.name for tag in tags]
+
+
+def test_an_unknown_tag_rolls_the_whole_save_back(drive: Any) -> None:
+    """A tag that does not resolve fails the save, and the row and its tags stay as they were."""
+
+    files, tags = _tagged_files(drive, 1)
+    schema = _storage_schemas("console").build("console")
+    document = """mutation Retag($id: String!, $tags: [ID!]) {
+      update_files_by_pk(pk_columns: {id: $id}, _set: {title: "Renamed", tags: $tags}) { id }
+    }"""
+    result = execute_schema(schema, document, {"id": str(files[0].sqid), "tags": ["tag_missing"]}, user=drive.alice)
+
+    assert result.errors
+    with system_context(reason="tags field rollback check"):
+        assert File.objects.get(pk=files[0].pk).title != "Renamed"
+    assert _saved_tag_names(files[0]) == [tag.name for tag in tags]

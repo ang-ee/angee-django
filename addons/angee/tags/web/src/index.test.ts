@@ -2,8 +2,7 @@ import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
-import tags, { TAGS_WIDGET } from "./index";
-import { tagsWidget } from "./TagsField";
+import tags from "./index";
 
 describe("angee.tags addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
@@ -35,9 +34,10 @@ describe("angee.tags addon manifest", () => {
     });
   });
 
-  test("registers the tags field widget and declares only the Tags page's containers", () => {
-    // Tags are a placeable field, never a record chatter tab.
-    expect(tags.widgets?.[TAGS_WIDGET]).toBe(tagsWidget);
+  test("registers the tag form and declares only the Tags page's containers", () => {
+    // Tags are a placeable field on the owner's form, edited as its standard chips field.
+    expect(tags.widgets ?? {}).toEqual({});
+    expect(Object.keys(tags.forms ?? {})).toEqual(["tags.Tag"]);
     expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields"]);
   });
 });

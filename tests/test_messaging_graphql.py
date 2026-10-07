@@ -125,7 +125,8 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "channel",
         "subtype",
     }
-    assert metadata.update_fields == ("status",)
+    # A message saves its tags with its own write.
+    assert metadata.update_fields == ("status", "tags")
     assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
     assert {
         name: (metadata.query.fields[name].relation.model, axis.server.label_key)
@@ -157,7 +158,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert mailbox_dimension["kind"] == "json"
     # The source does not declare metadata filterable: this axis is a summary.
     assert mailbox_dimension["drill"] is None
-    assert message["updateFields"] == ["status"]
+    assert message["updateFields"] == ["status", "tags"]
     status_field = {field["name"]: field for field in message["fields"]}["status"]
     assert message["query"]["fields"]["status"]["filter"] is not None
     assert "status" in message["query"]["axes"]
@@ -178,7 +179,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert thread.roots.update_name == "update_threads_by_pk"
     assert thread.roots.delete_name == "delete_threads_by_pk"
     assert thread.create_fields == ()
-    assert thread.update_fields == ("visibility",)
+    assert thread.update_fields == ("visibility", "tags")
     assert set(thread.query.axes) == {"last_message_at", "modality", "visibility", "channel"}
 
     channel = resources["messaging.Channel"]
