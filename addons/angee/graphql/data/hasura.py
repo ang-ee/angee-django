@@ -1244,6 +1244,24 @@ def _resource_filter_annotation(
     return expression(queryset) if callable(expression) else expression
 
 
+def row_annotations(
+    row: models.Model, annotations: Mapping[str, Any], queryset: models.QuerySet[Any],
+) -> dict[str, Any]:
+    """Return each named annotation for ``row``: the optimizer's value, else one read for this row.
+
+    A field that declares an ``annotate`` hint reads its value from the row the
+    optimizer annotated; a row loaded without it (a mutation payload) is annotated
+    here through ``queryset`` filtered to its primary key, one query for every
+    missing name. A row ``queryset`` cannot see yields no value for those names.
+    """
+
+    values = {name: vars(row)[name] for name in annotations if name in vars(row)}
+    missing = {name: expression for name, expression in annotations.items() if name not in values}
+    if missing:
+        values.update(queryset.filter(pk=row.pk).annotate(**missing).values(*missing).first() or {})
+    return values
+
+
 def _resource_filter_value(
     name: str, source: Callable[[strawberry.Info], models.QuerySet[Any]], expression: Any, output: Any,
 ) -> Callable[..., Any]:
@@ -1258,7 +1276,7 @@ def _resource_filter_value(
             return vars(root)[name]
         queryset = source(info)
         annotation = expression(queryset) if callable(expression) else expression
-        return queryset.filter(pk=root.pk).annotate(**{name: annotation}).values_list(name, flat=True).first()
+        return row_annotations(root, {name: annotation}, queryset).get(name)
 
     resolve.__annotations__["return"] = output
     return resolve
