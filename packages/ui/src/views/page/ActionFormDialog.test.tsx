@@ -582,12 +582,15 @@ describe("ActionFormDialog", () => {
       ],
     });
 
-    // The relation list exposes the create form as a visible button (default title).
-    expect(screen.getByRole("button", { name: "New document" })).toBeTruthy();
     // The single relation offers "Create …" for a query no option matches.
     fireEvent.click(screen.getByRole("button", { name: "Collection" }));
     fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Zed" } });
     expect(await screen.findByText("Create “Zed”")).toBeTruthy();
+    fireEvent.keyDown(await screen.findByPlaceholderText("Search…"), { key: "Escape" });
+    // The relation list offers it in its own search, never as a button beside it.
+    expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
+    fireEvent.input(await screen.findByRole("combobox", { name: "Documents" }), { target: { value: "Spec" }, inputType: "insertText" });
+    expect(await screen.findByRole("option", { name: "Create “Spec”" })).toBeTruthy();
   });
 
   test("offers no inline create without create even for creatable resources", async () => {
