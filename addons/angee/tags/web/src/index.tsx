@@ -9,6 +9,7 @@ import { Tag as TagIcon, Tags as TagsIcon } from "lucide-react";
 
 import { enTagsMessages } from "./i18n";
 import { tagsWidget } from "./TagsField";
+import { tagForm } from "./views/TagForm";
 
 const TAGS_ID = "tags";
 
@@ -60,6 +61,7 @@ const tags = defineBaseAddon({
     tag: TagIcon,
   },
   widgets: { [TAGS_WIDGET]: tagsWidget },
+  forms: { "tags.Tag": tagForm },
   containers: {
     // Scope-specific tag addons add facets, columns and form fields to the Tags page.
     "tags.tags#facets": {},

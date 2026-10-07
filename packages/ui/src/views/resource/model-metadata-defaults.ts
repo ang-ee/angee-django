@@ -178,7 +178,7 @@ export function relationFieldInfoForResource(
 
 /**
  * Editable fields for a model's inline create form, derived from its metadata:
- * scalars, enums, and object relations, minus `id` and audit fields. Used by the
+ * the creatable scalars, enums, and object relations, minus `id` and audit fields. Used by the
  * relation picker's create dialog so an object relation can be created inline
  * with no per-consumer field list.
  */
@@ -188,7 +188,9 @@ export function formFieldsFromMetadata(
   if (!metadata) return [];
   const fields: FieldDescriptor[] = [];
   for (const field of Object.values(metadata.fields)) {
-    if (NON_EDITABLE_FIELDS.has(field.name) || field.kind === "list") continue;
+    // Only what the create input accepts: a computed read (a display label, a
+    // contributed badge) is never a create control.
+    if (NON_EDITABLE_FIELDS.has(field.name) || field.kind === "list" || !field.creatable) continue;
     fields.push(formFieldDescriptor(field));
   }
   return fields;
