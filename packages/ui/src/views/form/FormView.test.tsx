@@ -630,7 +630,7 @@ describe("FormView", () => {
     </FormView>);
     await screen.findByLabelText("Title");
     // A lone pane renders beneath the sheet under its heading; its content sees the saved record.
-    expect((await screen.findByTestId("pane-record")).textContent).toBe(`notes.Note:note-1:${String(sdkMocks.record.title)}`);
+    expect((await screen.findByTestId("pane-record")).textContent).toBe(`notes.Note:note-1:${String(sdkMocks.record?.title)}`);
   });
 
   test("rejects a pane group whose id collides with a record tab", () => {
