@@ -63,6 +63,7 @@ function Many2ManyChipsEdit({
 }: Many2ManyEditProps): ReactElement {
   const t = useUiT();
   const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
   // The options drop beneath the whole field box, at its width, not beneath the inline input.
   const boxRef = useRef<HTMLDivElement>(null);
   const selected = relationIdList(value);
@@ -78,6 +79,8 @@ function Many2ManyChipsEdit({
     && (onSearchChange !== undefined || !needle || labelText(option).toLocaleLowerCase().includes(needle)));
   const exact = options.some((option) => labelText(option).trim().toLocaleLowerCase() === needle);
   const offered = [...matches.map((option) => option.value), ...(onCreate && text && !exact ? [CREATE_ITEM] : [])];
+  // Nothing left to pick and nothing typed opens no list: an empty "No options" panel is a dead end.
+  const shown = open && (offered.length > 0 || text !== "");
   const search = (next: string) => {
     setQuery(next);
     onSearchChange?.(next);
@@ -86,6 +89,7 @@ function Many2ManyChipsEdit({
   return (
     <Combobox.Root<string, true> multiple autoHighlight
       value={selected} items={[...selected, ...offered]} filteredItems={offered} filter={null}
+      open={shown} onOpenChange={setOpen}
       inputValue={query} onInputValueChange={search}
       itemToStringLabel={(item) => item === CREATE_ITEM ? text : optionTextLabel(optionLabel(options, item), item)}
       onValueChange={(next, details) => {
@@ -94,6 +98,8 @@ function Many2ManyChipsEdit({
         if (next.includes(CREATE_ITEM)) onCreate?.(text);
         else onChange?.(next);
         search("");
+        // A pick closes the list: the box may wrap onto another row, and the list reopens beneath it.
+        setOpen(false);
       }}>
       <Combobox.Chips ref={boxRef} className={chipInputVariants({ ...sizing, focus: "within", invalid: Boolean(controlProps["aria-invalid"]) })}>
         {selected.map((id) => {
