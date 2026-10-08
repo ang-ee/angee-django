@@ -108,9 +108,10 @@ test.each([false, true])("a many-to-many choose renders the multi widget and sub
   fireEvent.click(screen.getByRole("radio", { name: /^Select contacts/ }));
   expect(confirmDisabled()).toBe(true);
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0]).toMatchObject({ meta: { gqlVariables: { where } } }));
-  await waitFor(() => expect((screen.getByRole("combobox", { name: "Contacts" }) as HTMLButtonElement).disabled).toBe(false));
+  const search = await screen.findByRole("combobox", { name: "Contacts" });
   for (const contact of contacts) {
-    fireEvent.click(screen.getByRole("combobox", { name: "Contacts" }));
+    // The chips field searches as the reader types and adds the picked option as a chip.
+    fireEvent.input(search, { target: { value: contact.name }, inputType: "insertText" });
     fireEvent.click(await screen.findByRole("option", { name: contact.name }));
   }
   if (clear) for (const contact of contacts) fireEvent.click(screen.getByRole("button", { name: `Remove ${contact.name}` }));

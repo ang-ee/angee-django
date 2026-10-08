@@ -8,6 +8,7 @@
 import type { DocumentData, DocumentVariables } from "@angee/refine";
 
 import type {
+  OperatorJobStateFields,
   OperatorTemplateDescriptorFields,
   SNAPSHOT_QUERY,
   STACK_SNAPSHOT_SUBSCRIPTION,
@@ -15,7 +16,6 @@ import type {
 
 export type {
   ServiceState,
-  JobState,
   SourceState,
   WorkspaceSourceStatus,
   WorkspaceRef,
@@ -33,7 +33,6 @@ export type {
 
 import type {
   ServiceState,
-  JobState,
   SourceState,
   WorkspaceRef,
   SecretRef,
@@ -44,6 +43,8 @@ import type {
 
 /** Template panes consume the authored fragment, not every daemon SDL field. */
 export type TemplateDescriptor = DocumentData<typeof OperatorTemplateDescriptorFields>;
+/** Job rows consume the authored fragment too, so a daemon release that adds job fields changes no pane. */
+export type JobState = DocumentData<typeof OperatorJobStateFields>;
 export type TemplateInputDescriptor = TemplateDescriptor["inputs"][number];
 
 export interface OperatorConnectionInfo {
