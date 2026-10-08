@@ -170,20 +170,31 @@ function readOnlyFieldFor(field: FormField): FormField {
   return readOnlyField;
 }
 
+/** A form reads its record only through the model's metadata, so every fixture declares it. */
+function noteMetadata(names: readonly string[]) {
+  const fields = names.map((name) => ({
+    name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
+    creatable: true, updatable: true, requiredOnCreate: false,
+  }));
+  return { angee: { resources: [testDataResource("notes.Note", { schemaName: "public", fields })] } };
+}
+
 const storySchemas = storySchema(async (_input, init) => {
   const payload = requestPayload(init);
-  const patch = isRecord(payload.variables.data) ? payload.variables.data : {};
+  const values = payload.variables._set ?? payload.variables.object;
+  const patch = isRecord(values) ? values : {};
 
-  if (payload.query.includes("mutation updateNote")) {
-    return jsonResponse({ data: { updateNote: { ...storyRecord, ...patch } } });
+  if (payload.query.includes("update_notes_by_pk")) {
+    return jsonResponse({ data: { update_notes_by_pk: { ...storyRecord, ...patch } } });
   }
-  if (payload.query.includes("mutation createNote")) {
+  if (payload.query.includes("insert_notes_one")) {
     return jsonResponse({
-      data: { createNote: { ...storyRecord, id: "note-new", ...patch } },
+      data: { insert_notes_one: { ...storyRecord, id: "note-new", ...patch } },
     });
   }
-  return jsonResponse({ data: { note: storyRecord } });
+  return jsonResponse({ data: { notes_by_pk: storyRecord } });
 });
+storySchemas.public!.metadata = noteMetadata(Object.keys(storyRecord).filter((name) => name !== "id"));
 
 const meta = {
   title: "Views/FormView",
@@ -250,14 +261,8 @@ export const FullBleedTab: Story = {
   </RuntimeFixture>,
 };
 
-const railFields = ["title", "owner", "priority"].map((name) => ({
-  name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
-  creatable: true, updatable: true, requiredOnCreate: false,
-}));
-const railSchemas = storySchema(async () => jsonResponse({ data: { note: storyRecord } }));
-railSchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
-  schemaName: "public", fields: railFields,
-})] } };
+const railSchemas = storySchema(async () => jsonResponse({ data: { notes_by_pk: storyRecord } }));
+railSchemas.public!.metadata = noteMetadata(["title", "owner", "priority"]);
 
 export const RecordRail: Story = {
   render: () => <RuntimeFixture schemas={railSchemas} runtime={{ containers: containersFromChildren(FORM_CONTAINERS, {
