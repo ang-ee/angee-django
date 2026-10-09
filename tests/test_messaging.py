@@ -2162,10 +2162,14 @@ def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -
                 headers=headers,
             )
             Message.objects.ingest([parsed], channel=channel, quote_edges=False)
-        automated = Handle._base_manager.filter(pk__in=Message.objects.automated_sender_ids())
-        values = set(automated.values_list("value", flat=True))
+        automated = set(Message.objects.automated_sender_ids())
+        expected = set(
+            Handle._base_manager.filter(value__in=("notifications@example.test", "news@example.test")).values_list(
+                "pk", flat=True
+            )
+        )
 
-    assert values == {"notifications@example.test", "news@example.test"}
+    assert automated == expected
 
 
 @pytest.mark.django_db(transaction=True)

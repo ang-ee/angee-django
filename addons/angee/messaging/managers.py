@@ -2468,7 +2468,7 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
             .values("sender_id")
             .annotate(_sent=models.Count("pk"), _automated_sent=models.Count("pk", filter=models.Q(_automated=True)))
             .filter(_automated_sent=models.F("_sent"))
-            .values("sender_id")
+            .values_list("sender_id", flat=True)
         )
 
     def searching(self, term: str) -> MessageQuerySet:
