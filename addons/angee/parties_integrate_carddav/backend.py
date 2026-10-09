@@ -354,6 +354,10 @@ class CardDavDirectoryBackend(DirectoryBackend):
             raise CardDavResponseTooLargeError("CardDAV response exceeds the byte limit.") from error
         if response.status_code == 412:
             raise RemoteRejected()
+        if response.status_code == 403 and method in {"PUT", "DELETE"}:
+            # A book the account may read but not write (a shared directory) refuses
+            # the card: set that record aside instead of failing the book every cycle.
+            raise RemoteRejected("remote_forbidden", conflict=False)
         if cursor_request:
             if response.status_code == 404:
                 raise CursorInvalid()
