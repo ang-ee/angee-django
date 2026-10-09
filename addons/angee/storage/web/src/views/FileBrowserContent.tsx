@@ -157,6 +157,13 @@ export function FileBrowserContent({
         render={(row) => row.created_by_label || "—"}
       />
       <Column<StorageFileRow>
+        field="created_at"
+        header={t("column.created")}
+        render={(row) => (
+          <span className="text-fg-muted">{formatDate(row.created_at)}</span>
+        )}
+      />
+      <Column<StorageFileRow>
         field="updated_at"
         header={t("column.modified")}
         render={(row) => (

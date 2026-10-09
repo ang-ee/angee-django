@@ -108,6 +108,7 @@ export const enStorageMessages: Record<string, string> = {
   "column.size": "Size",
   "column.count": "Files",
   "column.author": "Uploaded by",
+  "column.created": "Created",
   "column.modified": "Modified",
 
   // Settings admin console sections.
