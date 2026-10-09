@@ -372,6 +372,11 @@ shared UI copy through an addon bundle.
   without colliding. Removing another addon's verb from a model instead
   displaces it for every row of that model and caps the model at one vendor.
 - Tokens beat color props and one-off variants. Theme by overriding tokens.
+- **Typography composes named text roles.**
+  [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) owns the shared
+  display/title/heading/value and secondary-text typography; callers add only
+  layout. A two-tone heading repeats the same role with `tone: "muted"`, while
+  a cell that needs only aligned figures uses the `numeric` modifier.
 - Implementation inspection reuses field-owned choice metadata. Platform owns
   the registered-type catalogue and source viewer; configured records and domain
   contracts stay with their addon. Render declared configuration with the

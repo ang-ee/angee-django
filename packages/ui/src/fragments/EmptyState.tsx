@@ -3,6 +3,7 @@ import * as React from "react";
 import { renderGlyph } from "../chrome/Glyph";
 import { tv } from "../lib/variants";
 import { Card } from "../ui/card";
+import { textRoleVariants } from "../ui/text";
 
 export type EmptyStateProps = Omit<
   React.HTMLAttributes<HTMLElement>,
@@ -29,7 +30,7 @@ export const emptyStateVariants = tv({
     icon:
       "mx-auto grid size-12 place-content-center rounded-full bg-inset text-fg-muted [&_.glyph]:size-5 [&>svg]:size-5",
     copy: "space-y-1",
-    title: "text-22 font-semibold text-fg",
+    title: textRoleVariants({ role: "display" }),
     description: "mx-auto max-w-md text-sm leading-relaxed text-fg-muted",
     actions: "flex flex-wrap items-center justify-center gap-2",
   },

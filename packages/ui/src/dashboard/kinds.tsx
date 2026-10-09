@@ -41,7 +41,7 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
         density="compact"
         label={<span className="sr-only">{props.spec.title}</span>}
         value={value}
-        valueClassName="text-xl font-semibold leading-6 tabular-nums"
+        valueSize="lg"
       />
     </DataState>
   );

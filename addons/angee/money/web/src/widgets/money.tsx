@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import {
   Input,
   rowValueAtPath,
+  textRoleVariants,
   widgetLabel,
   type WidgetDefinition,
   type WidgetField,
@@ -80,7 +81,7 @@ export function formatMoney(value: MoneyWidgetValue | undefined, code: string | 
 
 function MoneyRead({ value, row, field }: WidgetRenderProps<MoneyWidgetValue>): ReactElement {
   const code = resolveCurrencyCode(row, (field as MoneyWidgetField | undefined)?.currencyField);
-  return <span className="text-13 tabular-nums text-fg">{formatMoney(value, code)}</span>;
+  return <span className={textRoleVariants({ role: "value" })}>{formatMoney(value, code)}</span>;
 }
 
 function MoneyEdit({

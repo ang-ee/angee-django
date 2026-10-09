@@ -7,10 +7,12 @@ import type {
 
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
+import { cn } from "../../lib/cn";
+import { useRuntimeViewAs } from "../../runtime";
 import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import { Dialog } from "../../ui/dialog";
-import { useRuntimeViewAs } from "../../runtime";
+import { textRoleVariants } from "../../ui/text";
 import { DeletePreviewTree } from "./DeletePreviewTree";
 
 export interface DeletePreviewDialogProps {
@@ -105,7 +107,7 @@ function DeleteSummary({
         <div className="text-12 font-medium uppercase text-fg-muted">
           {t("deletePreview.rowsAffected")}
         </div>
-        <div className="mt-1 text-lg font-semibold text-fg">
+        <div className={cn(textRoleVariants({ role: "heading" }), "mt-1")}>
           {preview.totalDeletedCount}
         </div>
         {overflowCount > 0 ? (

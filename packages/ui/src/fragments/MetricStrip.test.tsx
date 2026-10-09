@@ -34,6 +34,16 @@ describe("MetricStrip", () => {
     expect(container.querySelector("dd")?.className).toContain("text-2xl");
   });
 
+  test("large value typography stays independent of compact tile density", () => {
+    render(<MetricTile density="compact" label="Revenue" value={24} valueSize="lg" />);
+    const value = screen.getByText("24");
+    expect(value.className).toContain("mt-1");
+    expect(value.className).toContain("text-xl");
+    expect(value.className).toContain("font-semibold");
+    expect(value.className).toContain("leading-6");
+    expect(value.className).toContain("tabular-nums");
+  });
+
   test("a non-navigable tile renders no link", () => {
     render(<MetricTile label="Relations" value={3} />);
     expect(screen.queryByRole("link")).toBeNull();

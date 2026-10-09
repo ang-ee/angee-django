@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 
 import { NumberField } from "../ui/number-field";
+import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
@@ -71,14 +72,14 @@ function NumberRead({
   value,
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
   return (
-    <span className="text-13 tabular-nums text-fg">
+    <span className={textRoleVariants({ role: "value" })}>
       {formatNumber(value)}
     </span>
   );
 }
 
 function NumberCell({ value }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
-  return <span className="tabular-nums">{formatNumber(value) || "—"}</span>;
+  return <span className={textRoleVariants({ numeric: true })}>{formatNumber(value) || "—"}</span>;
 }
 
 export const integerWidget = {

@@ -3,7 +3,7 @@ import * as React from "react";
 import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
-import { tv } from "../lib/variants";
+import { tv, type VariantProps } from "../lib/variants";
 import { Tag } from "../ui/badge";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
@@ -20,33 +20,6 @@ export interface MetricTileValue {
   /** When set, the tile is a link to this href (rendered as an `<a>`). */
   href?: string;
 }
-
-export type MetricTileProps = Omit<
-  React.HTMLAttributes<HTMLElement>,
-  "className"
-> &
-  Pick<React.AnchorHTMLAttributes<HTMLAnchorElement>, "target" | "download" | "rel"> &
-  MetricTileValue & {
-    className?: string;
-    density?: MetricDensity;
-    /** Optional value typography override for constrained composed surfaces. */
-    valueClassName?: string;
-  };
-
-export type MetricDensity = "compact" | "prominent";
-
-const NAVIGABLE_TILE =
-  "cursor-pointer no-underline outline-none transition hover:ring-2 hover:ring-border-focus focus-visible:focus-ring";
-
-export type MetricStripProps = Omit<
-  React.HTMLAttributes<HTMLDListElement>,
-  "className"
-> & {
-  className?: string;
-  density?: MetricDensity;
-  items?: readonly (readonly [React.ReactNode, React.ReactNode])[];
-  metrics?: readonly MetricTileValue[];
-};
 
 export const metricStripVariants = tv({
   slots: {
@@ -70,17 +43,66 @@ export const metricStripVariants = tv({
         value: "text-2xl font-semibold tabular-nums",
       },
     },
+    valueSize: {
+      default: {
+        value: "",
+      },
+      lg: {
+        value: "text-xl font-semibold leading-6 tabular-nums",
+      },
+    },
   },
-  defaultVariants: { density: "compact" },
+  defaultVariants: { density: "compact", valueSize: "default" },
 });
+
+type MetricStripRecipeProps = VariantProps<typeof metricStripVariants>;
+
+export type MetricDensity = NonNullable<MetricStripRecipeProps["density"]>;
+
+export type MetricTileProps = Omit<
+  React.HTMLAttributes<HTMLElement>,
+  "className"
+> &
+  Pick<React.AnchorHTMLAttributes<HTMLAnchorElement>, "target" | "download" | "rel"> &
+  MetricTileValue & {
+    className?: string;
+    density?: MetricDensity;
+    /** Named value typography, independent of the tile's density. */
+    valueSize?: MetricStripRecipeProps["valueSize"];
+  };
+
+export type MetricStripProps = Omit<
+  React.HTMLAttributes<HTMLDListElement>,
+  "className"
+> & {
+  className?: string;
+  density?: MetricDensity;
+  items?: readonly (readonly [React.ReactNode, React.ReactNode])[];
+  metrics?: readonly MetricTileValue[];
+};
+
+const NAVIGABLE_TILE =
+  "cursor-pointer no-underline outline-none transition hover:ring-2 hover:ring-border-focus focus-visible:focus-ring";
 
 export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
-    { className, density = "compact", detail, icon, label, value, tone, href, onClick, valueClassName, ...props },
+    {
+      className,
+      density = "compact",
+      detail,
+      icon,
+      label,
+      value,
+      tone,
+      href,
+      onClick,
+      valueSize = "default",
+      ...props
+    },
     ref,
   ) {
     const link = useInAppLink(href, { ...props, onClick });
-    const styles = metricStripVariants({ density });
+    const styles = metricStripVariants({ density, valueSize });
     const body = (
       <>
         <div className={styles.header()}>
@@ -93,7 +115,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
           )}
           {icon ? <IconTile icon={icon} size="md" /> : null}
         </div>
-        <dd className={styles.value({ className: valueClassName })}>{value}</dd>
+        <dd className={styles.value()}>{value}</dd>
         {detail ? <p className={styles.detail()}>{detail}</p> : null}
       </>
     );
