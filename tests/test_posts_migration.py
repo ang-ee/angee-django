@@ -19,7 +19,7 @@ from angee.posts.runtime_migrations import feed_channel_parent
 from tests.conftest import Feed, make_integration
 
 
-def _legacy_state() -> ProjectState:
+def _legacy_state(missing: str | None = None) -> ProjectState:
     state = ProjectState.from_apps(apps)
     feed = state.models[("posts", "feed")]
     channel = state.models[("messaging", "channel")]
@@ -29,7 +29,8 @@ def _legacy_state() -> ProjectState:
     del feed.fields["channel_ptr"]
     feed.fields["backend_class"] = feed.fields.pop("feed_backend_class")
     for name in feed_channel_parent.BRIDGE_FIELDS:
-        feed.fields[name] = channel.fields[name].clone()
+        if name != missing:
+            feed.fields[name] = channel.fields[name].clone()
     return state
 
 
@@ -54,12 +55,14 @@ def _insert_legacy_feed(editor: Any, model: type[models.Model], pk: Any) -> None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_populated_feed_upgrade_preserves_rows_messages_and_channel_reader() -> None:
+@pytest.mark.parametrize("missing", [None, "sync_run_id"])
+def test_populated_feed_upgrade_preserves_rows_messages_and_channel_reader(missing: str | None) -> None:
     if connection.vendor != "postgresql":
         pytest.skip("The live MTI upgrade is rehearsed against PostgreSQL.")
 
     call_command("rebac", "sync", verbosity=0)
-    legacy = _legacy_state()
+    # A released feed may predate a bridge field; the Channel parent takes its default.
+    legacy = _legacy_state(missing)
     assert feed_channel_parent.applies(legacy)
     assert not feed_channel_parent.applies(ProjectState.from_apps(apps))
     partial = legacy.clone()

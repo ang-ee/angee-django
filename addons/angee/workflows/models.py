@@ -128,6 +128,16 @@ class _NodeFailureRoute(models.Func):
         )
 
 
+def _empty_workflow_output_schema() -> dict[str, Any]:
+    """Released history only: the retired engine's empty output schema default.
+
+    Migration history materialized before the engine rebuild (``752281db0``)
+    names this callable as a field default, so it stays importable here.
+    """
+
+    return {"type": "object", "properties": {}, "additionalProperties": False}
+
+
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """Editable identity and draft, pointing to one immutable published version."""
 

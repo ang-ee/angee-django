@@ -7,8 +7,13 @@ def applies(state):
     """Discard executions using a retired decision relationship."""
     step = state.models.get(("workflows", "steprun"))
     decision = state.models.get(("decisions", "decision"))
+    # A pre-rebuild history (graph rows in workflows.Step) is retired whole by retire_pre_rebuild.
+    pre_rebuild = ("workflows", "step") in state.models
     return (
-        step is not None and "decision" not in step.fields and (decision is None or "step_run" not in decision.fields)
+        not pre_rebuild
+        and step is not None
+        and "decision" not in step.fields
+        and (decision is None or "step_run" not in decision.fields)
     )
 
 

@@ -250,7 +250,7 @@ class AngeeResource(resources.ModelResource):
 
         if xref not in self._instances:
             ledger = self._ledger_for_xref(xref)
-            self._instances[xref] = ledger.target_instance() if ledger is not None else None
+            self._instances[xref] = self._declared_instance(ledger.target_instance()) if ledger is not None else None
         return self._instances[xref]
 
     def instance_for_row(self, row: Mapping[str, Any]) -> models.Model | None:
@@ -347,6 +347,7 @@ class AngeeResource(resources.ModelResource):
                 except ResourceLoadError:
                     # Import reports collisions with the source-row context.
                     continue
+                target = resource._declared_instance(target)
                 resource._instances[xref] = target
                 resolved[(resource, xref)] = ResourceResolution(None, target)
         for dataset, resource in batches:
@@ -436,12 +437,27 @@ class AngeeResource(resources.ModelResource):
 
         if ledger is None:
             return
-        expected = self._meta.model._meta.label
-        if ledger.target_model != expected:
+        model = self._meta.model
+        expected = model._meta.label
+        # A row moved onto a multi-table child keeps its parent's ledger until saved.
+        parents = {parent._meta.label for parent in model._meta.get_parent_list()}
+        if ledger.target_model != expected and ledger.target_model not in parents:
             raise ResourceLoadError(
                 f"xref collision in {self.entry.addon.name}: {xref!r} "
                 f"already targets {ledger.target_model}, not {expected}"
             )
+
+    def _declared_instance(self, instance: models.Model | None) -> models.Model | None:
+        """Return the entry model's row for a ledger target recorded as its concrete parent.
+
+        The parent row's child shares its primary key; a parent without one has
+        no row to update, so the entry adopts or creates as for a missing target.
+        """
+
+        model = self._meta.model
+        if instance is None or isinstance(instance, model):
+            return instance
+        return model._base_manager.filter(pk=instance.pk).first()
 
     def _upsert_ledger(
         self,

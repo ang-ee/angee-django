@@ -892,6 +892,63 @@ def test_resource_load_rejects_existing_xref_for_another_model(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resource_load_moves_a_parent_xref_onto_its_child(tmp_path: Path) -> None:
+    """An xref recorded on a concrete parent updates its child row and re-targets."""
+
+    class MovedPage(AngeeModel):
+        """Parent the xref was first recorded on."""
+
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = "base"
+
+    class MovedNote(MovedPage):
+        """Child the declaration now names."""
+
+        body = models.TextField(blank=True)
+
+        class Meta:
+            app_label = "base"
+
+    class MovedLedger(Resource):
+        """Ledger for the moved-xref test."""
+
+        class Meta(Resource.Meta):
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "020_base.movednote.csv").write_text(
+        "_xref,title,body\nwelcome,Welcome,Seeded\n", encoding="utf-8",
+    )
+    owner = addon(tmp_path, manifest={
+        "master": (),
+        "install": ({"path": "resources/020_base.movednote.csv"},),
+        "demo": (),
+    })
+
+    with model_tables((MovedPage, MovedNote, MovedLedger)):
+        with system_context(reason="moved xref fixture"):
+            existing = MovedNote.objects.create(title="Welcome", body="Existing")
+        MovedLedger.objects.create(
+            source_addon=owner.name, source_path="resources/010_base.movedpage.csv", xref="welcome",
+            target_model=MovedPage._meta.label, target_id=existing.movedpage_ptr.public_id,
+            content_hash="sha256:released", tier=Resource.Tier.INSTALL,
+        )
+
+        result = MovedLedger.objects.load_addons((owner,), tiers=[Resource.Tier.INSTALL])
+
+        assert (result.created, result.updated) == (0, 1)
+        existing.refresh_from_db()
+        assert existing.body == "Seeded"
+        assert MovedPage._base_manager.count() == 1
+        ledger = MovedLedger.objects.get(xref="welcome")
+        assert (ledger.target_model, ledger.target_id) == (MovedNote._meta.label, existing.public_id)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_validate_cleans_rows_and_resolves_xrefs(
     tmp_path: Path,
 ) -> None:
