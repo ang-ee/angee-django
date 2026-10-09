@@ -366,6 +366,7 @@ def _render_local_stack(
     db_pool_timeout: int = 5,
     sentry_dsn: str = "",
     sentry_web_dsn: str = "",
+    operator_home: str = "",
 ) -> dict[str, Any]:
     """Render the docker-mode local stack enough for YAML contract tests."""
 
@@ -377,6 +378,7 @@ def _render_local_stack(
         "django_port": "8000",
         "framework": framework,
         "instance_name": "angee-local",
+        "operator_home": operator_home,
         "operator_port": "9000",
         "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
         "process_compose_port": "8090",
@@ -426,6 +428,7 @@ def _render_dev_stack(
     serve_workers: int = 0,
     db_pool_max_size: int = 2,
     db_pool_timeout: int = 5,
+    operator_home: str = "",
 ) -> dict[str, Any]:
     """Render the process-mode framework-dev stack enough for YAML contract tests.
 
@@ -451,6 +454,7 @@ def _render_dev_stack(
         "ingress_aliases": ingress_aliases,
         "node_image": "node:22-bookworm-slim",
         "ollama_port": ollama_port,
+        "operator_home": operator_home,
         "operator_port": "9000",
         "operator_image": "ghcr.io/ang-ee/angee-operator:latest",
         "playwright_image": "mcr.microsoft.com/playwright:v1.62.1-noble",
@@ -487,7 +491,11 @@ def _render_dev_stack(
 
 
 def _render_dev_docker_stack(
-    *, celery_queues: str = "", ingress_domain: str = "localhost", ingress_aliases: str = ""
+    *,
+    celery_queues: str = "",
+    ingress_domain: str = "localhost",
+    ingress_aliases: str = "",
+    operator_home: str = "",
 ) -> dict[str, Any]:
     """Render the Docker-mode framework-dev stack with every dev input present."""
 
@@ -495,6 +503,7 @@ def _render_dev_docker_stack(
         celery_queues=celery_queues,
         ingress_domain=ingress_domain,
         ingress_aliases=ingress_aliases,
+        operator_home=operator_home,
         _runtime_mode="docker",
     )
 
@@ -784,6 +793,38 @@ def test_local_stack_uses_operator_backed_addon_installer() -> None:
     assert "bind://.:${stack.root}" in operator["mounts"]
     assert "bind:///var/run/docker.sock:/var/run/docker.sock" in operator["mounts"]
     assert operator["ports"] == ["127.0.0.1:${ports.operator}:9000"]
+    # Without an operator home the container carries no SSH material.
+    assert "env" not in operator
+    assert not any(".ssh" in mount for mount in operator["mounts"])
+
+
+@pytest.mark.parametrize("render", ["local", "dev"])
+def test_docker_operator_reads_the_stack_owner_ssh_at_its_home(render: str) -> None:
+    """An operator home gives the daemon that literal HOME and its .ssh, read-only, at the same path."""
+
+    home = "/home/deploy"
+    stack = _render_local_stack(operator_home=home) if render == "local" else _render_dev_docker_stack(operator_home=home)
+    operator = stack["services"]["operator"]
+
+    assert operator["env"] == {"HOME": home}
+    assert f"bind://{home}/.ssh:{home}/.ssh:ro" in operator["mounts"]
+    assert "bind://.:${stack.root}" in operator["mounts"]
+
+
+def test_operator_home_defaults_to_the_rendering_users_home() -> None:
+    """Docker stacks give the operator SSH by default: a path input defaulting to ``~``, asked only for Docker."""
+
+    for template in (LOCAL_TEMPLATE, DEV_TEMPLATE):
+        questions = yaml.safe_load((template.parent.parent / "copier.yml").read_text())
+        assert questions["operator_home"]["type"] == "path"
+        assert questions["operator_home"]["default"] == "~"
+        assert 'operator_home|first != "/"' in questions["operator_home"]["validator"]
+    local = yaml.safe_load((LOCAL_TEMPLATE.parent.parent / "copier.yml").read_text())
+    assert "when" not in local["operator_home"]  # the local stack always runs Docker
+    dev = yaml.safe_load((DEV_TEMPLATE.parent.parent / "copier.yml").read_text())
+    for declared in (dev["operator_home"], dev["_angee"]["inputs"]["operator_home"]):
+        assert declared["when"] == "{{ runtime_mode == 'docker' }}"
+        assert declared["default"] == "~"
 
 
 def test_project_template_can_render_operator_addon_installer_settings() -> None:

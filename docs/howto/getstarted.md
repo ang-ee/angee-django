@@ -265,6 +265,16 @@ angee init . -t dev --yes \
 angee up
 ```
 
+The Docker operator uses the host's own SSH for git (Sync base, source
+fetches): `operator_home` defaults to the home of the user running `angee init`,
+recorded as an absolute path, and the operator container runs with that `HOME`
+and reads its `.ssh` read-only at the same path. Run `init` as the user who will
+own the stack root, or pass `--input operator_home=/home/<user>`. That user's
+`~/.ssh` must exist with the config and keys the stack's remotes need, and
+`known_hosts` must list the git host. If the operator fails to start with
+"bind source path does not exist: <home>/.ssh", create it
+(`install -d -m 700 ~/.ssh`) and add the keys.
+
 `init` renders from the published template registry in seconds; `angee up`
 pulls the images, cuts the `workspaces/src` framework workspace, starts every
 container (operator and edge included), and runs the first provision —

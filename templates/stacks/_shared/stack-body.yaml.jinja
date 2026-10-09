@@ -335,16 +335,22 @@ services:
 {# mounts at its host-identical path (${stack.root}) so the compose files it writes #}
 {# and the sources/workspaces it manages agree with the host daemon; the token rides #}
 {# argv via compose env-file interpolation (same exposure as the shell-expanded local #}
-{# form). A docker-mode host needs only the angee CLI, docker, and git. #}
+{# form). A docker-mode host needs only the angee CLI, docker, and git. With #}
+{# operator_home, the daemon's user gets that literal HOME (never ${HOME}: compose #}
+{# would interpolate the operator container's own) and reads its .ssh read-only at #}
+{# the same path, so git over SSH resolves keys, aliases and known_hosts as on the host. #}
     runtime: container
     image: {{ operator_image }}
     command: ["--root", "${stack.root}", "--bind", "0.0.0.0", "--port", "9000", "--token", "${secret.operator-token}"{% if effective_serve_mode == "production" %}, "--allowed-origin", "{% if ingress_domain_value == "localhost" %}http://localhost:{{ ui_port }}{% else %}https://{{ ingress_domain_value }}{% endif %}"{% endif %}]
     mounts:
       - "bind://.:${stack.root}"
       - "bind:///var/run/docker.sock:/var/run/docker.sock"
-    ports:
+{% if operator_home %}      - "bind://{{ operator_home }}/.ssh:{{ operator_home }}/.ssh:ro"
+{% endif %}    ports:
       - "{% if operator_bind == "127.0.0.1" %}127.0.0.1:{% endif %}${ports.operator}:9000"
-{% endif %}{% if runtime_mode == "process" %}    runtime: local
+{% if operator_home %}    env:
+      HOME: "{{ operator_home }}"
+{% endif %}{% endif %}{% if runtime_mode == "process" %}    runtime: local
     command:
       - sh
       - "-c"
