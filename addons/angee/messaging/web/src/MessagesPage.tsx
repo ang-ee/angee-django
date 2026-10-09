@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Column, Facet, List, ResourceList, type StringIdRow } from "@angee/ui";
 
-import { messageForm, messageRecordTabs, messageSubject } from "./MessageForm";
+import { messageForm, messageRecordTabs } from "./MessageForm";
+import { MESSAGE_SUMMARY_FIELDS, MessageSummary, type MessageSummaryData } from "./MessageSummary";
 import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Message";
@@ -9,17 +10,13 @@ const MODEL = "messaging.Message";
 // the list does not re-seed its grouping on every render.
 const DEFAULT_GROUPS = { list: { field: "channel" } } as const;
 
-interface MessageListRow extends StringIdRow {
-  title?: unknown;
-}
+type MessageListRow = StringIdRow & MessageSummaryData;
 
 /**
- * The message corpus across threads. Channel is an
- * explicit high-cardinality facet because it is useful here but not rendered as
- * a column. The list groups by relation label axes through `ResourceList` +
- * `ListView`, not a hand-rolled inbox. Messages arrive via channel sync,
- * so the list creates nothing; status is the one human-editable field. The
- * message title is a server-resolved projection of its TITLE part's fragment.
+ * The message corpus across threads, each row read like an email. Channel is an
+ * explicit high-cardinality facet and the default grouping, through
+ * `ResourceList` + `ListView` rather than a hand-rolled inbox. Messages arrive
+ * via channel sync, so the list creates nothing.
  */
 export function MessagesPage(): React.ReactElement {
   const t = useMessagingT();
@@ -29,24 +26,17 @@ export function MessagesPage(): React.ReactElement {
       <List<MessageListRow>
         resource={MODEL}
         defaultGroups={DEFAULT_GROUPS}
+        fields={MESSAGE_SUMMARY_FIELDS}
+        tableLayout="fixed"
+        headerVisibility="visually-hidden"
       >
         <Facet field="channel" label={t("messages.channel")} />
         <Column<MessageListRow>
-          field="title"
-          header={t("messages.title")}
-          render={(row) => messageSubject(row.title, t("messages.noSubject"))}
+          field="sent_at"
+          header={t("messages.list")}
+          hideable={false}
+          render={(row) => <MessageSummary message={row} />}
         />
-        <Column
-          field="sender_name"
-          header={t("messages.sender")}
-        />
-        <Column field="thread_title" header={t("messages.thread")} />
-        {/* A Feed is also a Channel; the vendor names its platform, while the
-            Channel backend_class identifies its parent transport kind. */}
-        <Column field="channel_vendor_name" header={t("messages.channelType")} />
-        <Column field="status" widget="statusBadge" />
-        <Column field="sent_at" />
-        <Column field="tags" hiddenByDefault />
       </List>
     </ResourceList>
   );

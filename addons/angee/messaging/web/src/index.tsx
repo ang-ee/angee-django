@@ -65,6 +65,15 @@ export {
   type ThreadTranscriptProps,
   type TranscriptOrder,
 } from "./ThreadTranscript";
+// A message read like an email: the summary row every message list renders and
+// the reader a message's record composes (Messages, Nexus).
+export {
+  MESSAGE_SUMMARY_FIELDS,
+  MessageSummary,
+  type MessageSummaryData,
+} from "./MessageSummary";
+export { MessageReader, type MessageReaderProps } from "./MessageReader";
+export type { MessageReaderData } from "./documents";
 
 export interface MessagingAddonOptions {
   /** Composer shortcut for this app's built-in Comments tab. */

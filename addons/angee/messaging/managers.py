@@ -2324,6 +2324,13 @@ class MessageStarManager(AngeeManager):
             return any(star.user_id == user_id for star in message.stars.all())
         return self.model._base_manager.filter(message=message, user_id=user_id).exists()
 
+    def prefetch_for(self, user: Any | None) -> models.Prefetch:
+        """Prefetch ``user``'s own stars, so :meth:`is_starred` answers a page of messages in one query."""
+
+        user_id = getattr(user, "pk", None)
+        stars = self.model._base_manager.all()
+        return models.Prefetch("stars", queryset=stars.filter(user_id=user_id) if user_id is not None else stars.none())
+
     def set_starred(self, message: Any, *, user: Any, starred: bool | None = None) -> bool:
         """Set or toggle ``user``'s star on ``message`` and return the new state."""
 

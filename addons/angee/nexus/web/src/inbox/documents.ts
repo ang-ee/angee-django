@@ -299,43 +299,18 @@ export const InboxMessage = graphql(`
       }
       message {
         ...InboxMessageFields
+        ...MessageReaderFields
         thread {
           id
           conversation_label
         }
         received_at
         external_id
-        parts {
-          ...MessagePartFields
-        }
-        participants {
-          id
-          role
-          handle {
-            ...MessageSenderFields
-          }
-        }
-        reaction_groups {
-          ...ReactionGroupFields
-        }
       }
     }
   }
 `);
 
-export const SetInboxStar = graphql(`
-  mutation NexusSetInboxStar($id: ID!, $starred: Boolean!) {
-    set_inbox_message_starred(id: $id, starred: $starred) {
-      id
-      starred
-    }
-  }
-`);
-
-export type InboxMessageRow = DocumentType<typeof InboxMessageFields>;
-export type InboxMessageDetail = DocumentType<
-  typeof InboxMessage
->["inbox_message"]["message"];
 export type InboxNavigatorRow = DocumentType<
   typeof InboxNavigator
 >["inbox_navigator"]["rows"][number];

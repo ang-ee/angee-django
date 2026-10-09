@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
   Action, Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
-  MessagePartsView, registerForm, TextLink, useResourceRecordHrefLookup,
+  registerForm, TextLink, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
   type RegisteredFormProps, useTrashActions,
 } from "@angee/ui";
@@ -9,13 +9,15 @@ import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 
 import { useMessagingT } from "./i18n";
-import { MessageDetailPartsDocument, type PartListRow } from "./documents";
+import { MessageReaderDocument, type PartListRow } from "./documents";
+import { MessageReader } from "./MessageReader";
 
 const MODEL = "messaging.Message";
 const PART_MODEL = "messaging.Part";
 // A part's attachment is a storage.File; its routed record page (breadcrumbs
 // included) is the follow target for the attachment cell.
 const FILE_MODEL = "storage.File";
+const STAR_MODEL = "messaging.MessageStar";
 
 // The structural tab defaults to grouping the part rows by role (title / header /
 // body / quoted / signature); regrouping by fragment.hash through the shared
@@ -133,18 +135,18 @@ function MessagePartsTab({ recordId }: RecordPanelContext): React.ReactElement {
   );
 }
 
-/** Human-readable MIME body and attachments, rendered by the shared message owner. */
-function MessageReadableBody({ recordId }: Pick<RecordPanelContext, "recordId">): React.ReactElement {
+/** The message read like an email; an attachment it opens shows beside the body. */
+function MessageRecordReader({ recordId }: Pick<RecordPanelContext, "recordId">): React.ReactElement {
   const t = useMessagingT();
-  const query = useAuthoredQuery(MessageDetailPartsDocument, { id: recordId }, {
-    models: [MODEL, PART_MODEL, FILE_MODEL],
+  const [previewPartId, setPreviewPartId] = React.useState<string | null>(null);
+  const query = useAuthoredQuery(MessageReaderDocument, { id: recordId }, {
+    models: [MODEL, PART_MODEL, FILE_MODEL, STAR_MODEL],
     records: [{ model: MODEL, id: recordId }],
   });
   if (query.isFetching && !query.data) return <LoadingPanel message={t("messages.loadingBody")} />;
-  if (query.error && !query.data) return <ErrorBanner description={t("messages.bodyUnavailable")} />;
   const message = query.data?.messages[0];
   if (!message) return <ErrorBanner description={t("messages.bodyUnavailable")} />;
-  return <MessagePartsView parts={message.parts} className="px-1" />;
+  return <MessageReader message={message} previewPartId={previewPartId} onPreviewPartChange={setPreviewPartId} />;
 }
 
 export function messageRecordTabs(
@@ -159,7 +161,8 @@ export function messageRecordTabs(
   ];
 }
 
-/** The canonical Message detail, reused by Messages and passive record peeks. */
+/** The canonical Message detail, reused by Messages and passive record peeks: the
+ *  reader above the Content and Envelope tabs. */
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
@@ -171,15 +174,14 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
     resource={MODEL}
     readOnly={readOnly}
     recordTabs={recordTabs}
-    formExtras={({ recordId }) => recordId ? <MessageReadableBody recordId={recordId} /> : null}
+    formExtras={({ recordId }) => recordId ? <MessageRecordReader recordId={recordId} /> : null}
     title={({ record }) => messageSubject(record?.title, t("messages.noSubject"))}
   >
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
     <Field name="tags" />
+    {/* The reader shows the sender and date; the envelope keeps the transport facts. */}
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
-      <Field name="sender" readOnly />
-      <Field name="sent_at" readOnly />
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />
       <Field name="external_id" readOnly />

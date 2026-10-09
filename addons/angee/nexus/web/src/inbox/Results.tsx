@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
+import { MessageSummary } from "@angee/messaging";
 import { senderDisplayName } from "@angee/parties";
 import {
-  Avatar,
   Button,
   Glyph,
   ListView,
@@ -10,13 +10,12 @@ import {
   RelativeTime,
   Select,
   Tag,
-  avatarInitials,
   useResourceView,
 } from "@angee/ui";
 import { RESULT_LENSES, resultLensForGroup } from "./contract";
 import { InboxOrder, InboxClearFilters, useResultControls } from "./Controls";
 import { resultSource } from "./sources";
-import type { InboxMessageRow, InboxResultRow } from "./documents";
+import type { InboxResultRow } from "./documents";
 import { INBOX_MODELS, type InboxNavigation } from "./state";
 import { InboxSelection } from "./documents";
 import { useNexusT } from "../i18n";
@@ -169,7 +168,7 @@ function ResultRow({
   if (!row.part)
     return (
       <div>
-        <InboxMessagePreview message={row.message} />
+        <MessageSummary message={row.message} />
         {row.message.thread ? (
           <div onClick={(event) => event.stopPropagation()}>
             <Button
@@ -244,35 +243,6 @@ function ResultRow({
         {t("inbox.sourceUse")}: {senderDisplayName(row.message.sender)} ·{" "}
         {row.message.channel?.display_name || row.message.platform} ·{" "}
         <RelativeTime value={row.latest} />
-      </div>
-    </div>
-  );
-}
-
-export function InboxMessagePreview({ message }: { message: InboxMessageRow }) {
-  const t = useNexusT();
-  const sender = senderDisplayName(message.sender, t("inbox.unknownSender"));
-  return (
-    <div className="flex min-w-0 items-start gap-3 whitespace-normal py-3">
-      <Avatar size="sm" initials={avatarInitials(sender)} />
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{sender}</span>
-          {message.starred ? (
-            <Glyph name="star" className="text-warning-text" />
-          ) : null}
-          <span className="ml-auto whitespace-nowrap text-2xs text-fg-muted">
-            <RelativeTime value={message.sent_at ?? message.created_at} />
-          </span>
-        </div>
-        {message.title ? (
-          <p className="truncate text-13 font-medium">{message.title}</p>
-        ) : null}
-        <p className="line-clamp-2 text-13 text-fg-muted">{message.preview}</p>
-        <div className="flex items-center gap-2 text-2xs text-fg-muted">
-          <Tag>{message.platform}</Tag>
-          <span>{message.channel?.display_name}</span>
-        </div>
       </div>
     </div>
   );
