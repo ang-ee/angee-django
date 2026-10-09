@@ -6,7 +6,7 @@ description = "Threads, messages, and channel bridges that ingest and deliver ma
 keywords = ["messaging", "channels", "chat"]
 category = "Data"
 # django.contrib.postgres backs the Fragment full-text SearchVectorField/GinIndex.
-depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.storage", "angee.tags", "django.contrib.contenttypes", "django.contrib.postgres"]
+depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.resources", "angee.storage", "angee.tags", "django.contrib.contenttypes", "django.contrib.postgres"]
 dependencies = [
   "django-anymail>=15.1",
 ]
