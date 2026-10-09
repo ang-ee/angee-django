@@ -304,11 +304,21 @@
   --control-h-md:  30px;
   --control-h-lg:  36px;
 
-  /* Motion */
+  /* Motion — base tokens */
   --dur-fast:  120ms;
   --dur-base:  180ms;
   --dur-slow:  280ms;
   --ease:      cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  /* Motion — ThemeStudio overrideable vars.
+     --motion-speed-mult scales all durations (0 = instant, 0.5 = half, 2 = double).
+     --motion-easing controls the curve preset applied to all transitions.
+     Components use var(--dur-ui) and var(--ease-ui) — the resolved values. */
+  --motion-speed-mult: 1;
+  --dur-ui:   calc(var(--dur-base) * var(--motion-speed-mult));
+  --dur-ui-fast: calc(var(--dur-fast) * var(--motion-speed-mult));
+  --dur-ui-slow: calc(var(--dur-slow) * var(--motion-speed-mult));
+  --ease-ui:  var(--ease);
 }
 
 /* ============================================================================

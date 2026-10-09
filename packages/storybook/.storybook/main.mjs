@@ -3,6 +3,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gqlStubPlugin } from "./gql-stub.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -37,14 +38,28 @@ const config = {
   typescript: { reactDocgen: false },
   viteFinal: async (vite) => {
     const tailwind = (await import("@tailwindcss/vite")).default;
-    vite.plugins = [...(vite.plugins ?? []), tailwind()];
+    // When runtime/gql is absent (standalone checkout), inject a stub plugin
+    // so addons importing @angee/gql/* don't cause a pre-bundling hard error.
+    const gqlPlugins = existsSync(join(STACK_ROOT, "runtime/gql"))
+      ? []
+      : [gqlStubPlugin()];
+    vite.plugins = [...(vite.plugins ?? []), tailwind(), ...gqlPlugins];
+    // Suppress the HMR error overlay for missing addons that require the full
+    // stack runtime (e.g. @angee/gql/console from proposals addon). These are
+    // expected missing deps in a standalone checkout — the overlay blocks the UI.
+    vite.server = { ...vite.server, hmr: { ...vite.server?.hmr, overlay: false } };
     vite.resolve = {
       ...(vite.resolve ?? {}),
       preserveSymlinks: true,
       dedupe: ["react", "react-dom"],
       alias: {
         ...(vite.resolve?.alias ?? {}),
-        "@angee/gql": join(STACK_ROOT, "runtime/gql"),
+        // Only alias @angee/gql when the full stack runtime/gql is present.
+        // In a standalone checkout this directory does not exist and addon
+        // stories that import from it (e.g. proposals) are simply skipped.
+        ...(existsSync(join(STACK_ROOT, "runtime/gql"))
+          ? { "@angee/gql": join(STACK_ROOT, "runtime/gql") }
+          : {}),
         react: join(ROOT, "node_modules/react"),
         "react-dom": join(ROOT, "node_modules/react-dom"),
         "react-dom/client": join(ROOT, "node_modules/react-dom/client"),

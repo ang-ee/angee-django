@@ -11,7 +11,7 @@ import { interactiveSurfaceVariants } from "./widget-control";
 
 export const buttonVariants = tv({
   extend: interactiveSurfaceVariants,
-  base: "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-6 border font-medium leading-none [&_.glyph]:size-3.5",
+  base: "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-6 border font-medium leading-none [&_.glyph]:size-3.5",
   variants: {
     variant: {
       primary:

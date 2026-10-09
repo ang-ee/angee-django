@@ -30,7 +30,7 @@ import {
 export const drawerVariants = tv({
   slots: {
     content:
-      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none transition-transform duration-200 ease-out",
+      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none [transition:transform_var(--dur-ui,200ms)_var(--ease-ui,ease)]",
     header: "space-y-1.5 border-b border-border-subtle px-5 py-4",
     body: cn(textRoleVariants({ role: "description" }), "min-h-0 flex-1 overflow-y-auto px-5 py-4"),
     footer:

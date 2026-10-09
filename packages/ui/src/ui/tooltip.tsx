@@ -16,7 +16,7 @@ import { tv, type VariantProps } from "../lib/variants";
 export const tooltipVariants = tv({
   slots: {
     content:
-      "max-w-xs rounded-6 bg-tooltip px-2 py-1.5 text-2xs font-medium text-on-tooltip shadow-md outline-none transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
+      "max-w-xs rounded-6 bg-tooltip px-2 py-1.5 text-2xs font-medium text-on-tooltip shadow-md outline-none [transition:opacity_var(--dur-ui,120ms)_var(--ease-ui,ease)] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0",
     arrow: "text-tooltip data-[uncentered]:hidden",
   },
   variants: {

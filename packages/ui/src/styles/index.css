@@ -320,6 +320,16 @@
   --shadow-md:      var(--elevation-md);
   --shadow-lg:      var(--elevation-lg);
   --shadow-popover: var(--elevation-popover);
+
+  /* ----------------------------------------------------------------
+   *  MOTION — bridge `--transition-duration` so Tailwind's
+   *  `transition-*` utilities (transition-colors, transition-transform,
+   *  etc.) pick up the ThemeStudio speed multiplier.
+   *  The default Tailwind `--transition-duration` is 150ms; we override
+   *  it with --dur-ui (= --dur-base × --motion-speed-mult).
+   * ---------------------------------------------------------------- */
+  --transition-duration: var(--dur-ui);
+  --transition-timing-function: var(--ease-ui);
 }
 
 /* ============================================================================
@@ -352,6 +362,24 @@
     width: 1em;
     height: 1em;
     flex-shrink: 0;
+  }
+
+  /* Every inherently interactive element gets pointer cursor by default.
+     Components that are disabled override this with cursor-not-allowed via
+     their own utility classes (disabled:cursor-not-allowed etc.). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  label[for],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="range"]:not(:disabled),
+  input[type="submit"]:not(:disabled),
+  input[type="reset"]:not(:disabled),
+  input[type="file"]:not(:disabled) {
+    cursor: pointer;
   }
 }
 
@@ -645,4 +673,14 @@
 }
 @keyframes skeleton-shimmer {
   to { transform: translateX(100%); }
+}
+
+/* AgentCard — running-state indicator bar sliding across the card top edge. */
+@theme {
+  --animate-agent-slide: agent-slide 1.8s ease-in-out infinite;
+}
+@keyframes agent-slide {
+  0%   { transform: translateX(-100%); opacity: 0.7; }
+  50%  { opacity: 1; }
+  100% { transform: translateX(350%); opacity: 0.7; }
 }

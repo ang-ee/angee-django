@@ -29,8 +29,9 @@ type VirtualElement = {
 
 export const popoverVariants = tv({
   slots: {
+    // Fade + subtle scale-down on enter/exit, driven by --dur-ui / --ease-ui.
     content:
-      "overflow-hidden rounded-8 border border-border-subtle bg-popover shadow-popover outline-none data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
+      "overflow-hidden rounded-8 border border-border-subtle bg-popover shadow-popover outline-none transition-[opacity,transform] [transition-duration:var(--dur-ui,180ms)] [transition-timing-function:var(--ease-ui,ease)] data-[starting-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[ending-style]:scale-95",
     list: "max-h-64 overflow-y-auto p-1",
     input:
       "h-7 w-full border-0 bg-transparent px-2 text-13 text-fg outline-none placeholder:text-fg-muted",

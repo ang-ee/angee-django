@@ -15,3 +15,5 @@ export * from "./appearance";
 export * from "./customization";
 export * from "./logo";
 export * from "./preview";
+export { ThemeStudio } from "./ThemeStudio";
+export * from "./theme-studio-presets";
