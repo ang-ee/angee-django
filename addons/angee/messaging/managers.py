@@ -3744,8 +3744,10 @@ class PartQuerySet(AngeeQuerySet[Any]):
         Use ``message.parts.attached_files()`` under the usual actor context, or
         ``message.parts.with_actor(actor).attached_files()``. Compose stored-file,
         disposition, role, MIME and byte-size predicates with the existing
-        message-bounded, cycle-safe ancestor navigation. Exclude inline parts,
-        signature and delivery-report branches, and zero-byte files. Open one
+        message-bounded, cycle-safe ancestor navigation. Exclude inline decoration
+        (Content-ID references, inline files without a filename or of a non-document
+        type), signature and delivery-report branches, and zero-byte files; an inline
+        PDF or XML with a filename is a document and stays selected. Open one
         parsed ``message/rfc822`` level regardless of multipart depth; skip raw
         message wrappers and deeper forwarded content without parsing file bytes.
 
@@ -3766,13 +3768,33 @@ class PartQuerySet(AngeeQuerySet[Any]):
         ``empty_file``. Only nonzero reasons appear; parts without Files do not.
         Signature roles or PGP/PKCS7 signature MIME types veto a whole branch,
         as do multipart reports and delivery/disposition status messages.
-        Content-IDs and inline file parts also veto descendants; inline text or
-        multipart containers alone do not. Forward depth counts strict RFC822
+        Content-IDs and inline decoration file parts also veto descendants; inline
+        text or multipart containers, and inline documents, do not. Forward depth counts strict RFC822
         ancestors, allowing one. MIME comparisons ignore case and parameters.
         """
 
         _selected, skipped = self._attached_file_selection()
         return dict(skipped)
+
+    INLINE_DOCUMENT_TYPES = frozenset({"application/pdf", "application/xml", "text/xml"})
+    """Document types a mailer may present inline (``Content-Disposition: inline`` with a filename)
+    without making them decoration: a forwarded bill stays an attachment."""
+
+    def _inline_decoration(self, row: Any) -> bool:
+        """Return whether an inline row is body decoration rather than a document.
+
+        A part referenced from the body by Content-ID is decoration, as is an inline
+        file part without a filename or of a non-document type (a signature image).
+        An inline file part with a filename and a document type is a document the
+        sender chose to show inline, and stays an attachment.
+        """
+
+        if row.cid:
+            return True
+        if not row.file_id or row.disposition != self.model.Disposition.INLINE:
+            return False
+        mime = row.type.split(";", 1)[0].strip().lower()
+        return not (row.name and (mime in self.INLINE_DOCUMENT_TYPES or mime.endswith("+xml")))
 
     def _attached_file_selection(self) -> tuple[list[Any], Counter[str]]:
         """Share classification between the selector and its skip counts."""
@@ -3801,7 +3823,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
                 "message/disposition-notification", "message/global-disposition-notification",
             } for mime in types):
                 reason = "delivery_report"
-            elif any(row.cid or row.file_id and row.disposition == self.model.Disposition.INLINE for row in lineage):
+            elif any(self._inline_decoration(row) for row in lineage):
                 reason = "inline"
             elif types[1:].count("message/rfc822") > 1:
                 reason = "forward_depth"

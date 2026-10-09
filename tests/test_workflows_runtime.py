@@ -12,7 +12,7 @@ from django.core.management import call_command
 from django.db import DataError, IntegrityError, OperationalError, transaction
 from django.db.models.functions import Now
 from pydantic import BaseModel, Field, field_serializer, field_validator
-from rebac import actor_context, system_context
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant as grant_role
 
 from angee.base.mixins import StaleRevisionError
@@ -495,6 +495,30 @@ def test_start_requires_an_actor_even_with_system_access(execution):
 
     with system_context(reason="test.start.without_actor"), pytest.raises(PermissionDenied, match="requires an actor"):
         WorkflowRun.objects.start(workflow, actor=None)
+
+
+def test_a_continued_workflow_is_started_by_the_continuing_workflows_principal(execution):
+    """``continues`` lets the continuing workflow's principal start this one, and nobody else's."""
+    actor, _ = execution
+    importer = load_workflow(document("entry"), key="continued_import", actor=actor)
+    receiver = load_workflow(document("entry"), key="continuing_receiver", actor=actor)
+    other = load_workflow(document("entry"), key="unrelated", actor=actor)
+    with system_context(reason="test.continues.setup"):
+        importer = Workflow._base_manager.get(pk=importer.pk)
+        receiver = Workflow._base_manager.get(pk=receiver.pk)
+        other = Workflow._base_manager.get(pk=other.pk)
+        principal, outsider = receiver.user, other.user
+    with pytest.raises(PermissionDenied):
+        importer.require_access("start", principal)
+    write_relationships([RelationshipTuple(
+        resource=to_object_ref(importer), relation="continues", subject=to_subject_ref(receiver),
+    )])
+    importer.require_access("start", principal)
+    with pytest.raises(PermissionDenied):
+        importer.require_access("start", outsider)
+    with actor_context(principal):
+        run = WorkflowRun.objects.start(importer, actor=principal)
+    assert run.run_as_id == principal.pk
 
 
 def test_workflow_verbs_deny_an_explicit_outsider_and_preserve_the_pinned_actor(execution):
