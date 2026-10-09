@@ -678,6 +678,7 @@ describe("statusDisplay plumbing", () => {
     status: {
       name: "status",
       kind: "enum",
+      widget: "select",
       statusDisplay: "dot",
     },
   }, testDataResource("example.Document"));
@@ -688,6 +689,7 @@ describe("statusDisplay plumbing", () => {
 
     expect(column?.statusDisplay).toBe("dot");
     expect(field?.statusDisplay).toBe("dot");
+    expect(field?.widget).toBe("statusBadge");
   });
 
   test("explicit descriptor displays win over metadata", () => {

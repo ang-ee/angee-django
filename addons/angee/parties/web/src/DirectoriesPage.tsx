@@ -24,7 +24,7 @@ export function DirectoriesPage(): React.ReactElement {
       <List resource={MODEL}>
         <Column field="display_name" header={t("directory.name")} />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" widget="colorDot" />
+        <Column field="runtime_status" />
         <Column field="backend_class" />
         {IntegrationSyncColumns()}
       </List>

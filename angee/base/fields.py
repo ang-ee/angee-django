@@ -32,7 +32,7 @@ from __future__ import annotations
 import base64
 import math
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -282,18 +282,25 @@ class StateField(TextChoicesField):
     GraphQL enum straight from ``choices_enum`` and the column ``max_length``
     is derived from it, so a state column never restates its choices. Declared
     natively, e.g. ``StateField(choices_enum=Note.Status, default=...)``.
+    ``status_display`` declares its migration-inert ``pill``, ``dot``, or ``text`` presentation.
     """
 
     angee_widget = "select"
     angee_scalar_hint = "String"
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        status_display: Literal["pill", "dot", "text"] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Index state columns and accept legacy blank-string migration state.
 
         New optional state declarations use NULL; the blank-string spelling is
         retained only so historical migration fields can still be reconstructed.
         """
 
+        self.angee_status_display = status_display
         self._angee_blank_string = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
         if self._angee_blank_string:
             kwargs["blank"] = False

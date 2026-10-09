@@ -13,6 +13,7 @@ function ColorDotRead({ field, ...props }: WidgetRenderProps<string>): ReactElem
   return <Read {...props} field={{ ...field, statusDisplay: field?.statusDisplay ?? "dot" }} />;
 }
 
+/** @deprecated Use `statusBadgeWidget` with `statusDisplay: "dot"`. */
 export const colorDotWidget = {
   edit: statusBadgeWidget.edit,
   read: ColorDotRead,

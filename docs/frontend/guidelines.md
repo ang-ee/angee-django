@@ -399,7 +399,7 @@ shared UI copy through an addon bundle.
   claims, including claims on framework defaults. Every React surface resolves
   tones with [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
   which reads the current app's runtime; custom surfaces use the same hook as
-  `statusBadge`, `colorDot`, and form headers.
+  `statusBadge` and form headers.
   The pure `statusTone` resolver remains for non-React transforms with explicit
   vocabulary. An explicit `<Column tone>` map wins, then addon tones, then the shared
   convention, else `brand`. Scoped `resources.<model>.fields.<field>.tones`
@@ -408,8 +408,8 @@ shared UI copy through an addon bundle.
   stages can declare it. A field's backend `status_display` metadata selects the
   `pill` (default), `dot`, or `text` Badge recipe everywhere that field renders;
   `<Column statusDisplay>` and `<Field statusDisplay>` are explicit authored
-  overrides. `colorDot` is the compatibility widget name that defaults this same
-  owner to `dot`, not a separate renderer. A run
+  overrides. The deprecated `colorDot` compatibility widget name defaults this
+  same owner to `dot`; it is not a separate renderer. A run
   state — stopped/running/error/warning — therefore uses the dot display (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum

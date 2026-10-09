@@ -142,7 +142,7 @@ function AgentResourceListPage({
       <List resource={MODEL} pageSize={50}>
         <Column field="name" />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" widget="colorDot" />
+        <Column field="runtime_status" />
         <Column field="updated_at" />
       </List>
       <Form resource={MODEL} deleteVisibleWhen={isTemplate ? undefined : canDeleteAgent}>

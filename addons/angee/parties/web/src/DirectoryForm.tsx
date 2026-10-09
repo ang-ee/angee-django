@@ -13,7 +13,7 @@ function DirectoryForm({ resource: _resource, ...props }: RegisteredFormProps): 
     <Form {...props} resource={MODEL}>
       <Field name="display_name" title readOnly />
       <Field name="lifecycle" readOnly />
-      <Field name="runtime_status" widget="colorDot" readOnly />
+      <Field name="runtime_status" readOnly />
       <Field name="backend_class" readOnly />
       <Field name="config" readOnly />
       {IntegrationSyncFields({ label: t("directory.group.lastSync") })}
