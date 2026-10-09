@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useOptionalAppearance } from "../theme/appearance";
 
 interface MotionTiming {
   readonly duration: number;
@@ -10,11 +11,20 @@ const FALLBACK_MOTION_TOKENS: MotionTiming = {
   easing: "cubic-bezier(0.2, 0.6, 0.2, 1)",
 };
 
-let cachedMotionTokens: MotionTiming | undefined;
-
-/** Read the base motion timing once, with the intrinsic theme tokens as the SSR fallback. */
+/** Read motion timing per mount and refresh it after the effective theme changes. */
 export function useMotionTokens(): MotionTiming {
-  const [tokens] = React.useState(readMotionTokens);
+  const appearance = useOptionalAppearance();
+  const effectiveThemeId = appearance?.effectiveThemeId;
+  const followsAppearance = appearance !== null;
+  const [tokens, setTokens] = React.useState(readMotionTokens);
+  React.useEffect(() => {
+    if (!followsAppearance) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setTokens(readMotionTokens());
+    });
+    return () => { active = false; };
+  }, [effectiveThemeId, followsAppearance]);
   return tokens;
 }
 
@@ -22,14 +32,11 @@ function readMotionTokens(): MotionTiming {
   if (typeof document === "undefined" || typeof getComputedStyle === "undefined") {
     return FALLBACK_MOTION_TOKENS;
   }
-  if (cachedMotionTokens) return cachedMotionTokens;
-
   const styles = getComputedStyle(document.documentElement);
-  cachedMotionTokens = {
+  return {
     duration: parseDuration(styles.getPropertyValue("--dur-base")),
     easing: styles.getPropertyValue("--ease").trim() || FALLBACK_MOTION_TOKENS.easing,
   };
-  return cachedMotionTokens;
 }
 
 function parseDuration(value: string): number {

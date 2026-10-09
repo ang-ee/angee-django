@@ -518,7 +518,10 @@ function isBoundedTokenValue(name, value) {
   const match = /^cubic-bezier\((.*)\)$/.exec(value);
   if (!match) return false;
   const points = match[1].split(",").map((point) => point.trim());
-  return points.length === 4 && points.every((point) => CSS_NUMBER_VALUE.test(point) && Number.isFinite(Number(point)));
+  if (points.length !== 4 || !points.every((point) => CSS_NUMBER_VALUE.test(point) && Number.isFinite(Number(point)))) return false;
+  const x1 = Number(points[0]);
+  const x2 = Number(points[2]);
+  return x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1;
 }
 
 function boundedInteger(value, suffix, minimum, maximum) {

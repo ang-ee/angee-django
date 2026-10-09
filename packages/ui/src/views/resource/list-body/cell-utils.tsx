@@ -8,7 +8,7 @@ import type {
 import { isDateField, rowValueAtPath, resourceFieldPathToSnake } from "@angee/metadata";
 import { type UiTranslate } from "../../../i18n";
 import { enumValueLabel, groupFieldLabel, statusLabel } from "../../../lib/labels";
-import { formatNumber } from "../../../lib/format-number";
+import { formatNumber, isNumericString } from "../../../lib/format-number";
 import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
 import { ChipList } from "../../../ui/chip";
@@ -200,11 +200,12 @@ export function formatMeasure(
   measure: Pick<GroupMeasure, "unit">,
 ): string {
   const formatted = value == null
-    || typeof value === "number"
+    ? ""
+    : typeof value === "number"
     || typeof value === "bigint"
-    || typeof value === "string"
-    ? formatNumber(value)
-    : String(value);
+    || (typeof value === "string" && isNumericString(value))
+      ? formatNumber(value)
+      : String(value);
   return measure.unit ? `${formatted} ${measure.unit}` : formatted;
 }
 

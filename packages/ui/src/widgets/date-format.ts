@@ -1,4 +1,8 @@
 import { format, formatDistance, isDate, isValid, parseISO, type Locale } from "date-fns";
+import { formatNumber } from "../lib/format-number";
+import { getHumanLocale } from "../lib/human-locale";
+
+export { setHumanDateLocale } from "../lib/human-locale";
 
 /** A date-ish widget value: an ISO string, a `Date`, or empty. */
 export type DateWidgetValue = string | Date | null;
@@ -49,15 +53,8 @@ export interface HumanDateOptions {
   density?: "list" | "full";
 }
 
-let humanDateLocale = "en";
-
-/** Set the default language for pure date formatters from the app i18n owner. */
-export function setHumanDateLocale(language: string): void {
-  humanDateLocale = language || "en";
-}
-
 function localeCode(locale?: string | Locale): string {
-  return typeof locale === "string" ? locale : locale?.code ?? humanDateLocale;
+  return typeof locale === "string" ? locale : locale?.code ?? getHumanLocale();
 }
 
 /** Compact calendar date, including the year only outside the current year. */
@@ -137,14 +134,15 @@ export function formatDuration(
   // Intl's English short unit is "wks"; the compact table vocabulary uses "wk".
   if (options.style !== "full" && language === "en") {
     const unitLabel = { day: "d", week: "wk", month: "mo", year: "yr" }[unit];
-    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value)} ${unitLabel}`;
+    return `${formatNumber(value, { locale, maximumFractionDigits: 2 })} ${unitLabel}`;
   }
-  return new Intl.NumberFormat(locale, {
+  return formatNumber(value, {
+    locale,
     style: "unit",
     unit,
     unitDisplay: options.style === "full" ? "long" : "short",
     maximumFractionDigits: 2,
-  }).format(value);
+  });
 }
 
 /** Full timestamp; explicit zones retain seconds, while local widget labels omit them. */

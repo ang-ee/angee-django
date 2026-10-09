@@ -22,6 +22,7 @@ const accepted = [
   ["chart colour", "--chart-1", "#315c52"],
   ["motion duration", "--dur-fast", "120ms"],
   ["motion easing", "--ease", "cubic-bezier(0.2, 0.6, 0.2, 1)"],
+  ["motion easing y overshoot", "--ease", "cubic-bezier(0, -0.4, 1, 1.4)"],
 ] as const satisfies readonly (readonly [string, ThemeTokenName, string])[];
 
 const rejected = [
@@ -31,6 +32,7 @@ const rejected = [
   ["chart colour", "--chart-1", "url(https://example.com/chart.svg)"],
   ["motion duration", "--dur-fast", "1001ms"],
   ["motion easing", "--ease", "cubic-bezier(0.2, nope, 0.2, 1)"],
+  ["motion easing x control", "--ease", "cubic-bezier(-0.1, 0.6, 1.1, 1)"],
 ] as const satisfies readonly (readonly [string, ThemeTokenName, string])[];
 
 function themeWithToken(name: ThemeTokenName, value: string): ThemeDefinition {

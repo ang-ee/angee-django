@@ -207,13 +207,8 @@ test("a statistic uses its loaded value in the heading and body", () => {
     definition={{ ...definition, widgets: [stat] }} />);
   const article = screen.getByRole("heading", { name: "Total" }).closest("article")!;
   expect(article.querySelector("header")?.textContent).toContain("Total· 5");
-  const numberFlow = article.querySelector("number-flow-react");
-  expect(numberFlow).toBeTruthy();
-  expect(
-    numberFlow?.shadowRoot?.querySelector(
-      '[part~="integer-digit"] > :not([inert])',
-    )?.textContent ?? numberFlow?.textContent,
-  ).toBe("0");
+  expect(article.querySelector("dd")?.textContent).toBe("0");
+  expect(article.querySelector("number-flow-react")).toBeNull();
 });
 
 test("an undeclared fallback does not replace a personal saved layout", () => {

@@ -1,8 +1,10 @@
 import * as React from "react";
-import NumberFlow, { type NumberFlowProps } from "@number-flow/react";
+import NumberFlow, { type Format, type NumberFlowProps } from "@number-flow/react";
 
 import { useInAppLink } from "../lib/in-app-link";
 import { cn } from "../lib/cn";
+import { formatNumber } from "../lib/format-number";
+import { getHumanLocale } from "../lib/human-locale";
 import { type Tone } from "../lib/tones";
 import { useMotionTokens } from "../lib/use-motion-tokens";
 import { tv, type VariantProps } from "../lib/variants";
@@ -20,7 +22,9 @@ export interface MetricTileValue {
   animate?: boolean;
   detail?: React.ReactNode;
   /** Native Intl formatting options for the typed numeric value. */
-  format?: Intl.NumberFormatOptions;
+  format?: Format;
+  /** Stable identity for preserving a tile across label or value changes. */
+  id?: string;
   icon?: React.ReactNode | string;
   label: React.ReactNode;
   /** Typed numeric path; when set, it takes precedence over the value slot. */
@@ -112,14 +116,11 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   ) {
     const link = useInAppLink(href, { ...props, onClick });
     const styles = metricStripVariants({ density, valueSize });
-    const resolvedValue = numericValue == null ? value : (
-      <MetricTileNumber
-        animate={animate}
-        format={format}
-        suffix={suffix}
-        value={numericValue}
-      />
-    );
+    const resolvedValue = numericValue == null
+      ? value
+      : animate
+        ? <AnimatedMetricTileNumber format={format} suffix={suffix} value={numericValue} />
+        : <>{formatNumber(numericValue, format)}{suffix}</>;
     const body = (
       <DefinitionPair
         action={icon ? <IconTile icon={icon} size="md" /> : undefined}
@@ -169,14 +170,12 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
 );
 MetricTile.displayName = "MetricTile";
 
-function MetricTileNumber({
-  animate,
+function AnimatedMetricTileNumber({
   format,
   suffix,
   value,
 }: {
-  animate: boolean;
-  format?: Intl.NumberFormatOptions;
+  format?: Format;
   suffix?: string;
   value: number | bigint;
 }): React.ReactElement {
@@ -188,10 +187,9 @@ function MetricTileNumber({
   ) as NumberFlowProps["value"];
   return (
     <NumberFlow
-      animated={animate}
-      // The runtime forwards every Intl option; its type only narrows the two
-      // scientific notation modes, whose non-digit parts simply do not spin.
-      format={format as NumberFlowProps["format"]}
+      animated
+      format={format}
+      locales={getHumanLocale()}
       opacityTiming={timing}
       respectMotionPreference
       spinTiming={timing}
@@ -220,5 +218,5 @@ export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
 MetricStrip.displayName = "MetricStrip";
 
 function metricKey(metric: MetricTileValue, index: number): string {
-  return `${String(metric.label)}:${String(metric.value)}:${index}`;
+  return metric.id ?? `${String(metric.label)}:${index}`;
 }
