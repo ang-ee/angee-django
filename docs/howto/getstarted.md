@@ -275,6 +275,12 @@ own the stack root, or pass `--input operator_home=/home/<user>`. That user's
 "bind source path does not exist: <home>/.ssh", create it
 (`install -d -m 700 ~/.ssh`) and add the keys.
 
+The private ARP source is opt-in (`--input include_arp=true`). A deployment
+that fetches it over SSH with a deploy key behind a host alias also passes
+`--input arp_repo=git@github-example:org/repo.git`; both are recorded
+answers, so a later stack update keeps the remote instead of resetting it to
+the https default.
+
 `init` renders from the published template registry in seconds; `angee up`
 pulls the images, cuts the `workspaces/src` framework workspace, starts every
 container (operator and edge included), and runs the first provision —
