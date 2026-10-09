@@ -63,6 +63,11 @@ _angee:
       type: str
       default: "ghcr.io/ang-ee/angee-operator:latest"
       help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
+    operator_home:
+      type: path
+      default: "~"
+      when: "{{ runtime_mode == 'docker' }}"
+      help: The stack-root owner's home directory (defaults to yours); the Docker operator uses it as HOME and reads its .ssh read-only, so git over SSH works as on the host.
     runtime_mode:
       type: str
       default: process
@@ -397,6 +402,18 @@ operator_image:
   type: str
   default: "ghcr.io/ang-ee/angee-operator:latest"
   help: Operator daemon image for Docker-mode stacks (the daemon runs as a container over the docker socket).
+
+operator_home:
+  type: path
+  default: "~"
+  when: "{{ runtime_mode == 'docker' }}"
+  help: >-
+    The home directory of the user who owns the stack root (defaults to the home
+    of the user running `angee init`, recorded as an absolute path). The Docker
+    operator runs with that HOME and mounts its .ssh read-only at the same path,
+    so git over SSH (Sync base, source fetches) uses the host's own SSH config,
+    keys and known_hosts. The host must have that .ssh.
+  validator: '{% if operator_home and operator_home|first != "/" %}operator_home must be an absolute path.{% endif %}'
 
 operator_port:
   type: int
