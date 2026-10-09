@@ -37,6 +37,12 @@ def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
         attached("image.png", type="image/png"),
         attached("opaque.bin", type="application/octet-stream"),
         attached("inline.txt", disposition="inline"),
+        # A forwarded bill: a mailer presents the document inline, with its filename and no Content-ID.
+        attached("inline-bill.pdf", type="application/pdf", disposition="inline"),
+        attached("inline-bill.xml", type="application/xml", disposition="inline"),
+        # Decoration stays out: a referenced image, and an inline image with no filename.
+        attached("logo.png", type="image/png", disposition="inline", cid="logo@example.com"),
+        ParsedPart(type="image/png", disposition="inline", content=b"png"),
         attached("cid.txt", cid="image@example.com"),
         ParsedPart(cid="parent@example.com", children=(attached("cid-child.txt"),)),
         attached("inline-parent.txt", disposition="inline", children=(attached("inline-child.txt"),)),
@@ -73,12 +79,13 @@ def test_attached_files_select_one_forward_level_and_count_each_skipped_part(
     skipped = scope.attached_file_skip_counts()
     assert Counter(part.name for part in selected) == Counter({
         "direct.txt": 2, "image.png": 1, "opaque.bin": 1, "forwarded.txt": 1,
+        "inline-bill.pdf": 1, "inline-bill.xml": 1,
     })
     direct = [part for part in selected if part.name == "direct.txt"]
     assert direct[0].file_id == direct[1].file_id
     assert all(part.file.size_bytes > 0 for part in selected)
     assert skipped == {
-        "signature": 5, "delivery_report": 3, "inline": 5, "forward_depth": 1,
+        "signature": 5, "delivery_report": 3, "inline": 7, "forward_depth": 1,
         "forwarded_message": 2, "empty_file": 1,
     }
     assert len(selected) + sum(skipped.values()) == scope.attachments().count()

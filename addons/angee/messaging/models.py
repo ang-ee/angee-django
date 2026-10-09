@@ -2589,8 +2589,9 @@ class Part(AuditMixin, AngeeDataModel):
 
     ``type``/``role`` is a genuine discriminator, not MTI: a ``multipart/*`` is a
     container; a text part references a :class:`Fragment`; a byte part references a
-    ``storage.File``. Attachments are ``disposition=attachment`` + ``file``; inline
-    images are ``disposition=inline`` + ``cid``.
+    ``storage.File``. Attachments are ``disposition=attachment`` + ``file``, or an
+    inline document (``disposition=inline`` with a filename and a document type, as
+    forwarded bills arrive); inline images are ``disposition=inline`` + ``cid``.
     """
 
     runtime = True
