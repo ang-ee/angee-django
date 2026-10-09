@@ -23,7 +23,8 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
-from angee.intake.models import NeedAccessAction, task_requester_name, task_requester_rows
+from angee.intake.choices import NeedAccessAction
+from angee.intake.models import task_requester_name, task_requester_rows
 from angee.messaging.schema import ChannelType, MessageType
 from angee.parties.schema import PartyType
 from angee.projects.schema import ProjectType, TaskType

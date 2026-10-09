@@ -9,6 +9,7 @@ depends_on = [
   "angee.messaging",
   "angee.parties",
   "angee.projects",
+  "angee.resources",
   "angee.work",
 ]
 

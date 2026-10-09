@@ -3,6 +3,7 @@
 - [`Need.objects.file_task`](models.py) owns atomic task filing and fingerprints the full request, including its party; queue, party and task permissions stay with their owners.
 - The [setup contributor](models.py) links only unassigned needs after share checks, then delegates to the other project setup owners.
 - [`Need.reset_access`](models.py) requires confirmation, revision and share authority; it asks a fresh independent decision while retaining the party and prior answers. Requester access follows the Need owner's admitted account through ReBAC; IAM owns credentials.
+- A Need [resource row](resources.py) may carry `access: approve|deny` with `access_by`, the xref of who answered. After the row saves and asks its question, the adapter answers it once through `decide_access` as that user, only while it is open; a later load keeps the stored answer.
 - The [Task record contribution](web/src/index.tsx) shows each Need's current access decision as a card with the permitted Need verbs beside its requester. The decision link opens the audit history owned by [Decisions](../decisions/README.md). IAM owns credential issuance separately; deciding or resetting request access does not change a password.
 - Both task schema nodes project the first linked Need as `requester { display_name email }`. The name uses the linked party or captured claim; the email is returned only to a task writer. Lists select this field without reading a second collection.
 
