@@ -1687,6 +1687,34 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  addons/angee/theme_ledger/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   addons/angee/theme_midnight/web:
     dependencies:
       '@angee/app':
@@ -2178,6 +2206,9 @@ importers:
       '@angee/theme-fyltr':
         specifier: workspace:*
         version: link:../../addons/angee/theme_fyltr/web
+      '@angee/theme-ledger':
+        specifier: workspace:*
+        version: link:../../addons/angee/theme_ledger/web
       '@angee/theme-midnight':
         specifier: workspace:*
         version: link:../../addons/angee/theme_midnight/web

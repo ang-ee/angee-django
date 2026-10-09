@@ -10,13 +10,15 @@ installed. `angee.theme_stock` makes that unchanged blue look selectable as
 **Default** under the stable `angee.stock` preference key. Installing another
 theme adds it to the catalogue and never activates it by import order.
 
-The framework identity catalogue includes two product themes. **Angee**
+The framework identity catalogue includes three product themes. **Angee**
 (`angee.theme_angee`, theme ID `angee.angee`) uses the `angee.ai` graphite and
 gold identity; **Fyltr** (`angee.theme_fyltr`, theme ID `angee.fyltr`) uses the
-`fyltr.ai` charcoal, cool-white and green identity. Each is one selectable
-theme with light and dark token layers. Default, Angee and Fyltr all accept the
-shared bounded customization described below. The full project profile installs
-both product themes; the default profile remains Default plus Appearance.
+`fyltr.ai` charcoal, cool-white and green identity; **Ledger**
+(`angee.theme_ledger`, theme ID `angee.ledger`) uses ink on warm paper with a
+solar accent and monochrome charts. Each is one selectable theme with light and
+dark token layers. Default, Angee, Fyltr and Ledger all accept the shared bounded
+customization described below. The full project profile installs all three
+product themes; the default profile remains Default plus Appearance.
 
 ## Host and user precedence
 
