@@ -3,7 +3,6 @@
 from django.db import migrations, models
 from django.db.migrations.operations.base import Operation
 
-
 BRIDGE_FIELDS = (
     "config",
     "cursor",
@@ -40,7 +39,9 @@ def applies(project_state):
         and "channel_ptr" in fields
         and "feed_backend_class" in fields
     )
-    if old and not new and all(name in fields for name in BRIDGE_FIELDS):
+    # Released feeds predate some bridge fields (sync_run_id); the removals below
+    # drop only the columns a feed's history actually has.
+    if old and not new:
         return True
     if new and not old and all(name not in fields for name in BRIDGE_FIELDS):
         return False
@@ -84,6 +85,22 @@ def insert_channel_parents(apps, schema_editor):
         cursor.execute(sql, params)
 
 
+class RemoveFieldIfPresent(migrations.RemoveField):
+    """Drop one retired bridge field only when the feed's history has it."""
+
+    def state_forwards(self, app_label, state):
+        if self.name in state.models[app_label, self.model_name_lower].fields:
+            super().state_forwards(app_label, state)
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        if self.name in from_state.models[app_label, self.model_name_lower].fields:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        if self.name in to_state.models[app_label, self.model_name_lower].fields:
+            super().database_backwards(app_label, schema_editor, from_state, to_state)
+
+
 class ReparentFeedState(Operation):
     """Change the historical Feed base after Django changes its local fields."""
 
@@ -106,7 +123,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RunPython(insert_channel_parents),
         migrations.RenameField("feed", "backend_class", "feed_backend_class"),
-        *(migrations.RemoveField("feed", name) for name in BRIDGE_FIELDS),
+        *(RemoveFieldIfPresent("feed", name) for name in BRIDGE_FIELDS),
         migrations.RenameField("feed", "integration_ptr", "channel_ptr"),
         migrations.AlterField(
             "feed",

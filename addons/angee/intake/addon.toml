@@ -24,3 +24,8 @@ demo = [
 name = "cutover"
 app_label = "intake"
 module = "runtime_migrations.cutover"
+
+[[migrations]]
+name = "single_target"
+app_label = "intake"
+module = "runtime_migrations.single_target"

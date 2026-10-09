@@ -7,10 +7,18 @@ keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
 depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions"]
 
+# Runs first: a pre-rebuild history is retired whole, so the cutovers below never match it.
+[[migrations]]
+name = "retire_pre_rebuild"
+app_label = "workflows"
+module = "runtime_migrations.retire_pre_rebuild"
+
 [[migrations]]
 name = "independent_decisions"
 app_label = "workflows"
 module = "runtime_migrations.independent_decisions"
+# The released guard also matched pre-rebuild histories it cannot transform; its copies stay valid.
+compatible_source_sha256 = ["7c5e604170aa65aeddba0e35a17b1fd919d76b3106a8654e4f5b415e0a95e4bd"]
 
 [[migrations]]
 name = "current_execution"
