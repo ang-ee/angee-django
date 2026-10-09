@@ -1,0 +1,12 @@
+// Storage-owned arms contributed to upstream resource definitions.
+// @rebac_package: storage
+// @rebac_schema_revision: 1
+
+// Files carry tags: adding or removing one needs write on the file, and a file's
+// tags are visible to its readers.
+definition tags/tag_assignment {
+    relation file: storage/file // rebac:field=target
+
+    permission target_read = file->read
+    permission target_write = file->write
+}

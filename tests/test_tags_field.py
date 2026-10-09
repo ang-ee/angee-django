@@ -2,15 +2,18 @@
 
 Storage's ``File`` stands in for every picked model: it reaches the field
 through a console ``type_extensions`` donor, the same ``TaggedNode`` the other
-owners compose onto their console node classes. The structural test pins the
-owners whose schema modules import in the bare test runtime; the projects
-console nodes are pinned beside the work declarations they already need
-(``tests/test_work_task_access.py``).
+owners compose onto their console node classes. Parties carry tags at the party
+for both of its kinds. The structural test pins the owners whose schema modules
+import in the bare test runtime; the projects console nodes are pinned beside
+the work declarations they already need (``tests/test_work_task_access.py``).
+Every taggable type's relation comes from its owner's fragment, so the tests
+compose them (``composed_permissions``).
 """
 
 from __future__ import annotations
 
 import importlib
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -20,28 +23,43 @@ from rebac import actor_context, system_context
 
 import tests.test_storage  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.messaging.testing.models import Organization, Party
 from angee.storage import schema as storage_schema
 from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import File, SchemaAddon, create_user, execute_schema, result_data
 from tests.test_storage import drive as drive
 
-pytestmark = pytest.mark.django_db(transaction=True)
+# Import after the concrete test models are registered; the source schema resolves
+# the runtime models through Django's app registry.
+parties_schema = importlib.import_module("angee.parties.schema")
+
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_permissions")]
 
 _PICKED_CONSOLE_NODES = (
     ("angee.messaging.schema", "ThreadType"),
     ("angee.messaging.schema", "MessageType"),
     ("angee.knowledge.schema", "PageTags"),
     ("angee.storage.schema", "FileTags"),
+    ("angee.parties.schema", "PartyTags"),
+    ("angee.parties.schema", "PersonTags"),
+    ("angee.parties.schema", "OrganizationTags"),
+    ("angee.parties.schema", "HandleTags"),
 )
 
 
-def _storage_schemas(name: str) -> GraphQLSchemas:
-    """Return storage's own ``name`` schema as a throwaway addon (reset after each test)."""
+def _addon_schemas(module: ModuleType, name: str) -> GraphQLSchemas:
+    """Return one addon's own ``name`` schema as a throwaway addon (reset after each test)."""
 
     return GraphQLSchemas([SchemaAddon({
-        name: {key: tuple(storage_schema.schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS},
+        name: {key: tuple(module.schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS},
     })])
+
+
+def _storage_schemas(name: str) -> GraphQLSchemas:
+    """Return storage's own ``name`` schema as a throwaway addon."""
+
+    return _addon_schemas(storage_schema, name)
 
 
 def _tagged_files(drive: Any, count: int) -> tuple[list[Any], list[Any]]:
@@ -77,6 +95,11 @@ def test_shared_public_nodes_stay_untagged() -> None:
     console = _storage_schemas("console").build("console")._schema
     assert "tags" not in public.get_type("FileType").fields
     assert str(console.get_type("FileType").fields["tags"].type) == "[TagType!]!"
+    public = _addon_schemas(parties_schema, "public").build("public")._schema
+    console = _addon_schemas(parties_schema, "console").build("console")._schema
+    for name in ("PartyType", "PersonType", "OrganizationType", "HandleType"):
+        assert "tags" not in public.get_type(name).fields
+        assert str(console.get_type(name).fields["tags"].type) == "[TagType!]!"
 
 
 def test_metadata_projects_tags_as_a_writable_relation_list() -> None:
@@ -208,3 +231,42 @@ def test_an_unknown_tag_rolls_the_whole_save_back(drive: Any) -> None:
     with system_context(reason="tags field rollback check"):
         assert File.objects.get(pk=files[0].pk).title != "Renamed"
     assert _saved_tag_names(files[0]) == [tag.name for tag in tags]
+
+
+_CREATE_PERSON = """mutation CreatePerson($tags: [ID!]) {
+  insert_people_one(object: {display_name: "Ada", tags: $tags}) { id tags { name } }
+}"""
+_RETAG_ORGANIZATION = """mutation RetagOrganization($id: String!, $tags: [ID!]) {
+  update_organizations_by_pk(pk_columns: {id: $id}, _set: {tags: $tags}) { id tags { name } }
+}"""
+
+
+def test_a_party_saves_its_tags_with_either_kinds_form() -> None:
+    """A person's create and an organization's update save tags, which every kind reads at the party."""
+
+    owner = create_user("tags-party-form-owner")
+    with system_context(reason="tags party form seed"):
+        vip, wholesale = Tag.objects.create(name="VIP", color=""), Tag.objects.create(name="Wholesale", color="")
+    with actor_context(owner):
+        organization = Organization.objects.create(display_name="Acme")
+    schema = _addon_schemas(parties_schema, "console").build("console")
+
+    created = result_data(execute_schema(schema, _CREATE_PERSON, {"tags": [str(vip.sqid)]}, user=owner))
+    assert created["insert_people_one"]["tags"] == [{"name": "VIP"}]
+    retagged = result_data(execute_schema(
+        schema, _RETAG_ORGANIZATION, {"id": str(organization.sqid), "tags": [str(wholesale.sqid), str(vip.sqid)]},
+        user=owner,
+    ))
+    assert retagged["update_organizations_by_pk"]["tags"] == [{"name": "VIP"}, {"name": "Wholesale"}]
+
+    with system_context(reason="tags party form check"):
+        assert {edge.content_type.model_class() for edge in TagAssignment.objects.all()} == {Party}
+    listed = result_data(execute_schema(
+        schema, "{ parties(order_by: [{display_name: asc}]) { display_name tags { name } } }", user=owner,
+    ))
+    assert listed["parties"] == [
+        {"display_name": "Acme", "tags": [{"name": "VIP"}, {"name": "Wholesale"}]},
+        {"display_name": "Ada", "tags": [{"name": "VIP"}]},
+    ]
+    people = result_data(execute_schema(schema, "{ people { display_name tags { name } } }", user=owner))
+    assert people["people"] == [{"display_name": "Ada", "tags": [{"name": "VIP"}]}]

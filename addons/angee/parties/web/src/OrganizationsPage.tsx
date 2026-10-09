@@ -9,6 +9,7 @@ const organizationsList = (
     <Column field="display_name" />
     <Column field="domain" />
     <Column field="created_at" />
+    <Column field="tags" hiddenByDefault />
   </List>
 );
 

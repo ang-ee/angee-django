@@ -404,15 +404,16 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
     index = record_edges_by_target()
     assert [edge._meta.label for edge in index[Task]] == [
         "knowledge.RecordBinding", "messaging.ThreadAttachment", "projects.Link", "storage.FileAttachment",
+        "tags.TagAssignment",
     ]
     assert FileAttachment.declares_target(MtiChild) and FileAttachment.declares_target(MtiChildProxy)
     assert not FileAttachment.declares_target(File) and not RecordBinding.declares_target(RecordRefPlainTarget)
     schema = addon_schema(storage_schema.schemas, "public")
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["storage.Drive"].record_edges == ("projects.ProjectBinding", "storage.FileAttachment")
-    assert resources["storage.File"].record_edges == ("messaging.ThreadAttachment",)
+    assert resources["storage.File"].record_edges == ("messaging.ThreadAttachment", "tags.TagAssignment")
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
-    assert wire["storage.File"]["recordEdges"] == ["messaging.ThreadAttachment"]
+    assert wire["storage.File"]["recordEdges"] == ["messaging.ThreadAttachment", "tags.TagAssignment"]
 
 
 def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:

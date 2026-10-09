@@ -82,6 +82,25 @@ live in code docstrings.
   `ProjectBindingQuerySet` and the hand-rolled binding save/delete gates;
   `projects.access.require_binding_access` now guards only the project's home
   folder.
+- Tag assignments are authorized by the record they tag. The app that owns a
+  taggable type (one composing `TaggedModel`) declares its `target`-backed
+  relation on `tags/tag_assignment` from its `permissions.extends.zed`, unioning
+  the type's read and write into `target_read` and `target_write`: projects
+  (projects, tasks), storage (files), knowledge (pages), messaging (threads,
+  messages) and parties (parties, handles). Adding or removing a tag, through a record's
+  save or the `tag`/`untag` verbs, needs write on the record and runs under the
+  actor; an assignment is read by whoever reads both the tag and the record.
+  `tag`/`untag` no longer require the `tags_admin` role (`TagsAdminPermission`
+  is removed): tag administrators curate the vocabulary, not records. A type no
+  relation names cannot be tagged under an actor, so consumers that tag other
+  record types compose `TaggedModel` and declare the relation;
+  `TagAssignment.check` (`tags.E001`–`tags.E003`) fails startup when the
+  composed models and the declared relations differ. `parties.Party` is
+  taggable: the party, person and organization console nodes and inputs carry
+  `tags`, and `angee.parties` depends on `angee.tags`. `parties.Handle` is
+  taggable too: its console node reads `tags`, and since its resource takes no
+  writes, the `tag`/`untag` verbs write them. Resource metadata now
+  lists `tags.TagAssignment` in `recordEdges` for taggable types.
 - File attachments and knowledge record bindings authorize their target in the
   REBAC schema (django-zed-rebac 0.26.0 relations backed by the edge's
   `GenericForeignKey`) and are created and deleted under the actor. The app that

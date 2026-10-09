@@ -1,0 +1,12 @@
+// Knowledge-owned arms contributed to upstream resource definitions.
+// @rebac_package: knowledge
+// @rebac_schema_revision: 1
+
+// Pages carry tags: adding or removing one needs write on the page, and a page's
+// tags are visible to its readers.
+definition tags/tag_assignment {
+    relation page: knowledge/page // rebac:field=target
+
+    permission target_read = page->read
+    permission target_write = page->write
+}

@@ -297,6 +297,7 @@ export function PeoplePage(): React.ReactElement {
           <Column field="given_name" />
           <Column field="family_name" />
           <Column field="created_at" />
+          <Column field="tags" hiddenByDefault />
         </List>
         {peopleForm(t, mergeSubmit, extraFields, contactActions)}
       </ResourceList>

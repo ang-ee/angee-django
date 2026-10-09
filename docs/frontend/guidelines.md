@@ -1232,10 +1232,11 @@ Hard-won traps — the wise learn from others' mistakes
   `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
   relation-list control.
 - **Tags show only where an owner places them, never as a chatter tab, and save
-  with the record.** An owner composes the backend's `TaggedModel` on the model,
-  `TaggedNode` on its console node and `tags_input_extensions(resource)` on its
-  console insert and set inputs, then places `<Field name="tags" />` on its
-  record form and `<Column field="tags" hiddenByDefault />` on its list. Resource
+  with the record.** An owner composes the backend's `TaggedModel` on the model
+  and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its
+  console node and `tags_input_extensions(resource)` on its console insert and
+  set inputs, then places `<Field name="tags" />` on its record form and
+  `<Column field="tags" hiddenByDefault />` on its list. Resource
   metadata projects `tags` as a writable relation list to `tags.Tag`, so the form
   edits it as its standard to-many chips field: a pick or removal dirties the
   form, Save writes the id list with the row (the backend diffs the edges in the

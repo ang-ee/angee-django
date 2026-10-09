@@ -23,6 +23,7 @@ export function HandlesPage(): React.ReactElement {
         <Column field="party.display_name" header={t("handle.contact")} />
         <Column field="confidence" header={t("handle.confidence")} />
         <Column field="is_preferred" header={t("handle.preferred")} />
+        <Column field="tags" hiddenByDefault />
       </List>
       <Form resource={MODEL}>
         <Field name="value" title readOnly />
@@ -31,6 +32,7 @@ export function HandlesPage(): React.ReactElement {
           <Field name="label" readOnly />
           <Field name="display_name" readOnly />
           <Field name="party" label={t("handle.contact")} readOnly />
+          <Field name="tags" readOnly />
         </Group>
         <Group label={t("handle.group.flags")} columns={3}>
           <Field name="is_preferred" readOnly />

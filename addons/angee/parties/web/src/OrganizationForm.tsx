@@ -52,6 +52,7 @@ export function OrganizationForm({ resource: _resource, recordTabs, ...props }: 
   return (
     <Form {...props} resource={MODEL} recordTabs={recordTabs ?? organizationTabs(t)}>
       {fields}
+      <Field name="tags" />
       {contactActions}
     </Form>
   );
