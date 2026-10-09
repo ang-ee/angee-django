@@ -320,14 +320,16 @@
   --font-weight-semibold: var(--fw-semibold);
   --font-weight-bold:     var(--fw-bold);
 
-  /* Type scale tokens not in Tailwind's default (11/13/15/22).
-     12/14/16/18 align with text-xs/text-sm/text-base/text-lg already. */
+  /* Theme bridges for custom scale keys and Tailwind's text-lg.
+     12/14/16 align with text-xs/text-sm/text-base already. */
   --text-2xs:               var(--fs-11); /* 11px */
   --text-2xs--line-height:  var(--lh-11); /* 16px */
   --text-13:                var(--fs-13); /* 13px */
   --text-13--line-height:   var(--lh-13); /* 20px */
   --text-15:                var(--fs-15); /* 15px */
   --text-15--line-height:   var(--lh-15); /* 22px */
+  --text-lg:                var(--fs-18); /* 18px */
+  --text-lg--line-height:   var(--lh-18); /* 28px */
   --text-22:                var(--fs-22); /* 22px */
   --text-22--line-height:   var(--lh-22); /* 30px */
 }

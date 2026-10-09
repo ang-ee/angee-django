@@ -30,6 +30,7 @@ RESOURCE_FIELD_WIDGETS = frozenset({
 ENUM_FIELD_WIDGETS = frozenset({"select", "tone"})
 """Widgets that pick one of an enum's own values; ``tone`` shows each in its colour."""
 
+
 def is_resource_field_widget(value: str) -> bool:
     """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
 

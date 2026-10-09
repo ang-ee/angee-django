@@ -13,6 +13,7 @@ import {
   type NavLinkVariant,
 } from "./nav-link";
 
+/** @deprecated Use `NavLinkVariant` and translate `default` to `inline`. */
 export type TextLinkVariant = "default" | "muted" | "block-card";
 
 const TEXT_LINK_VARIANTS = {
@@ -21,6 +22,7 @@ const TEXT_LINK_VARIANTS = {
   "block-card": "block-card",
 } as const satisfies Record<TextLinkVariant, NavLinkVariant>;
 
+/** @deprecated Use `NavLinkRecipeProps`. */
 export type TextLinkRecipeProps = Pick<NavLinkRecipeProps, "disabled"> & {
   variant?: TextLinkVariant;
 };
@@ -32,6 +34,7 @@ type TextLinkVariantOptions = Omit<
   variant?: TextLinkVariant;
 };
 
+/** @deprecated Use `navLinkVariants` with the translated variant. */
 export function textLinkVariants({
   class: classValue,
   className,
@@ -45,12 +48,14 @@ export function textLinkVariants({
   });
 }
 
-export type TextLinkProps = Omit<
-  NavLinkProps,
-  "active" | "affordance" | "to" | "variant"
-> & {
-  variant?: TextLinkVariant;
-};
+type TextLinkPropsFromNavLink<Props extends NavLinkProps> = Props extends unknown
+  ? Omit<Props, "active" | "affordance" | "to" | "variant"> & {
+      variant?: TextLinkVariant;
+    }
+  : never;
+
+/** @deprecated Use `NavLinkProps` with the translated variant. */
+export type TextLinkProps = TextLinkPropsFromNavLink<NavLinkProps>;
 
 /** @deprecated Use `NavLink` with the translated variant. */
 export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(

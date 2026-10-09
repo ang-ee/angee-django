@@ -1,5 +1,5 @@
 import { useEffect, useMemo, type ReactElement } from "react";
-import { Alert, Button, ControlBand, RadioGroupItem, RadioGroupRoot, SaveDiscardActions, SettingsSection, SettingsShell, ContainerOutlet, dirtyControlBandClassName, useAppRuntime, useAppearance, ThemePreviewFrame, useContainer, useLatestRef, useT, useUnsavedChangesNavigationGuard } from "@angee/ui";
+import { Alert, Button, ControlBand, RadioGroupItem, RadioGroupRoot, SaveDiscardActions, SettingsSection, SettingsShell, ContainerOutlet, dirtyControlBandClassName, textRoleVariants, useAppRuntime, useAppearance, ThemePreviewFrame, useContainer, useLatestRef, useT, useUnsavedChangesNavigationGuard } from "@angee/ui";
 import { parseThemeCustomization, resolveThemeOptions, type ColorScheme, type ThemeContribution, type ThemeCustomizationLogo, type ThemeOptionsEnvelope } from "@angee/ui/theme";
 import { useAppearanceT } from "../i18n";
 
@@ -32,7 +32,7 @@ export function AppearanceSettingsPage(): ReactElement {
       <Button className="ml-auto" variant="ghost" size="sm" loading={saving} onClick={() => void appearance.reset()}>{t("reset")}</Button>
     </ControlBand>
     <SettingsShell maxWidth="1100" gap="8">
-    <header className="grid gap-1"><h1 className="text-22 font-semibold text-fg">{t("title")}</h1><p className="text-13 text-fg-muted">{t("description")}</p></header>
+    <header className="grid gap-1"><h1 className={textRoleVariants({ role: "display" })}>{t("title")}</h1><p className="text-13 text-fg-muted">{t("description")}</p></header>
     {appearance.notice ? <Alert tone={appearance.notice === "theme-unavailable" ? "warning" : "danger"} title={appearance.notice === "theme-unavailable" ? t("unavailable") : appearance.notice === "options-invalid" ? t("invalidOptions") : t("unsupported")} /> : null}
     {appearance.error ? <Alert tone="danger" title={t("saveFailed")}>{appearance.error.message}</Alert> : null}
     <SettingsSection title={t("theme.title")} description={t("theme.description")}>

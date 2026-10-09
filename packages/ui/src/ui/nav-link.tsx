@@ -6,8 +6,6 @@ import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
 import { cardVariants } from "./card";
 
-export type NavLinkAffordance = "none" | "forward" | "outward";
-
 export const navLinkVariants = tv({
   base: "outline-none transition-colors focus-visible:focus-ring",
   variants: {
@@ -48,6 +46,8 @@ export const navLinkVariants = tv({
 
 export type NavLinkRecipeProps = VariantProps<typeof navLinkVariants>;
 
+export type NavLinkAffordance = NonNullable<NavLinkRecipeProps["affordance"]>;
+
 export type NavLinkVariant = NonNullable<NavLinkRecipeProps["variant"]>;
 
 export type NavLinkState = {
@@ -56,19 +56,34 @@ export type NavLinkState = {
   external: boolean;
 };
 
+type NavLinkTarget =
+  | {
+      asChild: true;
+      href?: string;
+      render?: UseRenderRenderProp<NavLinkState>;
+    }
+  | {
+      asChild?: boolean;
+      href: string;
+      render?: UseRenderRenderProp<NavLinkState>;
+    }
+  | {
+      asChild?: boolean;
+      href?: string;
+      render: UseRenderRenderProp<NavLinkState>;
+    };
+
 export type NavLinkProps = Omit<
   React.AnchorHTMLAttributes<HTMLAnchorElement>,
-  "className" | "color"
+  "className" | "color" | "href"
 > &
   NavLinkRecipeProps & {
     active?: boolean;
     affordance?: NavLinkAffordance;
-    asChild?: boolean;
     className?: string;
     disabled?: boolean;
-    render?: UseRenderRenderProp<NavLinkState>;
     to?: string;
-  };
+  } & NavLinkTarget;
 
 export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
   function NavLink(

@@ -231,6 +231,8 @@ The allowlist includes typography weights (integer 100–900), selected font siz
 colours, and motion durations (integer 0–1000ms). Easing is limited to the
 standard CSS keywords or `cubic-bezier(...)` with four finite numbers; chart
 colours retain the general safe token-value bounds above.
+The type scale is authored in pixels by design, and the theme validator enforces
+those bounds.
 
 Put complex authored design in a stylesheet listed by the definition. Every
 visual selector in that file must be gated by its theme ID, and asset paths must

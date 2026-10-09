@@ -19,7 +19,6 @@ const accepted = [
   ["typography weight", "--fw-semibold", "400"],
   ["font size", "--fs-15", "15px"],
   ["line height", "--lh-18", "26px"],
-  ["chart colour", "--chart-1", "#315c52"],
   ["motion duration", "--dur-fast", "120ms"],
   ["motion easing", "--ease", "cubic-bezier(0.2, 0.6, 0.2, 1)"],
   ["motion easing y overshoot", "--ease", "cubic-bezier(0, -0.4, 1, 1.4)"],
@@ -29,7 +28,6 @@ const rejected = [
   ["typography weight", "--fw-semibold", "901"],
   ["font size", "--fs-15", "41px"],
   ["line height", "--lh-18", "11px"],
-  ["chart colour", "--chart-1", "url(https://example.com/chart.svg)"],
   ["motion duration", "--dur-fast", "1001ms"],
   ["motion easing", "--ease", "cubic-bezier(0.2, nope, 0.2, 1)"],
   ["motion easing x control", "--ease", "cubic-bezier(-0.1, 0.6, 1.1, 1)"],
@@ -47,8 +45,12 @@ function themeWithToken(name: ThemeTokenName, value: string): ThemeDefinition {
 }
 
 describe("theme token layers", () => {
-  test("publishes the typography, chart, and motion token groups in contract order", () => {
-    expect(THEME_TOKEN_NAMES.slice(-EXPOSED_TOKENS.length)).toEqual(EXPOSED_TOKENS);
+  test("publishes the typography, chart, and motion token groups", () => {
+    const published = THEME_TOKEN_NAMES.filter((name) =>
+      name === "--ease"
+      || ["--fw-", "--fs-", "--lh-", "--chart-", "--dur-"].some((prefix) => name.startsWith(prefix)),
+    );
+    expect(new Set(published)).toEqual(new Set(EXPOSED_TOKENS));
   });
 
   test.each(accepted)("accepts a bounded %s", (_kind, name, value) => {

@@ -7,6 +7,13 @@ import { NavLink } from "./nav-link";
 
 afterEach(cleanup);
 
+test("requires href, asChild, or render to own the destination", () => {
+  // @ts-expect-error A bare NavLink would render an unfocusable anchor.
+  const bareLink = <NavLink>Bare</NavLink>;
+
+  expect(bareLink.type).toBe(NavLink);
+});
+
 test("accepts an optional href when a slotted anchor owns the destination", () => {
   render(<NavLink asChild><a href="/records/7">Slotted</a></NavLink>);
 
