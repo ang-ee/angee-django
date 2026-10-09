@@ -223,9 +223,16 @@ export default defineBaseAddon({
 
 Theme IDs are globally unique stable preference keys. Labels may change.
 Definitions use only the published semantic token allowlist; values are bounded
-and cannot contain CSS rules, URLs or declarations. Put complex authored design
-in a stylesheet listed by the definition. Every visual selector in that file
-must be gated by its theme ID, and asset paths must be local and relative:
+and cannot contain CSS rules, URLs or declarations.
+The allowlist includes typography weights (integer 100–900), selected font sizes
+(integer 10–40px) and line heights (integer 12–56px), chart series and surface
+colours, and motion durations (integer 0–1000ms). Easing is limited to the
+standard CSS keywords or `cubic-bezier(...)` with four finite numbers; chart
+colours retain the general safe token-value bounds above.
+
+Put complex authored design in a stylesheet listed by the definition. Every
+visual selector in that file must be gated by its theme ID, and asset paths must
+be local and relative:
 
 ```js
 stylesheets: ["./theme.css"]

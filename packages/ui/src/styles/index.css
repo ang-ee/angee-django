@@ -294,16 +294,6 @@
   --font-sans: var(--font-family-sans);
   --font-mono: var(--font-family-mono);
 
-  /* Type scale tokens not in Tailwind's default (11/13/15/22/28/34).
-     12/14/16/18 align with text-xs/text-sm/text-base/text-lg already. */
-  --text-2xs:               0.6875rem; /* 11px */
-  --text-2xs--line-height:  1rem;      /* 16px */
-  --text-13:                0.8125rem; /* 13px */
-  --text-13--line-height:   1.25rem;   /* 20px */
-  --text-15:                0.9375rem; /* 15px */
-  --text-15--line-height:   1.375rem;  /* 22px */
-  --text-22:                1.375rem;  /* 22px */
-  --text-22--line-height:   1.875rem;  /* 30px */
   --text-28:                1.75rem;   /* 28px */
   --text-28--line-height:   2.25rem;   /* 36px */
   --text-34:                2.125rem;  /* 34px */
@@ -320,6 +310,26 @@
   --shadow-md:      var(--elevation-md);
   --shadow-lg:      var(--elevation-lg);
   --shadow-popover: var(--elevation-popover);
+}
+
+/* Theme-authored typography must be referenced directly by the generated
+   utilities so overrides on a theme selector remain authoritative. */
+@theme inline {
+  --font-weight-normal:   var(--fw-regular);
+  --font-weight-medium:   var(--fw-medium);
+  --font-weight-semibold: var(--fw-semibold);
+  --font-weight-bold:     var(--fw-bold);
+
+  /* Type scale tokens not in Tailwind's default (11/13/15/22).
+     12/14/16/18 align with text-xs/text-sm/text-base/text-lg already. */
+  --text-2xs:               var(--fs-11); /* 11px */
+  --text-2xs--line-height:  var(--lh-11); /* 16px */
+  --text-13:                var(--fs-13); /* 13px */
+  --text-13--line-height:   var(--lh-13); /* 20px */
+  --text-15:                var(--fs-15); /* 15px */
+  --text-15--line-height:   var(--lh-15); /* 22px */
+  --text-22:                var(--fs-22); /* 22px */
+  --text-22--line-height:   var(--lh-22); /* 30px */
 }
 
 /* ============================================================================

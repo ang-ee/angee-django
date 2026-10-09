@@ -21,10 +21,18 @@ export const THEME_TOKEN_NAMES = Object.freeze([
   "--elevation-lg", "--elevation-popover", "--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12",
   "--r-full", "--rail-w", "--topbar-h", "--breadcrumbbar-h", "--controlpanel-h", "--chatter-w",
   "--control-h-sm", "--control-h-md", "--control-h-lg",
+  "--fw-regular", "--fw-medium", "--fw-semibold", "--fw-bold",
+  "--fs-15", "--lh-15", "--fs-18", "--lh-18", "--fs-22", "--lh-22",
+  "--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6", "--chart-7", "--chart-8",
+  "--chart-other", "--chart-surface",
+  "--dur-fast", "--dur-base", "--dur-slow", "--ease",
 ]);
 
 const TOKEN_SET = new Set(THEME_TOKEN_NAMES);
 const FORBIDDEN_VALUE = /[;{}@]|url\s*\(|expression\s*\(|!important/i;
+const INTEGER_VALUE = /^(?:0|[1-9]\d*)$/;
+const CSS_NUMBER_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+const EASING_KEYWORDS = new Set(["linear", "ease", "ease-in", "ease-out", "ease-in-out"]);
 
 export function defineTheme(definition) {
   assertThemeDefinition(definition);
@@ -496,7 +504,29 @@ function assertTokenLayer(layer, owner) {
   for (const [name, value] of entries) {
     if (!TOKEN_SET.has(name)) throw new TypeError(`Theme token ${name} in ${owner} is not public.`);
     if (typeof value !== "string" || value.length === 0 || value.length > 256 || FORBIDDEN_VALUE.test(value)) throw new TypeError(`Theme token ${name} in ${owner} has an unsafe value.`);
+    if (!isBoundedTokenValue(name, value)) throw new TypeError(`Theme token ${name} in ${owner} is outside its public bounds.`);
   }
+}
+
+function isBoundedTokenValue(name, value) {
+  if (name.startsWith("--fw-")) return boundedInteger(value, "", 100, 900);
+  if (name.startsWith("--fs-")) return boundedInteger(value, "px", 10, 40);
+  if (name.startsWith("--lh-")) return boundedInteger(value, "px", 12, 56);
+  if (name.startsWith("--dur-")) return boundedInteger(value, "ms", 0, 1000);
+  if (name !== "--ease") return true;
+  if (EASING_KEYWORDS.has(value)) return true;
+  const match = /^cubic-bezier\((.*)\)$/.exec(value);
+  if (!match) return false;
+  const points = match[1].split(",").map((point) => point.trim());
+  return points.length === 4 && points.every((point) => CSS_NUMBER_VALUE.test(point) && Number.isFinite(Number(point)));
+}
+
+function boundedInteger(value, suffix, minimum, maximum) {
+  if (!value.endsWith(suffix)) return false;
+  const integer = suffix ? value.slice(0, -suffix.length) : value;
+  if (!INTEGER_VALUE.test(integer)) return false;
+  const number = Number(integer);
+  return number >= minimum && number <= maximum;
 }
 
 function assertThemeOptions(id, options) {
