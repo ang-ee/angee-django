@@ -358,7 +358,11 @@ _FILE_RESOURCE = hasura_model_resource(
     ],
     insert=False,
     updatable=["filename", "title", "folder", "metadata"],
+    # A file reads as its title or filename; that computed label is not filterable,
+    # so lists and file pickers search the two columns behind it. The filename
+    # leads: every file has one, while a title is optional.
     record_representation="display_name",
+    record_search_fields=("filename", "title"),
     field_id_decode={
         "drive": public_pk_decoder(Drive),
         "folder": public_pk_decoder(Folder),

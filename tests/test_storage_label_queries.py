@@ -1,4 +1,4 @@
-"""Native SQL budgets for narrow File label selections."""
+"""File labels: native SQL budgets for narrow label selections, and the columns a label search reads."""
 
 from typing import Any
 
@@ -67,3 +67,17 @@ def test_file_labels_fetch_title_and_filename_with_authorized_rows(drive: Any, s
         assert result_data(execute_schema(schema, detail, {"id": str(row.sqid)}, user=drive.alice)) == {
             "files_by_pk": expected_label,
         }
+
+
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_file_search_reads_the_title_and_filename_behind_its_label(schema_name: str) -> None:
+    """The computed label is not filterable, so a file list's text search names the columns behind it."""
+
+    schema = addon_schema(storage_schema.schemas, schema_name)
+    files = {item.model_label: item for item in schema.angee_resources}["storage.File"]
+
+    assert files.record_representation == "display_name"
+    assert files.record_search_fields == ("filename", "title")
+    for name in files.record_search_fields:
+        search = files.query.fields[name].filter
+        assert search is not None and "iContains" in search.operators
