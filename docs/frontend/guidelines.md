@@ -1009,6 +1009,12 @@ addon that supplies the real ones removes them, as messaging does. Tab ids are
 namespaced like every child; `aliases` keeps a tab's former id working in
 `?chatterTab=` links for one release.
 
+A tab that lists one polymorphic edge (files, pages, source conversations)
+shows only where the record's type can carry it: its `when` checks the edge's
+model label in `context.route.recordEdges`, the resource metadata the backend
+derives from each edge's schema target relations. Never let a pane report the
+edge "unavailable" or offer writes on a type whose schema declares no arm.
+
 Tabs a page publishes with `useChatterContent` are runtime children of the same
 container. They follow the composed tabs and take the same narrowing. To keep
 the aside off a route, narrow `record#aside` with `only: []` under

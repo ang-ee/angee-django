@@ -1703,7 +1703,7 @@ describe("createApp resource route index", () => {
     ).toThrow(/schema metadata exposes no resources/);
   });
 
-  test("exposes inherited model and canonical labels on chatter record routes", async () => {
+  test("exposes inherited model and canonical labels and record edges on chatter record routes", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     history.replaceState(null, "", "/notes/abc");
@@ -1714,7 +1714,7 @@ describe("createApp resource route index", () => {
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
+        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordEdges?.join(",") ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
       );
     }
 
@@ -1741,14 +1741,14 @@ describe("createApp resource route index", () => {
       },
     ]);
     input.schemas = testSchemasWithConsoleResources([
-      { ...testDataResource("notes.Note"), canonicalLabel: "parties.Party" },
+      { ...testDataResource("notes.Note"), canonicalLabel: "parties.Party", recordEdges: ["storage.FileAttachment"] },
     ]);
     const app = createApp(input);
     const root = app.mount(host);
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note parties.Party id chatter.comments");
+        expect(host.textContent).toContain("notes.Note parties.Party storage.FileAttachment id chatter.comments");
       });
     } finally {
       root.unmount();

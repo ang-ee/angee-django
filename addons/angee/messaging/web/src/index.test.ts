@@ -21,6 +21,18 @@ describe("messaging addon manifest", () => {
     });
   });
 
+  test("offers the Sources tab only where the record's type can retain source conversations", () => {
+    const sources = (messaging.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.sources"]!;
+    const record = (recordEdges?: readonly string[]): ChatterViewContext => ({
+      pathname: "/records/rec_1", params: { id: "rec_1" },
+      route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", ...(recordEdges ? { recordEdges } : {}) },
+      view: { kind: "record", type: "example/record", sqid: "rec_1" },
+    });
+    expect(sources.content.when?.(record(["messaging.ThreadAttachment"]))).toBe(true);
+    expect(sources.content.when?.(record(["storage.FileAttachment"]))).toBe(false);
+    expect(sources.content.when?.(record())).toBe(false);
+  });
+
   test("registers the message resources", () => {
     expect((messaging.routes ?? []).map((route) => route.name)).toEqual([
       "messaging.publicWebforms",

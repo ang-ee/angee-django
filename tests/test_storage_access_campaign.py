@@ -43,7 +43,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])
-def test_record_files_query_requires_record_and_file_read_and_reports_arm(
+def test_record_files_query_requires_record_and_file_read_and_uploads_need_the_arm(
     drive: Any, monkeypatch: pytest.MonkeyPatch, schema_name: str,
 ) -> None:
     reader, stranger = create_user("record-files-reader"), create_user("record-files-stranger")
@@ -55,36 +55,29 @@ def test_record_files_query_requires_record_and_file_read_and_reports_arm(
         attachment = FileAttachment.objects.attach(file, drive)
     with actor_context(drive.alice):
         drive.with_actor(drive.alice).grant_record_access("viewer", reader)
-    assert not FileAttachment.objects.has_record_arm(generic_target(drive))
-    # The capability branch is isolated here; the native arm's actual presence
-    # is covered by record upload tests, and the file edge still scopes itself.
-    monkeypatch.setattr(FileAttachmentManager, "has_record_arm", lambda *_: True)
     schema = addon_schema(storage_schema.schemas, schema_name)
     query = """query ($model: String!, $id: ID!) {
       record_files(model_label: $model, record_id: $id) {
-        available can_upload attachments { id file { id filename } }
+        can_upload attachments { id file { id filename } }
       }
     }"""
     variables = {"model": "storage.Drive", "id": str(drive.sqid)}
+    listed = [{"id": str(attachment.sqid), "file": {"id": str(file.sqid), "filename": "attached.txt"}}]
+    # Drives accept attachments here but declare no record-file arm: the edges
+    # list, and record-scoped uploads are not offered even to the writer.
+    assert not FileAttachment.objects.has_record_arm(generic_target(drive))
+    no_arm = result_data(execute_schema(schema, query, variables, user=drive.alice))["record_files"]
+    assert no_arm == {"can_upload": False, "attachments": listed}
+    # The upload branch is isolated here; the native arm's actual presence is
+    # covered by record upload tests, and the file edge still scopes itself.
+    monkeypatch.setattr(FileAttachmentManager, "has_record_arm", lambda *_: True)
     visible = result_data(execute_schema(schema, query, variables, user=reader))["record_files"]
-    assert visible == {
-        "available": True, "can_upload": False,
-        "attachments": [],
-    }
+    assert visible == {"can_upload": False, "attachments": []}
     owner_view = result_data(execute_schema(schema, query, variables, user=drive.alice))["record_files"]
-    assert owner_view == {
-        "available": True, "can_upload": True,
-        "attachments": [{"id": str(attachment.sqid),
-                         "file": {"id": str(file.sqid), "filename": "attached.txt"}}],
-    }
+    assert owner_view == {"can_upload": True, "attachments": listed}
     assert result_data(execute_schema(schema, query, variables, user=stranger))["record_files"] == {
-        "available": False, "can_upload": False, "attachments": [],
+        "can_upload": False, "attachments": [],
     }
-    monkeypatch.undo()
-    no_arm = result_data(execute_schema(schema, query, {
-        "model": "storage.Drive", "id": str(drive.sqid),
-    }, user=drive.alice))["record_files"]
-    assert no_arm == {"available": False, "can_upload": False, "attachments": []}
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])

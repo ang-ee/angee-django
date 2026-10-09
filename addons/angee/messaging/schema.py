@@ -39,7 +39,12 @@ from angee.graphql.data import (
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import TrashedRefMixin
@@ -782,8 +787,11 @@ class RecordThreadActivityType(AngeeNode):
 
 
 @strawberry_django.type(ThreadAttachment)
-class ThreadAttachmentType(AngeeNode):
-    """GraphQL projection of a model-record thread attachment."""
+class ThreadAttachmentType(RecordReferenceNode):
+    """GraphQL projection of a model-record thread attachment.
+
+    The attached record's identity projects only while the reader can read it.
+    """
 
     role: auto
     label: auto
@@ -792,22 +800,12 @@ class ThreadAttachmentType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry.field(name="model_label")
-    def model_label(self) -> str:
-        """Return the attached target's model label (``app_label.ModelName``)."""
-
-        return cast(Any, self).record_model_label
-
-    @strawberry.field(name="record_id")
-    def record_id(self) -> strawberry.ID:
-        """Return the attached target's stable public id (its sqid).
-
-        A parent pointer back to the record — the ``ID`` scalar every record reference
-        uses (``RecordReferenceInput.record_id``); navigating it re-gates through the
-        target's own record read (an assignee not granted the record may 404).
-        """
-
-        return cast(strawberry.ID, cast(Any, self).record_public_id)
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry_django.type(ThreadFollower)
@@ -1497,7 +1495,8 @@ class MessagingQuery:
         record = _referenced_record(input)
         if record is None:
             return []
-        return list(ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk"))
+        edges = ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk")
+        return list(with_record_reference_access(edges))
 
     @strawberry.field(name="record_thread_unread_count")
     def record_thread_unread_count(

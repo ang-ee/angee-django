@@ -17,6 +17,7 @@ import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
 import {
   RECORD_UNREAD_COUNT_MODELS,
   RecordThreadUnreadCountDocument,
+  THREAD_ATTACHMENT_MODEL,
 } from "./documents";
 
 export { CHANNEL_MODEL, LogRecordActivityDocument } from "./documents";
@@ -141,7 +142,12 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
       },
       "messaging.sources": {
         sequence: 30,
-        content: { label: "Sources", icon: "inbox", aliases: ["sources"], render: (context) => <RecordSourceThreadsPane context={context} /> },
+        content: {
+          label: "Sources", icon: "inbox", aliases: ["sources"],
+          // Only on types whose schema lets a record retain source conversations.
+          when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
+          render: (context) => <RecordSourceThreadsPane context={context} />,
+        },
       },
     },
   },

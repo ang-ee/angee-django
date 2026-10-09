@@ -3,7 +3,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { RecordThreadStreamSource } from "@angee/messaging";
-import type { ChatterViewContext } from "@angee/ui";
 
 const sdk = vi.hoisted(() => ({
   query: vi.fn(), refetch: vi.fn(), createPage: vi.fn(), updateBody: vi.fn(), bind: vi.fn(),
@@ -34,15 +33,10 @@ vi.mock("@angee/messaging", () => ({
   },
 }));
 
-import { RecordNotesStream, recordNotesTab } from "./RecordNotesStream";
+import { RecordNotesStream } from "./RecordNotesStream";
 import { KnowledgeRecordNotes, KnowledgeUpdatePageBody, KnowledgeVault } from "./data/documents";
 
 const target = { modelLabel: "example.Record", recordId: "rec_1" };
-const context: ChatterViewContext = {
-  pathname: "/records/rec_1", params: { id: "rec_1" },
-  route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: target.modelLabel },
-  view: { kind: "record", type: "example/record", sqid: target.recordId },
-};
 
 let bindingData: {
   record_knowledge_can_bind: boolean;
@@ -125,20 +119,6 @@ test("empty stream keeps the host hint", () => {
     heading={{ label: "Notes", hint: "Visible to the invited team" }} />);
   expect(screen.getByText("No notes yet.")).toBeTruthy();
   expect(screen.getByText("Visible to the invited team")).toBeTruthy();
-});
-
-test("the tab renders the same role-scoped stream", () => {
-  const tab = recordNotesTab({ label: "Notes", role: "notes",
-    vault: "vlt_1", heading: { label: "Manager notes", hint: "For managers" } });
-  expect(tab.sequence).toBe(40);
-  const contribution = tab.content;
-  expect(contribution).toMatchObject({ label: "Notes", icon: "notes" });
-  expect(contribution.when?.(context)).toBe(true);
-  expect(contribution.when?.({ ...context, view: { kind: "list", type: "example/record" } })).toBe(false);
-  expect(recordNotesTab({ label: "Notes", role: "notes", vault: "vlt_1", when: () => false }).content.when?.(context)).toBe(false);
-  render(<>{contribution.render?.(context)}</>);
-  expect(screen.getByText("Manager notes")).toBeTruthy();
-  expect(screen.getByText(/First note: Details/)).toBeTruthy();
 });
 
 function lastChildSource(): Extract<RecordThreadStreamSource, { kind: "children" }> {

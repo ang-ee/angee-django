@@ -16,7 +16,10 @@ definition knowledge/record_binding {
 ```
 
 An undeclared type cannot be bound under an actor and its bindings stay
-unreadable; the binding grants no access by itself.
+unreadable; the binding grants no access by itself. The Pages tab shows only on
+record views of declared types (their resource metadata lists
+`knowledge.RecordBinding` in `recordEdges`), and `record_knowledge_can_bind`
+offers binding only on a declared type the actor can write.
 
 The tab is the `record#aside/knowledge.pages` child. The rendered addon exports
 `recordPagesTab({ label, role, sequence, when, aliases })`, which returns a
@@ -36,10 +39,9 @@ The record owner continues to own the permission arm and any narrowing of the
 aside.
 
 For dated, role-scoped notes, use `RecordNotesStream({ target, role, vault,
-heading, composer })` in a record section or `recordNotesTab({ label, role,
-vault, heading, composer, sequence, when })` as an aside child. `vault` is the public
-vault id. The stream reads page content through the binding query and offers its
-inline composer only when the record can be bound and that vault projects `write`.
+heading, composer })` in a record section. `vault` is the public vault id. The
+stream reads page content through the binding query and offers its inline
+composer only when the record can be bound and that vault projects `write`.
 It creates a note page, writes its markdown body, then binds it under `role`.
 The existing Pages tab keeps its binding and inline reader behavior.
 

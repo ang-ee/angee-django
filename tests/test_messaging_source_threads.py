@@ -17,7 +17,8 @@ from rebac import (
 from angee.messaging.testing.models import Thread, ThreadAttachment
 from angee.projects.testing.models import Project, Task
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
-from tests.conftest import create_user, vault_for
+from tests.conftest import create_user, execute_schema, result_data, vault_for
+from tests.test_messaging_graphql import _schema
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -74,6 +75,22 @@ def test_source_edge_takes_write_on_the_record_and_lists_in_one_scoped_statement
     with actor_context(owner):
         assert ThreadAttachment.objects.unbind_source_thread(task, thread) == 1
         assert ThreadAttachment.objects.unbind_source_thread(task, thread) == 0
+
+
+def test_source_threads_project_their_record_through_the_reference_gate(sourced: dict[str, Any]) -> None:
+    owner, reader, task, thread = sourced["owner"], sourced["reader"], sourced["task"], sourced["thread"]
+    with actor_context(owner):
+        edge = ThreadAttachment.objects.bind_source_thread(task, thread, label="Original request")
+    query = """query ($model: String!, $id: ID!) {
+      record_source_threads(input: { model_label: $model, record_id: $id }) {
+        id label record_model record_id thread { id }
+      }
+    }"""
+    rows = result_data(execute_schema(_schema(), query, {"model": "projects.Task", "id": str(task.sqid)}, user=reader))
+    assert rows["record_source_threads"] == [{
+        "id": str(edge.sqid), "label": "Original request", "record_model": "projects.Task",
+        "record_id": str(task.sqid), "thread": {"id": str(thread.sqid)},
+    }]
 
 
 def test_source_edge_refuses_undeclared_and_untyped_records(sourced: dict[str, Any]) -> None:

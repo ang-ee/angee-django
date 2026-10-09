@@ -8,7 +8,9 @@ import { useStorageT } from "./i18n";
 import { FileRecordPreview } from "./views/FilePreview";
 import { StorageUploadTasks } from "./views/StorageUploadTasks";
 
-const ATTACHMENT_MODELS = ["storage.FileAttachment"] as const;
+/** The edge a record carries its files through; resource metadata lists it where a type can. */
+export const FILE_ATTACHMENT_MODEL = "storage.FileAttachment";
+const ATTACHMENT_MODELS = [FILE_ATTACHMENT_MODEL] as const;
 
 /** The chatter tab's record, as the pane expects it. */
 export function recordFilesTarget(context: ChatterViewContext): RecordFilesTarget {
@@ -25,8 +27,7 @@ export function useRecordFilesCount(context: ChatterViewContext): number | undef
   const query = useAuthoredQuery(StorageRecordFiles, variables, {
     enabled: Boolean(modelLabel && recordId), models: ATTACHMENT_MODELS,
   });
-  const files = query.data?.record_files;
-  return files?.available ? files.attachments.length : undefined;
+  return query.data?.record_files.attachments.length;
 }
 
 /** The record whose attachments a pane lists. */
@@ -63,13 +64,12 @@ export function RecordFilesPane({ target }: { target: RecordFilesTarget }): Reac
     });
   }
 
-  if (filesQuery.isPending && !recordFiles) {
+  if (!recordFiles) {
+    if (filesQuery.error) return <ErrorBanner description={filesQuery.error.message} />;
     return <SkeletonStatus label={t("record.loading")} className="space-y-3 p-4">
       <Skeleton className="h-9" /><Skeleton className="h-12" /><Skeleton className="h-12" />
     </SkeletonStatus>;
   }
-  if (filesQuery.error && !recordFiles) return <ErrorBanner description={filesQuery.error.message} />;
-  if (!recordFiles?.available) return <EmptyState icon="file" title={t("record.unavailable")} />;
 
   const attachments = recordFiles.attachments;
   const selected = attachments.find((edge) => edge.file.id === selectedId);

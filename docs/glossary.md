@@ -192,6 +192,11 @@ tier (`master`, `install`, `demo`). Addons list resource files in their
 a GraphQL schema contribution for the frontend data-view layer. It is a UI/API
 surface, not an import file.
 
+**Record edge** — a polymorphic edge model (`RecordRefMixin`, such as
+`storage.FileAttachment`) whose schema relations declare the record types it
+may target. A data resource's `recordEdges` lists the edges its records can
+carry; record surfaces for one edge apply only there.
+
 **Resource query** — the executable query contract of a data resource. The
 backend finalizes `DataResourceQuery` against the composed schema; frontend
 `ResourceQuery` resolves filters, selections, ordering and group axes from it.

@@ -1,8 +1,10 @@
 # Record files
 
-Storage contributes a **Files** chatter tab on record routes. `record_files`
-returns attachments only when the actor can read the record and each file. The
-file keeps its own permissions; attaching it never grants file access.
+Storage contributes a **Files** chatter tab on the record routes of types that
+accept attachments: those whose resource metadata lists `storage.FileAttachment`
+in `recordEdges`. `record_files` returns attachments only when the actor can read
+the record and each file. The file keeps its own permissions; attaching it never
+grants file access.
 
 A record type accepts attachments once its owner declares it on
 `storage/file_attachment` from its `permissions.extends.zed`: one relation backed
@@ -31,7 +33,8 @@ definition storage/file {
 ```
 
 The model owner decides record read/write permissions. Storage checks the
-effective arm before accepting a record upload, and the tab uses the existing
-`file_upload_begin` record target with `visibility: RECORD`. The tab is the
+effective arm before accepting a record upload, `record_files` offers uploads
+(`can_upload`) only where it exists and the actor can write the record, and the
+tab uses the existing `file_upload_begin` record target with `visibility: RECORD`. The tab is the
 `record#aside/storage.files` child (`?chatterTab=files` still selects it); a product
 narrowing `record#aside` with `only` keeps it by listing `storage.files`.

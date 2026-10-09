@@ -1,10 +1,10 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { ErrorBanner, Skeleton, SkeletonStatus, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { ErrorBanner, Skeleton, SkeletonStatus } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
-import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
+import type { RecordPagesTarget } from "./RecordPagesPane";
 import {
   KnowledgeBindRecord, KnowledgeRecordNotes, KnowledgeUpdatePageBody, KnowledgeVault, KnowledgeVaultByName,
   PAGE_MODEL, PAGE_READ_MODELS, RECORD_BINDING_MODEL,
@@ -116,26 +116,4 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       onCreated: () => { void bindings.refetch(); },
     }} />
   </>;
-}
-
-export interface RecordNotesTabOptions extends Omit<RecordNotesStreamProps, "target"> {
-  label: string;
-  sequence?: number;
-  when?: ChatterTabContent["when"];
-}
-
-/** A record's role-scoped notes as a chatter tab, for an addon's `<model>#aside` or `record#aside`. */
-export function recordNotesTab(options: RecordNotesTabOptions): ContainerChild<ChatterTabContent> {
-  const { label, role, vault, heading, composer, sequence = 40, when } = options;
-  return {
-    sequence,
-    content: {
-      label, icon: "notes",
-      when: (context) => context.view.kind === "record"
-        && Boolean(context.route?.modelLabel && context.view.sqid)
-        && (when?.(context) ?? true),
-      render: (context) => <RecordNotesStream target={recordPagesTarget(context)} role={role}
-        vault={vault} heading={heading ?? { label }} composer={composer} />,
-    },
-  };
 }

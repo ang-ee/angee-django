@@ -91,7 +91,12 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
 
 @strawberry.type
 class RecordReferenceNode(AngeeNode):
-    """Project a generic reference only while its current target is readable."""
+    """Project a generic reference only while its current target is readable.
+
+    ``get_queryset`` batches the target read into the rows' own query. A row
+    loaded another way (a to-one fallback, a mutation result) answers the same
+    annotation on a one-row queryset under the current actor.
+    """
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet[Any], info: Info) -> models.QuerySet[Any]:
@@ -99,11 +104,20 @@ class RecordReferenceNode(AngeeNode):
 
     def reference_model(self) -> str | None:
         row = cast(Any, self)
-        return (row.record_model_label or None) if row._angee_record_readable else None
+        return (row.record_model_label or None) if _record_readable(row) else None
 
     def reference_id(self) -> PublicID | None:
         row = cast(Any, self)
-        return optional_public_id(row.record_public_id or None) if row._angee_record_readable else None
+        return optional_public_id(row.record_public_id or None) if _record_readable(row) else None
+
+
+def _record_readable(row: Any) -> bool:
+    """Return the row's batched target-read annotation, computing it once when absent."""
+
+    if "_angee_record_readable" not in row.__dict__:
+        rows = with_record_reference_access(read_scoped_queryset(type(row), current_actor()).filter(pk=row.pk))
+        row._angee_record_readable = bool(rows.values_list("_angee_record_readable", flat=True).first())
+    return bool(row._angee_record_readable)
 
 
 def actor_scoped_relation_expression(

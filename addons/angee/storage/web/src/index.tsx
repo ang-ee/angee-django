@@ -8,7 +8,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
-import { RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
+import { FILE_ATTACHMENT_MODEL, RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
 import { FileRecordPreview, filePreviewPageFromSearch } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
 import { fileForm } from "./views/file-form";
@@ -67,7 +67,8 @@ const storage = defineBaseAddon({
           label: "Files",
           icon: "file",
           aliases: ["files"],
-          when: (context) => context.view.kind === "record" && Boolean(context.route?.modelLabel && context.view.sqid),
+          // Only on types whose schema lets a record carry attachments.
+          when: (context) => context.route?.recordEdges?.includes(FILE_ATTACHMENT_MODEL) ?? false,
           useCount: useRecordFilesCount,
           render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
         },

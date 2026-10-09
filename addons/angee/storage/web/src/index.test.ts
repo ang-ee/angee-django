@@ -1,5 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem } from "@angee/ui";
+import type { BaseMenuItem, ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import { enStorageMessages } from "./i18n";
@@ -60,6 +60,18 @@ describe("storage addon manifest", () => {
     expect(enStorageMessages["settings.backends.description"]).toBe(
       "Infrastructure a drive is created against.",
     );
+  });
+
+  test("offers the Files tab only where the record's type carries file attachments", () => {
+    const tab = (storage.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["storage.files"]!;
+    const record = (recordEdges?: readonly string[]): ChatterViewContext => ({
+      pathname: "/records/rec_1", params: { id: "rec_1" },
+      route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", ...(recordEdges ? { recordEdges } : {}) },
+      view: { kind: "record", type: "example/record", sqid: "rec_1" },
+    });
+    expect(tab.content.when?.(record(["knowledge.RecordBinding", "storage.FileAttachment"]))).toBe(true);
+    expect(tab.content.when?.(record(["messaging.ThreadAttachment"]))).toBe(false);
+    expect(tab.content.when?.(record())).toBe(false);
   });
 
   test("registers its drive glyph", () => {

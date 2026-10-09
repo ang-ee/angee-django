@@ -142,6 +142,36 @@ def test_inbox_scopes_recipients_in_sql_and_batches_record_pointers(
     assert all(row["message"] is None for row in revoked)
 
 
+def test_thread_attachment_projects_its_record_only_to_the_record_reader(composed_tables, campaign_schema):
+    """A thread reader sees the attachment edge; its record's identity needs the record's own read."""
+    recipient = make_user("attachment-thread-reader")
+    with system_context(reason="test.messaging.graphql.attachment-record"):
+        record = ChatterDoc.objects.create(title="Gated record")
+        attachment = ThreadAttachment.objects.ensure_for_record(record)
+        message = Message.objects.create(thread=attachment.thread)
+        notice = ThreadNotification.objects.create(
+            message=message, thread=attachment.thread, attachment=attachment, user=recipient,
+        )
+    grant(attachment.thread, "reader", recipient)
+    query = "query { thread_notifications { attachment { label record_model record_id } } }"
+    mutation = """mutation Ack($id: ID!) {
+        mark_thread_notification_read(id: $id) { attachment { label record_model record_id } }
+    }"""
+    hidden = {"label": attachment.label, "record_model": None, "record_id": None}
+    assert result_data(execute_schema(campaign_schema, query, user=recipient))["thread_notifications"] == [
+        {"attachment": hidden},
+    ]
+    acked = result_data(execute_schema(campaign_schema, mutation, {"id": notice.sqid}, user=recipient))
+    assert acked["mark_thread_notification_read"]["attachment"] == hidden
+    grant(record, "reader", recipient)
+    shown = {"label": attachment.label, "record_model": "chatterdemo.ChatterDoc", "record_id": record.sqid}
+    assert result_data(execute_schema(campaign_schema, query, user=recipient))["thread_notifications"] == [
+        {"attachment": shown},
+    ]
+    acked = result_data(execute_schema(campaign_schema, mutation, {"id": notice.sqid}, user=recipient))
+    assert acked["mark_thread_notification_read"]["attachment"] == shown
+
+
 def test_notification_by_id_and_aggregate_use_recipient_permission(composed_tables, campaign_schema):
     recipient, owner = make_user("private-inbox"), make_user("thread-reader")
     with system_context(reason="test.messaging.graphql.inbox-scope"):
