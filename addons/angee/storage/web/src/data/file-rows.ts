@@ -59,6 +59,7 @@ export interface StorageFileRow extends Record<string, unknown> {
   upload_state: string;
   visibility: string;
   is_trashed: boolean;
+  created_at: string;
   updated_at: string;
   created_by_label: string | null;
   url: string;

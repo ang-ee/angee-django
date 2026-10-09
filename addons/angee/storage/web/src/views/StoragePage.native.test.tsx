@@ -38,7 +38,7 @@ const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
   return { id, title, filename: `${title}.bin`, url: "", drive: drive.id, folder: null,
     is_trashed: false, upload_state: "ready", visibility: "inherited", size_bytes: 1, mime_type: null,
-    created_by_label: "", updated_at: "2026-09-05T00:00:00Z" };
+    created_by_label: "", created_at: "2026-09-04T00:00:00Z", updated_at: "2026-09-05T00:00:00Z" };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
