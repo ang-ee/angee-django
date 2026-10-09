@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { InAppLinkProvider } from "../lib/in-app-link";
+import type { NumberFlowElement } from "@number-flow/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { InAppLinkProvider } from "../lib/in-app-link";
 import { MetricStrip, MetricTile } from "./MetricStrip";
 
 afterEach(() => cleanup());
@@ -44,6 +45,32 @@ describe("MetricStrip", () => {
     expect(value.className).toContain("leading-6");
     expect(value.className).toContain("tabular-nums");
     expect(value.closest("dd")?.parentElement?.className).toContain("gap-y-1");
+  });
+
+  test("formats a typed numeric value and forwards animation to NumberFlow", () => {
+    const expected = new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: 2,
+    }).format(1234.56);
+    const { container } = render(
+      <MetricTile
+        animate
+        format={{ maximumFractionDigits: 2 }}
+        label="Revenue"
+        numericValue={1234.56}
+        suffix=" total"
+        value="Fallback"
+      />,
+    );
+
+    const numberFlow = container.querySelector<NumberFlowElement>("number-flow-react");
+    expect(numberFlow).toBeTruthy();
+    const renderedValue = numberFlow?.shadowRoot
+      ? Array.from(numberFlow.shadowRoot.querySelectorAll(
+        '[part~="digit"] > :not([inert]), [part~="symbol"] > :not([inert])',
+      )).map((part) => part.textContent).join("")
+      : numberFlow?.textContent;
+    expect(renderedValue).toBe(`${expected} total`);
+    expect(numberFlow?.animated).toBe(true);
   });
 
   test("routes tile detail through the definition pair caption slot", () => {
