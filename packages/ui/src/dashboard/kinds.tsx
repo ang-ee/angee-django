@@ -16,6 +16,7 @@ import { ResourceViewProvider } from "../views/resource/resource-view-context";
 import { resourceViewPresetDefaults } from "../views/resource/model/favorites";
 import { useAppRuntime } from "../runtime/runtime";
 import { useUiT } from "../i18n";
+import { formatNumber } from "../lib/format-number";
 import type { ColumnDescriptor } from "../views/page";
 import { cellContent } from "../views/resource/list-body/cell-utils";
 import { useResourceRecordHrefLookup, useRouteHref } from "../runtime/runtime";
@@ -33,7 +34,7 @@ function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   const suffix = typeof props.spec.options.suffix === "string" ? props.spec.options.suffix : "";
   const value = props.data.value == null
     ? "—"
-    : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(props.data.value)}${suffix}`;
+    : `${formatNumber(props.data.value, { maximumFractionDigits: 2 })}${suffix}`;
   return (
     <DataState {...props} skeleton={<><Skeleton className="h-5 w-1/2" /><Skeleton className="h-8 w-2/3" /></>}>
       <MetricTile

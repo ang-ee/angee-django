@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { formatNumber } from "../lib/format-number";
 import { NumberField } from "../ui/number-field";
 import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
@@ -73,13 +74,13 @@ function NumberRead({
 }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
   return (
     <span className={textRoleVariants({ role: "value" })}>
-      {formatNumber(value)}
+      {formatNumber(value, { useGrouping: false, maximumFractionDigits: 20 })}
     </span>
   );
 }
 
 function NumberCell({ value }: WidgetRenderProps<NumericWidgetValue>): ReactElement {
-  return <span className={textRoleVariants({ numeric: true })}>{formatNumber(value) || "—"}</span>;
+  return <span className={textRoleVariants({ numeric: true })}>{formatNumber(value, { useGrouping: false, maximumFractionDigits: 20 }) || "—"}</span>;
 }
 
 export const integerWidget = {
@@ -103,9 +104,4 @@ function normaliseNumber(value: NumericWidgetValue | undefined): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
-}
-
-function formatNumber(value: NumericWidgetValue | undefined): string {
-  const number = normaliseNumber(value);
-  return number === null ? "" : String(number);
 }

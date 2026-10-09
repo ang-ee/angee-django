@@ -2,6 +2,7 @@
 // `tv` recipe factory every component recipe is built on.
 
 export { cn } from "./cn";
+export { formatNumber, numberFormatter, type NumberInput } from "./format-number";
 export { titleCase } from "./titleCase";
 export { rowValueAtPath } from "@angee/metadata";
 export { statusLabel } from "./labels";
