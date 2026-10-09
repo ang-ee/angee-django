@@ -48,19 +48,25 @@ export function textLinkVariants({
   });
 }
 
-type TextLinkPropsFromNavLink<Props extends NavLinkProps> = Props extends unknown
-  ? Omit<Props, "active" | "affordance" | "to" | "variant"> & {
-      variant?: TextLinkVariant;
-    }
-  : never;
-
-/** @deprecated Use `NavLinkProps` with the translated variant. */
-export type TextLinkProps = TextLinkPropsFromNavLink<NavLinkProps>;
+/**
+ * @deprecated Use `NavLinkProps` with the translated variant. Keeps TextLink's
+ * historical contract: `href` is optional on its own (NavLink requires a
+ * destination through `href`, `asChild`, or `render`).
+ */
+export type TextLinkProps = Omit<
+  Extract<NavLinkProps, { href: string }>,
+  "active" | "affordance" | "href" | "to" | "variant"
+> & {
+  href?: string;
+  variant?: TextLinkVariant;
+};
 
 /** @deprecated Use `NavLink` with the translated variant. */
 export const TextLink = React.forwardRef<HTMLElement, TextLinkProps>(
   function TextLink({ variant = "default", ...props }, ref) {
-    return <NavLink {...props} ref={ref} variant={TEXT_LINK_VARIANTS[variant]} />;
+    // The historical contract allowed a missing href; the canonical owner's
+    // destination union is satisfied by the compatibility cast only here.
+    return <NavLink {...(props as NavLinkProps)} ref={ref} variant={TEXT_LINK_VARIANTS[variant]} />;
   },
 );
 TextLink.displayName = "TextLink";
