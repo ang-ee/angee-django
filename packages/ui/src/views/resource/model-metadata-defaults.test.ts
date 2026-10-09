@@ -100,6 +100,13 @@ describe("resource metadata defaults", () => {
     expect(fieldsWithMetadataDefaults([{ name: "title", label: "Title" }], scoped)[0]?.label).toBe("Subject");
     expect(NOTE_METADATA.fields.title?.label).toBeUndefined();
   });
+  test("retains an authored subline path while resolving column metadata", () => {
+    const [column] = columnsWithMetadataDefaults(
+      [{ field: "title", subline: "vendor.name" }],
+      NOTE_METADATA,
+    );
+    expect(column?.subline).toBe("vendor.name");
+  });
   test("bare enum columns use the badge with metadata labels and scoped tones", () => {
     const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
       ...NOTE_METADATA.fields, status: { ...NOTE_METADATA.fields.status!, tones: { IN_REVIEW: "warning" } },

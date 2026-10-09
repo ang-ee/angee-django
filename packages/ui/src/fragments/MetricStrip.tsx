@@ -7,7 +7,6 @@ import { tv, type VariantProps } from "../lib/variants";
 import { Tag } from "../ui/badge";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
-import { textRoleVariants } from "../ui/text";
 import {
   DefinitionPair,
   definitionFromTuple,
@@ -30,7 +29,6 @@ export const metricStripVariants = tv({
     root: "grid gap-3 sm:grid-cols-2",
     tile: "min-w-0 shadow-none",
     value: "",
-    detail: cn(textRoleVariants({ role: "caption", truncate: true }), "m-0 mt-1"),
   },
   variants: {
     density: {
@@ -101,28 +99,26 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
     const link = useInAppLink(href, { ...props, onClick });
     const styles = metricStripVariants({ density, valueSize });
     const body = (
-      <>
-        <DefinitionPair
-          action={icon ? <IconTile icon={icon} size="md" /> : undefined}
-          density={density}
-          label={
-            density === "prominent" ? (
-              <Tag tone={tone ?? "neutral"}>{label}</Tag>
-            ) : (
-              label
-            )
-          }
-          orientation="stacked"
-          value={
-            valueSize === "lg" ? (
-              <span className={styles.value()}>{value}</span>
-            ) : (
-              value
-            )
-          }
-        />
-        {detail ? <p className={styles.detail()}>{detail}</p> : null}
-      </>
+      <DefinitionPair
+        action={icon ? <IconTile icon={icon} size="md" /> : undefined}
+        density={density}
+        detail={detail}
+        label={
+          density === "prominent" ? (
+            <Tag tone={tone ?? "neutral"}>{label}</Tag>
+          ) : (
+            label
+          )
+        }
+        orientation="stacked"
+        value={
+          valueSize === "lg" ? (
+            <span className={styles.value()}>{value}</span>
+          ) : (
+            value
+          )
+        }
+      />
     );
 
     if (href != null) {

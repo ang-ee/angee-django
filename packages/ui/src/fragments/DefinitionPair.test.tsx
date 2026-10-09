@@ -50,3 +50,20 @@ test("renders the declared empty value when the value is absent", () => {
 
   expect(screen.getByText("Not provided")).toBeTruthy();
 });
+
+test("renders muted caption detail after the value", () => {
+  render(
+    <DefinitionPair
+      detail="Acme Corp"
+      label="Amount"
+      orientation="stacked"
+      value="$1,234.00"
+    />,
+  );
+
+  const value = screen.getByText("$1,234.00");
+  const detail = screen.getByText("Acme Corp");
+  expect(detail.className).toContain("text-2xs");
+  expect(detail.className).toContain("text-fg-muted");
+  expect(value.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});

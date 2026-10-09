@@ -46,6 +46,14 @@ describe("MetricStrip", () => {
     expect(value.closest("dd")?.parentElement?.className).toContain("gap-y-1");
   });
 
+  test("routes tile detail through the definition pair caption slot", () => {
+    render(<MetricTile detail="Since last month" label="Revenue" value={24} />);
+    const detail = screen.getByText("Since last month");
+    expect(detail.className).toContain("text-2xs");
+    expect(detail.className).toContain("text-fg-muted");
+    expect(detail.parentElement?.querySelector("dd")?.textContent).toBe("24");
+  });
+
   test("a non-navigable tile renders no link", () => {
     render(<MetricTile label="Relations" value={3} />);
     expect(screen.queryByRole("link")).toBeNull();

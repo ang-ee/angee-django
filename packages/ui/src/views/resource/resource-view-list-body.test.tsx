@@ -2,7 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
-import { testDataResource, testQueryField } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
 import { afterEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
@@ -189,6 +189,65 @@ test("passes a column's status display to its cell widget", () => {
   );
 
   expect(screen.getByText("dot")).toBeTruthy();
+});
+
+test("renders a widget column's subline through the subline field widget", () => {
+  const renderPrimary = vi.fn(({ value, field }: WidgetRenderProps) => (
+    <span data-subline={field?.subline}>{String(value)}</span>
+  ));
+  const renderDetail = vi.fn(({ value }: WidgetRenderProps) => (
+    <span>{`Vendor: ${String(value)}`}</span>
+  ));
+  const baseMetadata = modelMetadata("vendor", "String");
+  const metadata: ModelMetadata = {
+    ...baseMetadata,
+    resource: {
+      ...baseMetadata.resource,
+      query: testResourceQuery({
+        fields: { vendor: testQueryField("vendor.name") },
+      }),
+    },
+    fields: {
+      ...baseMetadata.fields,
+      vendor: { ...baseMetadata.fields.vendor!, widget: "test.detail" },
+    },
+  };
+  render(
+    <AppRuntimeProvider runtime={{ widgets: {
+      "test.primary": { read: renderPrimary, cell: renderPrimary },
+      "test.detail": { read: renderDetail, cell: renderDetail },
+    } }}>
+      <ListCellContent
+        column={{
+          field: "amount",
+          header: "Amount",
+          subline: "vendor",
+          widget: "test.primary",
+        }}
+        metadata={metadata}
+        row={{ amount: 125, vendor: { name: "Acme Corp" } }}
+      />
+    </AppRuntimeProvider>,
+  );
+
+  expect(screen.getByText("125").getAttribute("data-subline")).toBe("vendor");
+  const detail = screen.getByText("Vendor: Acme Corp");
+  expect(detail.parentElement?.className).toContain("text-fg-muted");
+  expect(screen.getByText("Amount").classList.contains("sr-only")).toBe(true);
+});
+
+test("renders a plain column's subline beneath its primary value", () => {
+  render(
+    <ListCellContent
+      column={{ field: "reference", header: "Reference", subline: "vendor.name" }}
+      row={{ reference: "INV-001", vendor: { name: "Acme Corp" } }}
+    />,
+  );
+
+  const primary = screen.getByText("INV-001");
+  const detail = screen.getByText("Acme Corp");
+  expect(detail.className).toContain("text-fg-muted");
+  expect(primary.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 test("to-many relation cells link each retained record label without another read", () => {

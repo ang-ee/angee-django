@@ -1,25 +1,30 @@
 import * as React from "react";
 
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "../ui/section-eyebrow";
+import { textRoleVariants } from "../ui/text";
 
 export const definitionPairVariants = tv({
   slots: {
     root: "min-w-0",
     label: sectionEyebrowVariants({ tracking: "normal", weight: "medium" }),
     value: "m-0 min-w-0 text-fg",
+    detail: cn(textRoleVariants({ role: "caption", truncate: true }), "m-0 min-w-0"),
     action: "ml-2 inline-flex align-middle",
   },
   variants: {
     orientation: {
       inline: {
         label: "normal-case",
+        detail: "col-start-2",
       },
       stacked: {
         root:
           "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1",
         label: "col-start-1 row-start-1 self-center",
         value: "col-span-2 col-start-1 row-start-2",
+        detail: "col-span-2 col-start-1 row-start-3",
         action: "col-start-2 row-start-1 ml-0 self-center",
       },
     },
@@ -39,6 +44,7 @@ export const definitionPairVariants = tv({
         root: "gap-y-3",
         label: "contents normal-case tracking-normal",
         value: "truncate text-2xl font-semibold tabular-nums",
+        detail: "-mt-2",
       },
     },
   },
@@ -97,9 +103,11 @@ export type DefinitionPairProps = Omit<
 > &
   DefinitionPairRecipeProps & {
     action?: React.ReactNode;
-    /** `dl` emits a dt/dd pair; `div` emits aria-associated divs. */
+    /** `dl` emits a dt/dd definition group; `div` emits aria-associated divs. */
     as?: DefinitionPairElement;
     className?: string;
+    /** Muted caption content rendered after the value. */
+    detail?: React.ReactNode;
     emptyValue?: React.ReactNode;
     label: React.ReactNode;
     value?: React.ReactNode;
@@ -139,6 +147,7 @@ export const DefinitionPair = React.forwardRef<
     as = "dl",
     className,
     density = "compact",
+    detail,
     emptyValue = "-",
     label,
     layout = "grid",
@@ -152,6 +161,7 @@ export const DefinitionPair = React.forwardRef<
   const styles = definitionPairVariants({ density, layout, orientation });
   const LabelElement = as === "div" ? "div" : "dt";
   const ValueElement = as === "div" ? "div" : "dd";
+  const DetailElement = as === "div" ? "div" : "dd";
   const labelId = as === "div" ? generatedLabelId : undefined;
   const actionElement = action ? (
     <span className={styles.action()}>{action}</span>
@@ -176,6 +186,11 @@ export const DefinitionPair = React.forwardRef<
           value ?? emptyValue
         )}
       </ValueElement>
+      {detail != null ? (
+        <DetailElement aria-labelledby={labelId} className={styles.detail()}>
+          {detail}
+        </DetailElement>
+      ) : null}
     </div>
   );
 });

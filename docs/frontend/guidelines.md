@@ -379,9 +379,9 @@ shared UI copy through an addon bundle.
   a cell that needs only aligned figures uses the `numeric` modifier.
 - **Definition pairs have one owner.**
   [`DefinitionPair`](../../packages/ui/src/fragments/DefinitionPair.tsx) owns one
-  label, value, and optional action. Collections keep their own structure:
-  `MetaGrid` owns its shared label column, while metric tiles own their cards,
-  links, icons, and details.
+  label, value, optional muted detail, and optional action. Collections keep
+  their own structure: `MetaGrid` owns its shared label column, while metric
+  tiles own their cards, links, and icons.
 - Implementation inspection reuses field-owned choice metadata. Platform owns
   the registered-type catalogue and source viewer; configured records and domain
   contracts stay with their addon. Render declared configuration with the

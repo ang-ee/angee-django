@@ -2,13 +2,15 @@ import * as React from "react";
 import { type CellContext, type Column as TableColumn, type ColumnDef, type Row as TableRow } from "@tanstack/react-table";
 import { resourceOrderFieldForPath, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
-import { useUiT } from "../../../i18n";
-import { useResolvedWidget } from "../../../widgets";
+import { DefinitionPair } from "../../../fragments/DefinitionPair";
+import { useUiT, type UiTranslate } from "../../../i18n";
+import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, readPath } from "./cell-utils";
 import { groupLabel, tableGroupAxes } from "./grouping";
 import { queryForColumns } from "../resource-query";
+import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 export interface BuildColumnsOptions {
   groupStack?: readonly ResourceViewGroup[];
   metadata?: ModelMetadata | null;
@@ -124,18 +126,58 @@ export function ListCellContent<TRow extends Row>({
 }): React.ReactNode {
   const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
+  const sublineColumn = column.subline
+    ? columnsWithMetadataDefaults<TRow>(
+        [{
+          field: column.subline,
+          ...(metadata?.resource.query.fields[column.subline]
+            ? { queryField: metadata.resource.query.fields[column.subline] }
+            : {}),
+        }],
+        metadata ?? null,
+      )[0]
+    : undefined;
+  const sublineWidget = useResolvedWidget(sublineColumn?.widget ?? "");
   if (column.showWhen && !column.showWhen(row)) return null;
+  const primary = resolvedCellContent(column, row, t, metadata, widget);
+  if (!sublineColumn) return primary;
+  return (
+    <DefinitionPair
+      as="div"
+      density="cell"
+      detail={resolvedCellContent(
+        sublineColumn,
+        row,
+        t,
+        metadata,
+        sublineWidget,
+      )}
+      label={<span className="sr-only">{column.header ?? column.field}</span>}
+      orientation="stacked"
+      value={primary}
+    />
+  );
+}
+
+function resolvedCellContent<TRow extends Row>(
+  column: ColumnDescriptor<TRow>,
+  row: TRow,
+  t: UiTranslate,
+  metadata: ModelMetadata | null | undefined,
+  widget: WidgetDefinition | undefined,
+): React.ReactNode {
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
     return (
       <Cell
-        value={readPath(row, column.field)}
+        value={readPath(row, column.queryField?.row?.path ?? column.field)}
         row={row}
         field={{
           name: column.field,
           label: column.header,
           options: column.options,
           tone: column.tone,
+          ...(column.subline ? { subline: column.subline } : {}),
           ...(column.currencyField ? { currencyField: column.currencyField } : {}),
           ...(column.statusDisplay ? { statusDisplay: column.statusDisplay } : {}),
         }}
