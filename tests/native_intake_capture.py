@@ -22,6 +22,7 @@ from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
+from angee.parties.mixins import LinkSource
 
 
 class HasuraFilterDeclarationTests(TransactionTestCase):
@@ -205,7 +206,9 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
                 platform="email",
                 value="customer@example.com",
             )
-            apps.get_model("parties", "PartyHandle").objects.link(party, handle, is_confirmed=True)
+            apps.get_model("parties", "PartyHandle").objects.link(
+                party, handle, source=LinkSource.MANUAL, is_confirmed=True
+            )
         task_model = apps.get_model("projects", "Task")
         with patch.object(
             task_model, "validate_record_access_subject", side_effect=RecordAccessSubjectRefused()

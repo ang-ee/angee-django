@@ -480,6 +480,18 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 class PartyHandleQuerySet(AngeeQuerySet):
     """Require association mutations to pass through the resolution owner."""
 
+    def asserted(self) -> Self:
+        """Keep links a directory card or a person asserted, never an unreviewed inference.
+
+        A ``carddav`` link restates its own card and a ``manual`` link was added by
+        a person; every other source is a suggestion until a human confirms it. A
+        dismissed link is the durable anti-link and asserts nothing.
+        """
+
+        return self.filter(is_dismissed=False).filter(
+            Q(is_confirmed=True) | Q(source__in=(LinkSource.CARDDAV, LinkSource.MANUAL))
+        )
+
     def readable_party_name_expression(self, *, actor: Any) -> Any:
         """Return the linked Party label only when ``actor`` can read it."""
 
@@ -828,19 +840,22 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         handle: Any,
         *,
         confidence: float = 1.0,
-        source: LinkSource = cast(LinkSource, LinkSource.MANUAL),
+        source: LinkSource,
         is_confirmed: bool = False,
         metadata: dict[str, Any] | None = None,
         created_by_id: Any = None,
     ) -> Any:
         """Link ``handle`` to ``party`` with ``confidence``, then resolve the handle's owner.
 
-        ``is_confirmed`` records a human-strength decision (a connect flow claiming
-        the signed-in user's own handle); it upgrades an existing weaker link to the
-        confirmed self-link. Resolution only re-runs when the link is new, upgraded,
-        or the handle's owner is not already this party, so a re-sync of an unchanged
-        contact does no extra work. Source metadata merges onto the existing link so
-        a later importer can add provenance without erasing prior evidence.
+        Every caller declares ``source``: provenance decides whether the link is an
+        assertion a directory card may publish or a suggestion awaiting review (see
+        :meth:`PartyHandleQuerySet.asserted`). ``is_confirmed`` records a
+        human-strength decision (a connect flow claiming the signed-in user's own
+        handle); it upgrades an existing weaker link to the confirmed self-link.
+        Resolution only re-runs when the link is new, upgraded, or the handle's owner
+        is not already this party, so a re-sync of an unchanged contact does no extra
+        work. Source metadata merges onto the existing link so a later importer can
+        add provenance without erasing prior evidence.
         """
 
         with transaction.atomic():
@@ -1913,6 +1928,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         Explicitly bound value queries read related scalar facts in bulk. The
         shared contact projection owns canonical ordering and JSON encoding.
+        Contact points are only the person's asserted links: a suggestion stays
+        inside Angee until a human confirms it, so it is never written to a card.
         """
 
         people = tuple(apps.get_model("parties", "Person").objects.filter(pk__in=[row.pk for row in people]))
@@ -1923,9 +1940,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         handles: dict[Any, dict[str, list[tuple[str, str, bool]]]] = defaultdict(lambda: defaultdict(list))
         for row in (
             apps.get_model("parties", "PartyHandle")
-            .objects.filter(
-                party_id__in=ids, is_dismissed=False, handle__platform__in=(platforms.EMAIL, platforms.PHONE)
-            )
+            .objects.asserted()
+            .filter(party_id__in=ids, handle__platform__in=(platforms.EMAIL, platforms.PHONE))
             .values("party_id", "handle__platform", "handle__value", "handle__label", "handle__is_preferred")
         ):
             handles[row["party_id"]][row["handle__platform"]].append(
@@ -1968,7 +1984,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 uid=person.source_uid,
                 etag=person.source_etag,
                 raw_vcard=person.raw_vcard,
-                display_name=person.display_name,
+                # ingest_contact stores the placeholder for a nameless card; the card stays nameless.
+                display_name="" if person.display_name == person.PLACEHOLDER_NAME else person.display_name,
                 name_prefix=person.name_prefix,
                 given_name=person.given_name,
                 additional_name=person.additional_name,
