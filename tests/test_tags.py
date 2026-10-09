@@ -36,7 +36,7 @@ from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
 from angee.base.identity import public_id_for
-from angee.messaging.testing.models import Message, Party, Person, Thread
+from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema
 from angee.tags.models import TaggedModel
@@ -512,6 +512,24 @@ def test_a_type_no_relation_names_cannot_be_tagged(party_edge: SimpleNamespace) 
         assert not TagAssignment.objects.exists()
 
 
+def test_a_handle_carries_its_own_tags_under_its_writer(party_edge: SimpleNamespace) -> None:
+    """A handle's writer tags it apart from its party; only its readers see the edge."""
+
+    with system_context(reason="tags test handle"):
+        handle = Handle.objects.create(
+            platform="email", value="billing@example.test", party=party_edge.party, created_by=party_edge.owner,
+        )
+    handle_address = ("parties/handle", public_id_for(Handle, handle.pk))
+    with actor_context(party_edge.outsider), pytest.raises(ValueError):
+        TagAssignment.objects.attach(*handle_address, [party_edge.tag.sqid])
+    with actor_context(party_edge.owner):
+        TagAssignment.objects.attach(*handle_address, [party_edge.tag.sqid])
+        assert [edge.tag_id for edge in TagAssignment.objects.for_record(handle)] == [party_edge.tag.pk]
+        assert not TagAssignment.objects.for_record(party_edge.party).exists()
+    with actor_context(party_edge.outsider):
+        assert not TagAssignment.objects.exists()
+
+
 def test_attaching_across_mti_levels_shares_one_edge(party_edge: SimpleNamespace) -> None:
     """A tag addressed at a person and at its party resolves to one edge on the party.
 
@@ -537,12 +555,23 @@ def test_attaching_across_mti_levels_shares_one_edge(party_edge: SimpleNamespace
         assert objects.for_target(*party_address).count() == 1
 
 
-def _tag_errors(errors: list[Any]) -> list[Any]:
-    return [error for error in errors if error.id.startswith("tags.")]
-
-
 def _taggable_test_models() -> set[type[Any]]:
-    return {File, Message, Page, Party, Project, Task, Thread}
+    return {File, Handle, Message, Page, Party, Project, Task, Thread}
+
+
+def _tag_errors(errors: list[Any]) -> list[Any]:
+    """The check's findings about the framework's taggable models and the edge's relations.
+
+    Other test modules register concrete fixtures of taggable sources (a task
+    under a demo type) that declare no relation; the check rightly reports them,
+    so these tests read only the findings about the models they assert on.
+    """
+
+    owned = _taggable_test_models()
+    return [
+        error for error in errors
+        if error.id.startswith("tags.") and (error.obj in owned or error.obj is TagAssignment)
+    ]
 
 
 def test_the_check_accepts_matching_taggable_models_and_relations(composed_permissions: None) -> None:
@@ -600,7 +629,7 @@ def test_the_check_reports_tagged_model_placement(monkeypatch: pytest.MonkeyPatc
     strays = (MisplacedChild, Untyped)
     installed = apps.get_models
     monkeypatch.setattr(apps, "get_models", lambda *args, **kwargs: [*installed(*args, **kwargs), *strays])
-    placement = [error for error in TagAssignment.check() if error.id == "tags.E001"]
+    placement = [error for error in TagAssignment.check() if error.id == "tags.E001" and error.obj in strays]
 
     assert [error.obj for error in placement] == [MisplacedChild, Untyped]
     assert f"tagged as {MtiParent._meta.label}" in placement[0].msg

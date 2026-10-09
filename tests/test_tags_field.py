@@ -44,6 +44,7 @@ _PICKED_CONSOLE_NODES = (
     ("angee.parties.schema", "PartyTags"),
     ("angee.parties.schema", "PersonTags"),
     ("angee.parties.schema", "OrganizationTags"),
+    ("angee.parties.schema", "HandleTags"),
 )
 
 
@@ -96,7 +97,7 @@ def test_shared_public_nodes_stay_untagged() -> None:
     assert str(console.get_type("FileType").fields["tags"].type) == "[TagType!]!"
     public = _addon_schemas(parties_schema, "public").build("public")._schema
     console = _addon_schemas(parties_schema, "console").build("console")._schema
-    for name in ("PartyType", "PersonType", "OrganizationType"):
+    for name in ("PartyType", "PersonType", "OrganizationType", "HandleType"):
         assert "tags" not in public.get_type(name).fields
         assert str(console.get_type(name).fields["tags"].type) == "[TagType!]!"
 

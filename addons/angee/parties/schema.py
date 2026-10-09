@@ -958,6 +958,11 @@ class OrganizationTags(TaggedNode):
     """Console-only tags on an organization, which its party carries."""
 
 
+@strawberry_django.type(Handle, name="HandleType", extend=True)
+class HandleTags(TaggedNode):
+    """Console-only tags on a handle; its resource takes no writes, so the ``tag`` verbs write them."""
+
+
 _RESOURCE_TYPES = [
     *_PARTY_RESOURCE.types,
     *_PERSON_RESOURCE.types,
@@ -1046,7 +1051,7 @@ schemas = {
             changes(MergeVeto, field="mergeVetoChanged"),
             changes(Relationship, field="relationshipChanged"),
         ],
-        "type_extensions": [PartyTags, PersonTags, OrganizationTags],
+        "type_extensions": [PartyTags, PersonTags, OrganizationTags, HandleTags],
         "input_extensions": [
             *tags_input_extensions(_PARTY_RESOURCE),
             *tags_input_extensions(_PERSON_RESOURCE),

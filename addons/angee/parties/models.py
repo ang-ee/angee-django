@@ -458,14 +458,15 @@ class Organization(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/organization"
 
 
-class Handle(AuditMixin, AngeeDataModel):
+class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
     idempotent. ``party`` is the resolved owner the :class:`PartyHandle` manager
     materialises; it is null until a handle is linked, so a handle synced for an
-    unknown sender is still a valid row.
+    unknown sender is still a valid row. A handle carries tags of its own, apart
+    from its party's (a consumer marks a company's accounts-payable address).
     """
 
     runtime = True
