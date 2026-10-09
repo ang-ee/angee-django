@@ -236,7 +236,8 @@ workspaces:
 # Jobs finish successfully before their dependents start. Re-running the entry
 # job with chained_restart applies this same graph to the running application.
 # `manage.py angee provision` owns runtime preparation and the fresh
-# post-build process boundary.
+# post-build process boundary. Development loads demo data; production serving
+# runs with DEBUG off, where the resource loader refuses demo data, so it loads none.
 jobs:
 {% if stack_flavor == "framework" %}
   # Install at the host's JS workspace owner, including its addon packages.
@@ -265,7 +266,7 @@ jobs:
       - sh
       - "-c"
       - >-
-        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--demo --force-rebac{% else %}--bootstrap-admin{% endif %}
+        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}{% if effective_serve_mode == "production" %}--force-rebac{% else %}--demo --force-rebac{% endif %}{% else %}--bootstrap-admin{% endif %}
     depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator{% if stack_flavor == "framework" %}, deps{% endif %}]
 {% endif %}
 

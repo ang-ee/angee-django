@@ -1849,6 +1849,15 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
     ]
 
 
+def test_production_provision_loads_no_demo_data() -> None:
+    """Production serving runs with DEBUG off, where demo data is refused; development loads it."""
+
+    production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
+    assert production["command"][-1].endswith("python manage.py angee provision --force-rebac")
+    development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
+    assert development["command"][-1].endswith("python manage.py angee provision --demo --force-rebac")
+
+
 def test_localhost_production_frontend_needs_no_edge_lookup() -> None:
     stack = _render_dev_stack(_runtime_mode="docker", serve_mode="production")
     command = stack["services"]["frontend"]["command"][-1]
