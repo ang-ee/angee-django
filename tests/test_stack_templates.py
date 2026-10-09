@@ -132,16 +132,15 @@ def _render_stack_manifest(
 
 
 def _inline_includes(manifest_path: Path) -> str:
-    """Splice each ``{% include "rel" %}`` with the file at ``rel`` from the loader base.
+    """Splice each ``{% include "rel" %}`` with the file at ``rel`` from the template root.
 
-    The operator's pongo2 loader resolves an include against its base directory —
-    the template's ``_subdirectory`` root (``<template>/template/``) — NEVER the
-    including file's own directory (copier-go renders file content ``FromString``,
-    so the include has no origin path). The dev manifest sits one level below the
-    subdirectory root; resolving file-relative here would pin the wrong contract.
+    Copier resolves an include name against the template root — the directory
+    holding ``copier.yml`` — NEVER the including file's own directory or the
+    ``_subdirectory`` copy root; ``_angee.include_root`` only widens where an
+    include may read. Resolving any other way here would pin the wrong contract.
     """
 
-    base = _template_subdirectory(manifest_path)
+    base = _template_root(manifest_path)
     active: set[Path] = set()
 
     def inline(path: Path) -> str:
@@ -164,13 +163,13 @@ def _inline_includes(manifest_path: Path) -> str:
     return inline(manifest_path)
 
 
-def _template_subdirectory(manifest_path: Path) -> Path:
-    """Return the template's ``_subdirectory`` root (the pongo2 loader base)."""
+def _template_root(manifest_path: Path) -> Path:
+    """Return the template root: the nearest ancestor holding ``copier.yml``."""
 
     for ancestor in manifest_path.parents:
-        if ancestor.name == "template" and (ancestor.parent / "copier.yml").exists():
+        if (ancestor / "copier.yml").exists():
             return ancestor
-    raise AssertionError(f"no template _subdirectory above {manifest_path}")
+    raise AssertionError(f"no template root above {manifest_path}")
 
 
 def _strip_jinja_comments(text: str) -> str:
@@ -592,14 +591,17 @@ def test_both_stacks_render_from_one_shared_body() -> None:
     dev_text = DEV_TEMPLATE.read_text(encoding="utf-8")
     local_text = LOCAL_TEMPLATE.read_text(encoding="utf-8")
 
-    # pongo2 resolves includes from the template's `_subdirectory` root (the loader
-    # base), never the including file's dir — so BOTH templates use the same `../..`
-    # hop count even though dev's manifest sits one level deeper.
-    assert '{% include "../../_shared/stack-body.yaml.jinja" %}' in dev_text
-    assert '{% include "../../_shared/stack-body.yaml.jinja" %}' in local_text
-    dev_include = (_template_subdirectory(DEV_TEMPLATE) / "../../_shared/stack-body.yaml.jinja").resolve()
-    local_include = (_template_subdirectory(LOCAL_TEMPLATE) / "../../_shared/stack-body.yaml.jinja").resolve()
+    # Copier resolves includes from the template root that holds copier.yml, never
+    # the including file's dir or the `_subdirectory` copy root — so BOTH templates
+    # name `../_shared/`, the root's sibling; `_angee.include_root` lets them read it.
+    assert '{% include "../_shared/stack-body.yaml.jinja" %}' in dev_text
+    assert '{% include "../_shared/stack-body.yaml.jinja" %}' in local_text
+    dev_include = (_template_root(DEV_TEMPLATE) / "../_shared/stack-body.yaml.jinja").resolve()
+    local_include = (_template_root(LOCAL_TEMPLATE) / "../_shared/stack-body.yaml.jinja").resolve()
     assert dev_include == SHARED_BODY == local_include
+    for copier_path in (DEV_COPIER, LOCAL_COPIER):
+        include_root = yaml.safe_load(copier_path.read_text(encoding="utf-8"))["_angee"]["include_root"]
+        assert SHARED_BODY.is_relative_to((copier_path.parent / include_root).resolve())
 
     dev = _render_dev_stack()
     dev_docker = _render_dev_docker_stack()
@@ -629,7 +631,7 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
         assert contract in instructions
 
     for agents_template, restart_job in ((DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "provision")):
-        include = f'{{% include "../../_shared/AGENTS.md.jinja" with restart_job="{restart_job}" %}}'
+        include = f'{{% include "../_shared/AGENTS.md.jinja" with restart_job="{restart_job}" %}}'
         assert agents_template.read_text(encoding="utf-8").strip() == include
 
     for claude_template in (DEV_CLAUDE_TEMPLATE, LOCAL_CLAUDE_TEMPLATE):

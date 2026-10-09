@@ -1,6 +1,6 @@
 {# stacks/dev wrapper: framework-dev stack. Set the flavor axis + address #}
 {# variables, then include the one shared manifest body. The include path resolves #}
-{# from the template's `_subdirectory` root (the renderer's loader base). #}
+{# from the template root that holds copier.yml, as Copier resolves includes. #}
 {% set stack_flavor = "framework" %}
 {% set ingress_domain_value = ingress_domain %}
 {# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}
@@ -24,4 +24,4 @@
 {% set operator_bind = "0.0.0.0" %}
 {% set pgdata_mount = "./data/pgdata" %}
 {% if runtime_mode == "docker" %}{% set uv_cache_dir = "/app/caches/uv" %}{% endif %}
-{% include "../../_shared/stack-body.yaml.jinja" %}
+{% include "../_shared/stack-body.yaml.jinja" %}

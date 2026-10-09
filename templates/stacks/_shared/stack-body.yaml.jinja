@@ -255,7 +255,7 @@ jobs:
   # Bootstrap the addon dependency group before Django imports, then let the
   # provision command own its lifecycle and database wait in a fresh interpreter.
   provision:
-{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
@@ -271,7 +271,7 @@ jobs:
 
   # Codegen consumes both the provisioned Django SDL and this live daemon SDL.
   operator-schema:
-{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "operator_schema"]
 {% else %}    command: ["sh", "-c", "{{ python_sync }}exec python manage.py operator_schema"]
 {% endif %}    depends_on: [operator, provision]
@@ -393,7 +393,7 @@ services:
 {% endif %}{% endif %}
   # Each container syncs its own venv; the provision job already prepared the host.
   django:
-{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
 {% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     ready:
       tcp: { port: {{ django_port }} }
@@ -424,7 +424,7 @@ services:
 {% for role in "worker,"|add:celery_queues|split:"," %}{% if role %}
   # Dedicated queue workers retain their own pool and concurrency policy.
   celery-{{ role }}:
-{% include "../../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
 {% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
@@ -554,4 +554,4 @@ services:
     command: ["--headless", "--browser", "chromium", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931", "--allowed-hosts", "*", "--user-data-dir", "/data/profile"]
     after: [frontend]
     route: { port: 8931, auth: forward }
-{% endif %}{% endif %}{% if stack_flavor == "instance" or effective_serve_mode == "production" %}{% include "../../_shared/static-frontend.yaml.jinja" %}{% endif %}
+{% endif %}{% endif %}{% if stack_flavor == "instance" or effective_serve_mode == "production" %}{% include "../_shared/static-frontend.yaml.jinja" %}{% endif %}
