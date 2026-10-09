@@ -189,6 +189,8 @@ type JobRunOperation {
   nodes: [JobRunNode!]!
   output: String
   error: String
+  errorCode: String
+  errorCause: String
 }
 
 type JobRunPreview {
