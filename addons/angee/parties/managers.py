@@ -49,8 +49,6 @@ from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
 from angee.storage.models import UploadState
 
-_SIGNATURE_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d \t()./\-]*\d)?(?!\w)")
-
 
 class HandleAssociationStatus(StrEnum):
     """Nondisclosing assessment of one claimed Handle for a candidate Party."""
@@ -1020,15 +1018,16 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         self,
         *,
         text: str,
-        party_ids: Iterable[Any],
+        party_id: Any,
         fragment_hash: str,
         owner_id: Any,
     ) -> int:
-        """Mine one unique signature fragment for weak party-to-phone suggestions.
+        """Mine one sender's own signature fragment for weak party-to-phone suggestions.
 
         ``text`` and its content hash are neutral evidence supplied by the scheduled
-        task; this manager owns phone extraction, Handle creation, link provenance,
-        owner partition, and the durable-pair check. Every mined link records its
+        task, which passes only a fragment a single sender signed with; this
+        manager owns phone extraction, Handle creation, link provenance, owner
+        partition, and the durable-pair check. Every mined link records its
         fragment evidence at ``0.3`` confidence. An existing pair, including a
         dismissed anti-link, is never changed.
         """
@@ -1037,13 +1036,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         party_model = apps.get_model("parties", "Party")
         if owner_id is None:
             return 0
-        parties = tuple(
-            party_model.objects.filter(
-                pk__in=frozenset(party_ids),
-                created_by_id=owner_id,
-            ).order_by("sqid")
-        )
-        if not parties:
+        party = party_model.objects.filter(pk=party_id, created_by_id=owner_id).first()
+        if party is None:
             return 0
         created = 0
         metadata = {
@@ -1062,14 +1056,13 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 # Handles are globally unique by source identity. Evidence owned by
                 # one directory must never attach another owner's pre-existing row.
                 continue
-            for party in parties:
-                created += self._suggest(
-                    party,
-                    handle,
-                    confidence=0.3,
-                    metadata=metadata,
-                    created_by_id=party.created_by_id,
-                )
+            created += self._suggest(
+                party,
+                handle,
+                confidence=0.3,
+                metadata=metadata,
+                created_by_id=party.created_by_id,
+            )
         return created
 
     def suggest_from_display_names(self) -> int:
@@ -1174,23 +1167,40 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             self.resolve(locked_handle)
             return 1
 
+    def retract_suggestions(self, *, evidence_kind: str) -> int:
+        """Delete the unreviewed rule links one evidence kind produced.
+
+        Run it when that kind's extraction rule changes; the full suggestion sweep
+        then re-proposes only what the current rule supports. Confirmed links and
+        dismissed anti-links are human decisions and stay. The link delete
+        receivers re-resolve every affected handle.
+        """
+
+        deleted, _ = self.filter(
+            source=LinkSource.RULE,
+            is_confirmed=False,
+            is_dismissed=False,
+            metadata__evidence__kind=evidence_kind,
+        ).delete()
+        return deleted
+
     @staticmethod
     def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
-        """Return deterministic canonical phone values mined from signature text."""
+        """Return deterministic canonical phone values mined from signature text.
 
-        values = {
-            handle_model.normalize_value(
-                handle_model.Platform.PHONE,
-                match.raw_string,
+        libphonenumber's matcher finds only valid numbers written with their country
+        code. A digit run without one, such as a ticket or comment id, names no
+        number and is never mined.
+        """
+
+        return tuple(
+            sorted(
+                {
+                    handle_model.normalize_value(handle_model.Platform.PHONE, match.raw_string)
+                    for match in PhoneNumberMatcher(text or "", None)
+                }
             )
-            for match in PhoneNumberMatcher(text or "", None)
-        }
-        for match in _SIGNATURE_PHONE_CANDIDATE.finditer(text or ""):
-            normalized = handle_model.normalize_value(handle_model.Platform.PHONE, match.group())
-            digits = sum(character.isdigit() for character in normalized)
-            if 7 <= digits <= 15:
-                values.add(normalized)
-        return tuple(sorted(values))
+        )
 
 
 @dataclass(frozen=True, slots=True)

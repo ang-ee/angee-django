@@ -259,6 +259,35 @@ def test_corporate_disclaimer_maps_to_signature_role() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("quote", "header"),
+    [
+        pytest.param(
+            "On Thu, Jul 2, 2026 Monica wrote:\n> Here are the papers.\n>\n"
+            "> Best,\n> Monica Alvarez\n> +1 787 523 6508\n",
+            "On Thu, Jul 2, 2026 Monica wrote:",
+            id="marker-quoted",
+        ),
+        pytest.param(
+            "From: Monica Alvarez <monica@example.com>\nSent: Thursday, July 2, 2026\nSubject: Papers\n\n"
+            "Here are the papers.\n\nBest,\nMonica Alvarez\n+1 787 523 6508\n",
+            "From: Monica Alvarez <monica@example.com>\nSent: Thursday, July 2, 2026\nSubject: Papers",
+            id="outlook",
+        ),
+    ],
+)
+def test_quoted_reply_signature_stays_with_the_quoted_author(quote: str, header: str) -> None:
+    """Only the sender's signature has the signature role; a quoted author's is quoted."""
+
+    assert split_plain_text(f"Sounds good.\n\nBest,\nAlexis\n\n{quote}") == [
+        ("body", "Sounds good."),
+        ("signature", "Best,\nAlexis"),
+        ("quoted", header),
+        ("quoted", "Here are the papers."),
+        ("quoted", "Best,\nMonica Alvarez\n+1 787 523 6508"),
+    ]
+
+
 # --- parser: MIME structure ---
 
 

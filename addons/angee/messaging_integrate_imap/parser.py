@@ -217,7 +217,9 @@ def split_plain_text(text: str) -> list[tuple[str, str]]:
     ``body`` paragraphs from the newest reply, ``quoted`` paragraphs for older
     replies and marker-quoted runs (attribution line included, markers stripped
     to any depth, so the text content-addresses to the original body's
-    fragments), and ``signature`` for signatures and disclaimers alike.
+    fragments), and ``signature`` for the sender's signatures and disclaimers
+    alike. An older reply's signature belongs to its quoted author, so it is
+    ``quoted`` (see :func:`_tail_role`).
     Paragraphs are blank-line separated; document order is preserved so the
     first body paragraph stays the preview.
     """
@@ -236,9 +238,11 @@ def split_plain_text(text: str) -> list[tuple[str, str]]:
         segments.extend(_body_segments(reply.body, quoted=index > 0))
         signature = _signature_text(reply.signatures or "", reply.disclaimers)
         if signature:
-            segments.append(("signature", signature))
+            segments.append((_tail_role(reply.signatures, body=reply.body, newest=index == 0), signature))
         segments.extend(
-            ("signature", _strip_quote_markers(disclaimer)) for disclaimer in reply.disclaimers if disclaimer.strip()
+            (_tail_role(disclaimer, body=reply.body, newest=index == 0), _strip_quote_markers(disclaimer))
+            for disclaimer in reply.disclaimers
+            if disclaimer.strip()
         )
     return segments
 
@@ -780,6 +784,21 @@ def _body_segments(body: str, *, quoted: bool) -> list[tuple[str, str]]:
         run_lines.append(line)
     flush()
     return segments
+
+
+def _tail_role(tail: str, *, body: str, newest: bool) -> str:
+    """Return the role of one reply's signature or disclaimer text.
+
+    The newest reply's tail is the sender's. An older reply's tail belongs to the
+    quoted author: below an Outlook-style quote nothing carries markers, and a
+    ``>``-quoted reply quotes its signature too. Only an unmarked tail below a
+    ``>``-quoted reply is the sender's own signature placed after a bottom quote.
+    """
+
+    def marked(text: str) -> bool:
+        return any(_QUOTE_MARKER_RE.match(line) for line in text.split("\n"))
+
+    return "signature" if newest or (marked(body) and not marked(tail)) else "quoted"
 
 
 def _strip_quote_markers(text: str) -> str:
