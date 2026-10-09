@@ -163,6 +163,28 @@ def test_uninstalled_cutover_requires_opt_in_and_never_enables_capabilities(
     assert not any(config.name == addon.name for config in apps.get_app_configs())
 
 
+@pytest.mark.parametrize(("app_label", "expected"), [("resources", True), ("retired", False)])
+def test_retained_only_retirement_needs_the_target_history(runtime_migration_probe, app_label, expected) -> None:
+    """An installed addon's retirement of a label it no longer composes runs only where that label has history."""
+
+    materializer, addon, _, _, _ = runtime_migration_probe
+    write_addon_manifest(addon, migrations=({
+        "name": "rename_legacy", "app_label": app_label, "module": "runtime_migrations.rename_legacy",
+        "retained_only": True,
+    },))
+    assert bool(materializer.materialize(apps=None)) is expected
+
+
+def test_rejects_retained_only_with_uninstalled_only(runtime_migration_probe) -> None:
+    materializer, addon, _, _, _ = runtime_migration_probe
+    write_addon_manifest(addon, migrations=({
+        "name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy",
+        "retained_only": True, "uninstalled_only": True,
+    },))
+    with pytest.raises(RuntimeError, match="uninstalled_only and retained_only are exclusive"):
+        materializer.materialize(apps=None)
+
+
 def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
     source_path.write_text(

@@ -458,20 +458,29 @@ class RuntimeMigrations:
             for key in ("name", "app_label", "module"):
                 if not isinstance(declaration.get(key), str) or not declaration[key]:
                     raise RuntimeError(f"{addon.name}: migrations[{index}] requires string {key}")
-            if not isinstance(declaration.get("uninstalled_only", False), bool):
-                raise RuntimeError(f"{addon.name}: migrations[{index}] uninstalled_only must be a boolean")
+            for flag in ("uninstalled_only", "retained_only"):
+                if not isinstance(declaration.get(flag, False), bool):
+                    raise RuntimeError(f"{addon.name}: migrations[{index}] {flag} must be a boolean")
+            if declaration.get("uninstalled_only", False) and declaration.get("retained_only", False):
+                raise RuntimeError(
+                    f"{addon.name}: migrations[{index}] uninstalled_only and retained_only are exclusive"
+                )
             yield declaration
 
     def _migration_declarations(self) -> Iterator[tuple[AppConfig, tuple[Mapping[str, Any], ...]]]:
         """Read opted-in cutovers without enabling an uninstalled addon's capabilities."""
 
         installed = {addon.name for addon in self.addons}
+        retained = set(historical_labels(self.runtime_dir))
         for addon in self.addons:
+            # A retained_only retirement targets a label its installed addon no
+            # longer composes; a database without that label's history has nothing
+            # to retire, so the declaration does not exist there.
             yield addon, tuple(
                 entry for entry in self._declarations(addon)
                 if not entry.get("uninstalled_only", False)
+                and (not entry.get("retained_only", False) or entry["app_label"] in retained)
             )
-        retained = set(historical_labels(self.runtime_dir))
         directories = tuple(Path(path) for path in getattr(settings, "ANGEE_ADDON_DIRS", ()))
         for name, (manifest, _) in available_addons(directories).items():
             if name in installed or not any(
