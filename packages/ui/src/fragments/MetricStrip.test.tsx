@@ -10,7 +10,7 @@ afterEach(() => cleanup());
 
 describe("MetricStrip", () => {
   test("renders a tile per metric with label and value", () => {
-    render(
+    const { container } = render(
       <MetricStrip
         metrics={[
           { label: "Fields", value: 12 },
@@ -21,6 +21,8 @@ describe("MetricStrip", () => {
     expect(screen.getByText("Fields")).toBeTruthy();
     expect(screen.getByText("12")).toBeTruthy();
     expect(screen.getByText("Relations")).toBeTruthy();
+    expect(container.querySelectorAll("dt")).toHaveLength(2);
+    expect(container.querySelectorAll("dd")).toHaveLength(2);
   });
 
   test("prominent density keeps tone labels in the same metric family", () => {
@@ -37,11 +39,11 @@ describe("MetricStrip", () => {
   test("large value typography stays independent of compact tile density", () => {
     render(<MetricTile density="compact" label="Revenue" value={24} valueSize="lg" />);
     const value = screen.getByText("24");
-    expect(value.className).toContain("mt-1");
     expect(value.className).toContain("text-xl");
     expect(value.className).toContain("font-semibold");
     expect(value.className).toContain("leading-6");
     expect(value.className).toContain("tabular-nums");
+    expect(value.closest("dd")?.parentElement?.className).toContain("gap-y-1");
   });
 
   test("a non-navigable tile renders no link", () => {

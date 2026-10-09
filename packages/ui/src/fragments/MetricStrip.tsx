@@ -7,8 +7,12 @@ import { tv, type VariantProps } from "../lib/variants";
 import { Tag } from "../ui/badge";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
-import { SectionEyebrow } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
+import {
+  DefinitionPair,
+  definitionFromTuple,
+  type DefinitionPairTuple,
+} from "./DefinitionPair";
 
 export interface MetricTileValue {
   detail?: React.ReactNode;
@@ -25,8 +29,7 @@ export const metricStripVariants = tv({
   slots: {
     root: "grid gap-3 sm:grid-cols-2",
     tile: "min-w-0 shadow-none",
-    header: "flex min-w-0 items-center justify-between gap-2",
-    value: "m-0 truncate text-fg",
+    value: "",
     detail: cn(textRoleVariants({ role: "caption", truncate: true }), "m-0 mt-1"),
   },
   variants: {
@@ -34,13 +37,10 @@ export const metricStripVariants = tv({
       compact: {
         root: "xl:grid-cols-4",
         tile: "px-3 py-2.5",
-        value: "mt-1 text-13 font-medium",
       },
       prominent: {
         root: "lg:grid-cols-4",
         tile: "px-4 py-3",
-        header: "mb-3",
-        value: "text-2xl font-semibold tabular-nums",
       },
     },
     valueSize: {
@@ -77,7 +77,7 @@ export type MetricStripProps = Omit<
 > & {
   className?: string;
   density?: MetricDensity;
-  items?: readonly (readonly [React.ReactNode, React.ReactNode])[];
+  items?: readonly DefinitionPairTuple[];
   metrics?: readonly MetricTileValue[];
 };
 
@@ -105,17 +105,25 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
     const styles = metricStripVariants({ density, valueSize });
     const body = (
       <>
-        <div className={styles.header()}>
-          {density === "prominent" ? (
-            <dt className="contents">
+        <DefinitionPair
+          action={icon ? <IconTile icon={icon} size="md" /> : undefined}
+          density={density}
+          label={
+            density === "prominent" ? (
               <Tag tone={tone ?? "neutral"}>{label}</Tag>
-            </dt>
-          ) : (
-            <SectionEyebrow as="dt">{label}</SectionEyebrow>
-          )}
-          {icon ? <IconTile icon={icon} size="md" /> : null}
-        </div>
-        <dd className={styles.value()}>{value}</dd>
+            ) : (
+              label
+            )
+          }
+          orientation="stacked"
+          value={
+            valueSize === "lg" ? (
+              <span className={styles.value()}>{value}</span>
+            ) : (
+              value
+            )
+          }
+        />
         {detail ? <p className={styles.detail()}>{detail}</p> : null}
       </>
     );
@@ -149,7 +157,8 @@ MetricTile.displayName = "MetricTile";
 export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
   function MetricStrip({ className, density = "compact", items, metrics, ...props }, ref) {
     const styles = metricStripVariants({ density });
-    const resolved = resolveMetrics(metrics, items);
+    const resolved: readonly MetricTileValue[] =
+      metrics ?? items?.map((item) => definitionFromTuple(item)) ?? [];
 
     return (
       <dl ref={ref} className={cn(styles.root(), className)} {...props}>
@@ -161,19 +170,6 @@ export const MetricStrip = React.forwardRef<HTMLDListElement, MetricStripProps>(
   },
 );
 MetricStrip.displayName = "MetricStrip";
-
-function resolveMetrics(
-  metrics: readonly MetricTileValue[] | undefined,
-  items: readonly (readonly [React.ReactNode, React.ReactNode])[] | undefined,
-): readonly MetricTileValue[] {
-  if (metrics) return metrics;
-  return (
-    items?.map(([label, value]) => ({
-      label,
-      value,
-    })) ?? []
-  );
-}
 
 function metricKey(metric: MetricTileValue, index: number): string {
   return `${String(metric.label)}:${String(metric.value)}:${index}`;
