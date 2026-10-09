@@ -176,6 +176,8 @@ export interface ChatterRoute {
   viewType: string;
   modelLabel?: string;
   canonicalLabel?: string;
+  /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can carry. */
+  recordEdges?: readonly string[];
   recordParam?: string;
 }
 

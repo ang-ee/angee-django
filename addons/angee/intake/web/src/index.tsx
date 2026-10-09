@@ -10,7 +10,6 @@ import {
   SkeletonStatus,
   Tab,
   useRecordChromeContext,
-  type ChatterViewContext,
 } from "@angee/ui";
 import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
@@ -31,16 +30,6 @@ const intake = defineBaseAddon({
   containers: {
     [`${TASK_MODEL}#access-roles`]: {
       "intake.requester": { content: TaskRequesterAccessRole },
-    },
-    [`${TASK_MODEL}#aside`]: {
-      "intake.access-decisions": {
-        sequence: 50,
-        content: {
-          label: "Decisions",
-          when: (context) => context.view.kind === "record",
-          render: (context) => <TaskAccessChatter context={context} />,
-        },
-      },
     },
     [`${TASK_MODEL}#rail`]: {
       "intake.people-rail": { sequence: 40, content: ShareAccessRailGroup },
@@ -111,19 +100,6 @@ function TaskAccessGroup(): ReactElement {
   if (query.error) return <ErrorBanner description={t("access.error")} />;
   return <TaskAccessDecisions needs={query.data?.intake_needs ?? []}
     canManage={Boolean(record && holdsPermission(record, "write") && holdsPermission(record, "share"))} />;
-}
-
-function TaskAccessChatter({ context }: { context: ChatterViewContext }): ReactElement {
-  const t = useIntakeT();
-  const task = context.view.kind === "record" ? context.view.sqid ?? "" : "";
-  const query = useAuthoredQuery(TaskAccessNeedsDocument, { task }, {
-    enabled: Boolean(task), models: [NEED_MODEL, "decisions.Decision"],
-  });
-  if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
-    <TaskAccessCardSkeleton />
-  </SkeletonStatus>;
-  if (query.error) return <ErrorBanner description={t("access.error")} />;
-  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []} />;
 }
 
 export default intake;

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
@@ -16,7 +16,7 @@ from strawberry_django_hasura import HasuraResource
 from angee.base.impl import ImplClassField
 from angee.base.models import AngeeModel
 from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import concrete_child_models, generic_pointer_model
+from angee.base.refs import concrete_child_models, generic_pointer_model, record_edges_by_target
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis
@@ -283,11 +283,13 @@ def finalize_data_resources(
         )
         finalized.append(metadata)
     resources_by_model = {item.model: item for item in finalized if item.model is not None}
+    edges_by_target = record_edges_by_target()
     return tuple(
         dataclasses.replace(
             item,
             grantable=_grantable_relations(item.model, resources_by_model),
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
+            record_edges=_record_edges(item.model, edges_by_target),
         )
         for item in finalized
     )
@@ -667,6 +669,21 @@ def _concrete_kinds(
         for child in concrete_child_models(model)
         if child in resources_by_model
     )
+
+
+def _record_edges(
+    model: type[models.Model] | None,
+    edges_by_target: Mapping[type[models.Model], tuple[type[models.Model], ...]],
+) -> tuple[str, ...]:
+    """Project the edge models whose schema declares this resource's canonical type a target.
+
+    A record carries only these edges, so a surface listing one (a record's files,
+    pages or source conversations) applies to the record types that name it.
+    """
+
+    if model is None:
+        return ()
+    return tuple(edge._meta.label for edge in edges_by_target.get(generic_pointer_model(model), ()))
 
 
 def _grantable_relations(

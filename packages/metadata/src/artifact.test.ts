@@ -135,9 +135,19 @@ describe("generated resource wire contract", () => {
     expect(metadata.labels["parties.Handle"]?.resource.concreteKinds).toBeUndefined();
   });
 
+  test("reads the edges a record type can carry", () => {
+    const task = testDataResource("projects.Task", { recordEdges: ["knowledge.RecordBinding", "storage.FileAttachment"] });
+    const parsed = defineAngeeSchemaMetadata({ angee: { resources: [task, testDataResource("projects.Tag")] } });
+    const metadata = schemaFieldMetadataFromDataResources(parsed.angee?.resources ?? []);
+
+    expect(metadata.labels["projects.Task"]?.resource.recordEdges).toEqual(["knowledge.RecordBinding", "storage.FileAttachment"]);
+    expect(metadata.labels["projects.Tag"]?.resource.recordEdges).toBeUndefined();
+  });
+
   test.each([
     { concreteKinds: "parties.Person" },
     { concreteKinds: [42] },
+    { recordEdges: "storage.FileAttachment" },
     { query: { identity: { field: 42 } } },
     { aggregateMeasures: [{ op: 42 }] },
     { createArguments: [42] },

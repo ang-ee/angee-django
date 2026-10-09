@@ -42,8 +42,9 @@ export function recordPagesTab(options: RecordPagesTabOptions = {}): ContainerCh
     content: {
       label, icon: "knowledge",
       ...(aliases ? { aliases } : {}),
+      // A record of a type whose schema lets it carry bindings; a `<model>#aside` placement also reaches list views.
       when: (context) => context.view.kind === "record"
-        && Boolean(context.route?.modelLabel && context.view.sqid)
+        && (context.route?.recordEdges?.includes(RECORD_BINDING_MODEL) ?? false)
         && (when?.(context) ?? true),
       useCount: (context) => useRecordPagesCount(context, role),
       render: (context) => <RecordPagesPane target={recordPagesTarget(context)} role={role} />,

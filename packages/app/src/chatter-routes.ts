@@ -15,6 +15,7 @@ import {
 interface ResourceFacts {
   resourceType?: string | null;
   canonicalLabel?: string | null;
+  recordEdges?: readonly string[];
 }
 
 export function chatterRouteIndex(
@@ -29,9 +30,9 @@ export function chatterRouteIndex(
     const path = fullRoutePath(route, parent);
     const recordParam = trailingRouteParamName(path);
     const modelLabel = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
-    const canonicalLabel = modelLabel
-      ? resourceFactsByModel[modelLabel]?.canonicalLabel
-      : undefined;
+    const facts = modelLabel ? resourceFactsByModel[modelLabel] : undefined;
+    const canonicalLabel = facts?.canonicalLabel;
+    const recordEdges = facts?.recordEdges;
     return {
       name: route.name,
       path,
@@ -43,6 +44,7 @@ export function chatterRouteIndex(
       ),
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
+      ...(recordEdges ? { recordEdges } : {}),
       ...(recordParam ? { recordParam } : {}),
     };
   });
@@ -81,6 +83,7 @@ function resourceFactsByModelLabel(
     const facts = {
       resourceType: resource.resourceType,
       canonicalLabel: resource.canonicalLabel,
+      recordEdges: resource.recordEdges,
     };
     byModel[resource.modelLabel] ??= facts;
   }

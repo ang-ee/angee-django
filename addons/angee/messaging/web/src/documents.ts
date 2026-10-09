@@ -2,6 +2,8 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 
 /** The model every messaging-owned channel surface binds to. */
 export const CHANNEL_MODEL = "messaging.Channel";
+/** The edge a record carries its chatter and source conversations through. */
+export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
 
 // The models a record thread reads: the live-refresh keys for the thread/activity
 // queries and the invalidation set every chatter mutation republishes. One owner,
@@ -9,7 +11,7 @@ export const CHANNEL_MODEL = "messaging.Channel";
 export const READ_MODELS = [
   "parties.Handle",
   "messaging.Thread",
-  "messaging.ThreadAttachment",
+  THREAD_ATTACHMENT_MODEL,
   "messaging.Message",
   "messaging.ThreadFollower",
   "messaging.ThreadActivity",

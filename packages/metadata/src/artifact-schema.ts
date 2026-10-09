@@ -108,6 +108,8 @@ const ResourceSchema = v.looseObject({
   canonicalLabel: OptionalString,
   /** Model labels of the direct MTI children this schema exposes, sorted; each shares this resource's ids. */
   concreteKinds: v.optional(Strings),
+  /** Model labels of the polymorphic edges whose schema declares this type a target, sorted: what its records can carry. */
+  recordEdges: v.optional(Strings),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),

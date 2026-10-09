@@ -140,7 +140,6 @@ export const StorageFileById = graphql(`
 export const StorageRecordFiles = graphql(`
   query StorageRecordFiles($modelLabel: String!, $recordId: ID!) {
     record_files(model_label: $modelLabel, record_id: $recordId) {
-      available
       can_upload
       attachments {
         id

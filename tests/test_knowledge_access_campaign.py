@@ -171,12 +171,19 @@ def test_binding_refuses_undeclared_and_untyped_targets(composed_permissions):
     knowledge = vault_for(author, name="Knowledge")
     with actor_context(author):
         page = Page.objects.create_in(knowledge, title="Writable but not bindable")
+        assert page.has_access("write") and not RecordBinding.declares_target(Page)
         with pytest.raises(PermissionDenied):
             RecordBinding.objects.upsert(vault=knowledge, target=page)
         with pytest.raises(ValueError, match="no resource type"):
             RecordBinding.objects.upsert(vault=knowledge, target=ContentType.objects.get_for_model(Vault))
     with system_context(reason="test.binding.refused"):
         assert not RecordBinding.objects.exists()
+    # The writer is not offered a bind its type cannot carry; a declared type still is.
+    query = """query ($model: String!, $id: ID!) { record_knowledge_can_bind(model_label: $model, record_id: $id) }"""
+    schema = addon_schema(schemas, "console")
+    for model, record, expected in (("knowledge.Page", page, False), ("knowledge.Vault", knowledge, True)):
+        result = result_data(execute_schema(schema, query, {"model": model, "id": str(record.sqid)}, user=author))
+        assert result["record_knowledge_can_bind"] is expected, model
 
 
 def test_deleting_target_removes_bindings_without_deleting_knowledge(composed_permissions):

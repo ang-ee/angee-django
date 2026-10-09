@@ -34,7 +34,7 @@ function Count() {
 beforeEach(() => {
   sdk.query.mockReset().mockImplementation((document) => document === StorageDrives
     ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
-    : { data: { record_files: { available: true, can_upload: true, attachments: [
+    : { data: { record_files: { can_upload: true, attachments: [
       { id: "fat_1", label: "", file: { id: "fil_1", filename: "guide.pdf", title: "Guide", is_trashed: false } },
     ] } }, isPending: false });
   sdk.upload.mockReset();
@@ -59,7 +59,7 @@ test("uploads to the record through the existing record target and renders a ske
   expect(screen.getByRole("status").textContent).toContain("Loading attached files");
   sdk.query.mockImplementation((document) => document === StorageDrives
     ? { data: { drives: [{ id: "drv_1", name: "Files" }] }, isPending: false }
-    : { data: { record_files: { available: true, can_upload: true, attachments: [] } }, isPending: false });
+    : { data: { record_files: { can_upload: true, attachments: [] } }, isPending: false });
   view.rerender(<RecordFilesPane target={recordFilesTarget(context)} />);
   fireEvent.change(view.container.querySelector('input[type="file"]')!, {
     target: { files: [new File(["content"], "note.txt", { type: "text/plain" })] },

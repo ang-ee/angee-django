@@ -1026,7 +1026,10 @@ and current contracts before applying a historical example to a new deployment.
   deleting and recreating it; the library refuses a retargeting save. A type
   without a relation is refused under an actor, and an edge that accepts only
   some types derives that set from the schema through
-  `RecordRefMixin.declared_target_models` instead of listing it again. Each
+  `RecordRefMixin.declared_target_models` (`declares_target` for one type)
+  instead of listing it again. Resource metadata projects the inverse as
+  `recordEdges`, so a surface listing one edge applies only to the record types
+  that can carry it; a resolver does not re-decide that per request. Each
   edge's own `permissions.zed` states its rule:
   [storage](../../addons/angee/storage/permissions.zed),
   [knowledge](../../addons/angee/knowledge/permissions.zed),

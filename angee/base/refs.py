@@ -7,8 +7,9 @@ ancestor, and a row without a REBAC type cannot be named at all. The two edges
 that also name rows outside REBAC — a chatter thread on an ungated host, an
 import record link to a plain sink — store :func:`generic_pointer_target`, which falls
 back to Django's own generic-pointer identity for such a row.
-:func:`ancestor_object_refs` owns the read/grant fan-out, and
-:meth:`RecordRefMixin.declared_target_models` reads the target types an edge's schema declares.
+:func:`ancestor_object_refs` owns the read/grant fan-out,
+:meth:`RecordRefMixin.declared_target_models` reads the target types an edge's schema declares,
+and :func:`record_edges_by_target` inverts it into the edges each record type can carry.
 
 **Placement invariant.** Every polymorphic edge and every reverse
 ``GenericRelation`` onto one (``messaging.ThreadedModelMixin.thread_attachments``,
@@ -26,6 +27,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
@@ -306,13 +308,22 @@ class RecordRefMixin(models.Model):
             raise cls._undeclared_target(declared) from error
 
     @classmethod
+    def declares_target(cls, model: type[models.Model]) -> bool:
+        """Whether this edge's schema declares ``model``'s canonical type a target.
+
+        A record of an undeclared type cannot carry the edge under an actor: the
+        edge's ``create`` has no arm for it and :meth:`validate_target` refuses it.
+        """
+
+        target = canonical_model(model)
+        return target is not None and target._meta.label_lower in cls.declared_target_models()
+
+    @classmethod
     def validate_target(cls, target: models.Model) -> None:
         """Reject a target whose canonical model the edge's schema does not declare."""
 
-        model = canonical_model(type(target))
-        declared = cls.declared_target_models()
-        if model is None or model._meta.label_lower not in declared:
-            raise cls._undeclared_target(declared)
+        if not cls.declares_target(type(target)):
+            raise cls._undeclared_target(cls.declared_target_models())
 
     @classmethod
     def _undeclared_target(cls, declared: dict[str, type[models.Model]]) -> ValidationError:
@@ -359,6 +370,24 @@ class RecordRefMixin(models.Model):
         """Return the referenced record's stable public id."""
 
         return self.record_ref.public_id
+
+
+def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+    """Index the installed edges by the target models their schemas declare, edges in label order.
+
+    The inverse of :meth:`RecordRefMixin.declared_target_models`: the polymorphic
+    edges a record can carry, keyed by the canonical model
+    :func:`rebac.generic_target` names it by. An edge without a REBAC definition
+    declares no target types.
+    """
+
+    index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
+    for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
+        if not issubclass(edge, RecordRefMixin) or effective_rebac_definition(edge) is None:
+            continue
+        for target in edge.declared_target_models().values():
+            index.setdefault(target, []).append(edge)
+    return {target: tuple(edges) for target, edges in index.items()}
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

@@ -155,9 +155,8 @@ class RecordFileAttachmentType:
 
 @strawberry.type
 class RecordFilesType:
-    """The attachment capability and visible edges of one readable record."""
+    """The upload capability and visible edges of one readable record."""
 
-    available: bool
     can_upload: bool
     attachments: list[RecordFileAttachmentType]
 
@@ -168,24 +167,25 @@ class StorageQuery:
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
-        """List file-readable edges without granting access through the target."""
+        """List file-readable edges without granting access through the target.
+
+        Which record types carry files is the edge schema's fact, projected to
+        clients as resource metadata; a record-scoped upload also needs the
+        record-file arm and write on the record.
+        """
 
         try:
             model = apps.get_model(model_label.strip())
         except (LookupError, ValueError):
-            return RecordFilesType(available=False, can_upload=False, attachments=[])
+            return RecordFilesType(can_upload=False, attachments=[])
         if model_resource_type(model) is None:
-            return RecordFilesType(available=False, can_upload=False, attachments=[])
+            return RecordFilesType(can_upload=False, attachments=[])
         record = instance_from_public_id(model, str(record_id))
         if record is None:
-            return RecordFilesType(available=False, can_upload=False, attachments=[])
+            return RecordFilesType(can_upload=False, attachments=[])
         manager = FileAttachment._default_manager
-        available = manager.has_record_arm(generic_target(record))
-        if not available:
-            return RecordFilesType(available=False, can_upload=False, attachments=[])
         return RecordFilesType(
-            available=True,
-            can_upload=record.has_access("write"),
+            can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
             attachments=[
                 RecordFileAttachmentType(id=strawberry.ID(str(edge.sqid)), label=edge.label, file=edge.file)
                 for edge in manager.for_record(record)

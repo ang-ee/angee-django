@@ -31,7 +31,10 @@ import type { ChatterViewContext } from "@angee/ui";
 
 const context: ChatterViewContext = {
   pathname: "/records/rec_1", params: { id: "rec_1" },
-  route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record" },
+  route: {
+    name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record",
+    recordEdges: ["knowledge.RecordBinding"],
+  },
   view: { kind: "record", type: "example/record", sqid: "rec_1" },
 };
 
@@ -51,6 +54,10 @@ test("role configuration filters one shared query and opens the bound page inlin
   expect(tab).toMatchObject({ sequence: 45, content: { label: "References", icon: "knowledge", aliases: ["references"] } });
   const contribution = tab.content;
   expect(contribution.when?.(context)).toBe(true);
+  // A type whose schema declares no binding arm, and a list view, offer no Pages tab.
+  expect(contribution.when?.({ ...context, route: { ...context.route!, recordEdges: ["storage.FileAttachment"] } })).toBe(false);
+  expect(contribution.when?.({ ...context, view: { kind: "list", type: "example/record" } })).toBe(false);
+  expect(recordPagesTab({ when: () => false }).content.when?.(context)).toBe(false);
   function Count() { return <span>Count {contribution.useCount?.(context)}</span>; }
   render(<Count />);
   expect(screen.getByText("Count 1")).toBeTruthy();

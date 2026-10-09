@@ -1732,7 +1732,11 @@ class FileAttachmentManager(AngeeManager):
         ) if file.content_hash and file.upload_state == UploadState.READY else self.none()
 
     def has_record_arm(self, target: GenericTarget) -> bool:
-        """Read the effective REBAC schema's storage attachment capability."""
+        """Whether record-scoped files read and write through this target type's attachments.
+
+        The effective schema's ``storage/file`` arm, which a record-scoped upload
+        needs beyond the attachment edge's own target relation.
+        """
 
         schema = rebac_backend().schema()
         resource_type = model_resource_type(self.model._meta.get_field("file").related_model) or ""
