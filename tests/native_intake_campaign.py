@@ -13,6 +13,7 @@ from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
+from angee.parties.mixins import LinkSource
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
 
 
@@ -334,11 +335,11 @@ class CaptureCampaign(TransactionTestCase):
             party = apps.get_model("parties", "Party").objects.for_user(self.actor)
             handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
             links = apps.get_model("parties", "PartyHandle")
-            links.objects.link(party, handle, is_confirmed=False)
+            links.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=False)
         for key, confirmed in (("suggested", False), ("confirmed", True)):
             with system_context(reason="tests.t3.email"):
                 if confirmed:
-                    links.objects.link(party, handle, is_confirmed=True)
+                    links.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=True)
                 parsed = ParsedMessage(
                     external_id=key,
                     platform="email",

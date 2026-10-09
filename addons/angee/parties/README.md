@@ -43,9 +43,14 @@ local from synchronized folders.
 [`contact_projection`](backends.py) declares exactly the fields synchronized in
 both directions. It includes names, notes, dates, email/phone contact points,
 postal addresses, the source employment edge and the avatar content hash and MIME
-type. Extraction fetches and pre-stores avatars through storage's idempotent
-`File.objects.ingest_bytes` before the page transaction. Apply only validates and
-links the prepared File under the row lock; it performs database work only.
+type. Email and phone contact points come only from the person's
+[asserted links](managers.py): those the card itself carries, those a person
+added, and confirmed suggestions. Unreviewed suggestions such as mined
+signature phones or display-name matches stay inside Angee and are never
+written to a card. Extraction fetches and pre-stores avatars through storage's
+idempotent `File.objects.ingest_bytes` before the page transaction. Apply only
+validates and links the prepared File under the row lock; it performs database
+work only.
 Local comparisons use the stored hash without reading avatar bytes, and revisions
 retain the content address instead of base64 photo bytes. Collection order
 does not affect hashes. The remote and local bases are separate because domain

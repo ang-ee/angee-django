@@ -9,6 +9,7 @@ from rebac import system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging.testing.models import Address, Handle, Party, PartyHandle
+from angee.parties.mixins import LinkSource
 
 
 @pytest.mark.django_db(transaction=True)
@@ -82,7 +83,7 @@ def test_party_link_delete_repairs_after_commit(composed_tables: None, monkeypat
     with system_context(reason="delete repair fixture"):
         party = Party._base_manager.create(display_name="Customer")
         handle = Handle.objects.upsert(platform="email", value="repair@example.test")
-        link = PartyHandle.objects.link(party, handle)
+        link = PartyHandle.objects.link(party, handle, source=LinkSource.MANUAL)
         with transaction.atomic():
             link.delete()
             assert Handle._base_manager.get(pk=handle.pk).party_id == party.pk

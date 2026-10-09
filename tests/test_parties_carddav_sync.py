@@ -50,7 +50,7 @@ from angee.integrate.streams import (
     sync_bridge,
 )
 from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
-from angee.messaging.testing.models import Directory, Folder, Party, Person, RelationshipKind
+from angee.messaging.testing.models import Directory, Folder, Handle, Party, PartyHandle, Person, RelationshipKind
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -59,6 +59,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
+from angee.parties.mixins import LinkSource
 from angee.parties_integrate_carddav import backend as carddav_backend
 from angee.parties_integrate_carddav.backend import (
     _DAV_RESPONSE_CAP,
@@ -863,6 +864,81 @@ def test_successful_own_write_is_applied_on_next_pull(replica: Replica) -> None:
     assert person.updated_at == local_updated_at
     assert not SyncDiscrepancy.objects.exists()
     assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
+
+
+def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica: Replica) -> None:
+    person, link = replica.baseline()
+    bases = link.remote_base_hash, link.local_base_hash, link.remote_version
+    with system_context(reason="test signature suggestion"):
+        created = PartyHandle.objects.suggest_from_signature(
+            text="Ada Lovelace\nM: +1 415 555 2671",
+            party_ids=(person.pk,),
+            fragment_hash="ada-signature",
+            owner_id=person.created_by_id,
+        )
+    assert created == 1
+    replica.server.requests.clear()
+
+    assert push_stream(replica.stream, replica.backend).count == 0
+    link.refresh_from_db()
+    assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == bases
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+
+    suggestion = PartyHandle.objects.select_related("handle").get(party=person, source=LinkSource.RULE)
+    with system_context(reason="test confirmed suggestion"):
+        PartyHandle.objects.link(person, suggestion.handle, source=LinkSource.MANUAL, is_confirmed=True)
+
+    assert push_stream(replica.stream, replica.backend).count == 1
+    assert "+14155552671" in replica.server.cards[_HREF][0]
+
+
+@pytest.mark.parametrize(
+    ("source", "confirmed", "written"),
+    [
+        (LinkSource.MANUAL, False, True),
+        (LinkSource.RULE, True, True),
+        (LinkSource.RULE, False, False),
+        (LinkSource.EMAIL_MATCH, False, False),
+        (LinkSource.LLM, False, False),
+        (LinkSource.IMPORT, False, False),
+        (LinkSource.COMMUNITY, False, False),
+    ],
+)
+def test_only_asserted_contact_points_are_written_to_the_card(
+    replica: Replica, source: LinkSource, confirmed: bool, written: bool
+) -> None:
+    person, _link = replica.baseline()
+    with system_context(reason="test contact point provenance"):
+        handle = Handle.objects.upsert(platform="email", value="ada@example.test", created_by_id=person.created_by_id)
+        PartyHandle.objects.link(
+            person,
+            handle,
+            confidence=0.3,
+            source=source,
+            is_confirmed=confirmed,
+            created_by_id=person.created_by_id,
+        )
+
+    assert push_stream(replica.stream, replica.backend).count == int(written)
+    assert ("ada@example.test" in replica.server.cards[_HREF][0]) is written
+
+
+def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> None:
+    replica.server.store(_HREF, "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nTEL:+14155552671\r\nEND:VCARD\r\n")
+    person, link = replica.baseline()
+    assert person.display_name == Person.PLACEHOLDER_NAME
+    assert link.local_base_hash == canonical_json_sha256(contact_projection(Party.objects.project_contact(person)))
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+    person.notes = "Local edit"
+    person.save(update_fields=["notes"])
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    raw = replica.server.cards[_HREF][0]
+    card = vobject.readOne(raw)
+    assert card.fn.value == ""
+    assert Person.PLACEHOLDER_NAME not in raw
+    assert card.note.value == "Local edit"
 
 
 def test_contact_projection_is_deterministic_and_declares_exact_bridge_fields() -> None:
