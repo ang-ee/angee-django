@@ -173,7 +173,7 @@ sources:
   # arpee, the ARP product (arp.* consumer addons; PRIVATE repo — opt-in).
   angee-arp:
     kind: git
-    repo: https://github.com/ang-ee/angee-arp.git
+    repo: {{ arp_repo }}
     default_ref: main
     cache_path: {% if sources_home %}{{ sources_home }}/angee-arp{% else %}sources/angee-arp{% endif %}
 {% endif %}

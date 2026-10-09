@@ -402,6 +402,7 @@ def _render_dev_stack(
     framework_path: str = "workspaces/src/angee",
     addons_profile: str = "base",
     include_arp: bool = False,
+    arp_repo: str = "https://github.com/ang-ee/angee-arp.git",
     work_state_source: str = "",
     work_state_repo: str = "",
     work_state_ref: str = "main",
@@ -443,6 +444,7 @@ def _render_dev_stack(
     variables = {
         "addons_profile": addons_profile,
         "include_arp": "true" if include_arp else "",
+        "arp_repo": arp_repo,
         "celery_queues": celery_queues,
         "caddy_image": "caddy:2.9-alpine",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
@@ -1282,6 +1284,13 @@ def test_dev_stack_declares_the_framework_sources_and_the_src_workspace() -> Non
     assert set(arp["sources"]) == {"app", "framework", "angee", "angee-arp"}
     assert arp["sources"]["angee-arp"]["repo"] == "https://github.com/ang-ee/angee-arp.git"
     assert arp["sources"]["angee-arp"]["cache_path"] == "sources/angee-arp"
+    # The private repo's clone URL is an answer, so a deployment's SSH remote
+    # survives a stack update instead of reverting to the https default.
+    ssh = _render_dev_stack(include_arp=True, arp_repo="git@github-example:org/repo.git")
+    assert ssh["sources"]["angee-arp"]["repo"] == "git@github-example:org/repo.git"
+    questions = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
+    assert questions["arp_repo"]["default"] == "https://github.com/ang-ee/angee-arp.git"
+    assert questions["arp_repo"]["when"] == "{{ include_arp }}"
 
     # work_state_source names the .work slot's source; work_state_repo declares it.
     # Both set: the git source is rendered (location template-owned) AND bound.

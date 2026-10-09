@@ -385,6 +385,15 @@ include_arp:
   default: false
   help: Declare the private ang-ee/angee-arp source (arpee's arp.* addons) with its slot, addon dir, and web globs.
 
+# The ARP source is private, so a deployment often fetches it over SSH with a
+# deploy key behind a host alias (e.g. git@github-example:org/repo.git). The URL
+# is an answer, recorded like any other, so a stack update keeps it.
+arp_repo:
+  type: str
+  default: "https://github.com/ang-ee/angee-arp.git"
+  when: "{{ include_arp }}"
+  help: Clone URL of the ARP source; set an SSH remote to fetch the private repo with a deploy key.
+
 
 django_port:
   type: int
