@@ -262,6 +262,13 @@ fixed through build and migrate; reinstalling a retired addon requires a reviewe
 forward migration path. Incoming relations must be retired by their own owners
 before the table retirement becomes applicable.
 
+An installed addon that stops composing one of its labels retires that label's
+tables with `retained_only = true`. The declaration exists only where the target
+label has retained runtime migration files; a database that never had the label
+has nothing to retire, so a fresh install composes without it. Without the opt-in,
+a target label that is neither composed nor retained fails the build as a typo.
+The two flags are exclusive.
+
 Normal app boot and `emit_if_stale()` never materialize migrations.
 `angee build --check` validates existing history and reports applicable pending
 origins without writing migration files. Django setup still repairs generated
