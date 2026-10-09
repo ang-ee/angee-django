@@ -1,6 +1,6 @@
 {# stacks/local wrapper: docker-compose self-contained instance. Set axes + address #}
-{# variables, then include the one shared manifest body (../../_shared, resolved from #}
-{# the template `_subdirectory` — the renderer's loader base). `framework` #}
+{# variables, then include the one shared manifest body (../_shared, resolved from #}
+{# the template root that holds copier.yml, as Copier resolves includes). `framework` #}
 {# (source|baked) is read directly in the shared body. #}
 {% set stack_flavor = "instance" %}
 {# No public ingress yet for instance stacks; localhost keeps the shared body's #}
@@ -20,4 +20,4 @@
 {# would mint a stray nested `.angee/` on the host. Pin the stack-owned, gitignored #}
 {# ./caches/uv instead (/app/caches/uv inside the mount). #}
 {% set uv_cache_dir = "/app/caches/uv" %}
-{% include "../../_shared/stack-body.yaml.jinja" %}
+{% include "../_shared/stack-body.yaml.jinja" %}

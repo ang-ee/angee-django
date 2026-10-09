@@ -46,7 +46,7 @@ _angee:
   schema: 1
   kind: stack
   name: dev
-  include_root: "../.."  # pins templates/ in chain snapshots, so ../../_shared/ includes resolve
+  include_root: "../.."  # includes may read anywhere under templates/; names resolve from this template root, so ../_shared/
   description: >-
     The framework-dev stack: the root folder IS the stack AND the project host
     (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold

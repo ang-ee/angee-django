@@ -27,7 +27,12 @@ the difference is the runtime and where framework code comes from. Both
 render from ONE shared manifest body (`stacks/_shared/stack-body.yaml.jinja`): each
 template's `angee.yaml.jinja` is a thin `{% set %}` header (mode + address variables)
 that includes it, and `{% if runtime_mode == "process" | "docker" %}` branches cover
-only where the two modes differ. Both chain `projects/web` to scaffold the host.
+only where the two modes differ. As in Copier, an include names its file from the
+template root (the directory holding `copier.yml`), so the stacks include
+`../_shared/…`; `_angee.include_root: "../.."` lets includes read anywhere under
+`templates/` (angee 0.21.1 or later). Write every include that way, nested ones
+inside `_shared/` too (`../_shared/x.jinja`, never a bare `x.jinja`): a bare name
+resolves against the including file only by accident of today's renderer. Both chain `projects/web` to scaffold the host.
 Their manifests expose preparation as explicit jobs: framework dependency install,
 provision, operator schema refresh, and codegen; local instances replace framework
 codegen with a completed static frontend build. Python jobs and services share one
