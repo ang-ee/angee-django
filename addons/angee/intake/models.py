@@ -24,6 +24,9 @@ from angee.base.mixins import AuditMixin, OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.intake.choices import NeedAccessAction
+from angee.intake.resources import NeedResource
+from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +36,6 @@ class NeedImportance(models.TextChoices):
 
     NORMAL = "normal", "Normal"
     IMPORTANT = "important", "Important"
-
-
-class NeedAccessAction(models.TextChoices):
-    """Authored transitions for request access."""
-
-    INTAKE_APPROVE = "intake.approve", "Approve"
-    INTAKE_DENY = "intake.deny", "Deny"
 
 
 class NeedQuerySet(AngeeQuerySet):
@@ -333,10 +329,11 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             yield report
 
 
-class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
+class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
     """One external or manually-authored request attached to one semantic target."""
 
     runtime = True
+    resource_class = NeedResource
     sqid_prefix = "ned_"
     # The requester's name is a sort axis through the linked party: an empty
     # name and an unreadable party both tie as NULL through the shared guard.
