@@ -53,8 +53,9 @@ export function requestedFieldPaths<TRow extends Row>(
   };
   for (const column of columns) {
     addSelections(column.field, column.selectionPaths);
-    if (column.subline) addSelections(column.subline);
-    if (column.currencyField) addSelections(column.currencyField);
+    if (column.sublineColumn) {
+      addSelections(column.sublineColumn.field, column.sublineColumn.selectionPaths);
+    }
   }
   for (const extra of extraFields ?? []) paths.add(extra);
   const requiredGroups = laneSource && !groups.some((group) => group.field === laneSource.field)

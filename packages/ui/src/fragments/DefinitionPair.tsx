@@ -95,26 +95,29 @@ export type DefinitionPairLayout = NonNullable<
 export type DefinitionPairDensity = NonNullable<
   DefinitionPairRecipeProps["density"]
 >;
-export type DefinitionPairElement = "dl" | "div";
+export type DefinitionPairElement = "div";
 
-export type DefinitionPairProps = Omit<
+type DefinitionPairBaseProps = Omit<
   React.HTMLAttributes<HTMLDivElement>,
   "children" | "className"
 > &
   DefinitionPairRecipeProps & {
     action?: React.ReactNode;
-    /** `dl` emits a dt/dd definition group; `div` emits aria-associated divs. */
-    as?: DefinitionPairElement;
     className?: string;
     /** Muted caption content rendered after the value. */
     detail?: React.ReactNode;
     emptyValue?: React.ReactNode;
-    label: React.ReactNode;
     value?: React.ReactNode;
   };
 
+/** The default emits a dt/dd pair; `as="div"` emits divs and permits no label. */
+export type DefinitionPairProps = DefinitionPairBaseProps & (
+  | { as?: never; label: React.ReactNode }
+  | { as: DefinitionPairElement; label?: React.ReactNode }
+);
+
 export type DefinitionPairValue = Pick<
-  DefinitionPairProps,
+  DefinitionPairBaseProps & { label: React.ReactNode },
   "action" | "label" | "value"
 >;
 export type DefinitionPairTuple = readonly [
@@ -144,7 +147,7 @@ export const DefinitionPair = React.forwardRef<
 >(function DefinitionPair(
   {
     action,
-    as = "dl",
+    as,
     className,
     density = "compact",
     detail,
@@ -162,21 +165,30 @@ export const DefinitionPair = React.forwardRef<
   const LabelElement = as === "div" ? "div" : "dt";
   const ValueElement = as === "div" ? "div" : "dd";
   const DetailElement = as === "div" ? "div" : "dd";
-  const labelId = as === "div" ? generatedLabelId : undefined;
+  const labelId = as === "div" && label != null ? generatedLabelId : undefined;
+  const unlabelledDiv = as === "div" && labelId === undefined;
   const actionElement = action ? (
     <span className={styles.action()}>{action}</span>
   ) : null;
 
   return (
-    <div ref={ref} className={styles.root({ className })} {...props}>
-      <LabelElement id={labelId} className={styles.label()}>
-        {label}
-      </LabelElement>
+    <div
+      ref={ref}
+      className={styles.root({ className })}
+      {...props}
+      {...(labelId ? { role: "group", "aria-labelledby": labelId } : {})}
+    >
+      {label != null ? (
+        <LabelElement id={labelId} className={styles.label()}>
+          {label}
+        </LabelElement>
+      ) : null}
       {orientation === "stacked" ? actionElement : null}
-      <ValueElement
-        aria-labelledby={labelId}
-        className={styles.value()}
-      >
+      <ValueElement className={styles.value({
+        className: unlabelledDiv
+          ? `col-start-1 row-start-1 ${action ? "col-span-1" : "col-span-2"}`
+          : undefined,
+      })}>
         {orientation === "inline" ? (
           <>
             <span>{value ?? emptyValue}</span>
@@ -187,7 +199,11 @@ export const DefinitionPair = React.forwardRef<
         )}
       </ValueElement>
       {detail != null ? (
-        <DetailElement aria-labelledby={labelId} className={styles.detail()}>
+        <DetailElement className={styles.detail({
+          className: unlabelledDiv
+            ? "col-span-2 col-start-1 row-start-2"
+            : undefined,
+        })}>
           {detail}
         </DetailElement>
       ) : null}

@@ -141,8 +141,6 @@ export interface WidgetField extends FieldPresentation {
   name?: string;
   fill?: boolean;
   containerWidth?: number;
-  /** Path of a second row field rendered beneath a list-cell value. */
-  subline?: string;
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
   /** Control association and presentation supplied by a descriptor-form owner. */

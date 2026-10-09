@@ -100,12 +100,16 @@ describe("resource metadata defaults", () => {
     expect(fieldsWithMetadataDefaults([{ name: "title", label: "Title" }], scoped)[0]?.label).toBe("Subject");
     expect(NOTE_METADATA.fields.title?.label).toBeUndefined();
   });
-  test("retains an authored subline path while resolving column metadata", () => {
+  test("resolves an authored subline through the same column descriptor owner", () => {
     const [column] = columnsWithMetadataDefaults(
       [{ field: "title", subline: "vendor.name" }],
       NOTE_METADATA,
     );
     expect(column?.subline).toBe("vendor.name");
+    expect(column?.sublineColumn).toMatchObject({
+      field: "vendor.name",
+      header: "Vendor Name",
+    });
   });
   test("bare enum columns use the badge with metadata labels and scoped tones", () => {
     const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
@@ -831,6 +835,33 @@ describe("relation column read expansion", () => {
       .toEqual(["id", { assignees: ["id", "display_name"] }]);
   });
 
+  test("a to-many subline resolves to the native relation-list descriptor", () => {
+    const seat = testDataResource("decisions.Seat", {
+      fields: [{ name: "assignees", kind: "list", scalar: null, relationModelLabel: "iam.User",
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+      query: testResourceQuery({ fields: { assignees: testQueryField("assignees", {
+        kind: "list", scalar: null, row: null,
+      }) } }),
+    });
+    const user = testDataResource("iam.User", {
+      recordRepresentation: "display_name",
+      fields: [{ name: "display_name", kind: "scalar", scalar: "String", readable: true,
+        aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
+    });
+    const schema = schemaFieldMetadataFromDataResources([seat, user]);
+    const [column] = columnsWithMetadataDefaults<Row>(
+      [{ field: "label", subline: "assignees" }],
+      schema.labels["decisions.Seat"]!,
+      schema,
+    );
+
+    expect(column?.sublineColumn).toMatchObject({
+      field: "assignees",
+      selectionPaths: ["assignees.id", "assignees.display_name"],
+      relationList: { model: "iam.User", identityPath: "id", labelPath: "display_name" },
+    });
+  });
+
   test("a related model's record colour rides with its to-many chips", () => {
     const file = testDataResource("storage.File", {
       fields: [{ name: "tags", kind: "list", scalar: null, relationModelLabel: "tags.Tag",
@@ -883,6 +914,17 @@ describe("relation column read expansion", () => {
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "evidence_refs" }], handle);
     expect(column?.field).toBe("evidence_refs");
     expect(column && "relationList" in column).toBe(false);
+  });
+
+  test("an object-list subline without a relation representation fails during resolution", () => {
+    const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
+      testDataResource("parties.PartyHandle"));
+    const schema = schemaFieldMetadataFromDataResources([handle.resource]);
+    expect(() => columnsWithMetadataDefaults<Row>(
+      [{ field: "label", subline: "evidence_refs" }],
+      handle,
+      schema,
+    )).toThrow(/Column subline "evidence_refs" is an object list without a resolved relation representation/);
   });
 
   test("an authored to-many selection and renderer need no target resource metadata", () => {

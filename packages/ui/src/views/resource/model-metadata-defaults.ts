@@ -9,6 +9,7 @@ import {
   modelMetadataForLabel,
   modelFieldForPath,
   recordColorField,
+  RelationRepresentationError,
   relationModelLabelForField,
   relationRepresentationForPath,
 } from "@angee/metadata";
@@ -220,66 +221,102 @@ export function columnsWithMetadataDefaults<TRow extends object>(
   metadata: ModelMetadata | null,
   schemaMetadata?: SchemaFieldMetadata,
 ): readonly ColumnDescriptor<TRow>[] {
-  return columns.map((column) => {
-    const field = metadata?.fields[column.field];
-    const options = enumOptions(field);
-    const widget = column.widget ?? (field?.kind === "enum" ? "statusBadge" : field?.widget);
-    const vocabularyTones = field?.tones
-      ? Object.fromEntries(Object.entries(field.tones).filter((entry): entry is [string, Tone] => isTone(entry[1])))
-      : undefined;
-    // A relation-terminal column (`product` or `project.product`) names a GraphQL
-    // object, which cannot be selected as a leaf. The metadata owner resolves its
-    // id + record-representation leaves and the scalar display path, so the query
-    // selects `{ product { id name } }` and the cell reads `product.name`.
-    const schema = schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA;
-    // A fully authored object-list cell owns its selection and presentation.
-    // Its schema-only target need not expose a resource representation.
-    const authoredList = column.render && column.selectionPaths?.length && metadata
-      && modelFieldForPath(column.field, metadata, schema)?.field.kind === "list";
-    const relationRepresentation = metadata && !authoredList
-      ? relationRepresentationForPath(
-          column.field,
-          metadata,
-          schema,
-        )
-      : null;
-    const relationLabelField = column.render || relationRepresentation?.relationList
-      ? null
-      : relationRepresentation?.displayPath ?? null;
-    return {
-      ...column,
-      ...(relationLabelField ? { id: column.id ?? column.field, field: relationLabelField } : {}),
-      ...(relationRepresentation
-        ? { selectionPaths: [...new Set([...relationRepresentation.selectionPaths, ...(column.selectionPaths ?? [])])] }
-        : {}),
-      ...(relationRepresentation?.relationList
-        ? { relationList: relationRepresentation.relationList, interactive: column.interactive ?? true }
-        : {}),
-      header: fieldLabel(column.field, field, column.header),
-      // A bare enum uses the badge; other columns inherit only the backend's
-      // explicit widget (e.g. `"money"` over a Decimal). Scalar and relation
-      // cells otherwise render natively. A
-      // relation resolved to its label path renders the scalar label as text, so it
-      // drops the relation's `many2one` edit widget.
-      ...(!relationLabelField && column.widget === undefined && widget
-        ? { widget }
-        : {}),
-      ...(column.currencyField === undefined && field?.currencyField
-        ? { currencyField: field.currencyField }
-        : {}),
-      ...(column.statusDisplay === undefined && field?.statusDisplay
-        ? { statusDisplay: field.statusDisplay }
-        : {}),
-      ...(column.options === undefined &&
-      isEnumOptionWidget(widget ?? undefined) &&
-      options.length > 0
-        ? { options }
-        : {}),
-      ...(column.tone === undefined && vocabularyTones
-        ? { tone: vocabularyTones }
-        : {}),
-    };
-  });
+  return columns.map((column) => columnWithMetadataDefaults(
+    column,
+    metadata,
+    schemaMetadata,
+  ));
+}
+
+function columnWithMetadataDefaults<TRow extends object>(
+  column: ColumnDescriptor<TRow>,
+  metadata: ModelMetadata | null,
+  schemaMetadata?: SchemaFieldMetadata,
+  isSubline = false,
+): ColumnDescriptor<TRow> {
+  const field = metadata?.fields[column.field];
+  const options = enumOptions(field);
+  const widget = column.widget ?? (field?.kind === "enum" ? "statusBadge" : field?.widget);
+  const vocabularyTones = field?.tones
+    ? Object.fromEntries(Object.entries(field.tones).filter((entry): entry is [string, Tone] => isTone(entry[1])))
+    : undefined;
+  // A relation-terminal column (`product` or `project.product`) names a GraphQL
+  // object, which cannot be selected as a leaf. The metadata owner resolves its
+  // id + record-representation leaves and the scalar display path, so the query
+  // selects `{ product { id name } }` and the cell reads `product.name`.
+  const schema = schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA;
+  const resolvedField = metadata
+    ? modelFieldForPath(column.field, metadata, schema)
+    : null;
+  // A fully authored object-list cell owns its selection and presentation.
+  // Its schema-only target need not expose a resource representation.
+  const authoredList = column.render && column.selectionPaths?.length
+    && resolvedField?.field.kind === "list";
+  const relationRepresentation = metadata && !authoredList
+    ? relationRepresentationForPath(
+        column.field,
+        metadata,
+        schema,
+      )
+    : null;
+  const relationLabelField = column.render || relationRepresentation?.relationList
+    ? null
+    : relationRepresentation?.displayPath ?? null;
+  if (
+    isSubline
+    && resolvedField?.field.kind === "list"
+    && resolvedField.field.scalar == null
+    && !relationRepresentation?.relationList
+  ) {
+    throw new RelationRepresentationError(
+      `Column subline "${column.field}" is an object list without a resolved relation representation.`,
+    );
+  }
+  const sublineColumn = column.sublineColumn ?? (column.subline
+    ? columnWithMetadataDefaults<TRow>(
+        { field: column.subline },
+        metadata,
+        schemaMetadata,
+        true,
+      )
+    : undefined);
+  return {
+    ...column,
+    ...(column.queryField === undefined && metadata?.resource.query.fields[column.field]
+      ? { queryField: metadata.resource.query.fields[column.field] }
+      : {}),
+    ...(relationLabelField ? { id: column.id ?? column.field, field: relationLabelField } : {}),
+    ...(relationRepresentation
+      ? { selectionPaths: [...new Set([...relationRepresentation.selectionPaths, ...(column.selectionPaths ?? [])])] }
+      : {}),
+    ...(relationRepresentation?.relationList
+      ? { relationList: relationRepresentation.relationList, interactive: column.interactive ?? true }
+      : {}),
+    header: fieldLabel(column.field, field, column.header),
+    // A bare enum uses the badge; other columns inherit only the backend's
+    // explicit widget (e.g. `"money"` over a Decimal). Scalar and relation
+    // cells otherwise render natively. A
+    // relation resolved to its label path renders the scalar label as text, so it
+    // drops the relation's `many2one` edit widget.
+    ...(!relationLabelField && column.widget === undefined && widget
+      ? { widget }
+      : {}),
+    ...(column.currencyField === undefined && field?.currencyField
+      ? { currencyField: field.currencyField }
+      : {}),
+    ...(column.statusDisplay === undefined && field?.statusDisplay
+      ? { statusDisplay: field.statusDisplay }
+      : {}),
+    ...(column.options === undefined &&
+    isEnumOptionWidget(widget ?? undefined) &&
+    options.length > 0
+      ? { options }
+      : {}),
+    ...(column.tone === undefined && vocabularyTones
+      ? { tone: vocabularyTones }
+      : {}),
+    ...(sublineColumn ? { sublineColumn } : {}),
+  };
 }
 
 /** Apply metadata-derived field labels and enum options without overriding props. */

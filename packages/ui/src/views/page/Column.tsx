@@ -80,6 +80,8 @@ export interface ColumnDescriptor<
   tone?: Record<string, Tone>;
   /** Path of a second field rendered beneath the value as a stacked label/value pair. */
   subline?: string;
+  /** Metadata-resolved descriptor for {@link subline}. */
+  sublineColumn?: ColumnDescriptor<TRow>;
   /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
   currencyField?: string;
   /** Status widget shape projected from the field unless explicitly authored. */

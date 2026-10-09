@@ -10,7 +10,6 @@ import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, readPath } from "./cell-utils";
 import { groupLabel, tableGroupAxes } from "./grouping";
 import { queryForColumns } from "../resource-query";
-import { columnsWithMetadataDefaults } from "../model-metadata-defaults";
 export interface BuildColumnsOptions {
   groupStack?: readonly ResourceViewGroup[];
   metadata?: ModelMetadata | null;
@@ -126,17 +125,7 @@ export function ListCellContent<TRow extends Row>({
 }): React.ReactNode {
   const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
-  const sublineColumn = column.subline
-    ? columnsWithMetadataDefaults<TRow>(
-        [{
-          field: column.subline,
-          ...(metadata?.resource.query.fields[column.subline]
-            ? { queryField: metadata.resource.query.fields[column.subline] }
-            : {}),
-        }],
-        metadata ?? null,
-      )[0]
-    : undefined;
+  const sublineColumn = column.sublineColumn;
   const sublineWidget = useResolvedWidget(sublineColumn?.widget ?? "");
   if (column.showWhen && !column.showWhen(row)) return null;
   const primary = resolvedCellContent(column, row, t, metadata, widget);
@@ -152,7 +141,6 @@ export function ListCellContent<TRow extends Row>({
         metadata,
         sublineWidget,
       )}
-      label={<span className="sr-only">{column.header ?? column.field}</span>}
       orientation="stacked"
       value={primary}
     />
@@ -170,14 +158,13 @@ function resolvedCellContent<TRow extends Row>(
     const Cell = widget.cell;
     return (
       <Cell
-        value={readPath(row, column.queryField?.row?.path ?? column.field)}
+        value={readPath(row, column.field)}
         row={row}
         field={{
           name: column.field,
           label: column.header,
           options: column.options,
           tone: column.tone,
-          ...(column.subline ? { subline: column.subline } : {}),
           ...(column.currencyField ? { currencyField: column.currencyField } : {}),
           ...(column.statusDisplay ? { statusDisplay: column.statusDisplay } : {}),
         }}

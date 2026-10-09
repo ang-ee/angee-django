@@ -1,13 +1,20 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
+import {
+  schemaFieldMetadataFromDataResources,
+  type DataResourceFieldMetadata,
+  type DataResourceMetadata,
+  type ModelMetadata,
+  type SchemaFieldMetadata,
+} from "@angee/metadata";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
 import { afterEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { WidgetRenderProps } from "../../widgets";
+import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 
 import {
   buildColumns,
@@ -191,55 +198,46 @@ test("passes a column's status display to its cell widget", () => {
   expect(screen.getByText("dot")).toBeTruthy();
 });
 
-test("renders a widget column's subline through the subline field widget", () => {
+test("renders a resolved relation subline from its native label representation", () => {
   const renderPrimary = vi.fn(({ value, field }: WidgetRenderProps) => (
-    <span data-subline={field?.subline}>{String(value)}</span>
+    <span data-field={field?.name}>{String(value)}</span>
   ));
-  const renderDetail = vi.fn(({ value }: WidgetRenderProps) => (
-    <span>{`Vendor: ${String(value)}`}</span>
-  ));
-  const baseMetadata = modelMetadata("vendor", "String");
-  const metadata: ModelMetadata = {
-    ...baseMetadata,
-    resource: {
-      ...baseMetadata.resource,
-      query: testResourceQuery({
-        fields: { vendor: testQueryField("vendor.name") },
-      }),
-    },
-    fields: {
-      ...baseMetadata.fields,
-      vendor: { ...baseMetadata.fields.vendor!, widget: "test.detail" },
-    },
-  };
+  const { metadata, schema } = relationSublineMetadata();
+  const [column] = columnsWithMetadataDefaults(
+    [{
+      field: "amount",
+      header: "Amount",
+      subline: "vendor",
+      widget: "test.primary",
+    }],
+    metadata,
+    schema,
+  );
   render(
     <AppRuntimeProvider runtime={{ widgets: {
       "test.primary": { read: renderPrimary, cell: renderPrimary },
-      "test.detail": { read: renderDetail, cell: renderDetail },
     } }}>
       <ListCellContent
-        column={{
-          field: "amount",
-          header: "Amount",
-          subline: "vendor",
-          widget: "test.primary",
-        }}
+        column={column!}
         metadata={metadata}
         row={{ amount: 125, vendor: { name: "Acme Corp" } }}
       />
     </AppRuntimeProvider>,
   );
 
-  expect(screen.getByText("125").getAttribute("data-subline")).toBe("vendor");
-  const detail = screen.getByText("Vendor: Acme Corp");
-  expect(detail.parentElement?.className).toContain("text-fg-muted");
-  expect(screen.getByText("Amount").classList.contains("sr-only")).toBe(true);
+  expect(screen.getByText("125").getAttribute("data-field")).toBe("amount");
+  expect(screen.getByText("Acme Corp").className).toContain("text-fg-muted");
+  expect(screen.queryByText("Amount")).toBeNull();
 });
 
 test("renders a plain column's subline beneath its primary value", () => {
+  const [column] = columnsWithMetadataDefaults(
+    [{ field: "reference", header: "Reference", subline: "vendor.name" }],
+    null,
+  );
   render(
     <ListCellContent
-      column={{ field: "reference", header: "Reference", subline: "vendor.name" }}
+      column={column!}
       row={{ reference: "INV-001", vendor: { name: "Acme Corp" } }}
     />,
   );
@@ -248,6 +246,54 @@ test("renders a plain column's subline beneath its primary value", () => {
   const detail = screen.getByText("Acme Corp");
   expect(detail.className).toContain("text-fg-muted");
   expect(primary.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("renders a resolved to-many relation subline as retained record links", () => {
+  const { metadata, schema, user } = relationSublineMetadata();
+  const [column] = columnsWithMetadataDefaults(
+    [{ field: "reference", subline: "approvers" }],
+    metadata,
+    schema,
+  );
+  const { Provider, clearClients } = createUiTestProviders({ resources: [user] });
+  const runtime = {
+    routeHref: createRouteHref([
+      { name: "iam.users", path: "/iam/users" },
+      { name: "iam.users.record", path: "/iam/users/$id" },
+    ]),
+    routesByResource: {
+      "iam.User": {
+        collection: "iam.users",
+        record: { name: "iam.users.record", param: "id" },
+      },
+    },
+  };
+  try {
+    render(
+      <Provider>
+        <AppRuntimeProvider runtime={runtime}>
+          <ListCellContent
+            column={column!}
+            metadata={metadata}
+            row={{
+              reference: "INV-001",
+              approvers: [
+                { id: "usr_1", display_name: "Ada" },
+                { id: "usr_2", display_name: "Lin" },
+              ],
+            }}
+          />
+        </AppRuntimeProvider>
+      </Provider>,
+    );
+    expect(screen.getByRole("link", { name: "Ada" }).getAttribute("href"))
+      .toBe("/iam/users/usr_1");
+    expect(screen.getByRole("link", { name: "Lin" }).getAttribute("href"))
+      .toBe("/iam/users/usr_2");
+  } finally {
+    cleanup();
+    clearClients();
+  }
 });
 
 test("to-many relation cells link each retained record label without another read", () => {
@@ -348,4 +394,75 @@ function modelMetadata(name: string, scalar: string): ModelMetadata {
     }],
   });
   return schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+}
+
+function relationSublineMetadata(): {
+  metadata: ModelMetadata;
+  schema: SchemaFieldMetadata;
+  user: DataResourceMetadata;
+} {
+  const invoice = testDataResource("billing.Invoice", {
+    fields: [
+      resourceField("amount", "scalar", { scalar: "Decimal" }),
+      resourceField("reference", "scalar", { scalar: "String" }),
+      resourceField("vendor", "relation", {
+        relationModelLabel: "parties.Vendor",
+        relationObject: true,
+      }),
+      resourceField("approvers", "list", {
+        scalar: null,
+        relationModelLabel: "iam.User",
+      }),
+    ],
+    query: testResourceQuery({ fields: {
+      amount: testQueryField("amount", { scalar: "Decimal" }),
+      reference: testQueryField("reference"),
+      vendor: testQueryField("vendor.id", {
+        kind: "relation",
+        scalar: "ID",
+        row: { path: "vendor.id", paths: ["vendor.id"] },
+        relation: {
+          model: "parties.Vendor",
+          identityPath: "vendor.id",
+          labelPath: "vendor.name",
+        },
+      }),
+      approvers: testQueryField("approvers", {
+        kind: "list",
+        scalar: null,
+        row: null,
+      }),
+    } }),
+  });
+  const vendor = testDataResource("parties.Vendor", {
+    recordRepresentation: "name",
+    fields: [resourceField("name", "scalar", { scalar: "String" })],
+  });
+  const user = testDataResource("iam.User", {
+    recordRepresentation: "display_name",
+    fields: [resourceField("display_name", "scalar", { scalar: "String" })],
+  });
+  const schema = schemaFieldMetadataFromDataResources([invoice, vendor, user]);
+  return {
+    metadata: schema.labels[invoice.modelLabel]!,
+    schema,
+    user,
+  };
+}
+
+function resourceField(
+  name: string,
+  kind: DataResourceFieldMetadata["kind"],
+  extra: Partial<DataResourceFieldMetadata> = {},
+): DataResourceFieldMetadata {
+  return {
+    name,
+    kind,
+    readable: true,
+    aggregatable: false,
+    creatable: false,
+    updatable: false,
+    requiredOnCreate: false,
+    ...extra,
+  };
 }

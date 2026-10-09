@@ -33,16 +33,37 @@ test("renders inline and stacked definition pairs with their declared layouts", 
   expect(document.querySelectorAll("dd")).toHaveLength(2);
 });
 
-test("associates div labels and values without emitting definition elements", () => {
+test("labels a div pair as a group without labelling its value twice", () => {
   const { container } = render(
     <DefinitionPair as="div" label="Status" value="Ready" />,
   );
   const label = screen.getByText("Status");
+  const group = screen.getByRole("group", { name: "Status" });
   const value = screen.getByText("Ready").parentElement;
 
   expect(label.id).toBeTruthy();
-  expect(value?.getAttribute("aria-labelledby")).toBe(label.id);
+  expect(group.getAttribute("aria-labelledby")).toBe(label.id);
+  expect(value?.hasAttribute("aria-labelledby")).toBe(false);
   expect(container.querySelector("dt, dd")).toBeNull();
+});
+
+test("renders an unlabelled div pair without an empty label row or aria association", () => {
+  render(
+    <DefinitionPair
+      as="div"
+      data-testid="cell-pair"
+      detail="Acme Corp"
+      orientation="stacked"
+      value="$1,234.00"
+    />,
+  );
+
+  const pair = screen.getByTestId("cell-pair");
+  expect(pair.children).toHaveLength(2);
+  expect(pair.hasAttribute("role")).toBe(false);
+  expect(pair.hasAttribute("aria-labelledby")).toBe(false);
+  expect(screen.getByText("$1,234.00").className).toContain("row-start-1");
+  expect(screen.getByText("Acme Corp").className).toContain("row-start-2");
 });
 
 test("renders the declared empty value when the value is absent", () => {
