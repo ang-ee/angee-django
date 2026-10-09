@@ -11,6 +11,7 @@ import httpx2
 import pytest
 import strawberry
 from django.core.cache import cache
+from django.core.management import call_command
 from rebac import ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
 
@@ -24,6 +25,7 @@ from angee.operator.daemon import (
     OperatorInstanceKind,
     WorkspaceStatus,
 )
+from angee.operator.management.commands import operator_schema as operator_schema_command
 from angee.testing.permissions import install_permission_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
@@ -707,3 +709,20 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
 
     # The single role-membership row opens `read` through `reader->effective_member`.
     assert backend.has_access(subject=operator, action="read", resource=connection_ref)
+
+
+def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, settings, tmp_path) -> None:
+    """The stack job's export lands in the runtime, never in the operator package's committed snapshot."""
+
+    settings.ANGEE_RUNTIME_DIR = tmp_path
+    stub = SimpleNamespace(
+        admin_bearer="token", server_base="http://operator", introspect_sdl=lambda: "type Query { ping: String }",
+    )
+    monkeypatch.setattr(operator_schema_command.OperatorDaemon, "from_settings", classmethod(lambda cls: stub))
+    committed = Path(operator_schema_command.__file__).resolve().parents[2] / "web" / "schema" / "operator.graphql"
+    before = committed.read_bytes()
+
+    call_command("operator_schema", retries=1)
+
+    assert (tmp_path / "schemas" / "external" / "operator.graphql").read_text() == "type Query { ping: String }\n"
+    assert committed.read_bytes() == before

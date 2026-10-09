@@ -190,5 +190,16 @@ describe("angee-web-codegen", () => {
     );
     expect(appModule).toContain('import addon0 from "../../addon-web/src/index.tsx";');
     expect(generatedDocuments).toContain("DemoDocument");
+
+    // A stack's live export in runtime/schemas/external wins over the committed SDL.
+    const liveDir = join(runtime, "schemas", "external");
+    await mkdir(liveDir, { recursive: true });
+    await writeFile(join(liveDir, "demo.graphql"), "type Query { ping: String! pong: String! }\n");
+    await writeFile(
+      join(addon, "src", "documents.demo.ts"),
+      "export const Demo = /* GraphQL */ `query Demo { ping }`;\nexport const Pong = /* GraphQL */ `query Pong { pong }`;\n",
+    );
+    await run("node", [CODEGEN, "--runtime", runtime, "--web-root", web]);
+    expect(await readFile(join(runtime, "gql", "demo", "graphql.ts"), "utf8")).toContain("PongDocument");
   }, 30_000);
 });

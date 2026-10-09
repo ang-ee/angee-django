@@ -69,10 +69,15 @@ for (const name of djangoSchemas) {
   await runCodegen(name, schemaPath, runtimeDir, documentGlobs(name, documentRoots), false);
   buildOperationDocuments(name, runtimeDir);
 }
-// External schemas (the operator daemon): the addon owns the committed SDL, read
-// straight from node_modules. No Angee resource metadata, not a createApp schema.
+// External schemas (the operator daemon): the live export a stack job writes into
+// runtime/schemas/external/<schema>.graphql when present, else the addon's
+// committed SDL read straight from node_modules. No Angee resource metadata, not
+// a createApp schema; the subdirectory keeps it out of the Django schema scan.
 for (const entry of externalEntries) {
-  const schemaPath = path.resolve(webRoot, "node_modules", entry.package, entry.sdl);
+  const liveSchema = path.join(runtimeDir, "schemas", "external", `${entry.schema}.graphql`);
+  const schemaPath = existsSync(liveSchema)
+    ? liveSchema
+    : path.resolve(webRoot, "node_modules", entry.package, entry.sdl);
   const documents = documentRoots.map((root) => `${root}/**/${entry.documents}`);
   await runCodegen(entry.schema, schemaPath, runtimeDir, documents, entry.types === true);
 }
@@ -115,8 +120,8 @@ function readManifest(runtimeDir) {
 
 function schemaNamesFor(runtimeDir) {
   // The SDL on disk is the source of truth for which schemas exist: the Django
-  // `schema` command emits `runtime/schemas/<name>.graphql`, and external owners
-  // (the operator daemon) deposit their SDL into the same directory.
+  // `schema` command emits `runtime/schemas/<name>.graphql`; external owners'
+  // live SDL lives in the `external/` subdirectory, which this scan skips.
   const schemaDir = path.join(runtimeDir, "schemas");
   if (!existsSync(schemaDir)) return [];
   return readdirSync(schemaDir)

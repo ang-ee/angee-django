@@ -231,7 +231,8 @@ class OperatorDaemon:
         The daemon owns its schema; the console derives its types from it instead
         of hand-maintaining them. This reuses the addon's authenticated connection
         (the admin bearer over the absolute GraphQL URL) to fetch a fresh contract
-        — ``manage.py operator_schema`` writes it where frontend codegen reads it.
+        — ``manage.py operator_schema`` writes it into the runtime, where frontend
+        codegen reads it ahead of the package's committed snapshot.
         Returns ``None`` when the daemon is unset or unreachable.
         """
 

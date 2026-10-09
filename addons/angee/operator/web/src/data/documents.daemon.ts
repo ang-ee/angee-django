@@ -1,5 +1,6 @@
 // Operations against the operator daemon. Field selections are validated against
-// the daemon's own SDL (`runtime/schemas/operator.graphql`) by the unified
+// the daemon's own SDL (`runtime/schemas/external/operator.graphql`, else the
+// committed `web/schema/operator.graphql`) by the unified
 // `angee-web-codegen` pass; this file is intentionally not named `documents.ts`,
 // because the Django console codegen scans that filename for console operations.
 
