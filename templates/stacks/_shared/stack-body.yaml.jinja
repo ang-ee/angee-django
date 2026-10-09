@@ -57,7 +57,9 @@ ingress:
   routing: path
   tls: {% if ingress_domain_value == "localhost" %}"off"   # quoted: bare YAML `off` is boolean false; the operator wants the string{% else %}auto{% endif %}
   domain: {{ ingress_domain_value }}
-{% if ingress_domain_value == "localhost" %}{# edge_port applies only in localhost mode; automatic TLS pins host ports 443/80. #}  # Host port the edge publishes. 80 for the base stack; a workspace leases a distinct
+{% if ingress_aliases %}  # Further host names served as the same site, each with its own certificate.
+  aliases: [{{ ingress_aliases }}]
+{% endif %}{% if ingress_domain_value == "localhost" %}{# edge_port applies only in localhost mode; automatic TLS pins host ports 443/80. #}  # Host port the edge publishes. 80 for the base stack; a workspace leases a distinct
   # value (operator.port_pool.edge) so parallel stacks on one host don't all fight for :80.
   port: {{ edge_port }}{% endif %}
   # The edge runs as a container; this dev stack's operator is `runtime: local`, so
@@ -483,7 +485,7 @@ services:
       ANGEE_DJANGO_URL: http://django:8000
       ANGEE_UI_PORT: "{{ ui_port }}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"{% if ingress_domain_value == "localhost" %}{% else %}
-      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}"{% endif %}{% if sentry_web_dsn %}
+      ANGEE_UI_ALLOWED_HOSTS: "{{ ingress_domain_value }}{% if ingress_aliases %},{{ ingress_aliases }}{% endif %}"{% endif %}{% if sentry_web_dsn %}
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
     command:

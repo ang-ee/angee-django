@@ -229,6 +229,12 @@ mounts resolve on that filesystem) — ssh in and run `angee` there rather than
 pointing a remote `DOCKER_HOST` at it. With the default `localhost` domain the
 edge stays plain HTTP on `edge_port` and the UX is published directly.
 
+To serve further host names from the same stack (for example one per app that
+`ANGEE_UI.shell.hosts` selects), point their DNS at the host and list them in
+`ingress_aliases`, comma-separated: `--input ingress_aliases=ap.example.com,crm.example.com`.
+The edge serves them as the same site with a certificate each; `ingress_domain`
+stays the canonical origin. This needs an operator with `ingress.aliases` (v0.20.0).
+
 ### Quickstart: a dev VPS end to end
 
 The complete recipe, validated on a clean Ubuntu 24.04 VPS — from empty box to

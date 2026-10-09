@@ -113,6 +113,10 @@ _angee:
       type: str
       default: localhost
       help: Public DNS name serves the UX through the Caddy edge at https://<name> with automatic Let's Encrypt TLS on host ports 443/80; localhost keeps plain local HTTP on edge_port.
+    ingress_aliases:
+      type: str
+      default: ""
+      help: Comma-separated further public host names the edge serves as the same site as ingress_domain, each with its own certificate (e.g. "ap.example.com,crm.example.com").
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, settings/workspace files).
   # The ref is relative to THIS template's directory; downstream it can pin a
@@ -305,6 +309,11 @@ ingress_domain:
   type: str
   default: localhost
   help: Public DNS name serves the UX through the Caddy edge at https://<name> with automatic Let's Encrypt TLS on host ports 443/80; localhost keeps plain local HTTP on edge_port.
+
+ingress_aliases:
+  type: str
+  default: ""
+  help: Comma-separated further public host names the edge serves as the same site as ingress_domain, each with its own certificate (e.g. "ap.example.com,crm.example.com").
 
 # Which addon roster the host composes. `base` renders the consumer scaffold
 # (base addons only); `full` renders the whole platform composition — every
