@@ -666,6 +666,32 @@ describe("money currencyField plumbing", () => {
   });
 });
 
+describe("statusDisplay plumbing", () => {
+  const metadata = canonicalModel({
+    status: {
+      name: "status",
+      kind: "enum",
+      statusDisplay: "dot",
+    },
+  }, testDataResource("example.Document"));
+
+  test("a bare column and form field inherit the backend display", () => {
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "status" }], metadata);
+    const [field] = fieldsWithMetadataDefaults([{ name: "status" }], metadata);
+
+    expect(column?.statusDisplay).toBe("dot");
+    expect(field?.statusDisplay).toBe("dot");
+  });
+
+  test("explicit descriptor displays win over metadata", () => {
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "status", statusDisplay: "text" }], metadata);
+    const [field] = fieldsWithMetadataDefaults([{ name: "status", statusDisplay: "pill" }], metadata);
+
+    expect(column?.statusDisplay).toBe("text");
+    expect(field?.statusDisplay).toBe("pill");
+  });
+});
+
 describe("relation column read expansion", () => {
   const metadata = canonicalModel({
       product: {

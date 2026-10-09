@@ -389,7 +389,7 @@ shared UI copy through an addon bundle.
   `false`, zero, or empty values.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
   — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
-  (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
+  (`solid`/`soft`/`surface`/`outline`/`ghost`/`text`). Drive recipe color through
   `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
   the retired `default`/`error` names (they are `neutral`/`danger`).
 - **Status → tone is owned once** by
@@ -405,8 +405,12 @@ shared UI copy through an addon bundle.
   convention, else `brand`. Scoped `resources.<model>.fields.<field>.tones`
   colors one column without claiming a global status word; its option label
   remains the displayed text. Bare enum columns use `statusBadge`, and scalar
-  stages can declare it. A run
-  state — stopped/running/error/warning — renders as `colorDot` (grey/green/red/amber);
+  stages can declare it. A field's backend `status_display` metadata selects the
+  `pill` (default), `dot`, or `text` Badge recipe everywhere that field renders;
+  `<Column statusDisplay>` and `<Field statusDisplay>` are explicit authored
+  overrides. `colorDot` is the compatibility widget name that defaults this same
+  owner to `dot`, not a separate renderer. A run
+  state — stopped/running/error/warning — therefore uses the dot display (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
   rather than overloading one column with both axes.

@@ -7,6 +7,7 @@ import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-tabl
 import { afterEach, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
+import type { WidgetRenderProps } from "../../widgets";
 
 import {
   buildColumns,
@@ -172,6 +173,22 @@ test("renders metadata enum labels in the normal list-cell path", () => {
   const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   render(<ListCellContent column={{ field: "status" }} row={{ status: "PENDING" }} metadata={metadata} />);
   expect(screen.getByText("Needs approval")).toBeTruthy();
+});
+
+test("passes a column's status display to its cell widget", () => {
+  const renderStatus = vi.fn(({ field }: WidgetRenderProps) => <span>{field?.statusDisplay}</span>);
+  render(
+    <AppRuntimeProvider runtime={{ widgets: {
+      "test.status": { read: renderStatus, cell: renderStatus },
+    } }}>
+      <ListCellContent
+        column={{ field: "status", statusDisplay: "dot", widget: "test.status" }}
+        row={{ status: "ACTIVE" }}
+      />
+    </AppRuntimeProvider>,
+  );
+
+  expect(screen.getByText("dot")).toBeTruthy();
 });
 
 test("to-many relation cells link each retained record label without another read", () => {

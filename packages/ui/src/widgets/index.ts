@@ -36,6 +36,7 @@ export {
 
 export type {
   FieldPresentation,
+  StatusDisplay,
   VisibilityBinding,
   VisibilityAction,
   WidgetDefinition,

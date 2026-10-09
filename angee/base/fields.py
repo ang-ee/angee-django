@@ -5,7 +5,8 @@ of each concern. Angee adds only the naming and the framework default; the
 library owns the behavior.
 
 Fields may also declare projection facts for data-resource metadata:
-``angee_widget``, ``angee_scalar_hint``, and ``angee_currency_field``. The
+``angee_widget``, ``angee_scalar_hint``, ``angee_currency_field``, and
+``angee_status_display``. The
 GraphQL classifier reads those inert attributes before falling back to stock
 Django field types, so a field's owner states its own wire vocabulary.
 

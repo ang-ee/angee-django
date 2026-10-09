@@ -21,6 +21,7 @@ export {
   type ModelMetadata,
   type RelationRepresentationSelection,
   type SchemaFieldMetadata,
+  type StatusDisplay,
 } from "./artifact.js";
 
 export { ResourceQuery, GroupAxis, QueryParseError, type QueryFilter, type FilterRecord, type FilterValue, type FilterPrimitive, type GroupBucket, type GroupProjection, type LocalQueryField } from "./query.js";

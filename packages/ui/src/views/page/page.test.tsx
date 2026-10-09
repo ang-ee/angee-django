@@ -67,6 +67,8 @@ describe("page element markers", () => {
           selectionPaths={["title.value", "title.label"]}
           header="Title"
           widget="text"
+          currencyField="currency"
+          statusDisplay="dot"
           sortable
           hiddenByDefault
           hideable={false}
@@ -88,6 +90,8 @@ describe("page element markers", () => {
       selectionPaths: ["title.value", "title.label"],
       header: "Title",
       widget: "text",
+      currencyField: "currency",
+      statusDisplay: "dot",
       sortable: true,
       hiddenByDefault: true,
       hideable: false,

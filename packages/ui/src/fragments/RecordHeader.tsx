@@ -81,7 +81,9 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
             <Heading className={styles.title()}>{title}</Heading>
             {type ? <Badge>{type}</Badge> : null}
             {status ? (
-              <Badge tone={status.tone ?? "neutral"}>{status.label}</Badge>
+              <Badge density="compact" mark="icon" shape="pill" tone={status.tone ?? "neutral"}>
+                {status.label}
+              </Badge>
             ) : null}
           </div>
           {meta ? <div className={styles.meta()}>{meta}</div> : null}

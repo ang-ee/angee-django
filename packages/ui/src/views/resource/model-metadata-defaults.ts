@@ -267,6 +267,9 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       ...(column.currencyField === undefined && field?.currencyField
         ? { currencyField: field.currencyField }
         : {}),
+      ...(column.statusDisplay === undefined && field?.statusDisplay
+        ? { statusDisplay: field.statusDisplay }
+        : {}),
       ...(column.options === undefined &&
       isEnumOptionWidget(widget ?? undefined) &&
       options.length > 0
@@ -306,6 +309,9 @@ export function fieldsWithMetadataDefaults(
       label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.currencyField === undefined && fieldMetadata?.currencyField
         ? { currencyField: fieldMetadata.currencyField }
+        : {}),
+      ...(field.statusDisplay === undefined && fieldMetadata?.statusDisplay
+        ? { statusDisplay: fieldMetadata.statusDisplay }
         : {}),
       ...(field.options === undefined &&
       isEnumOptionWidget(widget ?? field.kind) &&

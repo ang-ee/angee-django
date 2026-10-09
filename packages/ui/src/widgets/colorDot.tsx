@@ -1,33 +1,20 @@
 import type { ReactElement } from "react";
 
-import { StatusDot } from "../ui/status-icon";
-import { useStatusTone } from "./use-status-tone";
-import { StatusSelectEdit } from "./statusSelectEdit";
-import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./types";
+import { statusBadgeWidget } from "./statusBadge";
+import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
 /**
- * The colored status dot: a `StatusDot` tinted by the shared `STATUS_TONES` vocabulary
- * (grey/green/red/amber for stopped/running/error/warning) next to the value's label.
- * The light-weight sibling of `statusBadge` — a bare dot, no pill — for a run state:
- * an agent or service running/stopped/error, or any small status enum (e.g. a task's
- * blocked/ready). A `<Column tone>` map overrides a value's tone; `edit` reuses the
- * select so the field is still writable in a form.
+ * Compatibility name for status fields that historically selected the dot shape.
+ * Rendering and editing stay owned by `statusBadge`; an explicit `statusDisplay`
+ * still wins when a caller is migrating this alias.
  */
-function ColorDotRead({ value, field }: WidgetRenderProps<string>): ReactElement {
-  const statusTone = useStatusTone();
-  const label = optionLabel(field?.options, value);
-  // The dot carries an accessible label even when the value isn't a known option.
-  const ariaLabel = typeof label === "string" && label ? label : String(value ?? "");
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <StatusDot tone={statusTone(value, field?.tone)} label={ariaLabel || undefined} />
-      <span>{label}</span>
-    </span>
-  );
+function ColorDotRead({ field, ...props }: WidgetRenderProps<string>): ReactElement {
+  const Read = statusBadgeWidget.read;
+  return <Read {...props} field={{ ...field, statusDisplay: field?.statusDisplay ?? "dot" }} />;
 }
 
 export const colorDotWidget = {
-  edit: StatusSelectEdit,
+  edit: statusBadgeWidget.edit,
   read: ColorDotRead,
   cell: ColorDotRead,
 } satisfies WidgetDefinition<string>;

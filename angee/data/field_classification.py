@@ -6,11 +6,12 @@ import datetime
 import decimal
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from django.db import models
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD
+from angee.data.metadata import StatusDisplay
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
 """Supported resource field kind names."""
@@ -28,7 +29,6 @@ RESOURCE_FIELD_WIDGETS = frozenset({
 
 ENUM_FIELD_WIDGETS = frozenset({"select", "tone"})
 """Widgets that pick one of an enum's own values; ``tone`` shows each in its colour."""
-
 
 def is_resource_field_widget(value: str) -> bool:
     """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
@@ -168,6 +168,18 @@ def money_currency_field(
     return _declared_projection_fact(field, metadata, MONEY_CURRENCY_FIELD_METADATA_KEY)
 
 
+def status_display(
+    field: models.Field[Any, Any] | None,
+    metadata: Mapping[str, object] | None = None,
+) -> StatusDisplay | None:
+    """Return the status shape a field declares for presentation metadata, if any."""
+
+    return cast(
+        StatusDisplay | None,
+        _declared_projection_fact(field, metadata, STATUS_DISPLAY_METADATA_KEY),
+    )
+
+
 def resource_field_widget(
     field: models.Field[Any, Any] | None,
     kind: str,
@@ -216,6 +228,9 @@ def resource_field_widget(
 
 MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
 """Field-metadata key naming a money projection's currency path."""
+
+STATUS_DISPLAY_METADATA_KEY = "angee_status_display"
+"""Field-metadata key naming a status projection's display shape."""
 
 
 def _declared_projection_fact(

@@ -1,21 +1,35 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
-import { toneClass, toneFill, type Fill, type Tone } from "../lib/tones";
+import {
+  FEEDBACK_INTENTS,
+  toneClass,
+  toneFill,
+  type FeedbackIntent,
+  type Fill,
+  type Tone,
+} from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
+import { StatusDot, StatusIcon } from "./status-icon";
 
 export const badgeVariants = tv({
-  base: "inline-flex min-w-0 items-center gap-1 whitespace-nowrap border font-medium leading-none",
+  base: "inline-flex min-w-0 items-center gap-1 whitespace-nowrap",
   variants: {
     shape: {
       rounded: "rounded-6",
       pill: "rounded-full",
     },
     density: {
-      default: "h-tag-h px-2 text-2xs",
-      compact: "h-tag-h px-1.5 text-2xs",
-      micro: "h-tag-h px-1 text-2xs",
-      tiny: "h-tag-h px-1 text-2xs",
+      default: "h-tag-h border px-2 text-2xs font-medium leading-none",
+      compact: "h-tag-h border px-1.5 text-2xs font-medium leading-none",
+      micro: "h-tag-h border px-1 text-2xs font-medium leading-none",
+      tiny: "h-tag-h border px-1 text-2xs font-medium leading-none",
+      bare: "gap-1.5",
+    },
+    mark: {
+      none: "",
+      dot: "",
+      icon: "",
     },
     block: {
       true: "flex w-full justify-between truncate text-left",
@@ -25,6 +39,7 @@ export const badgeVariants = tv({
   defaultVariants: {
     shape: "rounded",
     density: "default",
+    mark: "none",
     block: false,
   },
 });
@@ -61,6 +76,7 @@ type CountBadgeRecipeProps = VariantProps<typeof countBadgeVariants>;
 
 export type BadgeShape = NonNullable<BadgeRecipeProps["shape"]>;
 export type BadgeDensity = NonNullable<BadgeRecipeProps["density"]>;
+export type BadgeMark = NonNullable<BadgeRecipeProps["mark"]>;
 export type CountBadgeTone = NonNullable<CountBadgeRecipeProps["tone"]>;
 export type CountBadgeSize = NonNullable<CountBadgeRecipeProps["size"]>;
 
@@ -80,6 +96,7 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badg
     variant = "soft",
     shape = "rounded",
     density = "default",
+    mark = "none",
     block = false,
     className,
     children,
@@ -87,16 +104,21 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badg
   },
   ref,
 ) {
+  const iconTone = FEEDBACK_INTENTS.includes(tone as FeedbackIntent)
+    ? tone as FeedbackIntent
+    : "muted";
   return (
     <span
       ref={ref}
       className={cn(
-        badgeVariants({ shape, density, block }),
+        badgeVariants({ shape, density, mark, block }),
         toneClass(tone, variant),
         className,
       )}
       {...props}
     >
+      {mark === "dot" ? <StatusDot tone={tone} size="sm" /> : null}
+      {mark === "icon" ? <StatusIcon tone={iconTone} size="sm" /> : null}
       {children}
     </span>
   );

@@ -197,6 +197,8 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
       ? { interactive: props.interactive }
       : {}),
     ...(props.tone !== undefined ? { tone: props.tone } : {}),
+    ...(props.currencyField !== undefined ? { currencyField: props.currencyField } : {}),
+    ...(props.statusDisplay !== undefined ? { statusDisplay: props.statusDisplay } : {}),
   }));
 }
 

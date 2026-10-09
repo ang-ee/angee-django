@@ -1,7 +1,6 @@
 import type { ReactElement } from "react";
 
 import { Badge } from "../ui/badge";
-import { StatusIcon } from "../ui/status-icon";
 import { statusLabel } from "../lib/labels";
 import { useStatusTone } from "./use-status-tone";
 import { StatusSelectEdit } from "./statusSelectEdit";
@@ -17,15 +16,15 @@ function StatusBadgeRead({
     : statusLabel(value ?? "");
   if (!value) return <span>—</span>;
   const tone = statusTone(value, field?.tone);
-  const iconTone = tone === "info" || tone === "success" || tone === "warning" || tone === "danger"
-    ? tone : "muted";
+  const display = field?.statusDisplay ?? "pill";
   return (
     <Badge
       tone={tone}
-      density="compact"
-      shape="pill"
+      density={display === "pill" ? "compact" : "bare"}
+      mark={display === "pill" ? "icon" : display === "dot" ? "dot" : "none"}
+      shape={display === "pill" ? "pill" : "rounded"}
+      variant={display === "pill" ? "soft" : "text"}
     >
-      {iconTone === "muted" ? null : <StatusIcon tone={iconTone} size="sm" />}
       {label}
     </Badge>
   );
