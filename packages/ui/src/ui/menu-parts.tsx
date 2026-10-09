@@ -17,6 +17,7 @@ import { cn } from "../lib/cn";
 import { useInAppLink } from "../lib/in-app-link";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE } from "./popover";
+import { sectionEyebrowVariants } from "./section-eyebrow";
 import { textRoleVariants } from "./text";
 
 // DropdownMenu and ContextMenu are the same styled-part set over Base UI's
@@ -35,7 +36,10 @@ const MENU_SLOTS = {
     "absolute left-2 flex size-3.5 items-center justify-center text-brand [&_.glyph]:size-3.5",
   radioIndicator:
     "absolute left-2 flex size-3.5 items-center justify-center text-brand before:size-1.5 before:rounded-full before:bg-current before:content-['']",
-  label: "px-2 py-1.5 text-2xs font-semibold uppercase text-fg-muted",
+  label: sectionEyebrowVariants({
+    spacing: "popupGroup",
+    tracking: "normal",
+  }),
   separator: "-mx-1 my-1 h-px bg-border-subtle",
   shortcut: cn(textRoleVariants({ role: "caption" }), "ml-auto"),
   submenuIcon:

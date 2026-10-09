@@ -12,12 +12,14 @@ export const sectionEyebrowVariants = tv({
     },
     tone: {
       muted: "text-fg-muted",
+      subtle: "text-fg-subtle",
       fg: "text-fg",
       brand: "text-brand",
       warning: toneText("warning"),
       danger: toneText("danger"),
     },
     weight: {
+      regular: "font-normal",
       medium: "font-medium",
       semibold: "font-semibold",
     },
@@ -29,6 +31,7 @@ export const sectionEyebrowVariants = tv({
     spacing: {
       none: "",
       menu: "px-2 pb-1",
+      popupGroup: "px-2 py-1.5",
       field: "mb-1 block",
     },
     truncate: {

@@ -12,8 +12,15 @@ import { useRuntimeViewAs } from "../../runtime";
 import { Alert } from "../../ui/alert";
 import { Button } from "../../ui/button";
 import { Dialog } from "../../ui/dialog";
+import { sectionEyebrowVariants } from "../../ui/section-eyebrow";
 import { textRoleVariants } from "../../ui/text";
 import { DeletePreviewTree } from "./DeletePreviewTree";
+
+const DELETE_SUMMARY_EYEBROW_CLASS = sectionEyebrowVariants({
+  size: "sm",
+  tracking: "normal",
+  weight: "medium",
+});
 
 export interface DeletePreviewDialogProps {
   preview: DeletePreview;
@@ -104,7 +111,7 @@ function DeleteSummary({
   return (
     <div className="grid gap-2 text-13 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <div className="rounded-6 border border-border-subtle bg-sheet px-3 py-2">
-        <div className="text-12 font-medium uppercase text-fg-muted">
+        <div className={DELETE_SUMMARY_EYEBROW_CLASS}>
           {t("deletePreview.rowsAffected")}
         </div>
         <div className={cn(textRoleVariants({ role: "heading" }), "mt-1")}>
@@ -135,7 +142,7 @@ function GroupSummary({
   const count = groups.reduce((total, group) => total + group.count, 0);
   return (
     <div className="rounded-6 border border-border-subtle bg-sheet px-3 py-2">
-      <div className="text-12 font-medium uppercase text-fg-muted">{title}</div>
+      <div className={DELETE_SUMMARY_EYEBROW_CLASS}>{title}</div>
       <div className="mt-1 font-semibold text-fg">{count}</div>
       {groups.length > 0 ? (
         <div className="mt-1 space-y-0.5 text-12 text-fg-muted">

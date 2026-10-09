@@ -14,6 +14,7 @@ import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { sectionEyebrowVariants } from "./section-eyebrow";
 import {
   WIDGET_CONTROL_DATA_READONLY_CLASS,
   widgetControlSurface,
@@ -34,8 +35,12 @@ export const numberFieldVariants = tv({
       "min-w-0 flex-1 bg-transparent px-2 text-13 tabular-nums outline-none placeholder:text-fg-subtle disabled:cursor-not-allowed disabled:opacity-60",
     stepper:
       "flex h-full w-7 shrink-0 items-center justify-center border-l border-border-subtle bg-inset text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-40 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-40 [&_.glyph]:size-3",
-    scrubArea:
-      "inline-flex cursor-ew-resize touch-none select-none items-center gap-1 text-2xs font-medium uppercase text-fg-muted data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
+    scrubArea: sectionEyebrowVariants({
+      className:
+        "inline-flex cursor-ew-resize touch-none select-none items-center gap-1 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
+      tracking: "normal",
+      weight: "medium",
+    }),
     scrubCursor:
       "fixed z-popover inline-flex size-5 items-center justify-center rounded-full border border-border bg-popover text-fg shadow-popover [&_.glyph]:size-3",
   },
