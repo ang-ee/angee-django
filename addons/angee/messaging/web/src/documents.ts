@@ -129,12 +129,39 @@ export const MessagePartFields = graphql(`
   }
 `);
 
-/** Exact actor-readable Message body for passive record detail and peeks. */
-export const MessageDetailPartsDocument = graphql(`
-  query MessagingMessageDetailParts($id: String!) {
-    messages(where: { id: { _eq: $id } }, limit: 1) {
+/** What `MessageReader` presents: the envelope header, the body parts and their files. */
+export const MessageReaderFields = graphql(`
+  fragment MessageReaderFields on MessageType {
+    id
+    title
+    preview
+    sent_at
+    created_at
+    starred
+    sender { ...MessageSenderFields }
+    participants {
       id
-      parts { ...MessagePartFields }
+      role
+      handle { ...MessageSenderFields }
+    }
+    parts { ...MessagePartFields }
+  }
+`);
+
+/** One actor-readable message for its record page and peeks. */
+export const MessageReaderDocument = graphql(`
+  query MessagingMessageReader($id: String!) {
+    messages(where: { id: { _eq: $id } }, limit: 1) {
+      ...MessageReaderFields
+    }
+  }
+`);
+
+export const SetMessageStarredDocument = graphql(`
+  mutation MessagingSetMessageStarred($id: ID!, $starred: Boolean!) {
+    set_inbox_message_starred(id: $id, starred: $starred) {
+      id
+      starred
     }
   }
 `);
@@ -885,6 +912,7 @@ export const RecordActivityThreadDocument = graphql(`
 export type ThreadTranscriptRow =
   DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
 export type PartListRow = DocumentType<typeof MessagingPartListRow>;
+export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
 export type RecordActivityThreadPayload =

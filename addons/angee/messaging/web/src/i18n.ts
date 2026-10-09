@@ -70,6 +70,17 @@ export const enMessagingMessages: Record<string, string> = {
   "message.directionInbound": "Inbound",
   "message.directionOutbound": "Outbound",
 
+  // MessageSummary and MessageReader — a message read like an email.
+  "message.label": "Message",
+  "message.unknownSender": "Unknown sender",
+  "message.starred": "Starred",
+  "message.to": "To",
+  "message.cc": "Cc",
+  "message.bcc": "Bcc",
+  "message.attachment": "Attachment",
+  "message.attachmentPreview": "Attachment preview",
+  "message.closePreview": "Close preview",
+
   // Composer.
   "composer.audience": "Visible to people with access to this record.",
   "composer.help": "Use comments for discussion and notes for internal updates.",
@@ -194,17 +205,14 @@ export const enMessagingMessages: Record<string, string> = {
     "The live session stops and the account is released. Reusable pairing material is retained so you can reconnect without linking again.",
   "channel.pairing.done": "Done",
 
-  // MessagesPage — the Messages list + detail.
+  // MessagesPage and MessageForm — the Messages list + detail.
   "messages.channel": "Channel",
-  "messages.title": "Subject",
   "messages.noSubject": "(No subject)",
   "messages.tabContent": "Content",
-  "messages.sender": "Sender",
-  "messages.thread": "Thread",
-  "messages.channelType": "Channel",
   "messages.groupEnvelope": "Envelope",
   "messages.loadingBody": "Loading message",
   "messages.bodyUnavailable": "Message body is unavailable.",
+  "messages.list": "Messages",
 
   // RecordActivityPane — the Activity chatter tab.
   "activity.noRecord": "No record selected",

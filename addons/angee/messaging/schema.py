@@ -489,7 +489,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 
         return _message_reaction_groups(self, _request_user(info))
 
-    @strawberry.field
+    @strawberry_django.field(prefetch_related=[lambda info: MessageStar.objects.prefetch_for(_request_user(info))])
     def starred(self, info: strawberry.Info) -> bool:
         """Return whether the current user has starred this message."""
 

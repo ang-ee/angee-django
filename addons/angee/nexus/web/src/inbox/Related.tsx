@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
+import { MessageSummary } from "@angee/messaging";
 import { senderDisplayName } from "@angee/parties";
 import {
   Alert,
@@ -14,7 +15,6 @@ import {
 } from "@angee/ui";
 import { InboxRelatedTarget, type InboxConnectionRow } from "./documents";
 import { InboxOrder } from "./Controls";
-import { InboxMessagePreview } from "./Results";
 import { relatedSource } from "./sources";
 import { INBOX_MODELS, type InboxNavigation } from "./state";
 import { useNexusT } from "../i18n";
@@ -192,7 +192,7 @@ function ConnectionRow({
         {row.message.id === navigation.relatedFrom ? (
           <Tag tone="brand">{t("inbox.source")}</Tag>
         ) : null}
-        <InboxMessagePreview message={row.message} />
+        <MessageSummary message={row.message} />
         {row.message.thread ? (
           <div onClick={(event) => event.stopPropagation()}>
             <Button

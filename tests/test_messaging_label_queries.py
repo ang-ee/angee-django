@@ -1,4 +1,4 @@
-"""Native SQL budgets for narrow messaging Node label selections."""
+"""Native SQL budgets for messaging list selections: Node labels and the reader's star."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -9,7 +9,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
-from angee.messaging.testing.models import Fragment, Message, Thread
+from angee.messaging.testing.models import Fragment, Message, MessageStar, Thread
 from tests.conftest import execute_schema, result_data
 from tests.test_messaging_graphql import _schema
 
@@ -107,3 +107,35 @@ def test_thread_label_and_selected_title_share_native_loading() -> None:
         },
         {"id": str(untitled.sqid), "display_name": f"thread:{untitled.sqid}", "title": None},
     ]
+
+
+def test_message_list_starred_costs_constant_queries() -> None:
+    """A page of messages answers the reader's star in one query, never one per row."""
+
+    reader = get_user_model().objects.create_user(username="starred-list-reader")
+    other = get_user_model().objects.create_user(username="starred-list-other")
+    at = datetime(2026, 9, 1, tzinfo=UTC)
+    with system_context(reason="test.messaging.starred.seed"):
+        thread = Thread.objects.create(owner=reader, created_by=reader)
+        rows = [
+            Message.objects.create(thread=thread, created_by=reader, sent_at=at - timedelta(minutes=index))
+            for index in range(10)
+        ]
+        for row in rows[::2]:
+            MessageStar.objects.set_starred(row, user=reader, starred=True)
+        # Another reader's star never shows as this reader's.
+        MessageStar.objects.set_starred(rows[1], user=other, starred=True)
+    schema = _schema()
+    query = """
+        query Starred($limit: Int!) {
+          messages(limit: $limit, order_by: [{sent_at: desc}]) { id starred }
+        }
+    """
+    expected = [{"id": str(row.sqid), "starred": index % 2 == 0} for index, row in enumerate(rows)]
+    counts = []
+    for size in (1, 10):
+        with CaptureQueriesContext(connection) as captured:
+            payload = result_data(execute_schema(schema, query, {"limit": size}, user=reader))
+        assert payload["messages"] == expected[:size]
+        counts.append(len(captured))
+    assert counts[0] == counts[1], f"starred must not query per row: {counts}"
