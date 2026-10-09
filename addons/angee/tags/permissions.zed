@@ -1,7 +1,7 @@
 // Authorization schema for the tags addon.
 // @rebac_package: tags
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 // Named roles grant membership directly; platform admins reach every role.
 definition tags/role {
@@ -26,15 +26,22 @@ definition tags/tag {
     permission delete = admin->member + manager->effective_member
 }
 
-// The assignment target is polymorphic (GenericForeignKey to any row), so no
-// single zed type can cover it; access rides entirely on the tag parent — the
-// `storage/file_attachment` canon (which rides its file the same way). A scoped
-// tag's assignments are therefore only as visible as the tag itself.
+// A tag assignment is authorized by the record it tags. The app that owns a
+// taggable type (one composing `TaggedModel`) declares one relation for it in its
+// permissions.extends.zed, backed by the edge's GenericForeignKey
+// (`relation party: parties/party // rebac:field=target`), and unions the type's
+// read and write into `target_read` and `target_write`. Adding or removing a tag
+// needs write on the record; an edge is visible to whoever reads both the tag and
+// the record. A type no relation names cannot be tagged under an actor.
 definition tags/tag_assignment {
     relation tag:   tags/tag // rebac:field=tag
     relation admin: angee/role // rebac:const=admin
 
-    permission read   = tag->read + admin->member
-    permission write  = tag->write + admin->member
-    permission delete = tag->write + admin->member
+    permission target_read  = nil
+    permission target_write = nil
+
+    permission create = target_write
+    permission read   = (tag->read & target_read) + admin->member
+    permission write  = nil
+    permission delete = target_write
 }

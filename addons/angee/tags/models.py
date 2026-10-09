@@ -1,44 +1,48 @@
 """Tags: a polymorphic shared labelling vocabulary.
 
 A :class:`Tag` is one label in a vocabulary; a :class:`TagAssignment` is the
-polymorphic edge attaching a tag to **any** row. The edge follows the
-``storage.FileAttachment`` canon exactly — a ``content_type``/``object_id`` pair
-with a :class:`~django.contrib.contenttypes.fields.GenericForeignKey` ``target`` —
-so tags depend on nothing but ``angee.iam`` and reach every model without a FK
-back to it. Consumers attach explicitly through
-:meth:`TagAssignmentManager.attach` (create the edge against the concrete target)
-exactly as storage consumers attach a file.
+polymorphic edge attaching a tag to a record of a taggable type: a
+``content_type``/``object_id`` pair with a
+:class:`~django.contrib.contenttypes.fields.GenericForeignKey` ``target``, stored
+at :func:`rebac.generic_target`. Tags depend on nothing but ``angee.iam`` and
+reach every taggable model without a FK back to it.
 
 **Scope.** Tags are reference vocabulary readable by every non-anonymous actor
-through the native ``authenticated`` permission. No reader tuple is stored.
+through the native ``authenticated`` permission; tag administrators curate it.
+A tag assignment is authorized by the record it tags (``permissions.zed``):
+adding or removing a tag needs write on the record, and an assignment is visible
+to whoever reads both the tag and the record.
 
-**Tags show only where an owner places them.** Any row can be tagged through
-the explicit-attach path, but a model's tags are *read and saved* through the
-owner's own declarations: the owning addon depends on ``angee.tags``, composes
-:class:`TaggedModel` onto the model (the reverse accessor — a private field, no
-column, no migration — that also lets the delete collector cascade the edges,
-and the ``tags`` input consumer), composes
-:class:`angee.tags.schema.TaggedNode` onto the model's console node type and
-:func:`angee.tags.schema.tags_input_extensions` onto its console insert and set
-inputs, and places the ``tags`` field on its record form and list. A form then
-edits tags like any field and the row's save writes them. The tags addon never
-names another addon's model. Compose :class:`TaggedModel` on the topmost
-REBAC-typed MTI ancestor the canonical edge keys on
-(:func:`rebac.generic_target`), never on a child, so the delete collector
-filters at the same content type the write used (the placement invariant in
+**A taggable type is declared by its owner.** The owning addon depends on
+``angee.tags``, composes :class:`TaggedModel` onto the model (the reverse
+accessor — a private field, no column, no migration — that also lets the delete
+collector cascade the edges, and the ``tags`` input consumer), declares the
+type's ``target``-backed relation on ``tags/tag_assignment`` in its
+``permissions.extends.zed``, composes :class:`angee.tags.schema.TaggedNode` onto
+the model's console node type and :func:`angee.tags.schema.tags_input_extensions`
+onto its console insert and set inputs, and places the ``tags`` field on its
+record form and list. A form then edits tags like any field and the row's save
+writes them. :meth:`TagAssignment.check` keeps the composed models and the
+declared relations in step. The tags addon never names another addon's model.
+Compose :class:`TaggedModel` on the topmost REBAC-typed MTI ancestor the
+canonical edge keys on, never on a child, so the delete collector filters at the
+same content type the write used (the placement invariant in
 :mod:`angee.base.refs`).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from operator import attrgetter
 from typing import Any, cast
 
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core import checks
 from django.db import models
-from rebac import GenericTarget, generic_target, system_context
-from rebac.resources import model_for_resource_type
+from rebac import GenericTarget, generic_target
+from rebac.field_backing import canonical_model
+from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields import ColorField
 from angee.base.identity import instance_from_public_id
@@ -106,14 +110,13 @@ class TagAssignmentQuerySet(AngeeQuerySet[Any]):
 
 
 class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  # type: ignore[misc]
-    """Owns the polymorphic tag edge: target resolution, attach, and detach.
+    """Owns the polymorphic tag edge: target resolution, attach, detach, and set.
 
-    The write protocol: the target and every tag resolve **under the ambient
-    actor** — the REBAC-scoped lookups fail fast on a row the actor cannot read,
-    so nobody tags or untags what they cannot see — and only the edge
-    insert/delete itself runs under ``system_context``, because
-    ``tags/tag_assignment`` declares no ``create`` permission (rows enter through
-    gated call sites) and the pre-insert check has no row id to gate on.
+    Every read and write runs under the ambient actor. The target and each tag
+    resolve through REBAC-scoped lookups, which fail fast on a row the actor
+    cannot read, and the edge's own ``create`` and ``delete`` gates require write
+    on the target through the relation its type's app declares, so a type no
+    relation names is refused.
     """
 
     def resolve_target(self, target_type: str, target_id: str) -> GenericTarget | None:
@@ -149,9 +152,8 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
         """Attach each tag to the target row, idempotently per edge.
 
         Fails fast with :class:`ValueError` on an unresolvable target or tag (an
-        unreadable row is indistinguishable from a missing one, by design). Only
-        the ``get_or_create`` runs elevated; ``created_by`` still stamps from the
-        ambient actor, which elevation preserves.
+        unreadable row is indistinguishable from a missing one, by design); the
+        edge's ``create`` gate refuses an actor without write on the target.
         """
 
         target = self.resolve_target(target_type, target_id)
@@ -159,39 +161,36 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
             raise ValueError("tag target not found")
         tag_rows = [self._tag_for_id(tag_id) for tag_id in tag_ids]
         lookups = target.lookups(self.model, "target")
-        with system_context(reason="tags.assignment.attach"):
-            return [self.get_or_create(tag=tag_row, **lookups)[0] for tag_row in tag_rows]
+        return [self.get_or_create(tag=tag_row, **lookups)[0] for tag_row in tag_rows]
 
     def detach(self, target_type: str, target_id: str, tag_ids: list[str]) -> int:
         """Detach each tag from the target row; return the number of edges removed.
 
-        Same protocol as :meth:`attach`: target and tags resolve under the actor,
-        only the delete elevates.
+        Target and tags resolve as in :meth:`attach`; the edge's ``delete`` gate
+        refuses an actor without write on the target.
         """
 
         target = self.resolve_target(target_type, target_id)
         if target is None:
             raise ValueError("tag target not found")
         tag_pks = [self._tag_for_id(tag_id).pk for tag_id in tag_ids]
-        with system_context(reason="tags.assignment.detach"):
-            deleted, _by_model = self.filter(tag_id__in=tag_pks, **target.lookups(self.model, "target")).delete()
+        deleted, _by_model = self.filter(tag_id__in=tag_pks, **target.lookups(self.model, "target")).delete()
         return deleted
 
     def set_for(self, record: models.Model, tag_ids: Iterable[str]) -> None:
         """Make ``record``'s tags exactly ``tag_ids``: attach the missing ones, detach the rest.
 
-        The record's own save authorized the change (an owner's insert or update
-        carrying the ``tags`` input); each tag still resolves under the ambient
-        actor, and only the edge writes elevate, as in :meth:`attach`.
+        Runs in the save of an owner's insert or update carrying the ``tags``
+        input, under the same actor: the edge gates require write on the record
+        for each tag added or removed.
         """
 
         wanted = {self._tag_for_id(tag_id).pk for tag_id in tag_ids}
         lookups = generic_target(record).lookups(self.model, "target")
-        with system_context(reason="tags.assignment.set"):
-            current = set(self.filter(**lookups).values_list("tag_id", flat=True))
-            self.filter(tag_id__in=current - wanted, **lookups).delete()
-            for tag_pk in sorted(wanted - current):
-                self.create(tag_id=tag_pk, **lookups)
+        current = set(self.filter(**lookups).values_list("tag_id", flat=True))
+        self.filter(tag_id__in=current - wanted, **lookups).delete()
+        for tag_pk in sorted(wanted - current):
+            self.create(tag_id=tag_pk, **lookups)
 
     def _tag_for_id(self, tag_id: str) -> Any:
         """Return the actor-readable tag row for one public id, or fail fast."""
@@ -204,14 +203,12 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
 
 
 class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
-    """Polymorphic edge attaching one :class:`Tag` to any model row.
+    """Polymorphic edge attaching one :class:`Tag` to a record of a taggable type.
 
-    The exact ``storage.FileAttachment`` canon: a ``content_type``/``object_id``
-    pair with a :class:`GenericForeignKey` ``target``. Consumers attach explicitly
-    through :meth:`TagAssignmentManager.attach` — the party-tag path targets a
-    ``parties.Party`` row. Access rides entirely on the ``tag`` parent (see
-    ``permissions.zed``), the same way a file attachment rides its file: the
-    polymorphic target is not a single REBAC type, so no arrow can cover it.
+    The ``target`` generic foreign key stores :func:`rebac.generic_target`. Each
+    taggable type's app declares the ``target``-backed relation that authorizes
+    the edge by its record (``permissions.zed``); :meth:`check` requires those
+    relations and the models composing :class:`TaggedModel` to match.
     """
 
     runtime = True
@@ -247,6 +244,53 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
 
         return f"{self.tag_id}->{self.content_type_id}:{self.object_id}"
 
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require the taggable models and this edge's declared target types to match exactly.
+
+        A taggable model composes :class:`TaggedModel` on its canonical model,
+        the topmost REBAC-typed MTI ancestor its edges key on. Each needs a
+        ``target``-backed relation on this edge's definition, or no actor can tag
+        it; each declared target needs :class:`TaggedModel`, or its edges escape
+        the record's ``tags`` field and its delete cascade.
+        """
+
+        errors = super().check(**kwargs)
+        owners: set[type[models.Model]] = set()
+        for model in sorted(cls._meta.apps.get_models(), key=attrgetter("_meta.label")):
+            if not issubclass(model, TaggedModel):
+                continue
+            owner = canonical_model(model)
+            if owner is not None and issubclass(owner, TaggedModel):
+                owners.add(owner)
+                continue
+            errors.append(checks.Error(
+                f"{model._meta.label} composes TaggedModel, but its rows are tagged as "
+                + (f"{owner._meta.label}, which does not." if owner else "no REBAC type."),
+                hint="Compose TaggedModel on the topmost REBAC-typed MTI ancestor.",
+                obj=model,
+                id="tags.E001",
+            ))
+        declared = set(cls.declared_target_models().values())
+        for owner in sorted(owners - declared, key=attrgetter("_meta.label")):
+            errors.append(checks.Error(
+                f"{owner._meta.label} composes TaggedModel, but {model_resource_type(cls)} declares no "
+                f"relation for {model_resource_type(owner)}.",
+                hint="Declare the type's `target`-backed relation and its target_read and target_write "
+                "arms in the owning addon's permissions.extends.zed.",
+                obj=owner,
+                id="tags.E002",
+            ))
+        for target in sorted(declared - owners, key=attrgetter("_meta.label")):
+            errors.append(checks.Error(
+                f"{model_resource_type(cls)} declares a relation for {model_resource_type(target)}, but "
+                f"{target._meta.label} does not compose TaggedModel.",
+                hint="Compose TaggedModel on the model, or remove the relation.",
+                obj=cls,
+                id="tags.E003",
+            ))
+        return errors
+
 
 class TaggedModel(models.Model):
     """A model whose rows carry tags saved with the row.
@@ -256,7 +300,8 @@ class TaggedModel(models.Model):
     :func:`angee.tags.schema.tags_input_extensions` adds to its insert and set
     inputs: the row's write hands it here after the row is saved, in the same
     transaction. Compose it before the model base, on the topmost REBAC-typed
-    MTI ancestor.
+    MTI ancestor, and declare the type's relation on ``tags/tag_assignment``
+    (:meth:`TagAssignment.check`).
     """
 
     tag_assignments = GenericRelation("tags.TagAssignment")
@@ -271,7 +316,7 @@ class TaggedModel(models.Model):
 
         if tags is not None:
             type(self)._meta.get_field("tag_assignments").related_model.objects.set_for(self, tags)
-        super().apply_input_extensions(**values)  # type: ignore[misc]
+        super().apply_input_extensions(**values)
 
 
 TagRole = role_anchor("tags/role", name="TagRole")

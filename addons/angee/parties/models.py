@@ -59,15 +59,16 @@ from angee.parties.managers import (
     PartyManager,
 )
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
+from angee.tags.models import TaggedModel
 
 
-class Party(AuditMixin, AngeeDataModel):
+class Party(TaggedModel, AuditMixin, AngeeDataModel):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
-    display name, avatar, notes, and the lossless-vCard carriers. The concrete
-    kind (and its kind-specific fields) lives on the :class:`Person` /
-    :class:`Organization` child row.
+    display name, avatar, notes, tags, and the lossless-vCard carriers. The
+    concrete kind (and its kind-specific fields) lives on the :class:`Person` /
+    :class:`Organization` child row; a child's tags key on its party.
     """
 
     runtime = True

@@ -2,7 +2,6 @@
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.contenttypes.models import ContentType
 from rebac import SubjectRef, actor_context, system_context
 from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
@@ -10,10 +9,7 @@ from rebac.resources import model_resource_type
 
 from angee.portfolio.testing.models import Initiative, InitiativeProject, ProductRow, ReferenceRelease, Update
 from angee.projects.testing.models import Project
-from angee.tags.testing.models import (
-    Tag,
-    TagAssignment,
-)
+from angee.tags.testing.models import Tag
 from angee.uom.testing.models import (
     Uom,
     UomCategory,
@@ -33,10 +29,8 @@ def reference_rows(composed_tables):
         placement = InitiativeProject.objects.create(initiative=initiative, project=project)
         update = Update.objects.create(target=initiative, health="on_track", body="Reference")
         release = ReferenceRelease.objects.create(product=product, name="Reference")
-        assignment = TagAssignment.objects.create(
-            tag=tag, content_type=ContentType.objects.get_for_model(Project), object_id=project.pk,
-        )
-    return [tag, category, unit, product, initiative, placement, update, release, assignment]
+    # A tag assignment is not reference data: its record authorizes it (tests/test_tags.py).
+    return [tag, category, unit, product, initiative, placement, update, release]
 
 
 def test_signed_in_reads_include_every_reference_and_the_dependent_arrow(reference_rows):

@@ -20,7 +20,7 @@ from angee.tags.schema import TaggedNode
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import MarkdownPage, Page, addon_schema, create_user, execute_schema, result_data, vault_for
 
-pytestmark = pytest.mark.usefixtures("composed_tables")
+pytestmark = pytest.mark.usefixtures("composed_permissions")
 
 
 @strawberry_django.type(MarkdownPage)

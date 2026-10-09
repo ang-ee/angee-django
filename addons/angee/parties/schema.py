@@ -34,6 +34,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.mixins import LinkSource
+from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Party = apps.get_model("parties", "Party")
 Person = apps.get_model("parties", "Person")
@@ -942,6 +943,21 @@ _DIRECTORY_RESOURCE = hasura_model_resource(
 )
 
 
+@strawberry_django.type(Party, name="PartyType", extend=True)
+class PartyTags(TaggedNode):
+    """Console-only tags on a party; the public party node stays unchanged."""
+
+
+@strawberry_django.type(Person, name="PersonType", extend=True)
+class PersonTags(TaggedNode):
+    """Console-only tags on a person, which its party carries."""
+
+
+@strawberry_django.type(Organization, name="OrganizationType", extend=True)
+class OrganizationTags(TaggedNode):
+    """Console-only tags on an organization, which its party carries."""
+
+
 _RESOURCE_TYPES = [
     *_PARTY_RESOURCE.types,
     *_PERSON_RESOURCE.types,
@@ -1029,6 +1045,12 @@ schemas = {
             changes(CircleMember, field="circleMemberChanged"),
             changes(MergeVeto, field="mergeVetoChanged"),
             changes(Relationship, field="relationshipChanged"),
+        ],
+        "type_extensions": [PartyTags, PersonTags, OrganizationTags],
+        "input_extensions": [
+            *tags_input_extensions(_PARTY_RESOURCE),
+            *tags_input_extensions(_PERSON_RESOURCE),
+            *tags_input_extensions(_ORGANIZATION_RESOURCE),
         ],
     },
 }

@@ -4,10 +4,9 @@ Exposed on the admin console. :class:`Tag` gets ordinary CRUD; the polymorphic
 :class:`TagAssignment` edge is **not** an ordinary resource insert, so it is
 written through the authored ``tag`` / ``untag`` mutations and read through the
 authored ``tag_assignments`` query — all thin dispatchers into
-:class:`~angee.tags.models.TagAssignmentManager`, which owns the edge protocol:
-target and tags resolve under the calling actor (nobody tags a row they cannot
-read), and only the gate-less edge insert/delete elevates. The mutations are
-additionally gated on the ``tags_admin`` role.
+:class:`~angee.tags.models.TagAssignmentManager`, which writes under the calling
+actor: the edge's own gates require write on the tagged record, whoever curates
+the vocabulary.
 
 Owners of taggable models compose :class:`TaggedNode` onto their console node
 type to read a row's tags as a batched, actor-scoped relation list, and
@@ -24,10 +23,9 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
-from rebac import ObjectRef, current_actor
+from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
-from strawberry.permission import BasePermission
 from strawberry.types import get_object_definition
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
@@ -37,28 +35,9 @@ from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
-from angee.iam.permissions import RolePermission
 
 Tag = apps.get_model("tags", "Tag")
 TagAssignment = apps.get_model("tags", "TagAssignment")
-
-_TAGS_ADMIN_ROLE = ObjectRef("tags/role", "tags_admin")
-"""Role whose effective members may curate the vocabulary and (un)tag rows."""
-
-
-class TagsAdminPermission(RolePermission):
-    """Allow actors who reach the ``tags_admin`` role.
-
-    Platform admins (``angee/role:admin``) are implicit members through the
-    role's ``member`` union in ``permissions.zed``.
-    """
-
-    role_ref = _TAGS_ADMIN_ROLE
-    message = "Tags admin permission required."
-
-
-_TAGS_ADMIN_CLASSES: list[type[BasePermission]] = [TagsAdminPermission]
-
 
 @strawberry_django.type(Tag)
 class TagType(AngeeNode):
@@ -98,9 +77,9 @@ _TAG_EDGES_ATTR = "_angee_tag_edges"
 def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     """Prefetch each selected row's readable tag edges with their tags, once per page.
 
-    Both querysets are actor-scoped, so an edge whose tag the actor cannot read
-    never reaches the row, and the inner tag queryset carries the selected
-    ``TagType`` hints. The REBAC optimizer stamps and rescopes the outer lookup.
+    Both querysets are actor-scoped, so an edge whose tag or record the actor
+    cannot read never reaches the row, and the inner tag queryset carries the
+    selected ``TagType`` hints. The REBAC optimizer stamps and rescopes the outer lookup.
     A multi-table child's edges key on its canonical ancestor, which declares
     ``tag_assignments``, so the lookup climbs the child's parent links to it.
     """
@@ -231,7 +210,7 @@ class TagQuery:
 
     @strawberry.field(name="tag_assignments")
     def tag_assignments(self, target_type: str, target_id: PublicID) -> list[TagAssignmentType]:
-        """Return the tag assignments on one target row, REBAC-scoped by tag reach."""
+        """Return the tag assignments on one target row the actor reads, with their tags."""
 
         rows = TagAssignment.objects.for_target(target_type, str(target_id)).rebac_select_related("tag")
         return cast(list[TagAssignmentType], list(rows))
@@ -241,16 +220,16 @@ class TagQuery:
 class TagMutation:
     """Authored writes for the polymorphic tag edge (not an ordinary resource insert)."""
 
-    @strawberry.mutation(name="tag", permission_classes=_TAGS_ADMIN_CLASSES)
+    @strawberry.mutation(name="tag")
     def tag(self, target_type: str, target_id: PublicID, tag_ids: list[PublicID]) -> list[TagAssignmentType]:
-        """Attach each tag in ``tag_ids`` to the target row (idempotent per edge)."""
+        """Attach each tag in ``tag_ids`` to a target row the actor writes (idempotent per edge)."""
 
         assignments = TagAssignment.objects.attach(target_type, str(target_id), [str(tag_id) for tag_id in tag_ids])
         return cast(list[TagAssignmentType], assignments)
 
-    @strawberry.mutation(name="untag", permission_classes=_TAGS_ADMIN_CLASSES)
+    @strawberry.mutation(name="untag")
     def untag(self, target_type: str, target_id: PublicID, tag_ids: list[PublicID]) -> bool:
-        """Detach each tag in ``tag_ids`` from the target row."""
+        """Detach each tag in ``tag_ids`` from a target row the actor writes."""
 
         TagAssignment.objects.detach(target_type, str(target_id), [str(tag_id) for tag_id in tag_ids])
         return True

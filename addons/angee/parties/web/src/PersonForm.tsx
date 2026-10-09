@@ -21,6 +21,7 @@ export function personFields(t: ReturnType<typeof usePartiesT>, extraFields: Rea
       <Field name="birthday" label={t("person.field.birthday")} />
       <Field name="anniversary" label={t("person.field.anniversary")} />
       <Field name="folder" label={t("person.folder")} readOnly />
+      <Field name="tags" />
     </Group>
     {extraFields}
     <Field name="notes" />

@@ -2,7 +2,7 @@
 // A public group's thread readable by every signed-in user exposes its followers'
 // identities to every signed-in user too; private fields remain gated.
 // @rebac_package: messaging
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition parties/party {
     relation followed_thread: messaging/thread // rebac:field=thread_followers__thread
@@ -22,4 +22,14 @@ definition parties/person {
 definition storage/file {
     relation message_part: messaging/part // rebac:field=message_parts
     permission read = message_part->read
+}
+
+// Threads and messages carry tags: adding or removing one needs write on the
+// record, and a record's tags are visible to its readers.
+definition tags/tag_assignment {
+    relation thread: messaging/thread // rebac:field=target
+    relation message: messaging/message // rebac:field=target
+
+    permission target_read = thread->read + message->read
+    permission target_write = thread->write + message->write
 }

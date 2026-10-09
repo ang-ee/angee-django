@@ -517,17 +517,22 @@ data through REBAC, never a queryset bypass.
   define private share mutations. Metadata projects the grant surface and the
   subject resource's public identity field; the API converts selected public
   subjects to canonical PK references before validating and writing grants.
-- **Tags are read through their owner.** A taggable model's addon depends on
-  `angee.tags`, declares `tag_assignments = GenericRelation("tags.TagAssignment")`
-  on the model (a private field: no column, no migration, and the delete
-  collector cascades the edges), composes
+- **A record authorizes its tags.** A taggable model's addon depends on
+  `angee.tags`, composes [`TaggedModel`](../../addons/angee/tags/models.py) on
+  the canonical model (its reverse generic relation is a private field: no
+  column, no migration, and the delete collector cascades the edges), declares
+  the type's `target`-backed relation on `tags/tag_assignment` from its
+  `permissions.extends.zed`, composes
   [`TaggedNode`](../../addons/angee/tags/schema.py) onto the console node — or a
   console `type_extensions` donor when the node is shared with the public
-  schema — and places the field in its web fragment. The native prefetch hint
-  batches every row's readable edges and tags once per page under the actor's
-  scope; metadata projects a read-only `list` relation to `tags.Tag`, and the
-  `tag`/`untag` mutations remain the only write path. The tags addon names no
-  other addon's model.
+  schema — with `tags_input_extensions` on its console inputs, and places the
+  field in its web fragment. The native prefetch hint batches every row's
+  readable edges and tags once per page under the actor's scope. Adding or
+  removing a tag, through the record's save or the `tag`/`untag` verbs, needs
+  write on the record; tag administrators curate only the vocabulary. An edge is
+  read by whoever reads both the tag and the record. `TagAssignment.check`
+  fails startup when the taggable models and the declared relations differ. The
+  tags addon names no other addon's model.
 - **Raise through the model's access owner.** `require_access(permission, actor=None)`
   delegates to native REBAC checks. An explicit actor stays bound to the instance;
   omitting it preserves native instance and ambient scope precedence. Verbs resolve
@@ -1035,7 +1040,9 @@ and current contracts before applying a historical example to a new deployment.
   [knowledge](../../addons/angee/knowledge/permissions.zed),
   [projects](../../addons/angee/projects/permissions.zed) (a binding takes
   share on the project and the type's grant authority),
-  [portfolio](../../addons/angee/portfolio/permissions.zed) and
+  [portfolio](../../addons/angee/portfolio/permissions.zed),
+  [tags](../../addons/angee/tags/permissions.zed) (an assignment also needs
+  the tag's read) and
   [messaging](../../addons/angee/messaging/permissions.zed) (a const relation on
   the row's role keeps the arms off chatter edges). Evidence and provenance edges
   whose access follows their owner (workflow subjects, step records and watches,

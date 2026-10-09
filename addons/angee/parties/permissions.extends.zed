@@ -1,5 +1,5 @@
 // @rebac_package: parties
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // A member's colleagues include the active people whose identity they read:
 // every record owner's identity arm on parties/person (thread followers, task
@@ -8,4 +8,14 @@ definition auth/user {
     relation person: parties/person // rebac:field={"path":"person","filters":{"is_active":true}}
 
     permission colleague = person->read
+}
+
+// Parties carry tags at the party, whichever kind a person or organization is:
+// adding or removing one needs write on the party, and its tags are visible to
+// the party's readers.
+definition tags/tag_assignment {
+    relation party: parties/party // rebac:field=target
+
+    permission target_read = party->read
+    permission target_write = party->write
 }
