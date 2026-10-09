@@ -172,7 +172,8 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     assert not proposed.is_confirmed
     assert not proposed.is_dismissed
     assert reader_handle.label == "Shared read-only label"
-    assert reader_handle.party_id == reader_target.pk
+    # A manual claim awaits review, so it does not decide the shared handle's owner.
+    assert reader_handle.party_id is None
     assert not reader_handle.party_link_confirmed
     assert reader_proposed.party_id == reader_target.pk
     assert not reader_proposed.is_confirmed
@@ -366,16 +367,16 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         assert handle.party_link_confirmed is False
         assert alice.handle_count == 1
 
-        # Dismissing the winner demotes the handle to the next candidate and
-        # recounts BOTH parties (the demoted owner must not keep a stale count).
+        # Dismissing the winner leaves only a suggestion awaiting review, which never
+        # owns the handle; the demoted owner must not keep a stale count.
         strong.with_actor(owner).dismiss()
         handle.refresh_from_db()
         alice.refresh_from_db()
         alicia.refresh_from_db()
-        assert handle.party_id == alicia.pk
+        assert handle.party_id is None
         assert handle.party_link_confirmed is False
         assert alice.handle_count == 0
-        assert alicia.handle_count == 1
+        assert alicia.handle_count == 0
 
         # A re-sync re-linking the dismissed pair must not resurrect it: the
         # dismissed row already exists, so resolution still ignores it.
@@ -387,7 +388,7 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
             created_by_id=owner.pk,
         )
         handle.refresh_from_db()
-        assert handle.party_id == alicia.pk
+        assert handle.party_id is None
 
         # A human confirm outranks any score and clears the dismissal.
         strong.refresh_from_db()
@@ -400,9 +401,8 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         assert strong.confidence == 1.0
         assert strong.source == LinkSource.MANUAL
 
-        # Low-confidence, undecided links are exactly the review-queue shape.
-        review = PartyHandle.objects.filter(is_confirmed=False, is_dismissed=False, confidence__lt=0.5)
-        assert list(review.values_list("pk", flat=True)) == [weak.pk]
+        # Low-confidence, undecided links are exactly the review queue.
+        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [weak.pk]
 
         with pytest.raises(TypeError, match="transitions must use"):
             PartyHandle.objects.filter(pk=weak.pk).update(confidence=0.8)
@@ -962,7 +962,7 @@ def test_counter_signals_reresolve_on_direct_link_delete(composed_tables: None) 
         PartyHandle.objects.link(
             bob,
             handle,
-            confidence=0.4,
+            confidence=0.6,
             source=LinkSource.LLM,
             created_by_id=owner.pk,
         )

@@ -25,13 +25,15 @@ def refresh_handle_suggestions(
 ) -> int:
     """Refresh parties-owned suggestions from current handle and signature evidence.
 
-    Display-name evidence is native to parties. Signature evidence is an optional
-    contribution from the downstream messaging addon: the app-registry guard keeps
-    parties independently installable, and the task passes only a neutral
-    fragment's text/hash plus its one sender's party id into the manager owner.
-    A fragment more than one sender signed with is nobody's personal evidence.
-    Both passes partition evidence by the parties audit owner before making any
-    inference.
+    Display-name evidence is native to parties. The downstream messaging addon
+    optionally contributes signature evidence and its automated senders, whose
+    display names are no evidence: the app-registry guard keeps parties
+    independently installable, and the task passes only neutral fragment
+    text/hashes, party ids and handle ids into the manager owner. A fragment more
+    than one sender signed with is nobody's personal evidence. Both passes
+    partition evidence by the parties audit owner before making any inference.
+    Like the phone renormalization, each run first repairs handle owners stored
+    under an older resolution rule.
 
     Steady-state cost stays proportional to NEW evidence: signature parts are
     mined only within ``lookback_hours`` (2× the hourly beat, so a missed tick
@@ -52,15 +54,17 @@ def refresh_handle_suggestions(
 
 
 def _refresh_handle_suggestions(lookback_hours: float | None) -> int:
-    """Run the three suggester passes under the already-held task lock."""
+    """Run the owner repair and suggester passes under the already-held task lock."""
 
     party_handles = apps.get_model("parties", "PartyHandle").objects
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
         handles = apps.get_model("parties", "Handle").objects
-        changed = int(handles.renormalize_phone_values())
-        created = int(party_handles.suggest_from_display_names())
+        changed = int(handles.renormalize_phone_values()) + int(party_handles.resolve_stale_owners())
         if not apps.is_installed("angee.messaging"):
-            return changed + created
+            return changed + int(party_handles.suggest_from_display_names())
+
+        automated_senders = apps.get_model("messaging", "Message").objects.automated_sender_ids()
+        created = int(party_handles.suggest_from_display_names(shared_handle_ids=automated_senders))
 
         part_model = apps.get_model("messaging", "Part")
         signature_parts = part_model._base_manager.filter(role="signature", fragment__isnull=False)

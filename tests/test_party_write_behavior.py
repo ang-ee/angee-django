@@ -35,33 +35,59 @@ def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, m
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggestion_sweep_resolves_and_recounts_idempotently(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Suggestion sweep resolves and recounts idempotently."""
+def test_display_name_suggestions_need_a_personal_full_name_the_party_bears(composed_tables: None) -> None:
+    """Only a full name the party itself bears is suggested, once and for review only."""
     del composed_tables
     owner = get_user_model().objects.create_user(username="routed-suggestion-owner")
     with system_context(reason="suggestion fixture"):
-        party = Party._base_manager.create(display_name="Customer", created_by_id=owner.pk)
-        Handle._base_manager.create(
-            platform="email",
-            value="customer@example.test",
-            display_name="Customer",
-            party=party,
-            created_by_id=owner.pk,
-        )
-        candidate = Handle._base_manager.create(
-            platform="phone", value="+420777123456", display_name="Customer", created_by_id=owner.pk
-        )
-        created = PartyHandle.objects.suggest_from_display_names()
-        repeated = PartyHandle.objects.suggest_from_display_names()
+
+        def handle(platform: str, value: str, name: str, party: Party | None = None) -> Handle:
+            row = Handle._base_manager.create(platform=platform, value=value, display_name=name, created_by=owner)
+            if party is not None:
+                PartyHandle.objects.link(party, row, source=LinkSource.CARDDAV, created_by_id=owner.pk)
+            return row
+
+        ada = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        brand = Party._base_manager.create(display_name="Customer", created_by=owner)
+        grab_bag = Party._base_manager.create(display_name="Unknown", created_by=owner)
+        handle("email", "ada@example.test", "Ada Lovelace", ada)
+        handle("email", "customer@example.test", "Customer", brand)
+        handle("phone", "+420777000001", "Grace Hopper", grab_bag)
+        candidate = handle("phone", "+420777123456", "Ada Lovelace")
+        handle("phone", "+420777123457", "Customer")
+        handle("email", "grace@example.test", "Grace Hopper")
+        notifications = handle("email", "notifications@example.test", "Ada Lovelace")
+
+        created = PartyHandle.objects.suggest_from_display_names(shared_handle_ids=[notifications.pk])
+        repeated = PartyHandle.objects.suggest_from_display_names(shared_handle_ids=[notifications.pk])
+        suggested = set(PartyHandle._base_manager.filter(source=LinkSource.RULE).values_list("party_id", "handle_id"))
         candidate.refresh_from_db()
-        party.refresh_from_db()
-        link = PartyHandle._base_manager.get(handle_id=candidate.pk, party_id=party.pk)
+        ada.refresh_from_db()
     assert (created, repeated) == (1, 0)
-    assert candidate.party_id == party.pk
-    assert party.handle_count == 2
-    assert link.is_confirmed is False
+    assert suggested == {(ada.pk, candidate.pk)}
+    assert candidate.party_id is None
+    assert ada.handle_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables: None) -> None:
+    """A handle a suggestion owned under the old resolution rule is re-resolved once."""
+    del composed_tables
+    owner = get_user_model().objects.create_user(username="stale-owner-repair-owner")
+    with system_context(reason="stale owner fixture"):
+        party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        handle = Handle._base_manager.create(platform="phone", value="+14155552671", created_by=owner)
+        PartyHandle.objects.link(party, handle, confidence=0.3, source=LinkSource.RULE, created_by_id=owner.pk)
+        Handle._base_manager.filter(pk=handle.pk).update(party=party)
+        Party._base_manager.filter(pk=party.pk).update(handle_count=1)
+
+        repaired = PartyHandle.objects.resolve_stale_owners()
+        repeated = PartyHandle.objects.resolve_stale_owners()
+        handle.refresh_from_db()
+        party.refresh_from_db()
+    assert (repaired, repeated) == (1, 0)
+    assert handle.party_id is None
+    assert party.handle_count == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -73,11 +99,10 @@ def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_t
     with system_context(reason="signature mining fixture"):
         ada = Party._base_manager.create(display_name="Ada", created_by=owner)
         senders = {
-            name: Handle._base_manager.create(
-                platform="email", value=f"{name}@example.test", party=party, created_by=owner
-            )
-            for name, party in (("ada", ada), ("carol", None))
+            name: Handle._base_manager.create(platform="email", value=f"{name}@example.test", created_by=owner)
+            for name in ("ada", "carol")
         }
+        PartyHandle.objects.link(ada, senders["ada"], source=LinkSource.CARDDAV, created_by_id=owner.pk)
         own = Fragment.objects.upsert(text="Ada Lovelace\n+1 415 555 2671\nIssue 1721429715", created_by_id=owner.pk)
         shared = Fragment.objects.upsert(text="Monica Alvarez\n+1 787 523 6508", created_by_id=owner.pk)
         for sender, fragment in (("ada", own), ("ada", shared), ("carol", shared)):
@@ -100,8 +125,8 @@ def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_t
 
 
 @pytest.mark.django_db(transaction=True)
-def test_retracting_suggestions_keeps_reviewed_links_and_re_resolves_handles(composed_tables: None) -> None:
-    """Retraction deletes only unreviewed rule links of its evidence kind and unresolves their handles."""
+def test_retracting_suggestions_keeps_reviewed_links(composed_tables: None) -> None:
+    """Retraction deletes only unreviewed rule links of its evidence kind; the confirmed one still owns."""
     del composed_tables
     owner = get_user_model().objects.create_user(username="signature-retraction-owner")
     with system_context(reason="signature retraction fixture"):
