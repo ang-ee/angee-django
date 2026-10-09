@@ -431,7 +431,7 @@ shared UI copy through an addon bundle.
   form, or detail in an addon — compose the shared resource actions
   (`ResourceList`/`ResourceCreate`/`ResourceEdit`/`ResourceShow`), `List`/`Form`
   declarations, and record fragments (`RecordHeader`/`MetaGrid`/`MetricStrip`);
-  for a linked cell, compose `TextLink`/`Chip`/`MetricTile`, never a bespoke link
+  for a linked cell, compose `NavLink`/`Chip`/`MetricTile`, never a bespoke link
   class, and for a list of values, `ChipList`. If a shared view lacks what your case needs, extend it in `@angee/ui`
   (the owner) so every addon gets it. The shared-primitive rule lives in the
   [constitution](../../AGENTS.md#constitution).

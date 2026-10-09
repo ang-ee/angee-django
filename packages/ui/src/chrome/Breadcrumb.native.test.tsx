@@ -9,7 +9,7 @@ import { ConsoleLayout } from "../layouts/ConsoleLayout";
 import { InAppLinkProvider, routerNavigator } from "../lib/in-app-link";
 import { AppRuntimeProvider, containersFromChildren, createRouteHref } from "../runtime";
 import { createUiTestProviders } from "../testing";
-import { TextLink } from "../ui/text-link";
+import { NavLink } from "../ui/nav-link";
 import { RecordReference } from "../views/relation/RecordReference";
 import { RoutedRecordController } from "../views/resource/resource-routing";
 import { ResourceViewProvider, useResourceView } from "../views/resource/resource-view-context";
@@ -33,9 +33,9 @@ function Page() {
   return <>
     <RecordReference model="agents.Agent" id="demo" label="Open agent" />
     <RecordReference model="models.Model" id="one" label="Follow model" />
-    <TextLink href="/models/two?view=all">Follow another model</TextLink>
-    <TextLink href="/models/one?view=other">Follow same model with another query</TextLink>
-    {modelId && /^\d+$/.test(modelId) ? <TextLink href={`/models/${Number(modelId) + 1}`}>Next model</TextLink> : null}
+    <NavLink href="/models/two?view=all" variant="inline">Follow another model</NavLink>
+    <NavLink href="/models/one?view=other" variant="inline">Follow same model with another query</NavLink>
+    {modelId && /^\d+$/.test(modelId) ? <NavLink href={`/models/${Number(modelId) + 1}`} variant="inline">Next model</NavLink> : null}
     {modelId ? <RoutedRecordController resource="models.Model" newRecordId="new">
       {(controller) => <button onClick={() => controller.onRecordTabChange?.("details")}>Details tab</button>}
     </RoutedRecordController> : null}
@@ -53,7 +53,7 @@ function renderConsole(path = "/agents/demo", drawer = false) {
     <ui.Provider><AppRuntimeProvider runtime={{
       ...(drawer ? { containers: containersFromChildren([{ address: "shell#drawers-right" }], {
         "shell#drawers-right": { related: { content: {
-          title: "Related", render: () => <TextLink href="/models/one">Drawer model</TextLink>,
+          title: "Related", render: () => <NavLink href="/models/one" variant="inline">Drawer model</NavLink>,
         } } },
       }) } : {}),
       routeHref: createRouteHref([

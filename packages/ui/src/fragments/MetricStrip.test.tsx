@@ -58,6 +58,9 @@ describe("MetricStrip", () => {
     );
     const link = screen.getByRole("link");
     expect(link.getAttribute("href")).toBe("/fields?model=Note");
+    expect(link.getAttribute("type")).toBeNull();
+    expect(link.className).toContain("hover:border-border-strong");
+    expect(link.className).toContain("hover:shadow-sm");
     fireEvent.click(link);
     expect(onNavigate).toHaveBeenCalledWith("/fields?model=Note");
   });

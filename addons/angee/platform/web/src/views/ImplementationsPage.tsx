@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
-import { TextLink, Code, ListView, textRoleVariants, useRouteHref, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+import { NavLink, Code, ListView, textRoleVariants, useRouteHref, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import type { PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
@@ -21,9 +21,9 @@ export function ImplementationsPage(): ReactElement {
       field: "label", header: t("implementation.name"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <TextLink href={routeHref("platform.implementations.record", { id: row.id })}>
+          <NavLink href={routeHref("platform.implementations.record", { id: row.id })} variant="inline">
             {row.label}
-          </TextLink>
+          </NavLink>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.key}</span>
         </span>
       ),
@@ -34,7 +34,7 @@ export function ImplementationsPage(): ReactElement {
     {
       field: "addon_label", header: t("col.addon"),
       render: (row) => row.addon_id
-        ? <TextLink href={routeHref("platform.addons.record", { id: row.addon_id })}>{row.addon_label}</TextLink>
+        ? <NavLink href={routeHref("platform.addons.record", { id: row.addon_id })} variant="inline">{row.addon_label}</NavLink>
         : t("implementation.external"),
     },
     { field: "class_path", header: t("implementation.class"), render: (row) => <Code truncate>{row.class_path}</Code> },

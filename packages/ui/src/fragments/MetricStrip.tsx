@@ -81,9 +81,6 @@ export type MetricStripProps = Omit<
   metrics?: readonly MetricTileValue[];
 };
 
-const NAVIGABLE_TILE =
-  "cursor-pointer no-underline outline-none transition hover:ring-2 hover:ring-border-focus focus-visible:focus-ring";
-
 export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
     {
@@ -130,7 +127,7 @@ export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
 
     if (href != null) {
       return (
-        <Card asChild className={styles.tile({ className: cn(className, NAVIGABLE_TILE) })} density="sm">
+        <Card asChild className={styles.tile({ className })} density="sm" interactive>
           <a
             ref={ref as React.Ref<HTMLAnchorElement>}
             href={href}

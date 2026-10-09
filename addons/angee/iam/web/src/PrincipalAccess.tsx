@@ -4,7 +4,7 @@ import {
   InlineEmpty,
   RowsListView,
   Tabs,
-  TextLink,
+  NavLink,
   useRecordChromeContext,
   useResourceRecordHref,
   useResourceRoute,
@@ -43,7 +43,7 @@ function RoutedAccessTarget({
   const collectionHref = useResourceRoute(targetModel);
   const href = (row.target_id ? recordHref?.(row.target_id) : undefined) ?? collectionHref;
   return href
-    ? <TextLink href={href}>{row.resource}</TextLink>
+    ? <NavLink href={href} variant="inline">{row.resource}</NavLink>
     : <Code truncate>{row.resource}</Code>;
 }
 

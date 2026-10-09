@@ -1,6 +1,6 @@
 import {
   ListView,
-  TextLink,
+  NavLink,
   useResourceRecordHrefLookup,
   type ListColumn,
   type StringIdRow,
@@ -50,7 +50,7 @@ export function RecordNeedsPane({
           const href = sourceId
             ? recordHref(MESSAGE_MODEL, sourceId)
             : undefined;
-          return href ? <TextLink href={href}>{t("needs.evidence")}</TextLink> : "—";
+          return href ? <NavLink href={href} variant="inline">{t("needs.evidence")}</NavLink> : "—";
         },
       },
       { field: "created_at", header: t("needs.createdAt") },

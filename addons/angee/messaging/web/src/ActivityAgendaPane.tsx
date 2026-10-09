@@ -7,7 +7,7 @@ import {
   SectionHeading,
   Skeleton,
   SkeletonStatus,
-  TextLink,
+  NavLink,
   formatDate,
   formatDateStorage,
   useResourceRecordHrefLookup,
@@ -76,7 +76,7 @@ export function ActivityAgendaPane(): React.ReactElement {
                 title={activity.summary}
                 meta={
                   <>
-                    {href ? <TextLink href={href}>{label}</TextLink> : label}
+                    {href ? <NavLink href={href} variant="inline">{label}</NavLink> : label}
                     {activity.due_date ? ` · ${formatDate(activity.due_date)}` : null}
                   </>
                 }

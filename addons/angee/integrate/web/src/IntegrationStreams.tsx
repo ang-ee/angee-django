@@ -5,7 +5,7 @@ import {
   Button,
   Code,
   ListView,
-  TextLink,
+  NavLink,
   defineRowAction,
   jsonObjectFromUnknown,
   useActionResultMutation,
@@ -204,7 +204,7 @@ export function IntegrationStreamsPane(): ReactElement {
           ? recordHref(row.model_label, row.record_id)
           : undefined;
         return href
-          ? <TextLink href={href}>{t("streams.openTarget")}</TextLink>
+          ? <NavLink href={href} variant="inline">{t("streams.openTarget")}</NavLink>
           : t("streams.targetUnavailable");
       },
     },

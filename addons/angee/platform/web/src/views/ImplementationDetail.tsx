@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  TextLink,
+  NavLink,
   Badge, Code, CodeBlock, DetailSection, DetailSurface, ErrorBanner, FieldDescription, FieldLabel, FieldRoot,
   InlineEmpty, JsonValueView, LabeledDescriptorField, Tabs,
   deserializeFormSpec, errorMessage, jsonObjectFromUnknown, useAppRuntime, useRouteHref, useRouteRecordId,
@@ -90,12 +90,12 @@ export function ImplementationDetail(): ReactElement {
               <DetailSection title={t("detail.definition")} rows={[
                 [t("implementation.key"), <Code>{implementation.key}</Code>],
                 [t("col.category"), implementation.category],
-                [t("col.model"), <TextLink href={routeHref("platform.models.record", { id: implementation.model.toLowerCase() })}>{implementation.model}</TextLink>],
+                [t("col.model"), <NavLink href={routeHref("platform.models.record", { id: implementation.model.toLowerCase() })} variant="inline">{implementation.model}</NavLink>],
                 [t("col.field"), implementation.field],
                 [t("implementation.registry"), <Code>{implementation.registry_setting}</Code>],
                 [t("implementation.baseClass"), <Code>{implementation.base_class_path}</Code>],
                 [t("col.addon"), implementation.addon_id
-                  ? <TextLink href={routeHref("platform.addons.record", { id: implementation.addon_id })}>{implementation.addon_label}</TextLink>
+                  ? <NavLink href={routeHref("platform.addons.record", { id: implementation.addon_id })} variant="inline">{implementation.addon_label}</NavLink>
                   : t("implementation.external")],
               ]} />
             </Tabs.Panel>

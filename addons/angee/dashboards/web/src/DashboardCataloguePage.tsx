@@ -12,7 +12,7 @@ import {
   PageHeader,
   PageToolbar,
   Select,
-  TextLink,
+  NavLink,
   useDashboardRegistry,
   useAppRuntime,
   useRouteHref,
@@ -164,7 +164,7 @@ function DashboardCatalogue({ store, registry }: {
               : routeHref("dashboards.addon", { key: dashboard.target.key });
           return (
             <Card key={`${dashboard.target.scope}:${dashboard.id}`} className="flex min-h-32 flex-col gap-2 p-4">
-              <TextLink href={href} variant="muted" className="text-15 font-semibold text-fg">{dashboard.title}</TextLink>
+              <NavLink href={href} variant="muted" className="text-15 font-semibold text-fg">{dashboard.title}</NavLink>
               <p className="line-clamp-2 text-13 text-fg-muted">{dashboard.description || t("common.noDescription")}</p>
               <div className="mt-auto flex flex-wrap gap-1 text-2xs text-fg-subtle">
                 <span>{dashboard.target.scope}</span>

@@ -7,6 +7,7 @@ import type { DashboardDefinition, DashboardLoadState, DashboardRegistry, Dashbo
 import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
 import { DashboardSurface, visibleDashboardSnapshot } from "./surface";
 import { AppRuntimeProvider } from "../runtime/runtime";
+import { createRouteHref } from "../runtime/route-href";
 import type { ReactElement, ReactNode } from "react";
 
 const state = vi.hoisted(() => ({
@@ -135,6 +136,29 @@ test("widget headings compose loaded totals, hints, and audience without statist
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} definition={statistic} />);
   expect(screen.getByRole("heading", { name: /Decisions/ }).parentElement?.textContent).toContain("· 7");
   expect(screen.queryByText("Value")).toBeNull();
+});
+
+test("a full-view action composes the outward link affordance", () => {
+  const linked = {
+    ...widget,
+    id: "linked",
+    visibility: undefined,
+    options: { fullViewRoute: "tasks.list" },
+  };
+  render(
+    <AppRuntimeProvider runtime={{
+      routeHref: createRouteHref([{ name: "tasks.list", path: "/tasks" }]),
+    }}>
+      <DashboardSurface
+        target={{ scope: "addon", key: "overview" }}
+        definition={{ ...definition, widgets: [linked] }}
+      />
+    </AppRuntimeProvider>,
+  );
+
+  const link = screen.getByRole("link", { name: "Open Incoming requests in full view" });
+  expect(link.getAttribute("href")).toBe("/tasks");
+  expect(link.querySelector(".glyph")).toBeTruthy();
 });
 
 test("absent dashboards use the server edit answer and declaration can turn editing off", () => {

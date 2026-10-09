@@ -2,7 +2,7 @@ import { holdsPermission } from "@angee/metadata";
 import { extractActionOutcome } from "@angee/refine";
 import {
   Avatar, Badge, Button, FieldDescriptorControl, FormView, Glyph, Select, Table, TableBody,
-  TableCell, TableHead, TableHeader, TableRow, Textarea, TextLink, VisibilityControl,
+  NavLink, TableCell, TableHead, TableHeader, TableRow, Textarea, VisibilityControl,
   avatarInitials, canonicalOptionValue, errorMessage, optionLabel, useAuthoredResourceMutation,
   useEnumOptions, useRuntimeAuth, useRuntimeViewAs, type FieldDescriptor, type WidgetOption,
 } from "@angee/ui";
@@ -148,7 +148,7 @@ function ProposalHeader({ proposal, href, content, answers, options }: {
     <div className="flex items-center gap-2">
       <Avatar size="sm" initials={avatarInitials(label)} alt={label} />
       <span className="min-w-0 truncate text-13 font-semibold text-fg">
-        {content !== undefined ? content : href ? <TextLink href={href}>{label}</TextLink> : label}
+        {content !== undefined ? content : href ? <NavLink href={href} variant="inline">{label}</NavLink> : label}
       </span>
     </div>
     {audience ? <div className="ml-8 mt-1 text-xs font-normal text-fg-muted">{t("comparison.visibility", { visibility: audience })}</div> : null}

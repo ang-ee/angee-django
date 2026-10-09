@@ -3,7 +3,7 @@ import { useState, type ReactElement, type ReactNode, type Ref } from "react";
 import { Glyph } from "../../chrome/Glyph";
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
-import { TextLink } from "../../ui/text-link";
+import { NavLink } from "../../ui/nav-link";
 import {
   RelationField,
   type RelationSearchState,
@@ -208,10 +208,9 @@ export function RelationPicker({
             <Glyph decorative name="pencil" />
           </Button>
         ) : null}
-        {followHref ? <TextLink href={followHref} aria-label={t("relation.follow")} variant="muted"
-          className="inline-flex size-icon-btn-md shrink-0 items-center justify-center rounded-6 transition-colors hover:bg-inset focus-visible:focus-ring [&_.glyph]:size-4">
-          <Glyph decorative name="arrow-up-right" />
-        </TextLink> : null}
+        {followHref ? <NavLink href={followHref} aria-label={t("relation.follow")} variant="muted"
+          affordance="outward"
+          className="size-icon-btn-md shrink-0 justify-center rounded-6 text-base transition-colors hover:bg-inset focus-visible:focus-ring" /> : null}
       </div>
       <RelationRecordDialog
         dialog={dialog}

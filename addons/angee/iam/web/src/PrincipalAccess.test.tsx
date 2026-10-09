@@ -85,7 +85,7 @@ vi.mock("@angee/ui", () => {
       return null;
     },
     Tabs,
-    TextLink: ({ children, href }: { children?: ReactNode; href: string }) => (
+    NavLink: ({ children, href }: { children?: ReactNode; href: string }) => (
       <a href={href}>{children}</a>
     ),
     useRecordChromeContext: () => ({ record: mocks.record }),

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@angee/ui", () => ({
   Button: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  TextLink: ({ href, children }: { href?: string; children?: ReactNode }) => <a href={href}>{children}</a>,
+  NavLink: ({ href, children }: { href?: string; children?: ReactNode }) => <a href={href}>{children}</a>,
   useResourceRecordHref: (resource: string) => {
     mocks.resource = resource;
     return mocks.recordHref;
