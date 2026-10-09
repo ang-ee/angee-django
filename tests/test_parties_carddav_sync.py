@@ -115,6 +115,7 @@ class FakeDav:
         self.has_sync_token = True
         self.has_ctag = False
         self.list_etags = True
+        self.read_only = False
         self.store(_HREF, _card())
 
     @property
@@ -147,6 +148,8 @@ class FakeDav:
             card, etag = self.cards[url]
             return httpx2.Response(200, content=card.encode(), headers={"ETag": etag})
         if method in {"PUT", "DELETE"}:
+            if self.read_only:
+                return httpx2.Response(403)
             current = self.cards.get(url)
             rejected = (headers.get("if-none-match") == "*" and current is not None) or (
                 "if-match" in headers and (current is None or headers["if-match"] != current[1])
@@ -687,6 +690,29 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     assert person.notes == "Keep local edit"
     assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == old_bases
     assert "Concurrent remote edit" in replica.server.cards[_HREF][0]
+
+
+def test_read_only_book_sets_a_refused_card_aside_without_failing_the_book(replica: Replica) -> None:
+    person, link = replica.baseline()
+    person.notes = "Local edit a shared directory will not take"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+
+    result = push_stream(replica.stream, replica.backend)
+
+    link.refresh_from_db()
+    discrepancy = SyncDiscrepancy.objects.get(link=link)
+    assert result.count == 0
+    assert discrepancy.kind == DiscrepancyKind.REMOTE_REJECTED
+    assert discrepancy.code == "remote_forbidden"
+    person.refresh_from_db()
+    assert person.notes == "Local edit a shared directory will not take"
+    # A later cycle meets the same refusal on the same discrepancy row; the book
+    # keeps syncing and the shared directory's card is never overwritten.
+    again = push_stream(replica.stream, replica.backend)
+    assert again.count == 0
+    assert SyncDiscrepancy.objects.filter(link=link).count() == 1
+    assert "Local edit" not in replica.server.cards[_HREF][0]
 
 
 @pytest.mark.parametrize("keep", [ConflictKeep.REMOTE, ConflictKeep.LOCAL])
