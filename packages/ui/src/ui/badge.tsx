@@ -2,10 +2,9 @@ import * as React from "react";
 
 import { cn } from "../lib/cn";
 import {
-  FEEDBACK_INTENTS,
+  isFeedbackIntent,
   toneClass,
   toneFill,
-  type FeedbackIntent,
   type Fill,
   type Tone,
 } from "../lib/tones";
@@ -28,7 +27,7 @@ export const badgeVariants = tv({
     },
     mark: {
       none: "",
-      dot: "",
+      dot: "border-transparent bg-transparent text-inherit",
       icon: "",
     },
     block: {
@@ -104,21 +103,20 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badg
   },
   ref,
 ) {
-  const iconTone = FEEDBACK_INTENTS.includes(tone as FeedbackIntent)
-    ? tone as FeedbackIntent
-    : "muted";
   return (
     <span
       ref={ref}
       className={cn(
         badgeVariants({ shape, density, mark, block }),
-        toneClass(tone, variant),
+        mark === "dot" ? undefined : toneClass(tone, variant),
         className,
       )}
       {...props}
     >
-      {mark === "dot" ? <StatusDot tone={tone} size="sm" /> : null}
-      {mark === "icon" ? <StatusIcon tone={iconTone} size="sm" /> : null}
+      {mark === "dot" ? <StatusDot tone={tone} size="md" /> : null}
+      {mark === "icon" && isFeedbackIntent(tone) ? (
+        <StatusIcon tone={tone} size="sm" />
+      ) : null}
       {children}
     </span>
   );

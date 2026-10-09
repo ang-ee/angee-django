@@ -389,7 +389,7 @@ shared UI copy through an addon bundle.
   `false`, zero, or empty values.
 - Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
   — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
-  (`solid`/`soft`/`surface`/`outline`/`ghost`/`text`). Drive recipe color through
+  (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
   `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
   the retired `default`/`error` names (they are `neutral`/`danger`).
 - **Status → tone is owned once** by

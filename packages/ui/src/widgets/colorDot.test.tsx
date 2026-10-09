@@ -58,8 +58,21 @@ describe("colorDot widget tone", () => {
     const { container, getByText } = render(
       <Dot value="RUNNING" field={{ options: [{ value: "RUNNING", label: "Running" }] }} />,
     );
-    expect(getByText("Running")).toBeTruthy();
-    expect(dotClass(container)).toContain("size-1.5");
-    expect(container.firstElementChild?.className).not.toContain("h-tag-h");
+    const label = getByText("Running");
+    expect(dotClass(container)).toContain("size-2");
+    expect(label.className).toContain("text-inherit");
+    expect(label.className).not.toContain("text-success-text");
+    expect(label.className).not.toContain("h-tag-h");
+  });
+
+  test("keeps the historical raw fallback label", () => {
+    const { getByText } = render(<Dot value="QUEUED_NEW" />);
+    expect(getByText("QUEUED_NEW")).toBeTruthy();
+  });
+
+  test("keeps the historical dot-only empty value", () => {
+    const { container } = render(<Dot />);
+    expect(dotClass(container)).toContain("size-2");
+    expect(container.textContent).toBe("");
   });
 });

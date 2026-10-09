@@ -1,7 +1,7 @@
 // The semantic-color owner: one vocabulary for the whole React layer.
 //
 //   tone    = which palette  (neutral, brand, accent, info, success, …)
-//   variant = how it's filled (solid, soft, surface, outline, ghost, text)
+//   variant = how it's filled (solid, soft, surface, outline, ghost)
 //
 // `toneFill` is the single (tone × fill) → class matrix. Every entry is a
 // LITERAL class string on purpose — Tailwind only generates utilities it can
@@ -25,10 +25,26 @@ export const TONES = [
 
 export type Tone = (typeof TONES)[number];
 
+/** The feedback intents that carry a status glyph (a curated subset of the tones). */
+export const FEEDBACK_INTENTS = [
+  "info",
+  "success",
+  "warning",
+  "danger",
+] as const satisfies readonly Tone[];
+
+/** A feedback intent — a tone that carries a status glyph. */
+export type FeedbackIntent = (typeof FEEDBACK_INTENTS)[number];
+
 /** Whether `value` is one of the known tones — the membership guard at the boundary
  *  where an untyped value (Refine meta, JSON) must be narrowed to a `Tone`. */
 export function isTone(value: unknown): value is Tone {
   return TONES.includes(value as Tone);
+}
+
+/** Whether `value` is a feedback tone that carries a status glyph. */
+export function isFeedbackIntent(value: unknown): value is FeedbackIntent {
+  return (FEEDBACK_INTENTS as readonly unknown[]).includes(value);
 }
 
 /**
@@ -55,7 +71,7 @@ export function isMenuTone(value: unknown): value is MenuTone {
   return (MENU_TONES as readonly unknown[]).includes(value);
 }
 
-export const FILLS = ["solid", "soft", "surface", "outline", "ghost", "text"] as const;
+export const FILLS = ["solid", "soft", "surface", "outline", "ghost"] as const;
 
 export type Fill = (typeof FILLS)[number];
 
@@ -93,7 +109,7 @@ export function toneOnColorVar(tone: Tone): string {
 }
 
 // The tone-colored text utility per tone — the one place each on-surface
-// `text-*` literal is written. `toneFill`'s soft/surface/outline/ghost/text columns
+// `text-*` literal is written. `toneFill`'s soft/surface/outline/ghost columns
 // interpolate this (mirroring how the solid column reads `SOLID_BG`), so a tone's
 // text color lives once. The brand-family palettes (brand/accent/purple/pink)
 // use the `-soft-text` token; the feedback palettes use plain `text-<tone>-text`;
@@ -150,7 +166,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-sheet ${TONE_TEXT.neutral} border-border`,
     outline: `bg-transparent ${TONE_TEXT.neutral} border-border`,
     ghost: `bg-transparent ${TONE_TEXT.neutral} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.neutral} border-transparent`,
   },
   brand: {
     solid: `${SOLID_BG.brand} text-on-brand border-brand`,
@@ -158,7 +173,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-brand-tint ${TONE_TEXT.brand} border-brand-line`,
     outline: `bg-transparent ${TONE_TEXT.brand} border-brand-line`,
     ghost: `bg-transparent ${TONE_TEXT.brand} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.brand} border-transparent`,
   },
   accent: {
     solid: `${SOLID_BG.accent} text-on-accent border-accent`,
@@ -166,7 +180,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-accent-tint ${TONE_TEXT.accent} border-accent-line`,
     outline: `bg-transparent ${TONE_TEXT.accent} border-accent-line`,
     ghost: `bg-transparent ${TONE_TEXT.accent} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.accent} border-transparent`,
   },
   info: {
     solid: `${SOLID_BG.info} text-on-info border-info`,
@@ -174,7 +187,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-info-tint ${TONE_TEXT.info} border-info-line`,
     outline: `bg-transparent ${TONE_TEXT.info} border-info-line`,
     ghost: `bg-transparent ${TONE_TEXT.info} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.info} border-transparent`,
   },
   success: {
     solid: `${SOLID_BG.success} text-on-success border-success`,
@@ -182,7 +194,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-success-tint ${TONE_TEXT.success} border-success-line`,
     outline: `bg-transparent ${TONE_TEXT.success} border-success-line`,
     ghost: `bg-transparent ${TONE_TEXT.success} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.success} border-transparent`,
   },
   warning: {
     solid: `${SOLID_BG.warning} text-on-warning border-warning`,
@@ -190,7 +201,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-warning-tint ${TONE_TEXT.warning} border-warning-line`,
     outline: `bg-transparent ${TONE_TEXT.warning} border-warning-line`,
     ghost: `bg-transparent ${TONE_TEXT.warning} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.warning} border-transparent`,
   },
   danger: {
     solid: `${SOLID_BG.danger} text-on-danger border-danger`,
@@ -198,7 +208,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-danger-tint ${TONE_TEXT.danger} border-danger-line`,
     outline: `bg-transparent ${TONE_TEXT.danger} border-danger-line`,
     ghost: `bg-transparent ${TONE_TEXT.danger} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.danger} border-transparent`,
   },
   purple: {
     solid: `${SOLID_BG.purple} text-on-purple border-purple`,
@@ -206,7 +215,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-purple-tint ${TONE_TEXT.purple} border-purple-line`,
     outline: `bg-transparent ${TONE_TEXT.purple} border-purple-line`,
     ghost: `bg-transparent ${TONE_TEXT.purple} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.purple} border-transparent`,
   },
   pink: {
     solid: `${SOLID_BG.pink} text-on-pink border-pink`,
@@ -214,7 +222,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
     surface: `bg-pink-tint ${TONE_TEXT.pink} border-pink-line`,
     outline: `bg-transparent ${TONE_TEXT.pink} border-pink-line`,
     ghost: `bg-transparent ${TONE_TEXT.pink} border-transparent`,
-    text: `bg-transparent ${TONE_TEXT.pink} border-transparent`,
   },
 };
 
@@ -222,17 +229,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
 export function toneClass(tone: Tone, fill: Fill = "soft"): string {
   return toneFill[tone][fill];
 }
-
-/** The feedback intents that carry a status glyph (a curated subset of the tones). */
-export const FEEDBACK_INTENTS = [
-  "info",
-  "success",
-  "warning",
-  "danger",
-] as const satisfies readonly Tone[];
-
-/** A feedback intent — a tone that carries a status glyph. */
-export type FeedbackIntent = (typeof FEEDBACK_INTENTS)[number];
 
 /**
  * The canonical icon-registry glyph name for each feedback intent. One owner for
