@@ -10,7 +10,7 @@ import { vaultCreateForm } from "./views/vault-form";
 
 export { KnowledgePageView, type KnowledgePageViewProps } from "./KnowledgePageView";
 export { RecordPagesPane, recordPagesTab, recordPagesTarget, type RecordPagesTabOptions, type RecordPagesTarget } from "./RecordPagesPane";
-export { RecordNotesStream, type RecordNotesStreamProps } from "./RecordNotesStream";
+export { RecordNotesStream, recordNotesTab, type RecordNotesStreamProps, type RecordNotesTabOptions } from "./RecordNotesStream";
 
 const KNOWLEDGE_ID = "knowledge";
 
