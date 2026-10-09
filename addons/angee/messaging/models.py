@@ -81,9 +81,11 @@ from angee.messaging.managers import (
     ThreadManager,
     ThreadNotificationManager,
 )
+from angee.messaging.resources import MessageResource, ThreadActivityResource
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
+from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
 
@@ -1667,10 +1669,11 @@ class ActivityType(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class ThreadActivity(AuditMixin, AngeeDataModel):
+class ThreadActivity(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """A scheduled activity attached to a model chatter thread."""
 
     runtime = True
+    resource_class = ThreadActivityResource
 
     class ActivityStatus(models.TextChoices):
         """Stored lifecycle for an activity."""
@@ -1865,7 +1868,7 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
+class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1890,6 +1893,7 @@ class Message(TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataMo
     """
 
     runtime = True
+    resource_class = MessageResource
     rebac_grantable = {"reader": "write"}
     creation_key_scope = "creation_actor"
     creation_actor = models.CharField(max_length=512, null=True, blank=True, editable=False)
