@@ -409,6 +409,7 @@ def _render_dev_stack(
     enable_ollama: bool = False,
     ollama_port: str = "11434",
     ingress_domain: str = "localhost",
+    ingress_aliases: str = "",
     _runtime_mode: str = "process",
     postgres_mode: str = "bundled",
     postgres_host: str = "127.0.0.1",
@@ -448,6 +449,7 @@ def _render_dev_stack(
         "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
         "ingress_domain": ingress_domain,
+        "ingress_aliases": ingress_aliases,
         "node_image": "node:22-bookworm-slim",
         "ollama_port": ollama_port,
         "operator_port": "9000",
@@ -485,12 +487,15 @@ def _render_dev_stack(
     return _render_stack_manifest(DEV_TEMPLATE, variables)
 
 
-def _render_dev_docker_stack(*, celery_queues: str = "", ingress_domain: str = "localhost") -> dict[str, Any]:
+def _render_dev_docker_stack(
+    *, celery_queues: str = "", ingress_domain: str = "localhost", ingress_aliases: str = ""
+) -> dict[str, Any]:
     """Render the Docker-mode framework-dev stack with every dev input present."""
 
     return _render_dev_stack(
         celery_queues=celery_queues,
         ingress_domain=ingress_domain,
+        ingress_aliases=ingress_aliases,
         _runtime_mode="docker",
     )
 
@@ -1432,6 +1437,20 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     assert instance["jobs"]["frontend-build"]["depends_on"] == ["provision", "operator-schema"]
     assert instance["services"]["caddy"]["after"] == ["frontend-build"]
     assert instance["services"]["django"]["after"] == ["provision", "caddy"]
+
+
+def test_dev_stack_ingress_aliases_serve_further_hosts() -> None:
+    """Alias host names join the edge site and the UI's allowed hosts."""
+
+    stack = _render_dev_docker_stack(
+        ingress_domain="dev.example.com", ingress_aliases="ap.example.com,crm.example.com"
+    )
+
+    assert stack["ingress"]["domain"] == "dev.example.com"
+    assert stack["ingress"]["aliases"] == ["ap.example.com", "crm.example.com"]
+    frontend = stack["services"]["frontend"]
+    assert frontend["env"]["ANGEE_UI_ALLOWED_HOSTS"] == "dev.example.com,ap.example.com,crm.example.com"
+    assert stack["services"]["django"]["env"]["ANGEE_PUBLIC_ORIGIN"] == "https://dev.example.com"
 
 
 def test_dev_stack_hostname_mode_secures_the_ux_ingress() -> None:
