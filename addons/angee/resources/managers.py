@@ -14,6 +14,7 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.identity import public_id_of
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
@@ -53,6 +54,24 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
 
         with system_context(reason="resources.ledger_page"):
             return list(self.all()[:limit])
+
+    def seeding(self, record: models.Model) -> ResourceQuerySet:
+        """Return the ledger rows whose target is ``record``, by its model label and public id."""
+
+        return self.filter(target_model=record._meta.label, target_id=public_id_of(record))
+
+
+def seeded_record_merge_guard(record: models.Model) -> str | None:
+    """Refuse merging away a record a resource ledger loaded (an ``ANGEE_MERGE_GUARDS`` entry).
+
+    The next load would find no row for its xref and create the record again.
+    """
+
+    with system_context(reason="resources.seeded_record_merge_guard"):
+        ledger = apps.get_model("resources", "Resource").objects.seeding(record).first()
+    if ledger is None:
+        return None
+    return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
 
 
 class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # type: ignore[misc]
