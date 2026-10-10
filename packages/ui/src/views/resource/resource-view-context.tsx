@@ -8,7 +8,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouter, useRouterState, useSearch } from "@tanstack/react-router";
 import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Updater, type VisibilityState } from "@tanstack/react-table";
 import { stableSerialize } from "@angee/refine";
 import { Filter, ResourceQuery, useModelMetadata } from "@angee/metadata";
@@ -63,6 +63,32 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
+interface ResourceViewSelection {
+  query: string;
+  baseFilter: ResourceViewFilter | undefined;
+  rowSelection: RowSelectionState;
+}
+const EMPTY_ROW_SELECTION: RowSelectionState = {};
+
+function selectionForQuery(current: ResourceViewSelection, query: string): ResourceViewSelection {
+  return current.query === query ? current : { ...current, query, rowSelection: EMPTY_ROW_SELECTION };
+}
+
+/** Pagination and display controls do not change the selected collection. */
+function queryIdentity(state: ResourceViewState, effectiveBaseFilter: ResourceViewFilter | undefined) {
+  return {
+    collection: stableSerialize([state.filter, effectiveBaseFilter ?? {}, state.preset, state.view, state.groupStack]),
+    order: stableSerialize(state.sorting),
+  };
+}
+
+function useQueryIdentity(resource: string | undefined, baseFilter: ResourceViewFilter | undefined) {
+  const { resourceViews } = useAppRuntime();
+  return useCallback((state: ResourceViewState, scope = baseFilter) => stableSerialize([
+    resource, baseFilter ?? {}, queryIdentity(state, Filter.combineOptional(scope, resourceViews[state.preset ?? ""]?.fixedFilter)),
+  ]), [resource, baseFilter, resourceViews]);
+}
+
 export interface ResourceViewContextValue {
   /** Resource whose collection state this provider owns. */
   resource?: string;
@@ -81,6 +107,10 @@ export interface ResourceViewContextValue {
   setPagination: OnChangeFn<PaginationState>;
   setSorting: OnChangeFn<SortingState>;
   setRowSelection: OnChangeFn<RowSelectionState>;
+  /** Selection is keyed by the effective immutable scope in which it was made. */
+  selection: ResourceViewSelection;
+  selectionForScope: (baseFilter: ResourceViewFilter | undefined) => RowSelectionState;
+  setScopedRowSelection: (baseFilter: ResourceViewFilter | undefined, updater: Updater<RowSelectionState>) => void;
   setFilter: OnChangeFn<ResourceViewFilter>;
   resetQuery: () => void;
   /** Whether editable query state differs from this collection's default view. */
@@ -198,6 +228,11 @@ export function withResourceViewScope({
       ...ambient,
       baseFilter: Filter.combineOptional(ambient.baseFilter, baseFilter),
     };
+    const setRowSelection: OnChangeFn<RowSelectionState> = (updater) => ambient.setScopedRowSelection(scoped.baseFilter, updater);
+    scoped.state = { ...ambient.state, rowSelection: ambient.selectionForScope(scoped.baseFilter) };
+    scoped.setRowSelection = setRowSelection;
+    scoped.clearSelectedIds = () => setRowSelection({});
+    scoped.toggleSelectedId = (id, selected) => setRowSelection((current) => ({ ...current, [id]: selected ?? !current[id] }));
     return <ResourceViewContext.Provider value={scoped}>{children(scoped)}</ResourceViewContext.Provider>;
   }
   return (
@@ -231,7 +266,9 @@ function RouteResourceViewProvider({
   presetIds = EMPTY_PRESET_IDS,
   namespace,
 }: Omit<ResourceViewProviderProps, "scope">): ReactNode {
-  const search = useSearch({ strict: false });
+  const router = useRouter();
+  const search: Record<string, unknown> = useSearch({ strict: false });
+  const pendingSearch = useRouterState({ select: (state): Record<string, unknown> => state.location.search });
   const { resourceViews, defaultResourceView, menuResourceViewIds } = useAppRuntime();
   const model = useModelMetadata(resource ?? "");
   const modelLabel = model?.resource.modelLabel ?? resource;
@@ -261,13 +298,31 @@ function RouteResourceViewProvider({
   // Narrow Router navigation to functional search updates; no from is supplied
   // because the updater is route-agnostic.
   const navigate = useNavigate() as ResourceViewNavigate;
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>(
-    () => createResourceViewState(initialState).rowSelection,
-  );
   const queryState = useMemo(
     () => readState(search),
     [search, readState],
   );
+  const selectionQuery = useQueryIdentity(resource, baseFilter);
+  const query = selectionQuery(queryState);
+  const [selection, setSelection] = useState<ResourceViewSelection>(() => ({
+    query, baseFilter, rowSelection: createResourceViewState(initialState).rowSelection,
+  }));
+  const activeQuery = selectionQuery(readState(pendingSearch), selection.baseFilter);
+  const activeSelection = selectionForQuery(selection, activeQuery);
+  // Record the new baseline as well as deriving it, so history cannot revive
+  // ids from a query that was left without another selection interaction.
+  if (activeSelection !== selection) setSelection((current) => selectionForQuery(current, activeQuery));
+  const rowSelection = selectionForQuery(activeSelection, query).rowSelection;
+  // Read Router's current location at the interaction, including navigations
+  // that happened earlier in the same React batch outside this provider.
+  const setScopedRowSelection = useCallback((scope: ResourceViewFilter | undefined, updater: Updater<RowSelectionState>) => {
+    const target = selectionQuery(readState(router.state.location.search), scope);
+    setSelection((current) => {
+      const rowSelection = functionalUpdate(updater, selectionForQuery(current, target).rowSelection);
+      return current.query === target && rowSelection === current.rowSelection ? current : { query: target, baseFilter: scope, rowSelection };
+    });
+  }, [readState, router, selectionQuery]);
+  const setRowSelection = useCallback<OnChangeFn<RowSelectionState>>((updater) => setScopedRowSelection(baseFilter, updater), [baseFilter, setScopedRowSelection]);
   const [failedTransition, setFailedTransition] = useState<{
     search: unknown;
     error: Error;
@@ -322,6 +377,9 @@ function RouteResourceViewProvider({
   const value = useResourceViewContextValue({
     updateState,
     setRowSelection,
+    selection: activeSelection,
+    selectionQuery,
+    setScopedRowSelection,
     resource,
     baseFilter,
     favoriteKey,
@@ -352,22 +410,43 @@ function LocalResourceViewProvider({
     () => declaredPresetIds === undefined ? undefined : [...new Set([...declaredPresetIds, ...(initialPreset ? [initialPreset] : [])])],
     [declaredPresetIds, initialPreset],
   );
-  const [state, updateState] = useState(() =>
-    createResourceViewState(initialState),
-  );
-  const setRowSelection = useCallback<OnChangeFn<RowSelectionState>>(
-    (updater) => {
-      updateState((current) => ({
-        ...current,
-        rowSelection: functionalUpdate(updater, current.rowSelection),
-      }));
-    },
-    [],
-  );
+  const selectionQuery = useQueryIdentity(resource, baseFilter);
+  const [local, setLocal] = useState(() => {
+    const state = createResourceViewState(initialState);
+    return { state, selection: { query: selectionQuery(state), baseFilter, rowSelection: state.rowSelection } };
+  });
+  const query = selectionQuery(local.state, local.selection.baseFilter);
+  const activeSelection = selectionForQuery(local.selection, query);
+  const rowSelection = selectionForQuery(activeSelection, selectionQuery(local.state)).rowSelection;
+  const state = useMemo(() => rowSelection === local.state.rowSelection ? local.state : { ...local.state, rowSelection }, [local.state, rowSelection]);
+  if (activeSelection !== local.selection) setLocal((current) => {
+    const selection = selectionForQuery(current.selection, selectionQuery(current.state, current.selection.baseFilter));
+    return selection === current.selection ? current : { ...current, selection };
+  });
+  const updateState = useCallback<OnChangeFn<ResourceViewState>>((updater) => {
+    setLocal((current) => {
+      const query = selectionQuery(current.state, current.selection.baseFilter);
+      const next = functionalUpdate(updater, current.state);
+      const selection = selectionForQuery(current.selection, selectionQuery(next, current.selection.baseFilter));
+      return next === current.state && selection === current.selection && query === selection.query ? current : { state: next, selection };
+    });
+  }, [selectionQuery]);
+  const setScopedRowSelection = useCallback((scope: ResourceViewFilter | undefined, updater: Updater<RowSelectionState>) => {
+    setLocal((current) => {
+      const query = selectionQuery(current.state, scope);
+      const rowSelection = functionalUpdate(updater, selectionForQuery(current.selection, query).rowSelection);
+      return query === current.selection.query && rowSelection === current.selection.rowSelection ? current
+        : { ...current, selection: { query, baseFilter: scope, rowSelection } };
+    });
+  }, [selectionQuery]);
+  const setRowSelection = useCallback<OnChangeFn<RowSelectionState>>((updater) => setScopedRowSelection(baseFilter, updater), [baseFilter, setScopedRowSelection]);
   const defaultState = useMemo(() => createResourceViewState({ ...initialState, view: state.view }), [initialState, state.view]);
   const value = useResourceViewContextValue({
     updateState,
     setRowSelection,
+    selection: activeSelection,
+    selectionQuery,
+    setScopedRowSelection,
     resource,
     baseFilter,
     favoriteKey,
@@ -387,6 +466,9 @@ function LocalResourceViewProvider({
 function useResourceViewContextValue({
   updateState,
   setRowSelection,
+  selection,
+  selectionQuery,
+  setScopedRowSelection,
   resource,
   baseFilter,
   favoriteKey,
@@ -397,6 +479,9 @@ function useResourceViewContextValue({
 }: {
   updateState: OnChangeFn<ResourceViewState>;
   setRowSelection: OnChangeFn<RowSelectionState>;
+  selection: ResourceViewSelection;
+  selectionQuery: ReturnType<typeof useQueryIdentity>;
+  setScopedRowSelection: ResourceViewContextValue["setScopedRowSelection"];
   resource: string | undefined;
   baseFilter?: ResourceViewFilter;
   favoriteKey?: string;
@@ -435,13 +520,9 @@ function useResourceViewContextValue({
   );
   // Query facts belong to ResourceView; an external Router change must discard
   // old group interaction state before any newly mounted surface starts reads.
-  const groupQuery = stableSerialize([
-    resource,
-    state.filter,
-    effectiveBaseFilter,
-    state.groupStack,
-  ]);
-  const groupOrder = stableSerialize(state.sorting);
+  const identity = queryIdentity(state, effectiveBaseFilter);
+  const groupQuery = stableSerialize([resource, baseFilter ?? {}, identity.collection]);
+  const groupOrder = identity.order;
   const [groups, setGroups] = useState<ResourceViewGroups>(() => ({
     query: groupQuery,
     order: groupOrder,
@@ -449,6 +530,7 @@ function useResourceViewContextValue({
     expansion: null,
   }));
   const activeGroups = groupsForQuery(groups, groupQuery, groupOrder);
+  if (activeGroups !== groups) setGroups((current) => groupsForQuery(current, groupQuery, groupOrder));
   const setPaginationByScope = useCallback<OnChangeFn<GroupPagination>>(
     (updater) => {
       setGroups((current) => {
@@ -498,17 +580,11 @@ function useResourceViewContextValue({
   );
   const setPagination = useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
-      if (
-        functionalUpdate(updater, state.pagination).pageSize !==
-        state.pagination.pageSize
-      )
-        clearSelectedIds();
       updateState((current) => {
         const next = functionalUpdate(updater, current.pagination);
         const sizeChanged = next.pageSize !== current.pagination.pageSize;
         return {
           ...current,
-          ...(sizeChanged ? { rowSelection: {} } : {}),
           pagination: {
             pageIndex: sizeChanged
               ? 0
@@ -523,7 +599,7 @@ function useResourceViewContextValue({
         };
       });
     },
-    [clearSelectedIds, state.pagination, updateState],
+    [updateState],
   );
   const setSorting = useCallback<OnChangeFn<SortingState>>(
     (updater) => {
@@ -561,6 +637,9 @@ function useResourceViewContextValue({
       setPagination,
       setSorting,
       setRowSelection,
+      selection,
+      selectionForScope: (scope) => selectionForQuery(selection, selectionQuery(state, scope)).rowSelection,
+      setScopedRowSelection,
       setPage: (page: number) =>
         setPagination((current) => ({ ...current, pageIndex: page - 1 })),
       setPageSize: (pageSize: number) =>
@@ -667,6 +746,9 @@ function useResourceViewContextValue({
       setPagination,
       setSorting,
       setRowSelection,
+      selection,
+      selectionQuery,
+      setScopedRowSelection,
       resetScope,
       setGroupStack,
       clearSelectedIds,

@@ -3,6 +3,7 @@ import { useWidget, type WidgetMap } from "../runtime";
 import { booleanBadgeWidget } from "./booleanBadge";
 import { booleanWidget } from "./boolean";
 import { colorWidget } from "./color";
+import { colorDotWidget } from "./colorDot";
 import { comboboxWidget } from "./combobox";
 import { dateWidget } from "./date";
 import { datetimeWidget } from "./datetime";
@@ -139,6 +140,8 @@ export const defaultWidgets = {
   booleanBadge: booleanBadgeWidget,
   booleanToggle: booleanToggleWidget,
   color: colorWidget,
+  /** @deprecated Use `statusBadge` with `statusDisplay: "dot"`. */
+  colorDot: colorDotWidget,
   date: dateWidget,
   json: jsonWidget,
   datetime: datetimeWidget,

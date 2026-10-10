@@ -16,7 +16,7 @@ import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
 import { estimateGroupedItemSize, groupFieldLabel, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures } from "../resource-view-list-body";
 import { listBatchTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
-import { modelRowId, idsFromRowSelectionState } from "../resource-view-codecs";
+import { modelRowId } from "../resource-view-codecs";
 import {
   buildGroupedRenderModel,
   groupedPageWindow,
@@ -28,7 +28,7 @@ import {
 } from "../resource-view-grouped-model";
 import { useCollectionQueryBatch } from "../collection-source";
 import { useResourceViewTableChrome } from "./presentation";
-import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
+import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSelectionSnapshots } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
 import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSurfaceProps } from "./types";
 /**
@@ -492,12 +492,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     navigation: { filter: mergedFilter, order: sortOrder },
     onListStateChange,
   });
-  // Publish the snapshot like the flat surface: rows are empty here (the grouped
-  // render stream owns the visible records), but the non-null `navigationScope`
-  // carries the folded scope's own filter/order. Without this, a record pager
-  // built by `useListRecordNavigation` could retain a stale flat descriptor when
-  // a grouped scope becomes active. The clicked row subsequently supplies its
-  // precise leaf descriptor; the native headless query consumes that scope.
+  const { selectedIds, selectedRows } = useSelectionSnapshots(rowModels, resourceView.state.rowSelection);
   return {
     kind: "grouped",
     list,
@@ -518,7 +513,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     visibleFields,
     toggleVisibleField,
     rowModels,
-    selectedIds: idsFromRowSelectionState(resourceView.state.rowSelection),
+    selectedIds,
+    selectedRows,
     expandedKeys,
     toggleGroup,
     setGroupsExpanded,

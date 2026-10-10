@@ -35,6 +35,8 @@ vi.mock("@refinedev/core", async (importOriginal) => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useSearch: () => ({}),
+  useRouter: () => ({ state: { location: { search: {} } } }),
+  useRouterState: () => ({}),
   useNavigate: () => vi.fn(),
 }));
 
