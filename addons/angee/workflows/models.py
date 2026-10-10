@@ -20,7 +20,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, update_fields_with_auto_now
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -787,6 +787,14 @@ class StepWatch(RecordRefMixin, AngeeDataModel):
     record = GenericForeignKey("content_type", "object_id")
     pending = models.BooleanField(default=False, editable=False)
     objects = StepWatchManager()
+
+    def merge_collapse(self, duplicate: Any) -> bool:
+        """Keep the wake obligation when either watch was still pending on its record."""
+
+        if duplicate.pending and not self.pending:
+            self.pending = True
+            self.save(update_fields=update_fields_with_auto_now(self, {"pending"}))
+        return True
 
     class Meta:
         """Canonical record uniqueness and source capture lookup."""
