@@ -13,7 +13,17 @@ from rebac import actor_context, system_context
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging import managers as messaging_managers
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.messaging.testing.models import Address, Channel, Fragment, Handle, Message, Part, Party, PartyHandle
+from angee.messaging.testing.models import (
+    Address,
+    Channel,
+    Fragment,
+    Handle,
+    Message,
+    Part,
+    Party,
+    PartyHandle,
+    PartyHandleClaim,
+)
 from angee.parties.managers import Signing
 from angee.parties.mixins import LinkSource
 from angee.parties.tasks import refresh_handle_suggestions
@@ -173,7 +183,8 @@ def test_a_signature_pass_withdraws_only_undecided_suggestions_it_no_longer_supp
         remaining = set(PartyHandle._base_manager.filter(party=party).values_list("pk", flat=True))
         handle = Handle._base_manager.get(pk=unreviewed.handle_id)
         party.refresh_from_db()
-    assert withdrawn == 1
+    # Each pair's rule claim goes; the confirmed and dismissed pairs stay as the person's decisions.
+    assert withdrawn == 3
     assert remaining == {confirmed.pk, dismissed.pk}
     assert handle.party_id is None
     assert party.handle_count == 1
@@ -252,7 +263,7 @@ def test_a_list_senders_display_name_proposes_nobody(composed_tables: None) -> N
 
 @pytest.mark.django_db(transaction=True)
 def test_an_assertion_never_reopens_a_dismissed_link(composed_tables: None) -> None:
-    """A card that lists a dismissed number leaves the human decision as it was."""
+    """A card that lists a dismissed number adds its claim; the human decision stays as it was."""
     del composed_tables
     owner = get_user_model().objects.create_user(username="dismissed-link-owner")
     with system_context(reason="dismissed link fixture"):
@@ -264,7 +275,9 @@ def test_an_assertion_never_reopens_a_dismissed_link(composed_tables: None) -> N
         PartyHandle.objects.link(party, handle, source=LinkSource.CARDDAV, created_by_id=owner.pk)
         link.refresh_from_db()
         handle.refresh_from_db()
-    assert (link.is_dismissed, link.source, link.confidence) == (True, LinkSource.RULE, 0.3)
+        sources = set(PartyHandleClaim._base_manager.filter(link=link).values_list("source", flat=True))
+    assert (link.is_dismissed, link.is_confirmed) == (True, False)
+    assert sources == {LinkSource.RULE, LinkSource.CARDDAV}
     assert handle.party_id is None
 
 

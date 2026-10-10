@@ -307,6 +307,9 @@ A PartyHandle is **asserted** when a directory card restates it, a person added
 it, or a human confirmed it; any other source makes it an **inference** (an
 inferred link), which no card publishes. Provenance and confidence are separate:
 an inference at full confidence may decide the owner yet stays off the card.
+Each source that links a pair owns a **claim** (`PartyHandleClaim`) beneath the
+one PartyHandle row; the row derives its source and confidence from its claims
+and holds the human decision, so sources never overwrite each other.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

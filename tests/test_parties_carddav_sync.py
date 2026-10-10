@@ -1065,7 +1065,8 @@ def test_a_card_that_lists_a_mined_number_owns_it(replica: Replica) -> None:
         owned = PartyHandle.objects.select_related("handle").get(party=person, handle__value="+14155552671")
         assert (owned.source, owned.confidence) == (LinkSource.CARDDAV, 1.0)
         assert owned.handle.party_id == person.pk
-        assert PartyHandle.objects._reconcile_signatures([]) == 0
+        # The rule withdraws its own claim; the card's claim keeps the link and the owner.
+        assert PartyHandle.objects._reconcile_signatures([]) == 1
         assert PartyHandle.objects.filter(pk=owned.pk).exists()
 
 
@@ -1127,14 +1128,14 @@ def test_removing_a_line_takes_its_own_label_when_labels_are_equal(replica: Repl
         ((LinkSource.EMAIL_MATCH, 1.0), (LinkSource.CARDDAV, 1.0), LinkSource.CARDDAV),
         ((LinkSource.RULE, 0.4), (LinkSource.EMAIL_MATCH, 1.0), LinkSource.EMAIL_MATCH),
         ((LinkSource.MANUAL, 0.4), (LinkSource.EMAIL_MATCH, 1.0), LinkSource.MANUAL),
-        ((LinkSource.MANUAL, 0.4), (LinkSource.CARDDAV, 1.0), LinkSource.MANUAL),
+        ((LinkSource.MANUAL, 0.4), (LinkSource.CARDDAV, 1.0), LinkSource.CARDDAV),
         ((LinkSource.EMAIL_MATCH, 1.0), (LinkSource.RULE, 0.4), LinkSource.EMAIL_MATCH),
     ],
 )
 def test_an_undecided_link_keeps_the_strongest_provenance(
     replica: Replica, first: tuple[LinkSource, float], then: tuple[LinkSource, float], kept: LinkSource
 ) -> None:
-    """An assertion replaces an inference's source; an inference never unpublishes an assertion."""
+    """The pair derives its provenance from its claims: an assertion before an inference, then confidence."""
 
     person, _link = replica.baseline()
     with system_context(reason="test link provenance"):
