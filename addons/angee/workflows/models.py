@@ -20,10 +20,9 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.merge import MergePolicy
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas

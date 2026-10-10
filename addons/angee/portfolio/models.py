@@ -24,14 +24,13 @@ from rebac import (
 )
 
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.merge import MergePolicy
 from angee.base.mixins import AuditMixin, HierarchyMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 

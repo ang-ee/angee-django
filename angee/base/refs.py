@@ -25,7 +25,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar
+from enum import StrEnum
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -41,9 +42,6 @@ from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
 from angee.base.permissions import effective_rebac_definition
-
-if TYPE_CHECKING:
-    from angee.base.merge import MergePolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,13 +217,30 @@ def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
     return tuple(links)
 
 
+class MergePolicy(StrEnum):
+    """What merging a record does to the rows that point at it (see :mod:`angee.base.merge`)."""
+
+    MOVE = "move"
+    """Re-point the row to the survivor."""
+
+    KEEP = "keep"
+    """Leave the row pointing at the merged record, as history."""
+
+    BLOCK = "block"
+    """Refuse the merge while such a row exists."""
+
+
 class RecordRefMixin(models.Model):
     """Project a row reference from the model's single declared generic foreign key."""
 
     merge_policy: ClassVar[MergePolicy | None] = None
-    """What merging the referenced record does to this edge's rows; ``None`` blocks the merge.
+    """What merging the referenced record does to this edge's rows; ``None`` blocks the merge."""
 
-    See :mod:`angee.base.merge`.
+    merge_identity: ClassVar[tuple[tuple[str, ...], ...]] = ()
+    """Unique field sets whose equal rows state one fact.
+
+    A merge moving a row onto one the survivor already holds under such a set
+    drops the merged record's copy; any other unique collision refuses the merge.
     """
 
     class Meta:

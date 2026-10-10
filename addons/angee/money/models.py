@@ -34,11 +34,10 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import GenericTarget, generic_target
 
-from angee.base.merge import MergePolicy
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.money.rounding import RoundingMode, rounding_constant
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"

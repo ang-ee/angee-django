@@ -13,10 +13,9 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
 from angee.base.identity import instances_from_public_ids
-from angee.base.merge import MergePolicy
 from angee.base.mixins import AppendOnlyModel
 from angee.base.models import AngeeDataModel
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import read_scoped_queryset
 
 

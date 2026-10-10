@@ -19,7 +19,7 @@ from angee.resources.testing.models import Resource
 from angee.workflows.models import WorkflowRun
 from tests.conftest import Page, RecordBinding, Vault, make_addon
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.tables import model_tables
+from tests.tables import registered_model_tables, unregister_models
 from tests.test_record_refs import (
     RecordRefNullableEdge,
     RecordRefSubjectEdge,
@@ -42,6 +42,9 @@ class CustomColumnEdge(RecordRefMixin, models.Model):
         db_table = "test_record_ref_custom_columns"
 
 
+unregister_models(CustomColumnEdge)
+
+
 @pytest.fixture
 def import_reference(composed_tables, record_ref_tables, tmp_path):
     """Bind native resources to the existing suite ledger and model-table owner."""
@@ -61,7 +64,7 @@ def import_reference(composed_tables, record_ref_tables, tmp_path):
             addon_aliases={"reference_import": addon.name},
         )
 
-    with model_tables((CustomColumnEdge,)):
+    with registered_model_tables((CustomColumnEdge,)):
         yield resource
 
 

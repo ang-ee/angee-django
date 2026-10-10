@@ -46,7 +46,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields import ColorField
 from angee.base.identity import instance_from_public_id
-from angee.base.merge import MergeableMixin, MergePolicy
+from angee.base.merge import MergeableMixin
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -58,7 +58,7 @@ from angee.base.models import (
     AngeeQuerySet,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 
 
 class TagQuerySet(
@@ -213,6 +213,7 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """
 
     merge_policy = MergePolicy.MOVE
+    merge_identity = (("tag", "content_type", "object_id"),)
     runtime = True
     sqid_prefix = "tga_"
 

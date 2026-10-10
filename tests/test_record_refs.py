@@ -38,7 +38,7 @@ from tests.mtidemo.models import (
     MtiParent,
     MtiParentProxy,
 )
-from tests.tables import model_tables
+from tests.tables import registered_model_tables, unregister_models
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):
@@ -132,6 +132,7 @@ RECORD_REF_TEST_MODELS = (
     RecordRefCustomEdge,
     RecordRefNullableEdge,
 )
+unregister_models(*RECORD_REF_TEST_MODELS)
 
 
 @pytest.fixture()
@@ -139,7 +140,7 @@ def record_ref_tables(transactional_db: Any) -> Any:
     """Create the concrete test tables."""
 
     del transactional_db
-    with model_tables(RECORD_REF_TEST_MODELS):
+    with registered_model_tables(RECORD_REF_TEST_MODELS):
         yield
 
 
