@@ -99,7 +99,7 @@ def test_a_confirmation_is_the_persons_own_claim(composed_tables: None) -> None:
 def test_an_extending_source_sets_its_claim_fields_and_save_arguments(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An addon that extends the claim reaches its creation and every save through link()."""
+    """An addon that extends the claim sets its fields on creation and its save argument on refresh."""
 
     del composed_tables
     owner, party, handle = _pair("claims-extension")
@@ -125,7 +125,7 @@ def test_an_extending_source_sets_its_claim_fields_and_save_arguments(
             )
         claim = PartyHandleClaim._base_manager.get(link=link)
     assert saves == [
-        {"identity": "erp:partner:7", "fields": None},
+        {"identity": "", "fields": None},
         {"identity": "erp:partner:7", "fields": ["confidence", "updated_at"]},
     ]
     assert (claim.confidence, claim.metadata) == (0.9, {"provenance": "erp", "partner": 7})
