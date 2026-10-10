@@ -43,6 +43,7 @@ from html.parser import HTMLParser
 from typing import Any, cast
 
 from mailparser_reply import EmailReplyParser
+from mailparser_reply.constants import MAIL_LANGUAGES
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.parties.models import Handle
@@ -69,11 +70,11 @@ class _EmbeddedMessageBudget:
     remaining_bytes: int = EMBEDDED_MESSAGE_MAX_BYTES
 
 # mail-parser-reply owns plain-text segmentation (docs/stack.md): reply
-# boundaries at attribution headers, signature and disclaimer detection. The
-# language set covers what the previous hand-rolled attribution heuristic
-# matched (en/fr/de/es/it) so non-English "On …, X wrote:" headers keep
-# classifying as reply boundaries.
-_REPLY_PARSER = EmailReplyParser(languages=["en", "fr", "de", "es", "it"])
+# boundaries at attribution headers, signature and disclaimer detection. A
+# mailbox's languages are unknown, so every language the library knows applies:
+# a Czech "Od: … Datum: …" forward missed as a boundary reads as the sender's
+# signature, quoted numbers and all.
+_REPLY_PARSER = EmailReplyParser(languages=sorted(MAIL_LANGUAGES))
 
 # Envelope roles mapped from the address headers that carry them.
 _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))

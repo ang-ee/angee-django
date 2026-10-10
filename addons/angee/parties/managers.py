@@ -1053,39 +1053,51 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 )
         return None
 
-    def suggest_from_signature(
-        self,
-        *,
-        text: str,
-        party_id: Any,
-        fragment_hash: str,
-        owner_id: Any,
-    ) -> int:
-        """Mine one sender's own signature fragment for weak party-to-phone suggestions.
+    def suggest_from_signatures(self, signings: Iterable[tuple[str, str, Any, Any, Any]]) -> int:
+        """Mine signature fragments for weak party-to-phone suggestions.
 
-        ``text`` and its content hash are neutral evidence supplied by the scheduled
-        task, which passes only a fragment a single sender signed with; this
-        manager owns phone extraction, Handle creation, link provenance, owner
-        partition, and the durable-pair check. Every mined link records its
-        fragment evidence at ``0.3`` confidence. An existing pair, including a
-        dismissed anti-link, is never changed.
+        Each signing is ``(fragment_hash, text, sender_id, sender_party_id, owner_id)``:
+        neutral evidence that one sender signed with one fragment, supplied by the
+        scheduled task. This manager owns phone extraction, Handle creation, link
+        provenance, owner partition and the durable-pair check. A number is the
+        sender's own only while one sender alone signs with it in the owner's mail:
+        forwards, company switchboards and conference bridges repeat a number under
+        several senders, and none of them owns it. Each such number of a resolved
+        sender becomes one ``0.3`` suggestion recording its fragment. An existing
+        pair, including a dismissed anti-link, is never changed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
         party_model = apps.get_model("parties", "Party")
-        if owner_id is None:
-            return 0
-        party = party_model.objects.filter(pk=party_id, created_by_id=owner_id).first()
-        if party is None:
-            return 0
+        numbers: dict[str, tuple[str, ...]] = {}
+        signers: defaultdict[tuple[Any, str], set[Any]] = defaultdict(set)
+        evidence: dict[tuple[Any, Any, str], str] = {}
+        for fragment_hash, text, sender_id, party_id, owner_id in signings:
+            if owner_id is None:
+                continue
+            if fragment_hash not in numbers:
+                numbers[fragment_hash] = self._signature_phone_values(text, handle_model=handle_model)
+            for value in numbers[fragment_hash]:
+                signers[owner_id, value].add(sender_id)
+                if party_id is not None:
+                    evidence.setdefault((owner_id, party_id, value), fragment_hash)
+        existing = set(
+            self.filter(handle__platform=handle_model.Platform.PHONE).values_list(
+                "party_id", "handle__normalized_value"
+            )
+        )
+        parties = party_model.objects.in_bulk({party_id for _owner, party_id, _value in evidence})
         created = 0
-        metadata = {
-            "evidence": {
-                "kind": "signature_phone",
-                "fragment_hash": fragment_hash,
-            }
-        }
-        for value in self._signature_phone_values(text, handle_model=handle_model):
+        ordered = sorted(evidence.items(), key=lambda item: (item[0][2], str(item[0][1])))
+        for (owner_id, party_id, value), fragment_hash in ordered:
+            party = parties.get(party_id)
+            if (
+                len(signers[owner_id, value]) > 1
+                or (party_id, value) in existing
+                or party is None
+                or party.created_by_id != owner_id
+            ):
+                continue
             handle = handle_model.objects.upsert(
                 platform=handle_model.Platform.PHONE,
                 value=value,
@@ -1099,8 +1111,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 party,
                 handle,
                 confidence=0.3,
-                metadata=metadata,
-                created_by_id=party.created_by_id,
+                metadata={"evidence": {"kind": "signature_phone", "fragment_hash": fragment_hash}},
+                created_by_id=owner_id,
             )
         return created
 
