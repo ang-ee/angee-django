@@ -2006,8 +2006,13 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         return result
 
     def prepare_contact(self, parsed: ParsedContact, *, created_by_id: Any) -> ParsedContact:
-        """Store fetched photo bytes before contact locks, retaining their address."""
+        """Store fetched photo bytes before contact locks and name countries as stored.
 
+        The photo keeps its content address. Addresses take their canonical form, so
+        the projection both sync sides compare reads a card's "USA" as the stored "US".
+        """
+
+        parsed = replace(parsed, addresses=tuple(address.canonical() for address in parsed.addresses))
         photo = parsed.photo
         if photo is None or photo.content_hash:
             return parsed
