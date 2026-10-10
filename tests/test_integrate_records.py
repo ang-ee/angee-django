@@ -223,6 +223,14 @@ def test_record_link_sync_evidence_uses_bounded_queries(replica: Any, count: int
             if status != DiscrepancyStatus.RESOLVED:
                 conflicts.append(discrepancy.pk)
         SyncDiscrepancy.objects.record(replica, link=link, kind=DiscrepancyKind.SEMANTIC, code=f"semantic-{index}")
+        refused = SyncDiscrepancy.objects.record(
+            replica,
+            link=link,
+            kind=DiscrepancyKind.REMOTE_REJECTED,
+            code=f"refused-{index}",
+            retry_at=timezone.now() + timedelta(hours=1),
+        )
+        conflicts.append(refused.pk)
         expected[link.external_key] = (revisions, conflicts)
     RecordLink.objects.observe(replica, "outside-page")
 
@@ -235,7 +243,7 @@ def test_record_link_sync_evidence_uses_bounded_queries(replica: Any, count: int
         actual = {
             link.external_key: (
                 [revision.pk for revision in link.latest_revisions],
-                [conflict.pk for conflict in link.open_conflicts],
+                [hold.pk for hold in link.write_holds],
             )
             for link in links
         }
