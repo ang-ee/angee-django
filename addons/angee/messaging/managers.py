@@ -31,6 +31,9 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
+from functools import reduce
+from itertools import batched
+from operator import or_
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
@@ -74,6 +77,18 @@ _BOILERPLATE_CUTOFF = 100
 _SIGNING_TEXT_BATCH = 2000
 """Signature fragments whose texts one query loads for signature mining."""
 logger = logging.getLogger(__name__)
+
+AUTOMATED_MAIL_HEADERS: Mapping[str, models.Q] = {
+    "auto-submitted": ~models.Q(fragment__text__iexact="no"),
+    "list-id": models.Q(),
+    "list-unsubscribe": models.Q(),
+    "precedence": models.Q(fragment__text__iregex=r"^\s*(bulk|list|junk)\s*$"),
+}
+"""Header parts that mark automated mail, each with the value test it must pass.
+
+A mail channel retains these headers as header parts, and
+:meth:`MessageQuerySet.automated_sender_ids` reads them.
+"""
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
@@ -2451,17 +2466,15 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
         Automated mail carries a list header (RFC 2369 ``List-Unsubscribe``, RFC 2919
         ``List-Id``), an RFC 3834 ``Auto-Submitted`` other than ``no``, or
-        ``Precedence: bulk``, ``list`` or ``junk`` (the channel retains these as header
-        parts: :data:`angee.messaging.backends.AUTOMATED_MAIL_HEADERS`). Such an address speaks for a list
-        or a system, and its display name names whoever triggered the mail. A person
-        who sends the odd vacation auto-reply still writes the rest by hand.
+        ``Precedence: bulk``, ``list`` or ``junk`` (:data:`AUTOMATED_MAIL_HEADERS`).
+        Such an address speaks for a list or a system, and its display name names
+        whoever triggered the mail. A person who sends the odd vacation auto-reply
+        still writes the rest by hand.
         """
 
         part_model = apps.get_model("messaging", "Part")
         automated = part_model._base_manager.filter(
-            models.Q(name__in=("list-id", "list-unsubscribe"))
-            | (models.Q(name="auto-submitted") & ~models.Q(fragment__text__iexact="no"))
-            | models.Q(name="precedence", fragment__text__iregex=r"^\s*(bulk|list|junk)\s*$"),
+            reduce(or_, (models.Q(name=name) & test for name, test in AUTOMATED_MAIL_HEADERS.items())),
             message=models.OuterRef("pk"),
             role=part_model.PartRole.HEADER,
         )
@@ -3768,11 +3781,12 @@ class PartQuerySet(AngeeQuerySet[Any]):
     def signings(self) -> Iterator[Signing]:
         """Yield each pairing of a signature fragment with a sender who signed it, once.
 
-        The distinct rows carry fragment ids; each fragment's text loads once, in
-        batches, rather than riding every row of the DISTINCT.
+        The distinct rows stream and carry fragment ids; each fragment's text loads
+        once, in batches, rather than riding every row of the DISTINCT. A fragment
+        deleted between the two reads took its signature with it and is skipped.
         """
 
-        rows = list(
+        rows = (
             self.filter(role=self.model.PartRole.SIGNATURE, fragment__isnull=False, message__sender__isnull=False)
             .order_by("fragment__hash", "message__sender_id")
             .values_list(
@@ -3785,11 +3799,11 @@ class PartQuerySet(AngeeQuerySet[Any]):
             .distinct()
         )
         fragments = self.model._meta.get_field("fragment").related_model._base_manager
-        for start in range(0, len(rows), _SIGNING_TEXT_BATCH):
-            batch = rows[start : start + _SIGNING_TEXT_BATCH]
+        for batch in batched(rows.iterator(chunk_size=_SIGNING_TEXT_BATCH), _SIGNING_TEXT_BATCH):
             texts = dict(fragments.filter(pk__in={row[0] for row in batch}).values_list("pk", "text"))
             for fragment_id, fragment_hash, sender_id, party_id, owner_id in batch:
-                yield Signing(fragment_hash, texts[fragment_id] or "", sender_id, party_id, owner_id)
+                if fragment_id in texts:
+                    yield Signing(fragment_hash, texts[fragment_id] or "", sender_id, party_id, owner_id)
 
     def attachments(self) -> PartQuerySet:
         """Return parts that carry a stored file — a message's attachment parts."""

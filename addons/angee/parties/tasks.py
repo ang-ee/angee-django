@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from itertools import chain
-
 from celery import shared_task
 from django.apps import apps
 from rebac import system_context
 
-from angee.base.impl import resolve_hooks
 from angee.jobs.locks import LockKey, task_lock
 
 
@@ -21,16 +18,10 @@ from angee.jobs.locks import LockKey, task_lock
 def refresh_handle_suggestions(timestamp: int | None = None) -> int:
     """Reconcile parties-owned suggestions with current handle and signature evidence.
 
-    Display-name evidence is native to parties. Downstream addons contribute the
-    rest through declared hooks, so parties reads no other addon's models:
-    ``ANGEE_PARTIES_SHARED_SENDERS`` callables return handles whose display names
-    are no evidence (list and notification senders), and
-    ``ANGEE_PARTIES_SIGNINGS`` callables yield :class:`~angee.parties.managers.Signing`
-    rows. Both passes partition evidence by audit owner before any inference, and
-    each withdraws the undecided suggestions its evidence no longer supports, so a
-    rule change heals every deployment on the next run. Like the phone
-    renormalization, each run first repairs handle owners stored under an older
-    resolution rule.
+    :meth:`~angee.parties.managers.PartyHandleManager.reconcile_suggestions` owns
+    the evidence providers and their contract, so a rule change heals every
+    deployment on the next run. Like the phone renormalization, each run first
+    repairs handle owners stored under an older resolution rule.
 
     Every run reads every signature: whether a number is one person's own depends
     on all the mail that carries it, and the whole corpus mines in seconds. The
@@ -51,8 +42,5 @@ def _refresh_handle_suggestions() -> int:
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
         handles = apps.get_model("parties", "Handle").objects
         changed = int(handles.renormalize_phone_values()) + int(party_handles.resolve_stale_owners())
-        shared = frozenset(chain.from_iterable(hook() for hook in resolve_hooks("ANGEE_PARTIES_SHARED_SENDERS")))
-        changed += int(party_handles.suggest_from_display_names(shared_handle_ids=shared))
-        signings = chain.from_iterable(hook() for hook in resolve_hooks("ANGEE_PARTIES_SIGNINGS"))
-        changed += int(party_handles.suggest_from_signatures(signings))
+        changed += int(party_handles.reconcile_suggestions())
     return changed

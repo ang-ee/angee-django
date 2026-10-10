@@ -44,7 +44,8 @@ from typing import Any, cast
 
 from mailparser_reply import EmailReplyParser
 
-from angee.messaging.backends import AUTOMATED_MAIL_HEADERS, ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
+from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
 from angee.parties.models import Handle
 
 # The parties platform email handles live under (`Handle.Platform` owns the value).

@@ -705,8 +705,7 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
         from angee.base.identity import instance_from_public_id
         from angee.base.scoping import read_scoped_queryset
 
-        raw = (self.metadata or {}).get("evidence", ())
-        refs = list(raw) if isinstance(raw, (list, tuple)) else []
+        refs = list((self.metadata or {}).get("evidence_refs", ()))
         visible: list[PartyHandleEvidence] = []
         for ref in refs[: bounded + 1]:
             if not isinstance(ref, Mapping):
