@@ -46,7 +46,7 @@ from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.parties.mixins import LinkSource, ScoredLinkMixin
+from angee.parties.mixins import ASSERTING_SOURCES, LinkSource, ScoredLinkMixin
 from angee.storage.models import UploadState
 
 # An undecided link below this confidence is a suggestion awaiting review.
@@ -508,9 +508,7 @@ class PartyHandleQuerySet(AngeeQuerySet):
         dismissed link is the durable anti-link and asserts nothing.
         """
 
-        return self.filter(is_dismissed=False).filter(
-            Q(is_confirmed=True) | Q(source__in=(LinkSource.CARDDAV, LinkSource.MANUAL))
-        )
+        return self.filter(is_dismissed=False).filter(Q(is_confirmed=True) | Q(source__in=ASSERTING_SOURCES))
 
     def readable_party_name_expression(self, *, actor: Any) -> Any:
         """Return the linked Party label only when ``actor`` can read it."""
@@ -872,6 +870,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         :meth:`PartyHandleQuerySet.asserted`). ``is_confirmed`` records a
         human-strength decision (a connect flow claiming the signed-in user's own
         handle); it upgrades an existing weaker link to the confirmed self-link.
+        Without it, an undecided link keeps the higher confidence, and an assertion
+        replaces an inference's source, so a card that lists a mined number owns it.
+        An inference never replaces an assertion's source, so a person's link stays
+        published; a stronger inference replaces a weaker one. A dismissed link keeps
+        the human decision.
         Resolution only re-runs when the link is new, upgraded, or the handle's owner
         is not already this party, so a re-sync of an unchanged contact does no extra
         work. Source metadata merges onto the existing link so a later importer can
@@ -905,6 +908,19 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 link.is_dismissed = False
                 dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
                 upgraded = True
+            elif not created and not link.is_confirmed and not link.is_dismissed:
+                # Provenance outranks score: an assertion replaces an inference's
+                # source (a card that now lists a mined number owns it), and an
+                # inference never replaces an assertion's. A human decision stays.
+                if link.source not in ASSERTING_SOURCES and (
+                    source in ASSERTING_SOURCES or confidence > link.confidence
+                ):
+                    link.source = source
+                    dirty.append("source")
+                if confidence > link.confidence:
+                    link.confidence = confidence
+                    dirty.append("confidence")
+                upgraded = bool(dirty)
             merged_metadata = {**(link.metadata or {}), **(metadata or {})}
             if merged_metadata != link.metadata:
                 link.metadata = merged_metadata

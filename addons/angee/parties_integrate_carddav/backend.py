@@ -659,7 +659,11 @@ def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[
 
     A kept line stays verbatim with its Apple group (``itemN.X-ABLabel`` and kin), so the
     custom label and the TYPEs the projection does not carry (VOICE, a second TYPE)
-    survive an edit to a sibling line. A removed line takes its group's lines with it.
+    survive an edit to a sibling line. A removed line takes along its group's ``X-AB*``
+    companions unless a remaining standard (non-``X-``) property still uses that group:
+    a vCard group may hold several properties (``work.TEL`` with ``work.EMAIL``).
+    Companions are dropped by group, never by equality: vobject compares lines without
+    their group, so two ``X-ABLabel:Other`` lines are equal.
     """
 
     missing = list(wanted)
@@ -674,13 +678,18 @@ def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[
             gone.add(line.group.lower())
     if kept:
         card.contents[prop] = kept
-    gone -= {line.group.lower() for line in kept if line.group}
-    for name, lines in list(card.contents.items()):
-        survivors = [line for line in lines if (getattr(line, "group", None) or "").lower() not in gone]
-        if not survivors:
+    gone -= {
+        line.group.lower()
+        for name, lines in card.contents.items()
+        if not name.startswith("x-")
+        for line in lines
+        if getattr(line, "group", None)
+    }
+    for name in [name for name in card.contents if name.startswith("x-ab")]:
+        if remaining := [line for line in card.contents[name] if (line.group or "").lower() not in gone]:
+            card.contents[name] = remaining
+        else:
             del card.contents[name]
-        elif len(survivors) != len(lines):
-            card.contents[name] = survivors
     return missing
 
 

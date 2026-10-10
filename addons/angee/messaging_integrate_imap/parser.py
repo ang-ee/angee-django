@@ -43,7 +43,6 @@ from html.parser import HTMLParser
 from typing import Any, cast
 
 from mailparser_reply import EmailReplyParser
-from mailparser_reply.constants import MAIL_LANGUAGES
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.parties.models import Handle
@@ -70,11 +69,15 @@ class _EmbeddedMessageBudget:
     remaining_bytes: int = EMBEDDED_MESSAGE_MAX_BYTES
 
 # mail-parser-reply owns plain-text segmentation (docs/stack.md): reply
-# boundaries at attribution headers, signature and disclaimer detection. A
-# mailbox's languages are unknown, so every language the library knows applies:
-# a Czech "Od: … Datum: …" forward missed as a boundary reads as the sender's
-# signature, quoted numbers and all.
-_REPLY_PARSER = EmailReplyParser(languages=sorted(MAIL_LANGUAGES))
+# boundaries at attribution headers, signature and disclaimer detection. A missed
+# forward header leaves the forwarded mail in the sender's signature, quoted
+# numbers and all, so Czech and Dutch join the original five. The library's other
+# languages misread English: Danish signature openers ("Tak", "Kh") and Swedish
+# "/word" match ordinary body lines without a word boundary, and a single Polish
+# header line ("Do:", "Data:") splits a reply. Czech and Dutch need two header lines
+# in a row ("Van: …" then "Cc: …"), which English prose rarely writes; when it does, the
+# signature lands in the quoted part and is missed, never mined from the wrong text.
+_REPLY_PARSER = EmailReplyParser(languages=["cs", "de", "en", "es", "fr", "it", "nl"])
 
 # Envelope roles mapped from the address headers that carry them.
 _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
