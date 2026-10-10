@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Any, ClassVar
@@ -618,8 +618,7 @@ def _render_vcard(
     for field, prop in (("emails", "email"), ("phones", "tel")):
         if field not in changed:
             continue
-        card.contents.pop(prop, None)
-        for value, label, preferred in getattr(contact, field):
+        for value, label, preferred in _retain_lines(card, prop, getattr(contact, field), _labelled):
             item = card.add(prop)
             item.value = value
             types = [label] if label else []
@@ -631,8 +630,7 @@ def _render_vcard(
             if types:
                 item.params["TYPE"] = types
     if "addresses" in changed:
-        card.contents.pop("adr", None)
-        for address in contact.addresses:
+        for address in _retain_lines(card, "adr", contact.addresses, _address):
             item = card.add("adr")
             item.value = vobject.vcard.Address(
                 box=address.po_box,
@@ -654,6 +652,36 @@ def _render_vcard(
         if contact.photo.mime:
             photo.params["TYPE"] = [contact.photo.mime.removeprefix("image/").upper()]
     return card.serialize()
+
+
+def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[[Any], T]) -> list[T]:
+    """Keep the ``prop`` lines whose parsed value is still wanted and return the rest to add.
+
+    A kept line stays verbatim with its Apple group (``itemN.X-ABLabel`` and kin), so the
+    custom label and the TYPEs the projection does not carry (VOICE, a second TYPE)
+    survive an edit to a sibling line. A removed line takes its group's lines with it.
+    """
+
+    missing = list(wanted)
+    kept: list[Any] = []
+    gone: set[str] = set()
+    for line in card.contents.pop(prop, []):
+        value = parse(line)
+        if value in missing:
+            missing.remove(value)
+            kept.append(line)
+        elif line.group:
+            gone.add(line.group.lower())
+    if kept:
+        card.contents[prop] = kept
+    gone -= {line.group.lower() for line in kept if line.group}
+    for name, lines in list(card.contents.items()):
+        survivors = [line for line in lines if (getattr(line, "group", None) or "").lower() not in gone]
+        if not survivors:
+            del card.contents[name]
+        elif len(survivors) != len(lines):
+            card.contents[name] = survivors
+    return missing
 
 
 def _quarantined(href: str, payload: dict[str, Any], *, remote_version: str = "") -> RecordChange:
