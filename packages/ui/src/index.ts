@@ -58,7 +58,6 @@ export * from "./ui/kbd";
 export * from "./ui/code";
 export * from "./ui/alert";
 export * from "./ui/nav-link";
-export * from "./ui/text-link";
 export * from "./ui/section-eyebrow";
 export * from "./ui/card";
 export * from "./ui/separator";

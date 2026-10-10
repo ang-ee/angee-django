@@ -408,8 +408,7 @@ shared UI copy through an addon bundle.
   stages can declare it. A field's backend `status_display` metadata selects the
   `pill` (default), `dot`, or `text` Badge recipe everywhere that field renders;
   `<Column statusDisplay>` and `<Field statusDisplay>` are explicit authored
-  overrides. The deprecated `colorDot` compatibility widget name defaults this
-  same owner to `dot`; it is not a separate renderer. A run
+  overrides; there is no separate dot widget. A run
   state — stopped/running/error/warning — therefore uses the dot display (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
