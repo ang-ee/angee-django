@@ -75,13 +75,22 @@ class ModelLabelField(models.CharField):
     """Store Django's canonical ``app_label.ModelName`` for a configured model."""
 
     @staticmethod
-    def normalize(value: str) -> str:
+    def get_model(value: str) -> type[models.Model]:
+        """Return the configured model a label names; ``ValueError`` when none does."""
+
+        try:
+            return apps.get_model(value)
+        except (LookupError, ValueError) as error:
+            raise ValueError(f"Unknown model label {value!r}.") from error
+
+    @classmethod
+    def normalize(cls, value: str) -> str:
         if not value:
             return ""
         try:
-            return apps.get_model(value)._meta.label
-        except (LookupError, ValueError) as error:
-            raise ValidationError(f"Unknown model label {value!r}.") from error
+            return cls.get_model(value)._meta.label
+        except ValueError as error:
+            raise ValidationError(str(error)) from error
 
     def get_prep_value(self, value: Any) -> Any:
         value = super().get_prep_value(value)

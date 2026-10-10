@@ -12,7 +12,7 @@ from typing import Any, Protocol, TypeAlias
 
 import tablib
 import yaml
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
@@ -20,6 +20,7 @@ from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
 from angee.addons import addon_manifest
+from angee.base.fields import ModelLabelField
 from angee.base.impl import resolve_impl_class
 from angee.base.tiers import ResourceTier
 from angee.resources import sources
@@ -46,15 +47,9 @@ def resolve_model(label: str) -> type[models.Model]:
     """Return the model class named by an ``app_label.ModelName`` label."""
 
     try:
-        app_label, model_name = make_model_tuple(label)
+        return ModelLabelField.get_model(label)
     except ValueError as error:
-        raise ImproperlyConfigured(f"Invalid model label {label!r}") from error
-    if not app_label or not model_name:
-        raise ImproperlyConfigured(f"Invalid model label {label!r}")
-    try:
-        return apps.get_model(app_label, model_name)
-    except LookupError as error:
-        raise ImproperlyConfigured(f"Unknown model {label!r}") from error
+        raise ImproperlyConfigured(str(error)) from error
 
 
 ResourceDeclaration: TypeAlias = Mapping[str, Any]

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
@@ -30,6 +31,8 @@ from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.widgets import (
+    ContentTypeForeignKeyWidget,
+    ContentTypeManyToManyWidget,
     RecordRefField,
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
@@ -94,21 +97,19 @@ class AngeeResource(resources.ModelResource):
 
     @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
-        """Return the xref-aware widget factory for a foreign key."""
+        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise."""
 
-        return functools.partial(
-            XrefForeignKeyWidget,
-            model=get_related_model(field),
-        )
+        model = get_related_model(field)
+        widget = ContentTypeForeignKeyWidget if model is ContentType else XrefForeignKeyWidget
+        return functools.partial(widget, model=model)
 
     @classmethod
     def get_m2m_widget(cls, field: Any) -> functools.partial[Any]:
-        """Return the xref-aware widget factory for a many-to-many field."""
+        """Return the many-to-many widget factory: model labels for content types, xrefs otherwise."""
 
-        return functools.partial(
-            XrefManyToManyWidget,
-            model=get_related_model(field),
-        )
+        model = get_related_model(field)
+        widget = ContentTypeManyToManyWidget if model is ContentType else XrefManyToManyWidget
+        return functools.partial(widget, model=model)
 
     def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
         """Validate headers and reset any batch-planning state before importing."""

@@ -9,7 +9,6 @@ from rebac import actor_context, system_context
 from angee.base.identity import public_id_of
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
-from angee.testing.fixtures import composed_tables as composed_tables
 from tests.conftest import (
     Page,
     create_platform_admin,
