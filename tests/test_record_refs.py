@@ -14,8 +14,6 @@ from django.utils.module_loading import import_string
 from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
 
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel
 from angee.base.refs import (
     RecordRef,
     RecordRefMixin,
@@ -38,110 +36,22 @@ from tests.mtidemo.models import (
     MtiParent,
     MtiParentProxy,
 )
-from tests.tables import registered_model_tables, unregister_models
-
-
-class RecordRefTypedTarget(SqidMixin, AngeeModel):
-    """Concrete sqid-backed target with a REBAC resource type."""
-
-    sqid_prefix = "rrt_"
-    name = models.CharField(max_length=32)
-
-    class Meta:
-        """Django model options for the typed target."""
-
-        app_label = "auth"
-        db_table = "test_record_ref_typed_target"
-        rebac_resource_type = "tests/record-ref-target"
-
-
-class RecordRefPlainTarget(SqidMixin, models.Model):
-    """Concrete sqid-backed target without a REBAC resource type."""
-
-    sqid_prefix = "rrp_"
-    name = models.CharField(max_length=32)
-
-    class Meta:
-        """Django model options for the plain target."""
-
-        app_label = "auth"
-        db_table = "test_record_ref_plain_target"
-
-
-class RecordRefTargetEdge(RecordRefMixin, models.Model):
-    """Concrete target edge used by record-ref tests."""
-
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
-    object_id = models.PositiveBigIntegerField()
-    target = GenericForeignKey("content_type", "object_id")
-
-    class Meta:
-        """Django model options for the target edge."""
-
-        app_label = "auth"
-        db_table = "test_record_ref_target_edge"
-
-
-class RecordRefSubjectEdge(RecordRefMixin, models.Model):
-    """Concrete subject edge used by record-ref tests."""
-
-    subject_content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
-    subject_object_id = models.PositiveBigIntegerField()
-    subject = GenericForeignKey("subject_content_type", "subject_object_id")
-
-    class Meta:
-        """Django model options for the subject edge."""
-
-        app_label = "auth"
-        db_table = "test_record_ref_subject_edge"
-
-
-class RecordRefCustomEdge(RecordRefMixin, models.Model):
-    """Concrete reference with independently named relation fields and columns."""
-
-    kind = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+", db_column="kind_column")
-    key = models.PositiveBigIntegerField(db_column="key_column")
-    linked = GenericForeignKey("kind", "key")
-
-    class Meta:
-        """Django model options for the custom reference edge."""
-
-        app_label = "auth"
-        db_table = "test_record_ref_custom_edge"
-
-
-class RecordRefNullableEdge(RecordRefMixin, models.Model):
-    """Concrete nullable edge used by empty-reference tests."""
-
-    content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE, related_name="+")
-    object_id = models.PositiveBigIntegerField(null=True, blank=True)
-    target = GenericForeignKey("content_type", "object_id")
-
-    class Meta:
-        """Django model options for the nullable edge."""
-
-        app_label = "auth"
-        db_table = "test_record_ref_nullable_edge"
-
-
-RECORD_REF_TEST_MODELS = (
-    RecordRefTypedTarget,
-    RecordRefPlainTarget,
-    RecordRefTargetEdge,
-    RecordRefSubjectEdge,
+from tests.recordrefdemo.models import (
     RecordRefCustomEdge,
     RecordRefNullableEdge,
+    RecordRefPlainTarget,
+    RecordRefSubjectEdge,
+    RecordRefTargetEdge,
+    RecordRefTypedTarget,
 )
-unregister_models(*RECORD_REF_TEST_MODELS)
 
 
 @pytest.fixture()
 def record_ref_tables(transactional_db: Any) -> Any:
-    """Create the concrete test tables."""
+    """Use the probe tables Django creates for the installed ``tests.recordrefdemo`` app."""
 
     del transactional_db
-    with registered_model_tables(RECORD_REF_TEST_MODELS):
-        yield
+    yield
 
 
 def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tables: None) -> None:
@@ -153,13 +63,13 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
     plain = RecordRefPlainTarget.objects.create(name="plain")
 
     assert record_ref_for(typed) == RecordRef(
-        model_label="auth.RecordRefTypedTarget",
+        model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=typed.pk,
         public_id=typed.public_id,
         resource_type="tests/record-ref-target",
     )
     assert record_ref_for(plain) == RecordRef(
-        model_label="auth.RecordRefPlainTarget",
+        model_label="recordrefdemo.RecordRefPlainTarget",
         object_id=plain.pk,
         public_id=plain.sqid,
         resource_type="",
@@ -185,7 +95,7 @@ def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype
         record_ref = edge.record_ref
 
     assert record_ref == RecordRef(
-        model_label="auth.RecordRefTypedTarget",
+        model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
         resource_type="tests/record-ref-target",
@@ -196,7 +106,7 @@ def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype
         assert edge.record_ref == record_ref
 
     assert len(second_access) == 0
-    assert edge.record_model_label == "auth.RecordRefTypedTarget"
+    assert edge.record_model_label == "recordrefdemo.RecordRefTypedTarget"
     assert edge.record_public_id == target.public_id
 
 
@@ -244,12 +154,12 @@ def test_record_ref_mixin_uses_the_declared_subject_relation(record_ref_tables: 
     )
 
     assert edge.record_ref == RecordRef(
-        model_label="auth.RecordRefTypedTarget",
+        model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
         resource_type="tests/record-ref-target",
     )
-    assert edge.record_model_label == "auth.RecordRefTypedTarget"
+    assert edge.record_model_label == "recordrefdemo.RecordRefTypedTarget"
     assert edge.record_public_id == target.public_id
     assert not hasattr(edge, "subject_model_label")
     assert not hasattr(edge, "subject_public_id")

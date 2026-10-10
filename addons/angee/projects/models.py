@@ -1403,6 +1403,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     """
 
     merge_policy = MergePolicy.MOVE
+    merge_identity = (("project", "content_type", "object_id"),)
     runtime = True
     sqid_prefix = "pbd_"
 
@@ -1461,6 +1462,7 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
     """A URL-keyed external reference attached to a project or task."""
 
     merge_policy = MergePolicy.MOVE
+    merge_identity = (("content_type", "object_id", "url"),)
     runtime = True
     sqid_prefix = "plk_"
 

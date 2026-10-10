@@ -37,7 +37,7 @@ class MergeMutation:
             raise ValidationError({"target_type": f"Records of type {target_type!r} cannot be merged."})
         target = cast(
             MergeableMixin,
-            authorized_permission_target(info, cast(Any, model), target_id, model.MERGE_PERMISSION),
+            authorized_permission_target(info, cast(Any, model), target_id, model.SURVIVOR_PERMISSION),
         )
         try:
             target.merge(records=[public_id_value(value) for value in records])

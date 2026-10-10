@@ -100,6 +100,7 @@ INSTALLED_APPS = [
     "tests.extcontrib.apps.ExtContribConfig",
     "tests.mtidemo",
     "tests.hierdemo",
+    "tests.recordrefdemo",
     "tests",
 ]
 # Checkout- and process-local so concurrent pytest runs never share one SQLite

@@ -11,15 +11,18 @@ from typing import Any
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db.models import DO_NOTHING
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base import merge as merge_module
 from angee.base.identity import public_id_of
-from angee.base.merge import references
-from angee.base.refs import MergePolicy
+from angee.base.merge import EdgeReference, ForeignKeyReference, references
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.graphql import records
 from angee.messaging.testing.models import Party
+from angee.projects.testing.models import Project, Queue, Task
+from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
@@ -152,7 +155,7 @@ def test_an_edge_without_a_merge_policy_blocks_and_its_blockers_project(monkeypa
 
     mobile, mobil, _ada, _bob = _vocabulary()
     _tag_on_tag(mobile, mobil)
-    monkeypatch.setattr(TagAssignment, "merge_policy", None)
+    monkeypatch.setattr(TagAssignment, "merge_policy", RecordRefMixin.merge_policy)
     blocked = {
         tag.pk
         for condition, _message in Tag.merge_blockers()
@@ -189,15 +192,68 @@ def test_a_clash_outside_the_declared_identity_refuses_rather_than_deletes(monke
 def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     """A delete would collect ``related_name="+"`` rows too, so a merge must see them."""
 
-    party_fields = {(ref.model._meta.label, ref.field.name) for ref in references(Party) if ref.field is not None}
+    party_fields = {
+        (ref.model._meta.label, ref.field.name) for ref in references(Party) if isinstance(ref, ForeignKeyReference)
+    }
     assert ("messaging.ThreadFollower", "party") in party_fields
-    edges = {ref.model._meta.label: ref.policy for ref in references(Tag) if ref.pointer is not None}
+    edges = {ref.model._meta.label: ref.policy for ref in references(Tag) if isinstance(ref, EdgeReference)}
     assert edges["tags.TagAssignment"] == MergePolicy.MOVE
     assert edges["storage.FileAttachment"] == MergePolicy.MOVE
     assert edges["workflows.StepWatch"] == MergePolicy.MOVE
     assert edges["workflows.WorkflowRun"] == MergePolicy.KEEP
     assert edges["integrate.RecordLink"] == MergePolicy.BLOCK
     assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
+
+
+def test_a_history_key_keeps_pointing_at_the_merged_record() -> None:
+    """A ``DO_NOTHING`` key is history Django's delete leaves alone; a merge leaves it too."""
+
+    history = [
+        ref
+        for ref in references(Task)
+        if isinstance(ref, ForeignKeyReference) and ref.field.remote_field.on_delete == DO_NOTHING
+    ]
+    assert history
+    assert {ref.policy for ref in history} == {MergePolicy.KEEP}
+
+
+def test_a_key_to_a_multi_table_child_points_and_moves_by_the_shared_key() -> None:
+    """``Task.queue`` points at ``Queue``, a child of ``Group``: a group merge reads and moves it by the shared key."""
+
+    owner = create_user("merge-queue-owner")
+    with system_context(reason="merge test queues"):
+        kept = Queue.objects.create(name="Kept", key="KEPT", slug="kept", owner=owner)
+        merged = Queue.objects.create(name="Merged", key="MERGED", slug="merged", owner=owner)
+        plain = Group.objects.create(name="Plain", owner=owner, created_by=owner)
+        task = Task.objects.create(title="Moves", queue=merged, owner=owner)
+        (reference,) = [
+            ref
+            for ref in references(Group)
+            if isinstance(ref, ForeignKeyReference) and ref.model is Task and ref.field.name == "queue"
+        ]
+        assert list(Group._base_manager.filter(reference.pointing(Group)).values_list("pk", flat=True)) == [merged.pk]
+        survivor = Group._base_manager.get(pk=kept.pk)
+        reference.move(reference.rows(Group._base_manager.get(pk=merged.pk)), survivor=survivor)
+        task.refresh_from_db()
+        assert task.queue_id == kept.pk
+        with pytest.raises(ValidationError, match="cannot hold"):
+            reference.move(reference.rows(survivor), survivor=plain)
+
+
+def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A direct share is a stored row the retired record would take with it."""
+
+    owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
+    with system_context(reason="merge test share"):
+        project = Project.objects.create(title="Shared", owner=owner)
+        assert not merge_module._named_in_relationships(project)
+        project.system_grant_record_access("reader", reader)
+        assert merge_module._named_in_relationships(project)
+
+    mobile, mobil, _ada, _bob = _vocabulary()
+    monkeypatch.setattr(merge_module, "_named_in_relationships", lambda record: record.pk == mobil.pk)
+    with actor_context(_curator("merge-shared")), pytest.raises(ValidationError, match="shared"):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
 
 
 def test_the_shared_verb_merges_a_mergeable_type_and_refuses_another() -> None:
