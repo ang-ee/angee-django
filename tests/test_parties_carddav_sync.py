@@ -949,6 +949,47 @@ def test_only_asserted_contact_points_are_written_to_the_card(
     assert ("ada@example.test" in replica.server.cards[_HREF][0]) is written
 
 
+def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) -> None:
+    """Untouched numbers and addresses keep their Apple group, label and every TYPE."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item1.TEL;type=CELL;type=VOICE;type=pref:+14155552671\r\n"
+            "item1.X-ABLabel:WhatsApp\r\n"
+            "item2.TEL;type=HOME;type=FAX:+14155550100\r\n"
+            "item2.X-ABLabel:Thuis\r\n"
+            "item3.ADR;type=HOME:;;1 Main St;Springfield;IL;62701;US\r\n"
+            "item3.X-ABADR:us\r\n"
+            "item4.URL:https://example.test\r\n"
+            "item4.X-ABLabel:_$!<HomePage>!$_\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test contact point edit"):
+        PartyHandle.objects.filter(party=person, handle__value="+14155550100").delete()
+        handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
+        PartyHandle.objects.link(
+            person, handle, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=person.created_by_id
+        )
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    phones = {
+        line.value: (line.group, [str(item).lower() for item in line.params.get("TYPE", [])]) for line in card.tel_list
+    }
+    assert phones == {"+14155552671": ("item1", ["cell", "voice", "pref"]), "+14155550199": (None, [])}
+    assert {line.group: line.value for line in card.contents["x-ablabel"]} == {
+        "item1": "WhatsApp",
+        "item4": "_$!<HomePage>!$_",
+    }
+    assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
+    assert card.adr.group == "item3"
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
 def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> None:
     replica.server.store(_HREF, "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nTEL:+14155552671\r\nEND:VCARD\r\n")
     person, link = replica.baseline()
