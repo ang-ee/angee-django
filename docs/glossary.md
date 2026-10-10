@@ -295,6 +295,10 @@ The Handle's owner records the **control** fact (who may act through it), while
 **PartyHandle** records the **identity** fact (which Party it reaches); neither
 fact implies the other. A **suggestion** is an undecided PartyHandle below 0.5
 confidence: it awaits review and never decides which Party the Handle reaches.
+A PartyHandle is **asserted** when a directory card restates it, a person added
+it, or a human confirmed it; any other source makes it an **inference** (an
+inferred link), which no card publishes. Provenance and confidence are separate:
+an inference at full confidence may decide the owner yet stays off the card.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

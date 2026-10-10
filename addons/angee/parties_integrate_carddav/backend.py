@@ -34,6 +34,7 @@ from angee.integrate.http import RedirectOriginError, ResponseTooLargeError, sam
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
+    SET_FIELDS,
     DirectoryBackend,
     ParsedAddress,
     ParsedAddressbook,
@@ -618,7 +619,9 @@ def _render_vcard(
     for field, prop in (("emails", "email"), ("phones", "tel")):
         if field not in changed:
             continue
-        for value, label, preferred in _retain_lines(card, prop, getattr(contact, field), _labelled):
+        for value, label, preferred in _retain_lines(
+            card, prop, getattr(contact, field), _labelled, repeats=field in SET_FIELDS
+        ):
             item = card.add(prop)
             item.value = value
             types = [label] if label else []
@@ -631,7 +634,9 @@ def _render_vcard(
                 item.params["TYPE"] = types
     if "addresses" in changed:
         stored = apps.get_model("parties", "Address").objects.as_stored
-        for address in _retain_lines(card, "adr", contact.addresses, lambda line: stored(_address(line))):
+        for address in _retain_lines(
+            card, "adr", contact.addresses, lambda line: stored(_address(line)), repeats="addresses" in SET_FIELDS
+        ):
             item = card.add("adr")
             item.value = vobject.vcard.Address(
                 box=address.po_box,
@@ -655,14 +660,21 @@ def _render_vcard(
     return card.serialize()
 
 
-def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[[Any], T]) -> list[T]:
+def _retain_lines[T](
+    card: Any, prop: str, wanted: Sequence[T], parse: Callable[[Any], T], *, repeats: bool
+) -> list[T]:
     """Keep the ``prop`` lines whose parsed value is still wanted and return the rest to add.
 
+    With ``repeats`` (a collection the projection compares as a set), the card's own
+    repeat of a kept value stays (one number under two Apple labels); otherwise each
+    wanted value keeps one line, so deleting one of two equal addresses reaches the card.
     A kept line stays verbatim with its Apple group (``itemN.X-ABLabel`` and kin), so the
     custom label and the TYPEs the projection does not carry (VOICE, a second TYPE)
-    survive an edit to a sibling line. A removed line takes along only its group's
-    ``X-AB*`` companions, and only while no other property still uses that group:
+    survive an edit to a sibling line. A removed line takes along its group's ``X-AB*``
+    companions unless a remaining standard (non-``X-``) property still uses that group:
     a vCard group may hold several properties (``work.TEL`` with ``work.EMAIL``).
+    Companions are dropped by group, never by equality: vobject compares lines without
+    their group, so two ``X-ABLabel:Other`` lines are equal.
     """
 
     missing = list(wanted)
@@ -673,8 +685,7 @@ def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[
         if value in missing:
             missing.remove(value)
             kept.append(line)
-        elif value in wanted:
-            # The card's own repeat of a kept value (one number under two Apple labels).
+        elif repeats and value in wanted:
             kept.append(line)
         elif line.group:
             gone.add(line.group.lower())
@@ -688,8 +699,10 @@ def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[
         if getattr(line, "group", None)
     }
     for name in [name for name in card.contents if name.startswith("x-ab")]:
-        for line in [line for line in card.contents[name] if (line.group or "").lower() in gone]:
-            card.remove(line)
+        if remaining := [line for line in card.contents[name] if (line.group or "").lower() not in gone]:
+            card.contents[name] = remaining
+        else:
+            del card.contents[name]
     return missing
 
 

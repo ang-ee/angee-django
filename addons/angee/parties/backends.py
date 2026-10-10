@@ -121,6 +121,12 @@ CONTACT_FIELDS = (
 )
 """The exact bidirectional mapping; UID, transport facts and unmapped ORG units stay outside it."""
 
+SET_FIELDS = ("emails", "phones")
+"""Collections the projection compares as sets: a repeated value is no difference.
+
+Addresses compare as a list, so a second copy of one address is a difference.
+"""
+
 
 def contact_projection(contact: ParsedContact) -> dict[str, Any]:
     """Return the same JSON comparison shape for a remote card and a local person.
@@ -134,7 +140,7 @@ def contact_projection(contact: ParsedContact) -> dict[str, Any]:
     for name in ("birthday", "anniversary"):
         value = result[name]
         result[name] = value.isoformat() if value is not None else None
-    for name in ("emails", "phones"):
+    for name in SET_FIELDS:
         result[name] = [list(item) for item in sorted(set(result[name]))]
     result["addresses"] = sorted((asdict(address) for address in contact.addresses), key=canonical_json_sha256)
     photo = contact.photo
