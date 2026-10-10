@@ -479,8 +479,10 @@ def _apply_page(
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
+    held: set[str] = set()
     if evidence_rows is not None and stream.writes_back:
         evidence = {link.external_key: link for link in evidence_rows}
+        held = {key for key, link in evidence.items() if link.write_holds}
         for record in page.records:
             link = evidence.get(record.external_key)
             if (
@@ -584,8 +586,13 @@ def _apply_page(
                             if not locked.writes_back:
                                 raise SemanticError("local_change_on_pull", kind=DiscrepancyKind.CONFLICT)
                             write = written.get(record.external_key)
-                            if write is None and observed is not None and observed.write_holds:
-                                # A refused write waits out its retry time; the local change stays.
+                            if write is None and record.external_key in held:
+                                # A refused write waits out its retry time; the local change
+                                # stays. The first pass's hold decides, so a refusal resolved
+                                # since then waits for the next page rather than failing this one.
+                                discrepancies.extend(
+                                    row.pk for row in (observed.write_holds if observed is not None else ())
+                                )
                                 continue
                             if write is None:
                                 raise RuntimeError("A conditional write result is missing.")
@@ -678,9 +685,11 @@ def push_stream(
         if _baseline_adoption(stream):
             return PageResult(stream, exhausted=True)
         links = _manager("RecordLink")
+        candidates: set[str] = set()
         for candidate, link in _push_candidates(stream, adapter, external_keys):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
+            candidates.add(candidate.external_key)
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
             elif link.write_holds:
@@ -713,6 +722,18 @@ def push_stream(
                 # The write the remote once refused has now landed.
                 _resolve_applied(locked_stream, record)
             count += 1
+        if external_keys is None:
+            # A due refusal whose record has nothing left to write (deleted or
+            # reverted locally) has nothing to retry, and no rescan reads it.
+            refusals = _manager("SyncDiscrepancy")
+            for refusal in (
+                refusals.unresolved()
+                .due()
+                .filter(stream=stream, kind=DiscrepancyKind.REMOTE_REJECTED, link__isnull=False)
+                .select_related("link")
+            ):
+                if refusal.link.external_key not in candidates:
+                    refusals.resolve(refusal)
     return PageResult(stream, count, True, tuple(discrepancies))
 
 
