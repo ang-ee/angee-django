@@ -630,7 +630,7 @@ def _render_vcard(
             if types:
                 item.params["TYPE"] = types
     if "addresses" in changed:
-        for address in _retain_lines(card, "adr", contact.addresses, _address):
+        for address in _retain_lines(card, "adr", contact.addresses, lambda line: _address(line).canonical()):
             item = card.add("adr")
             item.value = vobject.vcard.Address(
                 box=address.po_box,
