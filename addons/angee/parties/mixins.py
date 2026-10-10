@@ -34,6 +34,13 @@ class LinkSource(models.TextChoices):
     RULE = "rule", "Rule"
 
 
+ASSERTING_SOURCES = frozenset({LinkSource.CARDDAV, LinkSource.MANUAL})
+"""Sources that assert a link: a directory card restating itself, or a person adding it.
+
+Every other source is an inference, which no card publishes until a human confirms it.
+"""
+
+
 class ScoredLinkMixin(models.Model):
     """A confidence-bearing link between two rows, reviewable by a human.
 
