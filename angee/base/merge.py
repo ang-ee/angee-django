@@ -5,20 +5,25 @@ A model composing :class:`MergeableMixin` merges through one template,
 merged record is a :class:`Reference` with a :class:`~angee.base.refs.MergePolicy`,
 much as Django's ``on_delete`` decides what a delete does to such rows:
 
-- a foreign key moves to the survivor, except one on an append-only model,
-  which can neither move nor outlive the record and so blocks;
+- a foreign key Django's delete collects moves to the survivor, except one on an
+  append-only model, which can neither move nor outlive the record and so
+  blocks, and a ``DO_NOTHING`` key (history), which keeps pointing at the record;
 - a polymorphic edge (:class:`~angee.base.refs.RecordRefMixin`) follows its
-  model's ``merge_policy``, and an edge that declares none blocks.
+  model's ``merge_policy``, which blocks unless the edge declares another.
 
 A move re-keys the pointing column. Where the survivor already holds an equal
-row under a unique set the edge declares as identity (``merge_identity``), the
-merged record's copy is dropped; any other unique collision refuses the merge.
-The merged record's own many-to-many rows are its data, not references: they
-leave with it unless :meth:`MergeableMixin.merge_fields` carries them over.
+row under the reference's identity (an edge's ``merge_identity``, an
+auto-created many-to-many link's pair), the merged record's copy is dropped; any
+other unique collision refuses the merge. The merged record's own many-to-many
+rows are its data, not references: they leave with it unless
+:meth:`MergeableMixin.merge_fields` carries them over. Stored REBAC
+relationships naming a merged record (a share, a membership) refuse the merge:
+retiring the record would drop them, and no merge moves them yet.
 
-Moves run as named system work once :meth:`MergeableMixin.merge` has authorized
-the actor: under an actor REBAC only deletes and recreates an edge, which would
-cost a row its identity. Retiring a merged record is the actor's own delete.
+Moves, and the identity copies they drop, run as named system work once
+:meth:`MergeableMixin.merge` has authorized the actor: under an actor REBAC only
+deletes and recreates an edge, which would cost a row its identity. Retiring a
+merged record is the actor's own delete.
 """
 
 from __future__ import annotations
@@ -32,10 +37,13 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django.db.models import Exists, OuterRef, ProtectedError, Q, RestrictedError
+from django.db.models import DO_NOTHING, Exists, OuterRef, ProtectedError, Q, RestrictedError
+from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context, to_object_ref
+from rebac.models import active_relationship_model
+from rebac.resources import model_resource_type
 
 from angee.base.actors import instance_actor
 from angee.base.identity import instances_from_public_ids
@@ -52,55 +60,53 @@ MERGE_LIMIT = 100
 
 @dataclass(frozen=True, slots=True)
 class Reference:
-    """One way rows of ``model`` point at records being merged: a foreign key or an edge's pointer."""
+    """One way rows of ``model`` point at records being merged, and what a merge does to them.
+
+    :class:`ForeignKeyReference` and :class:`EdgeReference` say how the rows
+    point; the move itself is shared.
+    """
 
     model: type[models.Model]
     policy: MergePolicy
-    field: models.ForeignObject[Any, Any] | None = None
-    pointer: GenericForeignKey | None = None
 
     @property
-    def label(self) -> str:
-        """Name the pointing rows for a refusal: the model's plural and the pointing column."""
+    def name(self) -> str:
+        """Return the pointing field's name."""
 
-        name = self.field.name if self.field is not None else self.pointer.name if self.pointer else ""
-        return f"{self.model._meta.verbose_name_plural} ({name})"
+        raise NotImplementedError
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """Return the model fields a move rewrites: the foreign key, or the pointer's type and id."""
+        """Return the model fields a move rewrites."""
 
-        if self.field is not None:
-            return (self.field.name,)
-        assert self.pointer is not None
-        return (self.model._meta.get_field(self.pointer.ct_field).name, self.pointer.fk_field)
+        raise NotImplementedError
 
     def lookup(self, record: models.Model) -> dict[str, Any]:
         """Return the column values that point at ``record``."""
 
-        if self.field is not None:
-            return {self.field.name: record}
-        assert self.pointer is not None
-        model = generic_pointer_model(type(record))
-        return {self.pointer.ct_field: ContentType.objects.get_for_model(model), self.pointer.fk_field: record.pk}
+        raise NotImplementedError
+
+    def pointing(self, target: type[models.Model]) -> Exists:
+        """Return a condition on ``target`` rows: some row of this reference points at it."""
+
+        raise NotImplementedError
+
+    def holds(self, survivor: models.Model) -> bool:
+        """Return whether ``survivor`` can be pointed at; the default accepts any record."""
+
+        del survivor
+        return True
+
+    @property
+    def label(self) -> str:
+        """Name the pointing rows for a refusal: the model's plural and the pointing field."""
+
+        return f"{self.model._meta.verbose_name_plural} ({self.name})"
 
     def rows(self, record: models.Model) -> models.QuerySet[Any]:
         """Return the rows pointing at ``record``, outside any actor scope."""
 
         return self.model._base_manager.filter(**self.lookup(record))
-
-    def pointing(self, target: type[models.Model]) -> Exists:
-        """Return a condition on ``target`` rows: some row of this reference points at it."""
-
-        if self.field is not None:
-            column = self.field.target_field.attname
-            return Exists(self.model._base_manager.filter(**{self.field.name: OuterRef(column)}))
-        assert self.pointer is not None
-        object_id = self.model._meta.get_field(self.pointer.fk_field)
-        return Exists(self.model._base_manager.filter(**{
-            self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
-            self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
-        }))
 
     def move(self, rows: models.QuerySet[Any], *, survivor: models.Model) -> None:
         """Re-point ``rows`` to ``survivor``, dropping copies of identity rows it already holds.
@@ -109,11 +115,11 @@ class Reference:
         share a slot, such as a rank, are different facts.
         """
 
-        if self.field is not None and not isinstance(survivor, self.field.related_model):
+        if not self.holds(survivor):
             raise ValidationError(f"The record that is kept cannot hold {self.label}.")
         target = self.lookup(survivor)
         held = self.model._base_manager.filter(**target)
-        identity = set(self.model.merge_identity) if issubclass(self.model, RecordRefMixin) else set()
+        identity = _merge_identity(self.model)
         for fields, condition in _unique_sets(self.model):
             if not set(self.columns) <= set(fields):
                 continue
@@ -128,6 +134,80 @@ class Reference:
                     "resolve that before merging."
                 )
         rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
+
+
+@dataclass(frozen=True, slots=True)
+class ForeignKeyReference(Reference):
+    """Rows whose foreign key points at the record, or at a multi-table parent or child sharing its key."""
+
+    field: models.ForeignObject[Any, Any]
+
+    @property
+    def name(self) -> str:
+        """Return the foreign key's name."""
+
+        return self.field.name
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Return the foreign key, the one field a move rewrites."""
+
+        return (self.field.name,)
+
+    def lookup(self, record: models.Model) -> dict[str, Any]:
+        """Return the key value pointing at ``record``; a multi-table relative shares its primary key."""
+
+        target = self.field.target_field
+        return {self.field.attname: record.pk if target.primary_key else getattr(record, target.attname)}
+
+    def pointing(self, target: type[models.Model]) -> Exists:
+        """Return a condition on ``target`` rows: a row's key holds the target's value."""
+
+        column = "pk" if self.field.target_field.primary_key else self.field.target_field.attname
+        return Exists(self.model._base_manager.filter(**{self.field.attname: OuterRef(column)}))
+
+    def holds(self, survivor: models.Model) -> bool:
+        """Return whether ``survivor`` has a row in the model the key points at.
+
+        A key on a multi-table child moves only onto a survivor that is that child.
+        """
+
+        related = self.field.related_model
+        return isinstance(survivor, related) or related._base_manager.filter(pk=survivor.pk).exists()
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeReference(Reference):
+    """Rows of a :class:`~angee.base.refs.RecordRefMixin` edge whose pointer names the record."""
+
+    pointer: GenericForeignKey
+
+    @property
+    def name(self) -> str:
+        """Return the edge's pointer name."""
+
+        return self.pointer.name
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """Return the pointer's type and id fields."""
+
+        return (self.model._meta.get_field(self.pointer.ct_field).name, self.pointer.fk_field)
+
+    def lookup(self, record: models.Model) -> dict[str, Any]:
+        """Return the pointer's type and id for ``record``."""
+
+        model = generic_pointer_model(type(record))
+        return {self.pointer.ct_field: ContentType.objects.get_for_model(model), self.pointer.fk_field: record.pk}
+
+    def pointing(self, target: type[models.Model]) -> Exists:
+        """Return a condition on ``target`` rows: an edge row names the target's type and key."""
+
+        object_id = self.model._meta.get_field(self.pointer.fk_field)
+        return Exists(self.model._base_manager.filter(**{
+            self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
+            self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
+        }))
 
 
 def references(model: type[models.Model]) -> Iterator[Reference]:
@@ -145,21 +225,23 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
     own_links = {field.remote_field.through for owner in tree for field in owner._meta.local_many_to_many}
     seen: set[tuple[str, str]] = set()
     for owner in tree:
-        for relation in owner._meta.get_fields(include_hidden=True):
-            if not (relation.auto_created and not relation.concrete and (relation.one_to_one or relation.one_to_many)):
+        for relation in get_candidate_relations_to_delete(owner._meta):
+            if relation.parent_link or relation.related_model in own_links:
                 continue
-            if getattr(relation, "parent_link", False) or relation.related_model in own_links:
-                continue
-            field = relation.field
-            key = (relation.related_model._meta.label, field.name)
+            key = (relation.related_model._meta.label, relation.field.name)
             if key in seen:
                 continue
             seen.add(key)
-            policy = MergePolicy.BLOCK if issubclass(relation.related_model, AppendOnlyModel) else MergePolicy.MOVE
-            yield Reference(relation.related_model, policy, field=field)
+            if relation.on_delete == DO_NOTHING:
+                policy = MergePolicy.KEEP
+            elif issubclass(relation.related_model, AppendOnlyModel):
+                policy = MergePolicy.BLOCK
+            else:
+                policy = MergePolicy.MOVE
+            yield ForeignKeyReference(relation.related_model, policy, relation.field)
     for edge in sorted(apps.get_models(), key=lambda candidate: candidate._meta.label):
         if issubclass(edge, RecordRefMixin):
-            yield Reference(edge, edge.merge_policy or MergePolicy.BLOCK, pointer=edge.record_ref_field())
+            yield EdgeReference(edge, edge.merge_policy, edge.record_ref_field())
 
 
 class MergeableMixin(models.Model):
@@ -172,8 +254,8 @@ class MergeableMixin(models.Model):
     merge by overriding those hooks and calling ``super()``.
     """
 
-    MERGE_PERMISSION: ClassVar[str] = "write"
-    """The survivor permission a merge needs."""
+    SURVIVOR_PERMISSION: ClassVar[str] = "write"
+    """The permission a merge needs on the record that is kept."""
 
     MERGED_PERMISSION: ClassVar[str] = "delete"
     """The permission a merge needs on each merged record."""
@@ -224,7 +306,7 @@ class MergeableMixin(models.Model):
                 raise ValidationError(f"These records no longer exist: {', '.join(sorted(gone)) or 'the kept one'}.")
             survivor = locked[self.pk]
             merged = [locked[pk] for pk in merged_ids]
-            if not survivor.has_access(self.MERGE_PERMISSION):
+            if not survivor.has_access(self.SURVIVOR_PERMISSION):
                 raise PermissionDenied("You are not allowed to change the record that is kept.")
             if not all(record.has_access(self.MERGED_PERMISSION) for record in merged):
                 raise PermissionDenied("You are not allowed to remove every record being merged.")
@@ -239,7 +321,7 @@ class MergeableMixin(models.Model):
         return self
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
-        """Refuse when any merged record matches a :meth:`merge_blockers` condition.
+        """Refuse a merged record that matches a :meth:`merge_blockers` condition or holds stored relationships.
 
         Overrides add rules about the pair, such as a recorded "keep separate".
         """
@@ -250,6 +332,9 @@ class MergeableMixin(models.Model):
                 refused = model._base_manager.filter(pk__in=[record.pk for record in merged]).filter(condition)
                 if refused.exists():
                     raise ValidationError(message)
+            for record in merged:
+                if _named_in_relationships(record):
+                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
 
     def merge_fields(self, merged: Sequence[Self]) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""
@@ -282,6 +367,37 @@ class MergeableMixin(models.Model):
             locked.with_actor(instance_actor(merged)).delete()
         except (ProtectedError, RestrictedError) as error:
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
+
+
+def _named_in_relationships(record: models.Model) -> bool:
+    """Return whether stored REBAC relationships name ``record``, as their resource or subject.
+
+    Relations backed by fields follow a moved key; stored rows (a direct share,
+    a membership) would go with the retired record.
+    """
+
+    if not model_resource_type(type(record)):
+        return False
+    ref = to_object_ref(record)
+    rows = active_relationship_model().objects
+    return (
+        rows.filter(resource_type=ref.resource_type, resource_id=ref.resource_id).exists()
+        or rows.filter(subject_type=ref.resource_type, subject_id=ref.resource_id).exists()
+    )
+
+
+def _merge_identity(model: type[models.Model]) -> frozenset[tuple[str, ...]]:
+    """Return the unique field sets whose equal rows of ``model`` state one fact.
+
+    An edge declares its own (``merge_identity``); an auto-created many-to-many
+    link is its pair. Any other model declares none.
+    """
+
+    if issubclass(model, RecordRefMixin):
+        return frozenset(model.merge_identity)
+    if model._meta.auto_created:
+        return frozenset(tuple(fields) for fields in model._meta.unique_together)
+    return frozenset()
 
 
 def _descendants(model: type[models.Model]) -> Iterator[type[models.Model]]:

@@ -233,8 +233,8 @@ class MergePolicy(StrEnum):
 class RecordRefMixin(models.Model):
     """Project a row reference from the model's single declared generic foreign key."""
 
-    merge_policy: ClassVar[MergePolicy | None] = None
-    """What merging the referenced record does to this edge's rows; ``None`` blocks the merge."""
+    merge_policy: ClassVar[MergePolicy] = MergePolicy.BLOCK
+    """What merging the referenced record does to this edge's rows; an edge that declares none blocks."""
 
     merge_identity: ClassVar[tuple[tuple[str, ...], ...]] = ()
     """Unique field sets whose equal rows state one fact.

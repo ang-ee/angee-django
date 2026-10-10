@@ -1799,6 +1799,7 @@ class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """
 
     merge_policy = MergePolicy.MOVE
+    merge_identity = (("file", "content_type", "object_id"),)
     runtime = True
 
     sqid_prefix = "fat_"

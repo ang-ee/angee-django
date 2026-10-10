@@ -201,8 +201,8 @@ carry; record surfaces for one edge apply only there.
 model (`MergeableMixin.merge`, the shared `merge_records` verb). Each
 *reference* to a merged record, meaning a foreign key or a record edge pointing
 at it, follows its merge policy: move to the survivor, keep pointing at the
-merged record, or block the merge. The merged record is then retired, deleted
-unless its model keeps a tombstone. A resource's `mergeable` says the verb
+merged record, or block the merge. The merged record is then retired
+(`retire_merged`, a delete by default). A resource's `mergeable` says the verb
 serves it.
 
 **Resource query** — the executable query contract of a data resource. The

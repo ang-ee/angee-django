@@ -688,6 +688,7 @@ class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     """
 
     merge_policy = MergePolicy.MOVE
+    merge_identity = (("page", "content_type", "object_id", "role"), ("vault", "content_type", "object_id", "role"))
     runtime = True
     sqid_prefix = "krb_"
 

@@ -695,14 +695,11 @@ data through REBAC, never a queryset bypass.
   exception to the actor-scope rule above.
   - [`MergeableMixin.merge`](../../angee/base/merge.py) first authorizes the actor:
     `write` on the survivor and `delete` on each merged record.
-  - Only then does it move references under `system_context(reason="merge")`.
-    Under an actor, REBAC only deletes and recreates an edge, which would cost
-    attachments their identity and dependants.
+  - Only then does it move references under `system_context(reason="merge")`,
+    including deleting a merged record's copy of an identity row the survivor
+    already holds. Under an actor, REBAC only deletes and recreates an edge,
+    which would cost attachments their identity and dependants.
   - Retiring a merged record stays the actor's own delete.
-  - Each polymorphic edge declares `merge_policy` (move, keep or block); an edge
-    without one blocks merges of its targets.
-  - An edge names its `merge_identity` unique sets. A collision on any other
-    unique set, such as a rank, refuses the merge rather than deleting a row.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

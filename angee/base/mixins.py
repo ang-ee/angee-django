@@ -99,13 +99,19 @@ def update_fields_with_auto_now(instance: models.Model, update_fields: Any) -> s
     fields = set(update_fields)
     if not fields:
         return fields
-    return fields | {field.name for field in instance._meta.fields if getattr(field, "auto_now", False)}
+    return fields | set(_auto_now_fields(type(instance)))
 
 
 def auto_now_stamps(model: type[models.Model], now: datetime) -> dict[str, Any]:
     """Return the ``auto_now`` columns a queryset update of ``model`` must stamp itself."""
 
-    return {field.name: now for field in model._meta.concrete_fields if getattr(field, "auto_now", False)}
+    return dict.fromkeys(_auto_now_fields(model), now)
+
+
+def _auto_now_fields(model: type[models.Model]) -> tuple[str, ...]:
+    """Return the names of ``model``'s ``auto_now`` fields, which every write stamps."""
+
+    return tuple(field.name for field in model._meta.concrete_fields if getattr(field, "auto_now", False))
 
 
 class SqidMixin(models.Model):
