@@ -1,4 +1,4 @@
-"""Import-export widgets for resolving resource xrefs."""
+"""Import-export widgets for resolving resource xrefs and content-type labels."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from import_export import fields, widgets
 from rebac import GenericTarget, generic_target
 
+from angee.base.fields import ModelLabelField
 from angee.base.refs import RecordRefMixin
 from angee.base.serialization import canonical_json
 
@@ -135,7 +137,37 @@ class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
         """Return target model objects for every xref in ``value``."""
 
         del row, kwargs
-        return [self.resolve_field_target(ref) for ref in xref_list(value)]
+        return [self.resolve_field_target(ref) for ref in many_to_many_values(value)]
+
+
+class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):
+    """Resolve a foreign key to ``contenttypes.ContentType`` from a model label.
+
+    Content types are never ledger rows, so a seed names the target model by
+    its Django label (``parties.PartyHandle``) instead of an xref. The native
+    ``clean`` keeps empty values and ``key_is_id`` handling.
+    """
+
+    def get_instance_by_lookup_fields(self, value: Any, row: Mapping[str, Any] | None, **kwargs: Any) -> ContentType:
+        """Return the content type of the model ``value`` names."""
+
+        del row, kwargs
+        return resolve_content_type(value)
+
+
+class ContentTypeManyToManyWidget(widgets.ManyToManyWidget):
+    """Resolve scalar or list model labels for many-to-many fields to ``ContentType``."""
+
+    def clean(
+        self,
+        value: Any,
+        row: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> list[ContentType]:
+        """Return the content type of every model label in ``value``."""
+
+        del row, kwargs
+        return [resolve_content_type(label) for label in many_to_many_values(value)]
 
 
 class _NativeJSONWidget(widgets.JSONWidget):
@@ -239,8 +271,21 @@ def split_xref(
     raise ValueError(f"unresolved xref {value!r}")
 
 
-def xref_list(value: Any) -> list[str]:
-    """Return xref strings from a comma-separated string or sequence."""
+def resolve_content_type(label: Any) -> ContentType:
+    """Return the content type of the model a Django model label names.
+
+    ``ModelLabelField`` owns which labels name a configured model and raises
+    the ``ValueError`` import-export reports against the row; Django's
+    content-type manager owns the cached row for that model.
+    """
+
+    if not isinstance(label, str):
+        raise ValueError("model labels must be strings")
+    return ContentType.objects.get_for_model(ModelLabelField.get_model(label))
+
+
+def many_to_many_values(value: Any) -> list[str]:
+    """Return the xrefs or model labels of a comma-separated string or sequence."""
 
     if value in (None, ""):
         return []
@@ -250,7 +295,7 @@ def xref_list(value: Any) -> list[str]:
         refs: list[str] = []
         for item in value:
             if not isinstance(item, str):
-                raise ValueError("many-to-many values must be xref strings")
+                raise ValueError("many-to-many values must be strings")
             refs.append(item)
         return refs
     raise ValueError("many-to-many values must be a list or string")

@@ -1181,6 +1181,13 @@ and current contracts before applying a historical example to a new deployment.
   other rows or prerequisite targets.
   A `RecordRefMixin` import column uses the model's single `GenericForeignKey`
   name; that field also owns the content-type and object-id backing column names.
+  Other relation columns name rows by `<addon>.<xref>` (a list or
+  comma-separated string for many-to-many). Content types are never ledger rows,
+  so a foreign key or many-to-many to `contenttypes.ContentType` takes Django
+  model labels instead (`applies_to: [parties.PartyHandle, parties.Person]`),
+  resolved by [`ModelLabelField.get_model`](../../angee/base/fields.py); an
+  unknown label fails its row. Row hashes cover the seed's labels, never
+  content-type ids, so a seed hashes the same in every database.
   Source omission and explicit null must remain
   distinguishable through dataset normalization.
 - <a id="seeded-transition-state"></a>**Transition-owned state in a seed is an initial value, applied on create and never on update.**

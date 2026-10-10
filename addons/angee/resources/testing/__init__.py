@@ -4,7 +4,9 @@ Install ``angee.resources.testing`` after ``angee.resources`` in test
 ``INSTALLED_APPS`` and import ``Resource`` from its ``models`` module. Native
 Django test database setup owns its table. This gives source-addon consumers
 the same ``resources.Resource`` registry identity as a composed host, including
-the ledger used by ``load_xref`` and the workflow test driver.
+the ledger used by ``load_xref`` and the workflow test driver. ``ContentTypeRow``
+is a static seed target whose relations to ``contenttypes.ContentType`` take
+model labels.
 
 Production settings and serving code must not depend on this test support.
 """
