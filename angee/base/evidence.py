@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
 from angee.base.identity import instances_from_public_ids
+from angee.base.merge import MergePolicy
 from angee.base.mixins import AppendOnlyModel
 from angee.base.models import AngeeDataModel
 from angee.base.refs import RecordRefMixin
@@ -39,6 +40,8 @@ class EvidenceFact(BaseModel):
 
 class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     """One retained edge from an evidence owner to a canonical source record."""
+
+    merge_policy = MergePolicy.KEEP
 
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
     object_id = models.PositiveBigIntegerField()

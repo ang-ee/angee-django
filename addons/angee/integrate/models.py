@@ -52,6 +52,7 @@ from strawberry_django.descriptors import model_property
 
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
+from angee.base.merge import MergePolicy
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
@@ -3272,6 +3273,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
 class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
     """A stable remote identity with the two last-applied comparison bases."""
 
+    merge_policy = MergePolicy.BLOCK
     runtime = True
     sqid_prefix = "rlk_"
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")

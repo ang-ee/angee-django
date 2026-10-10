@@ -691,6 +691,17 @@ data through REBAC, never a queryset bypass.
 - User-requested reads and writes retain their actor scope. Reserve
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row.
+- **Merge re-points references as named system work.** This is a deliberate
+  exception to the actor-scope rule above.
+  - [`MergeableMixin.absorb`](../../angee/base/merge.py) first authorizes the actor:
+    `write` on the survivor and `delete` on each merged record.
+  - Only then does it move references under `system_context(reason="merge")`.
+    Under an actor, REBAC only deletes and recreates an edge, which would cost
+    attachments their identity and dependants.
+  - Each polymorphic edge declares `merge_policy` (move, keep or block); an edge
+    without one blocks merges of its targets.
+  - A model whose rows need more than a re-keyed column on a move declares
+    `merge_rows`.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

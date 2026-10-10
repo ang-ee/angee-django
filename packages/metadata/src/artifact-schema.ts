@@ -112,6 +112,8 @@ const ResourceSchema = v.looseObject({
   concreteKinds: v.optional(Strings),
   /** Model labels of the polymorphic edges whose schema declares this type a target, sorted: what its records can carry. */
   recordEdges: v.optional(Strings),
+  /** Whether the shared `mergeRecords` verb serves this resource: its model composes `MergeableMixin`. */
+  mergeable: v.optional(v.boolean()),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),
