@@ -92,7 +92,7 @@ def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables
 
 @pytest.mark.django_db(transaction=True)
 def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_tables: None) -> None:
-    """Only a fragment one sender alone signs with is mined, and only for real phone numbers."""
+    """Only a number one sender alone signs with is mined, and only a real phone number."""
     del composed_tables
     owner = get_user_model().objects.create_user(username="signature-mining-owner")
     channel = make_integration(owner.username, model=Channel, owner=owner)
@@ -103,9 +103,13 @@ def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_t
             for name in ("ada", "carol")
         }
         PartyHandle.objects.link(ada, senders["ada"], source=LinkSource.CARDDAV, created_by_id=owner.pk)
-        own = Fragment.objects.upsert(text="Ada Lovelace\n+1 415 555 2671\nIssue 1721429715", created_by_id=owner.pk)
+        own = Fragment.objects.upsert(
+            text="Ada Lovelace\n+1 415 555 2671\nIssue 1721429715\nAnalytical Engines +1 787 906 0900",
+            created_by_id=owner.pk,
+        )
         shared = Fragment.objects.upsert(text="Monica Alvarez\n+1 787 523 6508", created_by_id=owner.pk)
-        for sender, fragment in (("ada", own), ("ada", shared), ("carol", shared)):
+        switchboard = Fragment.objects.upsert(text="Carol\nAnalytical Engines +1 787 906 0900", created_by_id=owner.pk)
+        for sender, fragment in (("ada", own), ("ada", shared), ("carol", shared), ("carol", switchboard)):
             message = Message._base_manager.create(
                 channel=channel,
                 created_by=owner,
@@ -115,7 +119,7 @@ def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_t
                 sent_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
             Part._base_manager.create(created_by=owner, message=message, role="signature", fragment=fragment)
-        refresh_handle_suggestions(lookback_hours=None)
+        refresh_handle_suggestions()
         mined = set(
             PartyHandle._base_manager.filter(source=LinkSource.RULE, handle__platform="phone").values_list(
                 "party_id", "handle__normalized_value"
@@ -131,11 +135,8 @@ def test_retracting_suggestions_keeps_reviewed_links(composed_tables: None) -> N
     owner = get_user_model().objects.create_user(username="signature-retraction-owner")
     with system_context(reason="signature retraction fixture"):
         party = Party._base_manager.create(display_name="Ada", created_by=owner)
-        PartyHandle.objects.suggest_from_signature(
-            text="+1 415 555 2671\n+1 415 555 2672\n+1 415 555 2673",
-            party_id=party.pk,
-            fragment_hash="ada-signature",
-            owner_id=owner.pk,
+        PartyHandle.objects.suggest_from_signatures(
+            [("ada-signature", "+1 415 555 2671\n+1 415 555 2672\n+1 415 555 2673", "ada", party.pk, owner.pk)]
         )
         confirmed, dismissed, unreviewed = PartyHandle._base_manager.filter(party=party).order_by(
             "handle__normalized_value"
