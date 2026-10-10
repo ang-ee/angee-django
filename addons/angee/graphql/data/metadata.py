@@ -14,6 +14,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
 from angee.base.impl import ImplClassField
+from angee.base.merge import MergeableMixin
 from angee.base.models import AngeeModel
 from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import concrete_child_models, generic_pointer_model, record_edges_by_target
@@ -290,6 +291,7 @@ def finalize_data_resources(
             grantable=_grantable_relations(item.model, resources_by_model),
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
             record_edges=_record_edges(item.model, edges_by_target),
+            mergeable=item.model is not None and issubclass(item.model, MergeableMixin),
         )
         for item in finalized
     )

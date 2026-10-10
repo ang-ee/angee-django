@@ -20,6 +20,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
+from angee.base.merge import MergePolicy
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
@@ -243,6 +244,7 @@ class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
 class WorkflowRun(RecordRefMixin, AngeeDataModel):
     """One actor's execution of one immutable graph against an optional record."""
 
+    merge_policy = MergePolicy.KEEP
     runtime = True
     rebac_grantable = {"reader": "write", "operator": "write"}
     sqid_prefix = "wfr_"
@@ -742,6 +744,7 @@ class StepAttempt(AngeeDataModel):
 class StepRecord(RecordRefMixin, AngeeDataModel):
     """One record used by a step, or supplied by its run's trigger."""
 
+    merge_policy = MergePolicy.KEEP
     runtime = True
     sqid_prefix = "wsrec_"
 
@@ -775,6 +778,7 @@ class StepRecord(RecordRefMixin, AngeeDataModel):
 class StepWatch(RecordRefMixin, AngeeDataModel):
     """One transactional observation and its durable, coalesced wake obligation."""
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "wsw_"
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="watches")
@@ -964,6 +968,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 class TriggerEvent(RecordRefMixin, AngeeDataModel):
     """One retained admission fact per trigger and concrete record reference."""
 
+    merge_policy = MergePolicy.KEEP
     runtime = True
     sqid_prefix = "wfe_"
     trigger = models.ForeignKey("workflows.Trigger", on_delete=models.PROTECT, related_name="events")

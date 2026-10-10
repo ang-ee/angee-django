@@ -26,6 +26,7 @@ from rebac.field_backing import canonical_model
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
+from angee.base.merge import MergePolicy
 from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
@@ -1402,6 +1403,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     binding is not moved: the library refuses a retargeting save under an actor.
     """
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "pbd_"
 
@@ -1459,6 +1461,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
 class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
     """A URL-keyed external reference attached to a project or task."""
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "plk_"
 
