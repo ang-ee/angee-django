@@ -23,7 +23,7 @@ is a typed, directed party↔party edge whose vocabulary
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -758,6 +758,24 @@ class AddressManager(AngeeManager):
     """Own normalized, conflict-safe attachment of canonical party addresses."""
 
     components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
+
+    def as_stored(self, address: Any) -> Any:
+        """Return a parsed address as its fields store it: a country name becomes its ISO code.
+
+        Each component passes through its own field's ``to_python``. A value its
+        field refuses (an unresolvable country) stays as written, for ingest to
+        refuse. Both sides of a directory sync compare this form, so a card's
+        "USA" reads as the stored "US".
+        """
+
+        stored: dict[str, Any] = {}
+        for name in ("label", *self.components):
+            value = getattr(address, name)
+            try:
+                stored[name] = self.model._meta.get_field(name).to_python(value)
+            except ValidationError:
+                stored[name] = value
+        return replace(address, **stored)
 
     def _normalize_components(self, values: Mapping[str, Any]) -> dict[str, str]:
         """Normalize address components through their owning model fields."""
