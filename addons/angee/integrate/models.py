@@ -3076,7 +3076,9 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
         ``write_holds`` (:meth:`SyncDiscrepancyQuerySet.holding_writes`) are its
         open conflicts and its refused writes still awaiting their retry time.
         The driver reloads under stream and link locks before applying. Empty
-        lists represent identities without revisions or holds.
+        lists represent identities without revisions or holds. The revision's
+        ``source_payload`` (a whole remote record, photo and all) is deferred: the
+        driver decides from the mapped side, and promotion re-reads the source.
         """
 
         revisions = apps.get_model("integrate", "RecordRevision").objects
@@ -3084,7 +3086,9 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
         return self.prefetch_related(
             Prefetch(
                 "revisions",
-                queryset=revisions.filter(pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))),
+                queryset=revisions.filter(
+                    pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))
+                ).defer("source_payload"),
                 to_attr="latest_revisions",
             ),
             Prefetch(
@@ -3386,15 +3390,15 @@ class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
 class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
     """Read scopes for retained record quarantine."""
 
-    def unresolved(self) -> Any:
+    def unresolved(self) -> Self:
         """Return open quarantine, including requested retries."""
         return self.filter(is_open=True)
 
-    def due(self) -> Any:
+    def due(self) -> Self:
         """Return the rows whose retry time has come, or that set none."""
         return self.filter(Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now()))
 
-    def holding_writes(self) -> Any:
+    def holding_writes(self) -> Self:
         """Return the open rows that hold their link's write-back.
 
         A conflict holds until someone resolves it; a refused write holds until

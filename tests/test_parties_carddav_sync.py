@@ -816,16 +816,36 @@ def test_a_remote_edit_the_hash_cannot_see_survives_the_next_write(replica: Repl
     assert card.note.value == "Changed locally"
 
 
-def test_the_preview_command_reports_each_declared_stream(replica: Replica) -> None:
+def test_the_preview_command_reports_each_current_stream_without_a_request(replica: Replica) -> None:
     person, _link = replica.baseline()
     person.notes = "Changed locally"
     person.save(update_fields=["notes"])
+    replica.server.requests.clear()
     out = StringIO()
     call_command("preview_push", replica.directory.sqid, "--keys", stdout=out)
     assert out.getvalue().splitlines() == [
         f"{replica.directory.sqid} contacts {_BOOK}: 1 to write, 0 held back by conflicts or refusals",
         "  write ada",
     ]
+    assert not replica.server.requests
+
+
+def test_a_refused_contact_deleted_locally_closes_its_refusal(replica: Replica) -> None:
+    """Nothing is left to write, and the remote never stored it, so no rescan would read it."""
+
+    (person,) = _refused_new_contacts(replica, 1)
+    refusal = SyncDiscrepancy.objects.get(kind=DiscrepancyKind.REMOTE_REJECTED, is_open=True)
+    replica.server.requests.clear()
+    with system_context(reason="test refused contact deleted"):
+        Person.objects.filter(pk=person.pk).delete()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal.refresh_from_db()
+    assert refusal.is_open
+
+    SyncDiscrepancy.objects.filter(pk=refusal.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal.refresh_from_db()
+    assert not refusal.is_open
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
