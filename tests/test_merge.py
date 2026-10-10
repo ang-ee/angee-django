@@ -22,6 +22,7 @@ from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.graphql import records
 from angee.messaging.testing.models import Party
 from angee.projects.testing.models import Project, Queue, Task
+from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
@@ -203,6 +204,34 @@ def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     assert edges["workflows.WorkflowRun"] == MergePolicy.KEEP
     assert edges["integrate.RecordLink"] == MergePolicy.BLOCK
     assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
+
+
+def test_a_generic_pointer_no_edge_declares_blocks_unless_it_is_a_revision() -> None:
+    """A plain generic foreign key cannot be moved safely; a reversion snapshot is history."""
+
+    plain = {ref.model._meta.label: ref.policy for ref in references(Tag) if isinstance(ref, EdgeReference)}
+    assert plain["reversion.Version"] == MergePolicy.KEEP
+    assert plain["rebac.SchemaOverride"] == MergePolicy.BLOCK
+
+
+def test_a_record_a_resource_ledger_loaded_refuses_its_merge() -> None:
+    """The next load would find no row for the ledger's xref and recreate the merged tag."""
+
+    mobile, mobil, _ada, _bob = _vocabulary()
+    with system_context(reason="merge test ledger"):
+        Resource.objects.create(
+            source_addon="angee.tags",
+            source_path="resources/install/tags.yaml",
+            tier=Resource.Tier.INSTALL,
+            xref="mobil",
+            content_hash="sha256:" + "0" * 64,
+            target_model=Tag._meta.label,
+            target_id=public_id_of(mobil),
+        )
+    with actor_context(_curator("merge-ledger")), pytest.raises(ValidationError, match="angee.tags resources"):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+    with system_context(reason="merge test read"):
+        assert Tag._base_manager.filter(pk=mobil.pk).exists()
 
 
 def test_a_history_key_keeps_pointing_at_the_merged_record() -> None:
