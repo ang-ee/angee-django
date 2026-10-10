@@ -19,13 +19,14 @@ from typing import Any, ClassVar
 
 import pytest
 from django.core.exceptions import ValidationError
-from imapclient.exceptions import LoginError
+from imapclient.exceptions import IMAPClientError, LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
+from angee.messaging_integrate_imap import backend as imap_backend
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import (
     MAX_SAMPLE_MESSAGES,
@@ -1313,19 +1314,18 @@ def test_incremental_run_fetches_only_new_uids(monkeypatch: pytest.MonkeyPatch) 
     messages = _drain(backend)
 
     assert [message.subject for message in messages] == ["C"]
-    assert account.searches == [("INBOX", ["UID", "3:*"])]
+    assert account.searches == [("INBOX", ["UID", "3:3"])]
     assert backend.test_pages.cursors["INBOX"]["last_uid"] == 3
 
 
-def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The server echoing the max UID below the watermark yields no refetch."""
+def test_expunged_uid_past_the_watermark_fetches_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A UIDNEXT past the watermark with no surviving mail there yields no refetch."""
 
     account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>"), _eml(message_id="<b@x>"))})
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 2}}}
     # A UID was allocated then expunged server-side: UIDNEXT moved past the
-    # watermark, so the prescreen lets the search through, and the search echoes
-    # only the highest existing UID (2) per the RFC 3501 ``n:*`` quirk.
+    # watermark, so the prescreen lets the search through, and it finds nothing.
     monkeypatch.setattr(
         FakeIMAPClient,
         "folder_status",
@@ -1333,7 +1333,45 @@ def test_uid_star_range_quirk_is_filtered_client_side(monkeypatch: pytest.Monkey
     )
 
     assert backend.test_pages.next_batch() == []
-    assert account.fetches == []  # the echoed max-UID (2) was filtered, nothing fetched
+    assert account.searches == [("INBOX", ["UID", "3:3"])]
+    assert account.fetches == []
+
+
+def test_a_full_mailbox_is_searched_in_bounded_uid_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No SEARCH answer outgrows imaplib's line limit, however many UIDs a mailbox holds."""
+
+    raws = (_eml(message_id=f"<{uid}@x>", subject=str(uid)) for uid in range(1, 6))
+    account = FakeImapAccount({"INBOX": _folder(*raws)})
+    backend = _backend(monkeypatch, account)
+    monkeypatch.setattr(imap_backend, "_SEARCH_UID_WINDOW", 2)
+
+    messages = _drain(backend)
+    preview = backend.preview_sample(ImapSamplePreviewRequest(mailbox="INBOX", all_dates=True, limit=5))
+
+    windows = [("INBOX", ["UID", window]) for window in ("1:2", "3:4", "5:5")]
+    assert [message.subject for message in messages] == ["1", "2", "3", "4", "5"]
+    assert [message.uid for message in preview.messages] == [5, 4, 3, 2, 1]
+    assert account.searches == windows + windows
+
+
+def test_a_server_failure_names_the_mailbox_and_step_but_not_the_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync telemetry says where the server failed; its raw reply stays in the worker log."""
+
+    account = FakeImapAccount({"INBOX": _folder(_eml())})
+    backend = _backend(monkeypatch, account)
+
+    def refuse(self: FakeIMAPClient, criteria: Any = "ALL") -> list[int]:
+        raise IMAPClientError("command: SEARCH => got more than 1000000 bytes")
+
+    monkeypatch.setattr(FakeIMAPClient, "search", refuse)
+    with pytest.raises(ImapError) as refused:
+        backend.test_pages.next_batch()
+
+    assert refused.value.public_message == (
+        "The IMAP server refused a command, or sent a reply that could not be read, while listing "
+        "messages in mailbox 'INBOX'. The worker log has the server's reply."
+    )
+    assert isinstance(refused.value.__cause__, IMAPClientError)
 
 
 def test_uidvalidity_change_resets_the_folder_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1351,7 +1389,7 @@ def test_uidvalidity_change_resets_the_folder_cursor(monkeypatch: pytest.MonkeyP
     messages = _drain(backend)
 
     assert [message.subject for message in messages] == ["A"]
-    assert account.searches == [("INBOX", "ALL")]
+    assert account.searches == [("INBOX", ["UID", "1:1"])]
     assert backend.test_pages.cursors["INBOX"] == {"uidvalidity": 777, "last_uid": 1}
 
 
