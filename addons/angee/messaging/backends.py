@@ -30,6 +30,9 @@ from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
+AUTOMATED_MAIL_HEADERS = ("auto-submitted", "list-id", "list-unsubscribe", "precedence")
+"""Headers a mail channel retains as header parts: ``MessageQuerySet.automated_sender_ids`` reads them."""
+
 logger = logging.getLogger(__name__)
 
 

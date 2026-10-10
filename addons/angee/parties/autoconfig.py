@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_HOOKS:append": ["ANGEE_PARTIES_SHARED_SENDERS", "ANGEE_PARTIES_SIGNINGS"],
+    # Evidence a downstream addon contributes to the hourly suggestion task, as
+    # dotted callables: handles whose display names are no evidence, and
+    # ``angee.parties.managers.Signing`` rows for signature mining.
+    "ANGEE_PARTIES_SHARED_SENDERS": [],
+    "ANGEE_PARTIES_SIGNINGS": [],
     "ANGEE_IMPL_REGISTRIES:append": ["angee.parties.backends.DirectoryBackend"],
     "CELERY_BEAT_SCHEDULE:append": {
         "parties.refresh_handle_suggestions": {
