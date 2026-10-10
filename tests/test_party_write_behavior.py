@@ -11,6 +11,8 @@ from django.test import override_settings
 from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
+from angee.messaging import managers as messaging_managers
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Address, Channel, Fragment, Handle, Message, Part, Party, PartyHandle
 from angee.parties.managers import Signing
 from angee.parties.mixins import LinkSource
@@ -101,9 +103,16 @@ def test_stale_owner_repair_unowns_a_handle_a_suggestion_decided(composed_tables
 
 
 @pytest.mark.django_db(transaction=True)
-def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_tables: None) -> None:
-    """Only a number one sender alone signs with is mined, and only a real phone number."""
+@pytest.mark.parametrize("batch", [1, 2000])
+def test_signature_phones_are_mined_only_from_a_senders_own_signature(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, batch: int
+) -> None:
+    """Only a number one sender alone signs with is mined, and only a real phone number.
+
+    Fragment texts load in batches; a batch of one crosses a boundary at every row.
+    """
     del composed_tables
+    monkeypatch.setattr(messaging_managers, "_SIGNING_TEXT_BATCH", batch)
     owner = get_user_model().objects.create_user(username="signature-mining-owner")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="signature mining fixture"):
@@ -136,6 +145,12 @@ def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_t
             )
         )
     assert mined == {(ada.pk, "+14155552671")}
+    # The verb reads every owner's mail whoever calls it: a stranger's run withdraws nothing.
+    stranger = get_user_model().objects.create_user(username="signature-mining-stranger")
+    with actor_context(stranger):
+        assert PartyHandle.objects.reconcile_suggestions() == 0
+    with system_context(reason="signature mining read"):
+        assert PartyHandle._base_manager.filter(source=LinkSource.RULE, handle__platform="phone").count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -181,6 +196,76 @@ def test_a_number_is_one_persons_until_another_person_signs_with_it(composed_tab
         shared = [*from_two_addresses, Signing("carol", "Carol\n+1 415 555 2671", "carol", carol.pk, owner.pk)]
         assert PartyHandle.objects._reconcile_signatures(shared) == 1
         assert not PartyHandle._base_manager.filter(source=LinkSource.RULE).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_another_owners_mail_neither_proposes_nor_keeps_a_suggestion(composed_tables: None) -> None:
+    """Support stays inside the owner partition: Bob's private mail never decides Alice's review queue."""
+    del composed_tables
+    alice, bob = (
+        get_user_model().objects.create_user(username=f"signature-partition-{name}") for name in ("alice", "bob")
+    )
+    with system_context(reason="signature partition fixture"):
+        ada = Party._base_manager.create(display_name="Ada", created_by=alice)
+        carol = Party._base_manager.create(display_name="Carol", created_by=alice)
+        text = "Analytical Engines\n+1 787 906 0900"
+        alice_ada = Signing("engines", text, "ada", ada.pk, alice.pk)
+        alice_carol = Signing("engines", text, "carol", carol.pk, alice.pk)
+        bob_ada = Signing("engines", text, "ada-at-bob", ada.pk, bob.pk)
+        assert PartyHandle.objects._reconcile_signatures([alice_ada, alice_carol, bob_ada]) == 0
+        assert PartyHandle.objects._reconcile_signatures([alice_ada]) == 1
+        # Carol signs with it in Alice's mail: Bob's mail cannot keep Alice's suggestion.
+        assert PartyHandle.objects._reconcile_signatures([alice_ada, alice_carol, bob_ada]) == 1
+        assert not PartyHandle._base_manager.filter(source=LinkSource.RULE).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_list_senders_display_name_proposes_nobody(composed_tables: None) -> None:
+    """Messaging's shared-sender provider keeps a list address's display name out of the evidence."""
+    del composed_tables
+    owner = get_user_model().objects.create_user(username="shared-sender-owner")
+    channel = make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="shared sender fixture"):
+        ada = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        own = Handle._base_manager.create(
+            platform="phone", value="+14155552671", display_name="Ada Lovelace", created_by=owner
+        )
+        PartyHandle.objects.link(ada, own, source=LinkSource.CARDDAV, created_by_id=owner.pk)
+        for external_id, value, headers in (
+            ("list-1", "list@example.test", (("list-id", "<repo.example.test>"),)),
+            ("person-1", "ada@example.test", ()),
+        ):
+            parsed = ParsedMessage(
+                external_id=external_id,
+                platform="email",
+                subject="Hello",
+                sender=ParsedHandle(platform="email", value=value, display_name="Ada Lovelace"),
+                body=ParsedPart(text=external_id),
+                headers=headers,
+            )
+            Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+    assert PartyHandle.objects.reconcile_suggestions() == 1
+    with system_context(reason="shared sender read"):
+        suggested = PartyHandle._base_manager.filter(source=LinkSource.RULE).values_list("handle__value", flat=True)
+        assert set(suggested) == {"ada@example.test"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_assertion_never_reopens_a_dismissed_link(composed_tables: None) -> None:
+    """A card that lists a dismissed number leaves the human decision as it was."""
+    del composed_tables
+    owner = get_user_model().objects.create_user(username="dismissed-link-owner")
+    with system_context(reason="dismissed link fixture"):
+        party = Party._base_manager.create(display_name="Ada", created_by=owner)
+        handle = Handle._base_manager.create(platform="phone", value="+14155552671", created_by=owner)
+        link = PartyHandle.objects.link(party, handle, confidence=0.3, source=LinkSource.RULE, created_by_id=owner.pk)
+        with actor_context(owner):
+            link.dismiss()
+        PartyHandle.objects.link(party, handle, source=LinkSource.CARDDAV, created_by_id=owner.pk)
+        link.refresh_from_db()
+        handle.refresh_from_db()
+    assert (link.is_dismissed, link.source, link.confidence) == (True, LinkSource.RULE, 0.3)
+    assert handle.party_id is None
 
 
 @pytest.mark.django_db(transaction=True)
