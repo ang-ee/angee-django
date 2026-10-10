@@ -898,7 +898,7 @@ def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica
     with system_context(reason="test signature suggestion"):
         created = PartyHandle.objects.suggest_from_signature(
             text="Ada Lovelace\nM: +1 415 555 2671",
-            party_ids=(person.pk,),
+            party_id=person.pk,
             fragment_hash="ada-signature",
             owner_id=person.created_by_id,
         )
