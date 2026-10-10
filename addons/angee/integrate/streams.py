@@ -7,7 +7,7 @@ re-read by identity when supported; there is no durable work queue.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from copy import copy
@@ -304,13 +304,16 @@ def _resolve_applied(stream: Any, record: Any) -> None:
         manager.resolve(discrepancy)
 
 
-def _has_conflict(link: Any) -> bool:
+def _push_held(link: Any) -> bool:
+    """Whether an open conflict, or a refused write still in its backoff, holds this link's push."""
+
     return (
         _manager("SyncDiscrepancy")
         .unresolved()
+        .filter(link=link)
         .filter(
-            link=link,
-            kind=DiscrepancyKind.CONFLICT,
+            Q(kind=DiscrepancyKind.CONFLICT)
+            | Q(kind=DiscrepancyKind.REMOTE_REJECTED, retry_at__gt=timezone.now())
         )
         .exists()
     )
@@ -670,21 +673,20 @@ def push_stream(
 
     if connection.in_atomic_block:
         raise RuntimeError("Remote writes must run outside a database transaction.")
-    if stream.kind != StreamKind.RECORD_REPLICA or stream.direction == StreamDirection.PULL:
+    if not _pushes(stream):
         return PageResult(stream, exhausted=True)
     count = 0
     discrepancies: list[int] = []
     with system_context(reason="integrate.stream.push"):
         if _baseline_adoption(stream):
             return PageResult(stream, exhausted=True)
-        for candidate in adapter.local_changes(stream, keys=external_keys):
+        links = _manager("RecordLink")
+        for candidate, link in _push_candidates(stream, adapter, external_keys):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
-            links = _manager("RecordLink")
-            link = links.filter(stream=stream, external_key=candidate.external_key).first()
             if link is None:
                 link = links.observe(stream, candidate.external_key)
-            if _has_conflict(link) or candidate.local_hash == link.local_base_hash:
+            if _push_held(link):
                 continue
             revision = _manager("RecordRevision").latest_for(link).first()
             record = RecordChange(
@@ -712,6 +714,51 @@ def push_stream(
                 _reflect_write(locked, record, result)
             count += 1
     return PageResult(stream, count, True, tuple(discrepancies))
+
+
+@dataclass(frozen=True, slots=True)
+class PushPreview:
+    """What one push of a stream would write, read without writing anything.
+
+    ``writes`` are the external keys the push would send; ``held`` are those an
+    open conflict, or a refused write still in its backoff, keeps back. A stream
+    that does not push, or still adopts its first baseline, previews empty.
+    """
+
+    stream: Any
+    writes: tuple[str, ...] = ()
+    held: tuple[str, ...] = ()
+
+
+def preview_push(stream: Any, adapter: BridgeImpl, *, external_keys: frozenset[str] | None = None) -> PushPreview:
+    """Return the keys :func:`push_stream` would write now, without writing anything."""
+
+    with system_context(reason="integrate.stream.preview_push"):
+        if not _pushes(stream) or _baseline_adoption(stream):
+            return PushPreview(stream)
+        writes: list[str] = []
+        held: list[str] = []
+        for candidate, link in _push_candidates(stream, adapter, external_keys):
+            (held if link is not None and _push_held(link) else writes).append(candidate.external_key)
+        return PushPreview(stream, tuple(writes), tuple(held))
+
+
+def _pushes(stream: Any) -> bool:
+    """Whether a stream writes local changes back to its remote."""
+
+    return stream.kind == StreamKind.RECORD_REPLICA and stream.direction != StreamDirection.PULL
+
+
+def _push_candidates(
+    stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None
+) -> Iterator[tuple[LocalChange, Any]]:
+    """Yield each local change that differs from its link's base, with that link or ``None`` when new."""
+
+    links = _manager("RecordLink")
+    for candidate in adapter.local_changes(stream, keys=external_keys):
+        link = links.filter(stream=stream, external_key=candidate.external_key).first()
+        if link is None or candidate.local_hash != link.local_base_hash:
+            yield candidate, link
 
 
 def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> tuple[RecordChange, ...]:
