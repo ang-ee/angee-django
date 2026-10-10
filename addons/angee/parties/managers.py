@@ -19,7 +19,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from itertools import combinations
+from itertools import chain, combinations
 from typing import Any, NamedTuple, Self, cast
 
 from django.apps import apps
@@ -39,6 +39,7 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
 from angee.base.identity import public_id_for
+from angee.base.impl import resolve_hooks
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import generic_pointer_model
@@ -57,7 +58,7 @@ _AWAITING_REVIEW = Q(is_confirmed=False, is_dismissed=False, confidence__lt=_REV
 class Signing(NamedTuple):
     """One sender's signature fragment: the evidence signature mining reads.
 
-    A downstream addon contributes these through ``ANGEE_PARTIES_SIGNINGS``;
+    A downstream addon contributes these through ``ANGEE_PARTIES_SIGNING_PROVIDERS``;
     parties reads no other addon's models.
     """
 
@@ -854,7 +855,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
             existing = self.filter(party=locked_party, handle=locked_handle).first()
-            refs = list((existing.metadata or {}).get("evidence", ())) if existing is not None else []
+            # Record references keep their own key: ``evidence`` describes a rule
+            # suggestion's evidence, and a claim may land on such a row.
+            refs = list((existing.metadata or {}).get("evidence_refs", ())) if existing is not None else []
             if evidence_ref not in refs:
                 refs.append(evidence_ref)
             return self.link(
@@ -865,7 +868,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 is_confirmed=False,
                 metadata={
                     "claim": "source_sender",
-                    "evidence": refs,
+                    "evidence_refs": refs,
                 },
                 created_by_id=getattr(actor, "pk", None),
             )
@@ -1087,20 +1090,48 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 )
         return None
 
-    def suggest_from_signatures(self, signings: Iterable[Signing]) -> int:
-        """Reconcile weak party-to-phone suggestions with the signatures in the owner's mail.
+    def reconcile_suggestions(self) -> int:
+        """Reconcile the evidence-backed suggestions with every registered evidence provider.
+
+        Display-name evidence is parties' own. Downstream addons contribute the rest
+        as dotted callables, so parties reads no other addon's models:
+
+        - ``ANGEE_PARTIES_SHARED_SENDER_PROVIDERS`` callables return handle ids whose
+          display names are no evidence (list and notification senders).
+        - ``ANGEE_PARTIES_SIGNING_PROVIDERS`` callables yield :class:`Signing` rows.
+          Each yields all of its evidence, since a signature suggestion the signings
+          no longer support is withdrawn. With no provider registered there is no
+          signature evidence to judge, and the signature suggestions stay.
+
+        A provider that raises does so before its pass writes anything. Returns the
+        suggestions created plus those withdrawn.
+        """
+
+        shared = frozenset(
+            chain.from_iterable(provider() for provider in resolve_hooks("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS"))
+        )
+        changed = self._reconcile_display_names(shared)
+        if providers := resolve_hooks("ANGEE_PARTIES_SIGNING_PROVIDERS"):
+            changed += self._reconcile_signatures(chain.from_iterable(provider() for provider in providers))
+        return changed
+
+    def _reconcile_signatures(self, signings: Iterable[Signing]) -> int:
+        """Reconcile weak party-to-phone suggestions with every signature in the owners' mail.
 
         Each :class:`Signing` is neutral evidence that one sender signed with one
-        fragment, contributed through ``ANGEE_PARTIES_SIGNINGS``. This manager owns
-        phone extraction, Handle creation, link provenance, owner partition and the
-        durable-pair check. A number is a person's own only while that one person
-        (or one unresolved address) signs with it in the owner's mail: forwards,
-        company switchboards and conference bridges repeat a number under several
-        people, and none of them owns it. Each such number of a resolved sender is
-        one ``0.3`` suggestion recording its fragment; an undecided suggestion the
-        evidence no longer supports is withdrawn. An existing pair, including a
-        dismissed anti-link, is never changed. Returns the suggestions created plus
-        those withdrawn.
+        fragment. This manager owns phone extraction, Handle creation, link
+        provenance, owner partition and the durable-pair check. A number is a
+        person's own only while that one person (or one unresolved address) signs
+        with it in the owner's mail: forwards, company switchboards and conference
+        bridges repeat a number under several people, and none of them owns it.
+        Each such number of a resolved sender is one ``0.3`` suggestion recording
+        its fragment; an undecided suggestion the evidence no longer supports is
+        withdrawn, so ``signings`` must be complete. An existing pair, including a
+        dismissed anti-link, is never changed.
+
+        A signer is the resolved party, or the address while it is unresolved: one
+        person writing from a resolved and an unresolved address counts twice until
+        the second resolves, and people resolved onto one shared card count once.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -1158,23 +1189,22 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         withdrawn = self._withdraw_unsupported("signature_phone", supported, ("party_id", "handle__normalized_value"))
         return created + withdrawn
 
-    def suggest_from_display_names(self, *, shared_handle_ids: Iterable[Any] = ()) -> int:
+    def _reconcile_display_names(self, shared: frozenset[Any]) -> int:
         """Reconcile weak identity links with the full display names pooled per audit owner.
 
-        A resolved handle supplies evidence only to an unresolved handle on another
-        platform, and only for a party that bears the same full name itself. A
-        one-word name (a first name, a brand) identifies nobody, and a party named
-        otherwise, such as a nameless card holding several people's numbers, is not
-        that person. ``shared_handle_ids`` are addresses several people speak through,
-        such as list or notification senders (``ANGEE_PARTIES_SHARED_SENDERS``): their
-        display names name whoever spoke last and are no evidence. Each distinct
-        candidate party receives one ``0.4`` rule link, and an undecided one the names
-        no longer support is withdrawn; existing pairs, including dismissed links,
-        remain untouched. Returns the suggestions created plus those withdrawn.
+        A resolved handle supplies evidence only to a handle on another platform,
+        and only for a party that bears the same full name itself. A one-word name
+        (a first name, a brand) identifies nobody, and a party named otherwise, such
+        as a nameless card holding several people's numbers, is not that person.
+        ``shared`` handles are addresses several people speak through: their display
+        names name whoever spoke last and are no evidence. Each distinct candidate
+        party of an unresolved handle receives one ``0.4`` rule link. A suggestion is
+        withdrawn only when its names no longer support it, not when its handle
+        later gains an owner; existing pairs, including dismissed links, remain
+        untouched.
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        shared = frozenset(shared_handle_ids)
         supported: set[tuple[Any, Any]] = set()
         created = 0
         owner_ids = (
@@ -1205,7 +1235,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     pools[normalized_name].append(handle)
 
             for handle in handles:
-                if handle.party_id is not None or handle.pk in shared:
+                if handle.pk in shared:
                     continue
                 normalized_name = handle_model.normalize_display_name(handle.display_name)
                 seen_parties: set[Any] = set()
@@ -1220,7 +1250,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                         continue
                     seen_parties.add(candidate.party_id)
                     supported.add((candidate.party_id, handle.pk))
-                    if (candidate.party_id, handle.pk) in existing_pairs:
+                    if handle.party_id is not None or (candidate.party_id, handle.pk) in existing_pairs:
                         continue
                     existing_pairs.add((candidate.party_id, handle.pk))
                     created += self._suggest(
@@ -1241,15 +1271,21 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
     def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, Any]], key: tuple[str, str]) -> int:
         """Delete the undecided rule suggestions of ``kind`` whose ``key`` pair no evidence supports now.
 
-        Confirmed links and dismissed anti-links are human decisions and stay. A
-        suggestion owns no handle, so withdrawing one changes no owner.
+        Confirmed links and dismissed anti-links are human decisions and stay. The
+        delete re-reads its rows locked under the same filter, so a suggestion a
+        person confirms, or a card upgrades, during the pass is no longer pending
+        and stays. A suggestion never decided its handle's owner, so withdrawing
+        one leaves the owner as it was.
         """
 
         pending = self.to_review().filter(source=LinkSource.RULE, metadata__evidence__kind=kind)
         stale = [pk for pk, *pair in pending.values_list("pk", *key) if tuple(pair) not in supported]
-        if stale:
-            self.filter(pk__in=stale).delete()
-        return len(stale)
+        if not stale:
+            return 0
+        with transaction.atomic():
+            locked = list(pending.filter(pk__in=stale).lock_if_supported().values_list("pk", flat=True))
+            pending.filter(pk__in=locked).delete()
+        return len(locked)
 
     def _suggest(
         self,

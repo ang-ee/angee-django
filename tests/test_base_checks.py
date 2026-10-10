@@ -165,6 +165,8 @@ def test_installed_hook_owners_declare_their_settings() -> None:
         "ANGEE_WEBFORM_TOKEN_HOOK",
         "ANGEE_TASK_LOCK_BACKEND",
         "ANGEE_WORK_MERGE_CONTRIBUTORS",
+        "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
+        "ANGEE_PARTIES_SIGNING_PROVIDERS",
     } <= set(settings.ANGEE_HOOKS)
     assert check_hooks() == []
 

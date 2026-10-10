@@ -1958,7 +1958,7 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
             email="foreign-sender-evidence@example.test",
         )
         foreign_party = Party._base_manager.create(display_name="Private evidence", created_by=foreign_owner)
-        link.metadata = {"evidence": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]}
+        link.metadata = {"evidence_refs": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]}
         link.save(update_fields=("metadata", "updated_at"))
 
     for message in messages:
@@ -1974,7 +1974,7 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
     assert not link.is_dismissed
     assert link.confidence == 1.0
     assert link.source == LinkSource.MANUAL
-    assert link.metadata["evidence"] == [
+    assert link.metadata["evidence_refs"] == [
         {"model": "messaging.Party", "id": str(foreign_party.sqid)},
         *({"model": "messaging.Message", "id": str(message.sqid)} for message in messages),
     ]
