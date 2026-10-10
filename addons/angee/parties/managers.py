@@ -872,6 +872,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         :meth:`PartyHandleQuerySet.asserted`). ``is_confirmed`` records a
         human-strength decision (a connect flow claiming the signed-in user's own
         handle); it upgrades an existing weaker link to the confirmed self-link.
+        Without it, a higher ``confidence`` still replaces an undecided suggestion's
+        confidence and source, so a card that lists a mined number owns it; a
+        dismissed link keeps the human decision.
         Resolution only re-runs when the link is new, upgraded, or the handle's owner
         is not already this party, so a re-sync of an unchanged contact does no extra
         work. Source metadata merges onto the existing link so a later importer can
@@ -904,6 +907,13 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 link.is_confirmed = True
                 link.is_dismissed = False
                 dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
+                upgraded = True
+            elif not created and not link.is_confirmed and not link.is_dismissed and confidence > link.confidence:
+                # A stronger assertion, such as a card that now lists the number,
+                # replaces an undecided guess; a human decision stays as it is.
+                link.confidence = confidence
+                link.source = source
+                dirty.extend(("confidence", "source"))
                 upgraded = True
             merged_metadata = {**(link.metadata or {}), **(metadata or {})}
             if merged_metadata != link.metadata:
