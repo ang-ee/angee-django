@@ -212,7 +212,6 @@ const ENUM_OPTION_WIDGETS = new Set([
   "selection",
   "statusbar",
   "statusBadge",
-  "colorDot",
 ]);
 
 /** Apply metadata defaults and scoped vocabulary, retaining authored column identity. */
