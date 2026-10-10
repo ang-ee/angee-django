@@ -778,6 +778,7 @@ class StepWatch(RecordRefMixin, AngeeDataModel):
     """One transactional observation and its durable, coalesced wake obligation."""
 
     merge_policy = MergePolicy.MOVE
+    merge_identity = (("step_run", "content_type", "object_id"),)
     runtime = True
     sqid_prefix = "wsw_"
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="watches")
