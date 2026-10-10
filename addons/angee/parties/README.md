@@ -47,7 +47,10 @@ type. Email and phone contact points come only from the person's
 [asserted links](managers.py): those the card itself carries, those a person
 added, and confirmed suggestions. Unreviewed suggestions such as mined
 signature phones or display-name matches stay inside Angee and are never
-written to a card. Extraction fetches and pre-stores avatars through storage's
+written to a card. Each source owns its own [claim](models.py) on a link, so a
+card, an import and a person's own entry coexist on one pair: a card that drops a
+number retracts only the card's claim, and the person's entry or decision stays.
+Extraction fetches and pre-stores avatars through storage's
 idempotent `File.objects.ingest_bytes` before the page transaction. Apply only
 validates and links the prepared File under the row lock; it performs database
 work only.

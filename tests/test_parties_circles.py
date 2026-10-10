@@ -22,6 +22,7 @@ from angee.messaging.testing.models import (
     Organization,
     Party,
     PartyHandle,
+    PartyHandleClaim,
     Person,
     Relationship,
     RelationshipKind,
@@ -222,7 +223,8 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
     assert social_handle.party_link_confirmed is True
     assert social_link.source == LinkSource.IMPORT
-    assert social_link.metadata["provenance"] == "linkedin_takeout"
+    import_claim = PartyHandleClaim._base_manager.get(link=social_link, source=LinkSource.IMPORT)
+    assert import_claim.metadata["provenance"] == "linkedin_takeout"
     acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
     employment = Relationship._base_manager.get(kind__slug="employee")
     assert acquaintance.other_party_id == first.pk
