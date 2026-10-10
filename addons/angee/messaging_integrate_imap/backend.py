@@ -41,7 +41,8 @@ from __future__ import annotations
 import logging
 import ssl
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date
@@ -53,7 +54,7 @@ from typing import Any, TypeVar
 
 from django.core.exceptions import ValidationError
 from imapclient import IMAPClient
-from imapclient.exceptions import IMAPClientAbortError, LoginError
+from imapclient.exceptions import IMAPClientAbortError, IMAPClientError, LoginError
 from pydantic import BaseModel, ConfigDict
 
 from angee.integrate.credentials import CredentialKind
@@ -74,6 +75,9 @@ _DEFAULT_BATCH_SIZE = 200
 _DEFAULT_MAX_MESSAGE_BYTES = 50_000_000
 _DEFAULT_MAX_BATCH_BYTES = 64_000_000
 _DEFAULT_TIMEOUT_SECONDS = 60
+_SEARCH_UID_WINDOW = 50_000
+"""UIDs one SEARCH may span. A SEARCH answers in one response line, which imaplib
+refuses past 1,000,000 bytes; 50,000 UIDs of at most ten digits each stay under it."""
 MAX_SAMPLE_MESSAGES = 50
 MAX_SAMPLE_BYTES = 64_000_000
 NEW_MAIL_DELIVERY_MODE = "new_only"
@@ -226,7 +230,8 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         if self._stream_identity != identity:
             self._stream_identity = identity
             self._cursor = deepcopy(stream.cursor)
-            self._work = self._discover(stream.partition)
+            with _server_step(stream.partition, "listing messages"):
+                self._work = self._discover(stream.partition)
         batch_size = min(max(1, page_bound), self._batch_size())
         while self._work:
             work = self._work[0]
@@ -234,7 +239,8 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             if not chunk:
                 self._work.popleft()
                 continue
-            messages = self._fetch_chunk(work, chunk)
+            with _server_step(work.name, "fetching messages"):
+                messages = self._fetch_chunk(work, chunk)
             answered = {
                 int(message.metadata["uid"])
                 for message in messages
@@ -313,16 +319,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 if request.before_uid is not None
                 else snapshot_upper_uid
             )
-            # Never send 1:0: IMAP treats reversed UID ranges as inclusive too.
-            criteria = ["UID", f"1:{page_upper_uid}", *criteria]
-            found = (
-                sorted(
-                    (int(uid) for uid in client.search(criteria) if 0 < int(uid) <= page_upper_uid),
-                    reverse=True,
-                )
-                if page_upper_uid > 0
-                else []
-            )
+            found = sorted(self._search_uids(1, page_upper_uid, criteria), reverse=True)
             chosen = found[: request.limit]
             rows = client.fetch(chosen, [b"BODY.PEEK[HEADER]", b"FLAGS", b"RFC822.SIZE"]) if chosen else {}
             answered = {uid: item for uid in chosen if (item := rows.get(uid)) is not None and b"BODY[HEADER]" in item}
@@ -527,11 +524,27 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         if last_uid and uidnext <= last_uid + 1:
             return deque()
         self._select(name, expected_uidvalidity=uidvalidity)
-        criteria = ["UID", f"{last_uid + 1}:*"] if last_uid else "ALL"
-        # RFC 3501 n:* can return the highest UID even when it lies below n.
-        uids = sorted(int(uid) for uid in client.search(criteria) if int(uid) > last_uid)
+        # Mail delivered after the STATUS above lies past UIDNEXT; the next run plans it.
+        uids = self._search_uids(last_uid + 1, uidnext - 1)
         self._report_progress("discovering", "Planned IMAP mailbox sync", mailbox=name, queued_messages=len(uids))
         return deque([_MailboxWork(name=name, uidvalidity=uidvalidity, uids=uids)])
+
+    def _search_uids(self, lower: int, upper: int, criteria: Sequence[Any] = ()) -> list[int]:
+        """Return the ascending UIDs in ``lower..upper`` of the selected mailbox matching ``criteria``.
+
+        A full mailbox answers one SEARCH with more UIDs than imaplib reads in a
+        line, so the range is searched in ``_SEARCH_UID_WINDOW`` windows. A
+        reversed range is empty rather than sent: IMAP treats ``n:m`` with
+        ``m < n`` as inclusive. Each answer is clipped to the window it was asked for.
+        """
+
+        client = self._client_or_fail()
+        found: list[int] = []
+        for start in range(lower, upper + 1, _SEARCH_UID_WINDOW):
+            end = min(start + _SEARCH_UID_WINDOW - 1, upper)
+            answer = (int(uid) for uid in client.search(["UID", f"{start}:{end}", *criteria]))
+            found.extend(sorted(uid for uid in answer if start <= uid <= end))
+        return found
 
     def delivery_boundary(self) -> dict[str, Any]:
         """Read the bridge's future-only delivery policy."""
@@ -986,6 +999,28 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._client = None
         self._selected = ""
         self._login_name = ""
+
+
+@contextmanager
+def _server_step(mailbox: str, action: str) -> Iterator[None]:
+    """Name the mailbox and step of a sync that the server failed, as an operator-safe ``ImapError``.
+
+    The server's own reply stays in the worker log with the traceback: it is
+    vendor text, which sync telemetry never shows.
+    """
+
+    try:
+        yield
+    except _TRANSIENT_ERRORS as error:
+        raise ImapError(
+            f"The connection to the IMAP server dropped while {action} in mailbox {mailbox!r}. "
+            "The next sync retries."
+        ) from error
+    except IMAPClientError as error:
+        raise ImapError(
+            f"The IMAP server refused a command, or sent a reply that could not be read, while {action} "
+            f"in mailbox {mailbox!r}. The worker log has the server's reply."
+        ) from error
 
 
 def _byte_budget_runs(uids: list[int], sizes: dict[int, dict[bytes, Any]], budget: int) -> list[list[int]]:
