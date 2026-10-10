@@ -14,7 +14,7 @@ existing capability overrides remain valid.
 | Record quarantine and due rescan candidates | [SyncDiscrepancy and its manager](models.py) |
 | Bounded page, conditional push and inventory execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
 | Concurrent nested JSON edits | [merge_json_state](models.py) |
-| Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed) |
+| Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed); `manage.py preview_push <integration>` lists what a push would write ([`preview_push`](streams.py)) |
 | Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
 
 Event feeds compose their domain's idempotent ingest verb and never create links
@@ -83,6 +83,9 @@ once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The
 caller closes its adapter. `push_stream` and `reconcile_stream` complete the
 cycle when applicable. These functions contain no workflow runtime dependency.
+`preview_push(stream, adapter)` returns the keys a push would write and those
+held back, writing nothing. Before resuming an integration paused for a mapping
+change, every stream should preview no writes.
 
 The Streams tab keeps its drill-down in route search state. Its open discrepancy
 view uses the backend `is_open` filter and offers explicit remote/local choices
@@ -95,14 +98,21 @@ returns one `RecordChange` for every requested external key, including a remote
 tombstone when that key no longer exists. Transport runs outside transactions;
 the shared page apply path commits the observations without changing the cursor,
 phase or advancement timestamps. Successful apply resolves earlier non-conflict
-failures for that identity. Event feeds are excluded from discrepancy rescan.
+failures for that identity. Event feeds are excluded from discrepancy rescan,
+and so are refused writes (`remote_rejected`): the push retries those, since a
+record the remote never stored has nothing to re-read.
 An adapter without `supports_identity_reads` requests a baseline instead, recording the fallback
 and reason in the discrepancy details. No private work queue is retained.
+A pull that finds a record unchanged still retains the source it read, so a
+remote edit the comparison hash cannot see is not reverted by the next write-back.
 
 Semantic quarantine increments `attempts` and sets an exponential retry delay
 starting at one minute, capped by the smaller of a positive reconciliation
 interval or 24 hours. A zero interval means continuous inventory reconciliation,
-so it retains the 24-hour retry cap. Conflicts keep `retry_at=None` and require
+so it retains the 24-hour retry cap. A refused write holds its link's write-back
+until `retry_at`, on every write path (`SyncDiscrepancyQuerySet.holding_writes`);
+each refused link keeps its own row, and a later write that lands resolves it.
+Conflicts keep `retry_at=None` and require
 explicit resolution before either side can be written again. `resolve_conflict`
 requires `keep="remote"` (re-read and apply remotely owned facts) or `keep="local"`
 (re-read the remote base/version, then conditionally write the local projection).
