@@ -896,11 +896,8 @@ def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica
     person, link = replica.baseline()
     bases = link.remote_base_hash, link.local_base_hash, link.remote_version
     with system_context(reason="test signature suggestion"):
-        created = PartyHandle.objects.suggest_from_signature(
-            text="Ada Lovelace\nM: +1 415 555 2671",
-            party_id=person.pk,
-            fragment_hash="ada-signature",
-            owner_id=person.created_by_id,
+        created = PartyHandle.objects.suggest_from_signatures(
+            [("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
         )
     assert created == 1
     replica.server.requests.clear()

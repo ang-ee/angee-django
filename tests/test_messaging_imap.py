@@ -274,6 +274,12 @@ def test_corporate_disclaimer_maps_to_signature_role() -> None:
             "From: Monica Alvarez <monica@example.com>\nSent: Thursday, July 2, 2026\nSubject: Papers",
             id="outlook",
         ),
+        pytest.param(
+            "Od: Monica Alvarez <monica@example.com>\nDatum: 2. července 2026 10:57:26 SELČ\nPředmět: Papers\n\n"
+            "Here are the papers.\n\nBest,\nMonica Alvarez\n+1 787 523 6508\n",
+            "Od: Monica Alvarez <monica@example.com>\nDatum: 2. července 2026 10:57:26 SELČ\nPředmět: Papers",
+            id="czech-forward",
+        ),
     ],
 )
 def test_quoted_reply_signature_stays_with_the_quoted_author(quote: str, header: str) -> None:
