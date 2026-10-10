@@ -33,7 +33,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models import F, OuterRef, Prefetch, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import (
@@ -3029,6 +3029,12 @@ class SyncStream(AuditMixin, AngeeDataModel):
 
         return f"{self.key} ({self.partition})" if self.partition else self.key
 
+    @property
+    def writes_back(self) -> bool:
+        """Whether this stream writes local changes to its remote: a replica that is not pull-only."""
+
+        return self.kind == StreamKind.RECORD_REPLICA and self.direction != StreamDirection.PULL
+
     def has_completed_baseline(self) -> bool:
         """Read completion across retained epochs, including this persisted row.
 
@@ -3065,24 +3071,30 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
     """Load comparison evidence for a bounded collection of replica identities."""
 
     def with_sync_evidence(self) -> Self:
-        """Prefetch each link's latest revision and open conflicts.
+        """Prefetch each link's latest revision and the open rows holding its writes.
 
-        The driver reloads under stream and link locks before applying.
-        Empty lists represent identities without revisions or open conflicts.
+        ``write_holds`` (:meth:`SyncDiscrepancyQuerySet.holding_writes`) are its
+        open conflicts and its refused writes still awaiting their retry time.
+        The driver reloads under stream and link locks before applying. Empty
+        lists represent identities without revisions or holds. The revision's
+        ``source_payload`` (a whole remote record, photo and all) is deferred: the
+        driver decides from the mapped side, and promotion re-reads the source.
         """
 
         revisions = apps.get_model("integrate", "RecordRevision").objects
-        conflicts = apps.get_model("integrate", "SyncDiscrepancy").objects
+        discrepancies = apps.get_model("integrate", "SyncDiscrepancy").objects
         return self.prefetch_related(
             Prefetch(
                 "revisions",
-                queryset=revisions.filter(pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))),
+                queryset=revisions.filter(
+                    pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))
+                ).defer("source_payload"),
                 to_attr="latest_revisions",
             ),
             Prefetch(
                 "discrepancies",
-                queryset=conflicts.unresolved().filter(kind=DiscrepancyKind.CONFLICT).order_by("pk"),
-                to_attr="open_conflicts",
+                queryset=discrepancies.holding_writes().order_by("pk"),
+                to_attr="write_holds",
             ),
         )
 
@@ -3378,9 +3390,24 @@ class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
 class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
     """Read scopes for retained record quarantine."""
 
-    def unresolved(self) -> Any:
+    def unresolved(self) -> Self:
         """Return open quarantine, including requested retries."""
         return self.filter(is_open=True)
+
+    def due(self) -> Self:
+        """Return the rows whose retry time has come, or that set none."""
+        return self.filter(Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now()))
+
+    def holding_writes(self) -> Self:
+        """Return the open rows that hold their link's write-back.
+
+        A conflict holds until someone resolves it; a refused write holds until
+        its retry time, when the next push asks the remote once more.
+        """
+        return self.unresolved().filter(
+            Q(kind=DiscrepancyKind.CONFLICT)
+            | Q(kind=DiscrepancyKind.REMOTE_REJECTED, retry_at__gt=timezone.now())
+        )
 
 
 class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)):  # type: ignore[misc]
@@ -3406,15 +3433,17 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                 locked_link = type(link).objects.filter(pk=link.pk).lock_if_supported().get()
                 if locked_link.stream_id != stream.pk:
                     raise ValidationError("A discrepancy link must belong to its stream.")
+            # Keyed by link too: two new records share an empty source hash, and one
+            # row for both would move between them and reset each one's backoff.
             row, _ = self.unresolved().get_or_create(
                 stream=stream,
+                link=link,
                 kind=kind,
                 code=code,
                 source_hash=source_hash,
                 mapping_version=mapping_version,
-                defaults={"link": link, "status": DiscrepancyStatus.OPEN},
+                defaults={"status": DiscrepancyStatus.OPEN},
             )
-            row.link = link
             row.details = {**row.details, **dict(details or {})}
             row.status, row.resolved_at = DiscrepancyStatus.OPEN, None
             row.retry_at = None if kind == DiscrepancyKind.CONFLICT else retry_at
@@ -3462,7 +3491,7 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                     raise ValidationError("Conflict resolution requires an adapter with identity reads.")
                 if stream.resync_required:
                     raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                if keep == ConflictKeep.LOCAL and stream.direction == StreamDirection.PULL:
+                if keep == ConflictKeep.LOCAL and not stream.writes_back:
                     raise ValidationError("A pull-only stream cannot keep local changes remotely.")
                 if keep == ConflictKeep.LOCAL and not stream.has_completed_baseline():
                     raise ValidationError("Complete the stream baseline before resolving its conflict.")
@@ -3580,10 +3609,13 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                 .annotate(aggregate=Coalesce("link__parent_id", "link_id"))
                 .values("aggregate")
             )
+            # A refused write is the push's to retry: re-reading the remote cannot
+            # clear it, and a local record the remote never stored has nothing to read.
             rows = (
                 unresolved.alias(aggregate=Coalesce("link__parent_id", "link_id"))
                 .exclude(aggregate__in=conflicts)
-                .filter(Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now()))
+                .exclude(kind=DiscrepancyKind.REMOTE_REJECTED)
+                .due()
                 .order_by("pk")
             )
             return tuple(rows if limit is None else rows[:limit])
@@ -3618,8 +3650,14 @@ class SyncDiscrepancy(AuditMixin, AngeeDataModel):
         rebac_resource_type = "integrate/sync_discrepancy"
         rebac_id_attr = "pk"
         constraints = (
+            # One open row per failing version of each link; unlinked failures share link 0.
             models.UniqueConstraint(
-                fields=("stream", "kind", "code", "source_hash", "mapping_version"),
+                F("stream"),
+                Coalesce("link", Value(0)),
+                F("kind"),
+                F("code"),
+                F("source_hash"),
+                F("mapping_version"),
                 condition=Q(is_open=True),
                 name="uniq_open_sync_discrepancy",
             ),

@@ -304,21 +304,6 @@ def _resolve_applied(stream: Any, record: Any) -> None:
         manager.resolve(discrepancy)
 
 
-def _push_held(link: Any) -> bool:
-    """Whether an open conflict, or a refused write still in its backoff, holds this link's push."""
-
-    return (
-        _manager("SyncDiscrepancy")
-        .unresolved()
-        .filter(link=link)
-        .filter(
-            Q(kind=DiscrepancyKind.CONFLICT)
-            | Q(kind=DiscrepancyKind.REMOTE_REJECTED, retry_at__gt=timezone.now())
-        )
-        .exists()
-    )
-
-
 def _retry_at(stream: Any, attempts: int) -> datetime:
     cap = timedelta(days=1)
     if stream.reconcile_interval and stream.reconcile_interval > timedelta(0):
@@ -494,14 +479,16 @@ def _apply_page(
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
-    if evidence_rows is not None and stream.direction != StreamDirection.PULL:
+    held: set[str] = set()
+    if evidence_rows is not None and stream.writes_back:
         evidence = {link.external_key: link for link in evidence_rows}
+        held = {key for key, link in evidence.items() if link.write_holds}
         for record in page.records:
             link = evidence.get(record.external_key)
             if (
                 link is not None
                 and record.external_key not in force_apply
-                and not link.open_conflicts
+                and not link.write_holds
                 and _decision(
                     link,
                     record,
@@ -554,8 +541,13 @@ def _apply_page(
                             record.external_key,
                             metadata=record.metadata or None,
                         )
-                        if observed is not None and observed.open_conflicts:
-                            discrepancies.extend(conflict.pk for conflict in observed.open_conflicts)
+                        conflicts = [
+                            row.pk
+                            for row in (observed.write_holds if observed is not None else ())
+                            if row.kind == DiscrepancyKind.CONFLICT
+                        ]
+                        if conflicts:
+                            discrepancies.extend(conflicts)
                             continue
                         revision = next(iter(observed.latest_revisions), None) if observed is not None else None
                         decision = (
@@ -569,9 +561,13 @@ def _apply_page(
                             raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
                         if decision == ChangeKind.UNCHANGED:
                             assert revision is not None
+                            # The comparison hash cannot see every remote edit (an
+                            # unmapped label, a respelled value). Retain the source as
+                            # read now, so the next write-back starts from it rather
+                            # than reverting it; an identical source reuses the revision.
                             _promote(
                                 link,
-                                replace(record, source_payload=revision.source_payload),
+                                record,
                                 ApplyResult(
                                     target=record.target if record.target is not None else UNSET,
                                     local_hash=record.local_hash,
@@ -587,9 +583,17 @@ def _apply_page(
                             _resolve_applied(locked, record)
                             continue
                         if decision == ChangeKind.WRITE_BACK:
-                            if locked.direction == StreamDirection.PULL:
+                            if not locked.writes_back:
                                 raise SemanticError("local_change_on_pull", kind=DiscrepancyKind.CONFLICT)
                             write = written.get(record.external_key)
+                            if write is None and record.external_key in held:
+                                # A refused write waits out its retry time; the local change
+                                # stays. The first pass's hold decides, so a refusal resolved
+                                # since then waits for the next page rather than failing this one.
+                                discrepancies.extend(
+                                    row.pk for row in (observed.write_holds if observed is not None else ())
+                                )
+                                continue
                             if write is None:
                                 raise RuntimeError("A conditional write result is missing.")
                             bases, result = write
@@ -673,7 +677,7 @@ def push_stream(
 
     if connection.in_atomic_block:
         raise RuntimeError("Remote writes must run outside a database transaction.")
-    if not _pushes(stream):
+    if not stream.writes_back:
         return PageResult(stream, exhausted=True)
     count = 0
     discrepancies: list[int] = []
@@ -681,14 +685,17 @@ def push_stream(
         if _baseline_adoption(stream):
             return PageResult(stream, exhausted=True)
         links = _manager("RecordLink")
+        candidates: set[str] = set()
         for candidate, link in _push_candidates(stream, adapter, external_keys):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
+            candidates.add(candidate.external_key)
             if link is None:
-                link = links.observe(stream, candidate.external_key)
-            if _push_held(link):
+                link, revision = links.observe(stream, candidate.external_key), None
+            elif link.write_holds:
                 continue
-            revision = _manager("RecordRevision").latest_for(link).first()
+            else:
+                revision = next(iter(link.latest_revisions), None)
             record = RecordChange(
                 candidate.external_key,
                 None,
@@ -707,12 +714,26 @@ def push_stream(
                 discrepancies.append(_quarantine(stream, record, error, link=link).pk)
                 continue
             with transaction.atomic():
-                _manager("SyncStream").lock_current(stream)
+                locked_stream = _manager("SyncStream").lock_current(stream)
                 locked = links.lock_if_supported().get(pk=link.pk)
                 if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:
                     raise RuntimeError("Record bases changed during write-back; reconcile before retrying.")
                 _reflect_write(locked, record, result)
+                # The write the remote once refused has now landed.
+                _resolve_applied(locked_stream, record)
             count += 1
+        if external_keys is None:
+            # A due refusal whose record has nothing left to write (deleted or
+            # reverted locally) has nothing to retry, and no rescan reads it.
+            refusals = _manager("SyncDiscrepancy")
+            for refusal in (
+                refusals.unresolved()
+                .due()
+                .filter(stream=stream, kind=DiscrepancyKind.REMOTE_REJECTED, link__isnull=False)
+                .select_related("link")
+            ):
+                if refusal.link.external_key not in candidates:
+                    refusals.resolve(refusal)
     return PageResult(stream, count, True, tuple(discrepancies))
 
 
@@ -722,43 +743,52 @@ class PushPreview:
 
     ``writes`` are the external keys the push would send; ``held`` are those an
     open conflict, or a refused write still in its backoff, keeps back. A stream
-    that does not push, or still adopts its first baseline, previews empty.
+    that does not write back, or still adopts its first baseline, previews empty.
     """
 
-    stream: Any
     writes: tuple[str, ...] = ()
     held: tuple[str, ...] = ()
 
 
-def preview_push(stream: Any, adapter: BridgeImpl, *, external_keys: frozenset[str] | None = None) -> PushPreview:
+def preview_push(stream: Any, adapter: BridgeImpl) -> PushPreview:
     """Return the keys :func:`push_stream` would write now, without writing anything."""
 
     with system_context(reason="integrate.stream.preview_push"):
-        if not _pushes(stream) or _baseline_adoption(stream):
-            return PushPreview(stream)
+        if not stream.writes_back or _baseline_adoption(stream):
+            return PushPreview()
         writes: list[str] = []
         held: list[str] = []
-        for candidate, link in _push_candidates(stream, adapter, external_keys):
-            (held if link is not None and _push_held(link) else writes).append(candidate.external_key)
-        return PushPreview(stream, tuple(writes), tuple(held))
+        for candidate, link in _push_candidates(stream, adapter, None):
+            (held if link is not None and link.write_holds else writes).append(candidate.external_key)
+        return PushPreview(tuple(writes), tuple(held))
 
 
-def _pushes(stream: Any) -> bool:
-    """Whether a stream writes local changes back to its remote."""
-
-    return stream.kind == StreamKind.RECORD_REPLICA and stream.direction != StreamDirection.PULL
+_CANDIDATE_BATCH = 500
+"""Local changes whose links one query loads, with their sync evidence."""
 
 
 def _push_candidates(
     stream: Any, adapter: BridgeImpl, external_keys: frozenset[str] | None
 ) -> Iterator[tuple[LocalChange, Any]]:
-    """Yield each local change that differs from its link's base, with that link or ``None`` when new."""
+    """Yield each local change that differs from its link's base, with that link or ``None`` when new.
 
+    A link carries its sync evidence (:meth:`RecordLinkQuerySet.with_sync_evidence`),
+    so the caller reads its write holds and latest revision without a query each.
+    """
+
+    candidates = iter(adapter.local_changes(stream, keys=external_keys))
     links = _manager("RecordLink")
-    for candidate in adapter.local_changes(stream, keys=external_keys):
-        link = links.filter(stream=stream, external_key=candidate.external_key).first()
-        if link is None or candidate.local_hash != link.local_base_hash:
-            yield candidate, link
+    while batch := list(islice(candidates, _CANDIDATE_BATCH)):
+        known = {
+            link.external_key: link
+            for link in links.filter(
+                stream=stream, external_key__in=[candidate.external_key for candidate in batch]
+            ).with_sync_evidence()
+        }
+        for candidate in batch:
+            link = known.get(candidate.external_key)
+            if link is None or candidate.local_hash != link.local_base_hash:
+                yield candidate, link
 
 
 def read_stream_keys(adapter: BridgeImpl, stream: Any, keys: Sequence[str]) -> tuple[RecordChange, ...]:

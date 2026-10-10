@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
+from io import StringIO
 from typing import Any
 from urllib.parse import urljoin
 from xml.sax.saxutils import escape
@@ -23,6 +24,7 @@ import httpx2
 import pytest
 import vobject
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import connection
 from django.utils import timezone
 from rebac import system_context
@@ -722,6 +724,130 @@ def test_read_only_book_sets_a_refused_card_aside_without_failing_the_book(repli
     assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
     assert SyncDiscrepancy.objects.filter(link=link).count() == 1
     assert "Local edit" not in replica.server.cards[_HREF][0]
+
+
+def _refused_new_contacts(replica: Replica, count: int) -> list[Any]:
+    """Create ``count`` local contacts a read-only book refuses, after one push."""
+
+    person, _link = replica.baseline()
+    replica.server.read_only = True
+    with system_context(reason="test new local contacts"):
+        people = [
+            Person.objects.create(
+                display_name=f"New {index}", folder_id=person.folder_id, created_by_id=person.created_by_id
+            )
+            for index in range(count)
+        ]
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    return people
+
+
+def test_refused_new_contacts_each_wait_out_their_own_backoff(replica: Replica) -> None:
+    """Two new records share an empty source hash; each still keeps its own refusal and retry time."""
+
+    people = _refused_new_contacts(replica, 3)
+    keys = {f"angee-{person.pk}" for person in people}
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 3
+    refusals = SyncDiscrepancy.objects.filter(kind=DiscrepancyKind.REMOTE_REJECTED, is_open=True)
+    assert {row.link.external_key for row in refusals} == keys
+    assert {row.attempts for row in refusals} == {1}
+
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+    assert set(preview_push(replica.stream, replica.backend).held) == keys
+
+
+def test_a_refused_new_contact_does_not_stop_the_book(replica: Replica) -> None:
+    """The rescan leaves refused writes to the push: a record the remote never stored has nothing to read."""
+
+    _refused_new_contacts(replica, 1)
+    SyncDiscrepancy.objects.update(retry_at=timezone.now() - timedelta(seconds=1))
+    begin_stream_cycle(replica.stream, replica.backend)
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
+
+
+def test_a_write_that_lands_after_a_refusal_resolves_it(replica: Replica) -> None:
+    person, link = replica.baseline()
+    person.notes = "Local edit"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal = SyncDiscrepancy.objects.get(link=link)
+
+    replica.server.read_only = False
+    SyncDiscrepancy.objects.filter(pk=refusal.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 1
+    refusal.refresh_from_db()
+    assert not refusal.is_open
+
+
+def test_a_resync_does_not_resend_a_card_held_by_its_refusal(replica: Replica) -> None:
+    """The page write pass and the push share one hold rule."""
+
+    person, _link = replica.baseline()
+    person.notes = "Local edit a shared directory will not take"
+    person.save(update_fields=["notes"])
+    replica.server.read_only = True
+    assert push_stream(replica.stream, replica.backend).count == 0
+    replica.server.requests.clear()
+    SyncStream.objects.request_resync(replica.stream)
+    for _ in range(3):
+        replica.pull()
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+
+
+def test_a_remote_edit_the_hash_cannot_see_survives_the_next_write(replica: Replica) -> None:
+    """An unchanged pull retains the card it read, so the next write-back starts from it."""
+
+    base = _card().replace("END:VCARD", "item1.TEL;type=CELL:+14155552671\r\nitem1.X-ABLabel:WhatsApp\r\nEND:VCARD")
+    replica.server.store(_HREF, base)
+    person, _link = replica.baseline()
+    replica.server.store(_HREF, base.replace("X-ABLabel:WhatsApp", "X-ABLabel:Signal"))
+    replica.pull()
+    person.notes = "Changed locally"
+    person.save(update_fields=["notes"])
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [line.value for line in card.contents["x-ablabel"]] == ["Signal"]
+    assert card.note.value == "Changed locally"
+
+
+def test_the_preview_command_reports_each_current_stream_without_a_request(replica: Replica) -> None:
+    person, _link = replica.baseline()
+    person.notes = "Changed locally"
+    person.save(update_fields=["notes"])
+    replica.server.requests.clear()
+    out = StringIO()
+    call_command("preview_push", replica.directory.sqid, "--keys", stdout=out)
+    assert out.getvalue().splitlines() == [
+        f"{replica.directory.sqid} contacts {_BOOK}: 1 to write, 0 held back by conflicts or refusals",
+        "  write ada",
+    ]
+    assert not replica.server.requests
+
+
+def test_a_refused_contact_deleted_locally_closes_its_refusal(replica: Replica) -> None:
+    """Nothing is left to write, and the remote never stored it, so no rescan would read it."""
+
+    (person,) = _refused_new_contacts(replica, 1)
+    refusal = SyncDiscrepancy.objects.get(kind=DiscrepancyKind.REMOTE_REJECTED, is_open=True)
+    replica.server.requests.clear()
+    with system_context(reason="test refused contact deleted"):
+        Person.objects.filter(pk=person.pk).delete()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal.refresh_from_db()
+    assert refusal.is_open
+
+    SyncDiscrepancy.objects.filter(pk=refusal.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 0
+    refusal.refresh_from_db()
+    assert not refusal.is_open
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
 @pytest.mark.parametrize("keep", [ConflictKeep.REMOTE, ConflictKeep.LOCAL])
