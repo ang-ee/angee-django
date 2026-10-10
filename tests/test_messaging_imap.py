@@ -261,6 +261,26 @@ def test_corporate_disclaimer_maps_to_signature_role() -> None:
 
 
 @pytest.mark.parametrize(
+    "line",
+    [
+        "Take the side entrance; the host is on +1 415 555 2671.",
+        "Khalid will call you from +44 20 7946 0958.",
+        "/etc/app/config.yaml holds the settings.",
+        "Data: 42 rows\nDo: call the vendor",
+    ],
+    ids=["take", "kh", "path", "header-like"],
+)
+def test_ordinary_english_lines_stay_body(line: str) -> None:
+    """No language the parser applies may read an English body line as a signature or a reply boundary."""
+
+    assert split_plain_text(f"Thanks for the note.\n\n{line}\n\nBest,\nAlexis") == [
+        ("body", "Thanks for the note."),
+        ("body", line),
+        ("signature", "Best,\nAlexis"),
+    ]
+
+
+@pytest.mark.parametrize(
     ("quote", "header"),
     [
         pytest.param(

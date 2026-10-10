@@ -923,6 +923,53 @@ def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica
     assert "+14155552671" in replica.server.cards[_HREF][0]
 
 
+def test_a_card_that_lists_a_mined_number_owns_it(replica: Replica) -> None:
+    """The card's assertion replaces the undecided guess, so retracting guesses leaves it."""
+
+    person, _link = replica.baseline()
+    with system_context(reason="test mined number"):
+        PartyHandle.objects.suggest_from_signatures(
+            [("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
+        )
+    replica.server.store(_HREF, _card().replace("END:VCARD", "TEL;type=CELL:+14155552671\r\nEND:VCARD"))
+    replica.pull()
+
+    with system_context(reason="test mined number read"):
+        owned = PartyHandle.objects.select_related("handle").get(party=person, handle__value="+14155552671")
+        assert (owned.source, owned.confidence) == (LinkSource.CARDDAV, 1.0)
+        assert owned.handle.party_id == person.pk
+        assert PartyHandle.objects.retract_suggestions(evidence_kind="signature_phone") == 0
+        assert PartyHandle.objects.filter(pk=owned.pk).exists()
+
+
+def test_removing_one_line_of_a_shared_group_keeps_its_other_properties(replica: Replica) -> None:
+    """A vCard group may hold several properties; only Apple's X-AB companions leave with a line."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "work.TEL;type=WORK:+14155550100\r\n"
+            "work.EMAIL;type=WORK:ada@work.test\r\n"
+            "item1.TEL;type=CELL:+14155552671\r\n"
+            "item1.X-ABLabel:WhatsApp\r\n"
+            "item2.TEL;type=HOME:+14155550199\r\n"
+            "item2.X-ABLabel:Thuis\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test shared group edit"):
+        PartyHandle.objects.filter(party=person, handle__value__in=("+14155550100", "+14155550199")).delete()
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [(line.group, line.value) for line in card.contents["email"]] == [("work", "ada@work.test")]
+    assert [(line.group, line.value) for line in card.tel_list] == [("item1", "+14155552671")]
+    assert {line.group: line.value for line in card.contents["x-ablabel"]} == {"item1": "WhatsApp"}
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
 @pytest.mark.parametrize(
     ("source", "confirmed", "written"),
     [
