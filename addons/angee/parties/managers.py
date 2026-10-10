@@ -19,8 +19,8 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from itertools import combinations
-from typing import Any, Self, cast
+from itertools import chain, combinations
+from typing import Any, NamedTuple, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -39,6 +39,7 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
 from angee.base.identity import public_id_for
+from angee.base.impl import resolve_hooks
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import generic_pointer_model
@@ -52,6 +53,22 @@ from angee.storage.models import UploadState
 # An undecided link below this confidence is a suggestion awaiting review.
 _REVIEW_CONFIDENCE = 0.5
 _AWAITING_REVIEW = Q(is_confirmed=False, is_dismissed=False, confidence__lt=_REVIEW_CONFIDENCE)
+
+
+class Signing(NamedTuple):
+    """One sender's signature fragment: the evidence signature mining reads.
+
+    A downstream addon contributes these through ``ANGEE_PARTIES_SIGNING_PROVIDERS``;
+    parties reads no other addon's models.
+    """
+
+    fragment_hash: str
+    text: str
+    sender_id: Any
+    party_id: Any
+    """The sender's resolved party, or ``None``."""
+    owner_id: Any
+    """The audit owner of the mail the fragment came from."""
 
 
 class HandleAssociationStatus(StrEnum):
@@ -504,8 +521,8 @@ class PartyHandleQuerySet(AngeeQuerySet):
         """Keep links a directory card or a person asserted, never an unreviewed inference.
 
         A ``carddav`` link restates its own card and a ``manual`` link was added by
-        a person; every other source is a suggestion until a human confirms it. A
-        dismissed link is the durable anti-link and asserts nothing.
+        a person; any other source is an inference no card publishes until a
+        human confirms it. A dismissed link is the durable anti-link and asserts nothing.
         """
 
         return self.filter(is_dismissed=False).filter(Q(is_confirmed=True) | Q(source__in=ASSERTING_SOURCES))
@@ -822,7 +839,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
         party.require_access("write", actor)
         if not 0 < confidence < _REVIEW_CONFIDENCE:
-            raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
+            raise ValidationError(
+                {"confidence": f"Claimed-handle proposals require confidence below {_REVIEW_CONFIDENCE}."}
+            )
         evidence_model = generic_pointer_model(type(evidence))
         evidence_ref = {
             "model": evidence_model._meta.label,
@@ -836,7 +855,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
             existing = self.filter(party=locked_party, handle=locked_handle).first()
-            refs = list((existing.metadata or {}).get("evidence", ())) if existing is not None else []
+            # Record references keep their own key: ``evidence`` describes a rule
+            # suggestion's evidence, and a claim may land on such a row.
+            refs = list((existing.metadata or {}).get("evidence_refs", ())) if existing is not None else []
             if evidence_ref not in refs:
                 refs.append(evidence_ref)
             return self.link(
@@ -847,7 +868,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 is_confirmed=False,
                 metadata={
                     "claim": "source_sender",
-                    "evidence": refs,
+                    "evidence_refs": refs,
                 },
                 created_by_id=getattr(actor, "pk", None),
             )
@@ -866,9 +887,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         """Link ``handle`` to ``party`` with ``confidence``, then resolve the handle's owner.
 
         Every caller declares ``source``: provenance decides whether the link is an
-        assertion a directory card may publish or a suggestion awaiting review (see
-        :meth:`PartyHandleQuerySet.asserted`). ``is_confirmed`` records a
-        human-strength decision (a connect flow claiming the signed-in user's own
+        assertion a directory card may publish or an inference it does not (see
+        :meth:`PartyHandleQuerySet.asserted`); confidence decides whether it awaits
+        review. ``is_confirmed`` records a human-strength decision (a connect flow claiming the signed-in user's own
         handle); it upgrades an existing weaker link to the confirmed self-link.
         Without it, an undecided link keeps the higher confidence, and an assertion
         replaces an inference's source, so a card that lists a mined number owns it.
@@ -1004,9 +1025,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
     def suggest_for(self, handle: Any) -> Any:
         """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
 
-        Three branches, all leaving links unconfirmed for review and never
-        duplicating an existing pair: indexed normalized twins contribute distinct
-        candidate parties (the first at ``1.0``, competing parties at ``0.3``);
+        Three branches, none confirming its link and none duplicating an existing
+        pair: indexed normalized twins contribute distinct candidate parties (the
+        first at ``1.0``, which decides the owner, competing parties at ``0.3`` for review);
         otherwise an email whose non-generic domain matches a tracked
         :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
         otherwise no-op. Both branches stay inside ``handle.created_by``'s audit
@@ -1069,18 +1090,48 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 )
         return None
 
-    def suggest_from_signatures(self, signings: Iterable[tuple[str, str, Any, Any, Any]]) -> int:
-        """Mine signature fragments for weak party-to-phone suggestions.
+    def reconcile_suggestions(self) -> int:
+        """Reconcile the evidence-backed suggestions with every registered evidence provider.
 
-        Each signing is ``(fragment_hash, text, sender_id, sender_party_id, owner_id)``:
-        neutral evidence that one sender signed with one fragment, supplied by the
-        scheduled task. This manager owns phone extraction, Handle creation, link
-        provenance, owner partition and the durable-pair check. A number is the
-        sender's own only while one sender alone signs with it in the owner's mail:
-        forwards, company switchboards and conference bridges repeat a number under
-        several senders, and none of them owns it. Each such number of a resolved
-        sender becomes one ``0.3`` suggestion recording its fragment. An existing
-        pair, including a dismissed anti-link, is never changed.
+        Display-name evidence is parties' own. Downstream addons contribute the rest
+        as dotted callables, so parties reads no other addon's models:
+
+        - ``ANGEE_PARTIES_SHARED_SENDER_PROVIDERS`` callables return handle ids whose
+          display names are no evidence (list and notification senders).
+        - ``ANGEE_PARTIES_SIGNING_PROVIDERS`` callables yield :class:`Signing` rows.
+          Each yields all of its evidence, since a signature suggestion the signings
+          no longer support is withdrawn. With no provider registered there is no
+          signature evidence to judge, and the signature suggestions stay.
+
+        A provider that raises does so before its pass writes anything. Returns the
+        suggestions created plus those withdrawn.
+        """
+
+        shared = frozenset(
+            chain.from_iterable(provider() for provider in resolve_hooks("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS"))
+        )
+        changed = self._reconcile_display_names(shared)
+        if providers := resolve_hooks("ANGEE_PARTIES_SIGNING_PROVIDERS"):
+            changed += self._reconcile_signatures(chain.from_iterable(provider() for provider in providers))
+        return changed
+
+    def _reconcile_signatures(self, signings: Iterable[Signing]) -> int:
+        """Reconcile weak party-to-phone suggestions with every signature in the owners' mail.
+
+        Each :class:`Signing` is neutral evidence that one sender signed with one
+        fragment. This manager owns phone extraction, Handle creation, link
+        provenance, owner partition and the durable-pair check. A number is a
+        person's own only while that one person (or one unresolved address) signs
+        with it in the owner's mail: forwards, company switchboards and conference
+        bridges repeat a number under several people, and none of them owns it.
+        Each such number of a resolved sender is one ``0.3`` suggestion recording
+        its fragment; an undecided suggestion the evidence no longer supports is
+        withdrawn, so ``signings`` must be complete. An existing pair, including a
+        dismissed anti-link, is never changed.
+
+        A signer is the resolved party, or the address while it is unresolved: one
+        person writing from a resolved and an unresolved address counts twice until
+        the second resolves, and people resolved onto one shared card count once.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -1088,27 +1139,32 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         numbers: dict[str, tuple[str, ...]] = {}
         signers: defaultdict[tuple[Any, str], set[Any]] = defaultdict(set)
         evidence: dict[tuple[Any, Any, str], str] = {}
-        for fragment_hash, text, sender_id, party_id, owner_id in signings:
-            if owner_id is None:
+        for signing in signings:
+            if signing.owner_id is None:
                 continue
-            if fragment_hash not in numbers:
-                numbers[fragment_hash] = self._signature_phone_values(text, handle_model=handle_model)
-            for value in numbers[fragment_hash]:
-                signers[owner_id, value].add(sender_id)
-                if party_id is not None:
-                    evidence.setdefault((owner_id, party_id, value), fragment_hash)
+            if signing.fragment_hash not in numbers:
+                numbers[signing.fragment_hash] = self._signature_phone_values(signing.text, handle_model=handle_model)
+            signer = ("party", signing.party_id) if signing.party_id is not None else ("handle", signing.sender_id)
+            for value in numbers[signing.fragment_hash]:
+                signers[signing.owner_id, value].add(signer)
+                if signing.party_id is not None:
+                    evidence.setdefault((signing.owner_id, signing.party_id, value), signing.fragment_hash)
+        supported = {
+            (party_id, value) for owner_id, party_id, value in evidence if len(signers[owner_id, value]) == 1
+        }
+        party_ids = {party_id for party_id, _value in supported}
         existing = set(
-            self.filter(handle__platform=handle_model.Platform.PHONE).values_list(
+            self.filter(handle__platform=handle_model.Platform.PHONE, party_id__in=party_ids).values_list(
                 "party_id", "handle__normalized_value"
             )
         )
-        parties = party_model.objects.in_bulk({party_id for _owner, party_id, _value in evidence})
+        parties = party_model.objects.in_bulk(party_ids)
         created = 0
         ordered = sorted(evidence.items(), key=lambda item: (item[0][2], str(item[0][1])))
         for (owner_id, party_id, value), fragment_hash in ordered:
             party = parties.get(party_id)
             if (
-                len(signers[owner_id, value]) > 1
+                (party_id, value) not in supported
                 or (party_id, value) in existing
                 or party is None
                 or party.created_by_id != owner_id
@@ -1130,23 +1186,26 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 metadata={"evidence": {"kind": "signature_phone", "fragment_hash": fragment_hash}},
                 created_by_id=owner_id,
             )
-        return created
+        withdrawn = self._withdraw_unsupported("signature_phone", supported, ("party_id", "handle__normalized_value"))
+        return created + withdrawn
 
-    def suggest_from_display_names(self, *, shared_handle_ids: Iterable[Any] = ()) -> int:
-        """Pool normalized full names per audit owner into weak identity links.
+    def _reconcile_display_names(self, shared: frozenset[Any]) -> int:
+        """Reconcile weak identity links with the full display names pooled per audit owner.
 
-        A resolved handle supplies evidence only to an unresolved handle on another
-        platform, and only for a party that bears the same full name itself. A
-        one-word name (a first name, a brand) identifies nobody, and a party named
-        otherwise, such as a nameless card holding several people's numbers, is not
-        that person. ``shared_handle_ids`` are addresses several people speak through,
-        such as list or notification senders: their display names name whoever spoke
-        last and are no evidence. Each distinct candidate party receives one ``0.4``
-        rule link; existing pairs, including dismissed links, remain untouched.
+        A resolved handle supplies evidence only to a handle on another platform,
+        and only for a party that bears the same full name itself. A one-word name
+        (a first name, a brand) identifies nobody, and a party named otherwise, such
+        as a nameless card holding several people's numbers, is not that person.
+        ``shared`` handles are addresses several people speak through: their display
+        names name whoever spoke last and are no evidence. Each distinct candidate
+        party of an unresolved handle receives one ``0.4`` rule link. A suggestion is
+        withdrawn only when its names no longer support it, not when its handle
+        later gains an owner; existing pairs, including dismissed links, remain
+        untouched.
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        shared = frozenset(shared_handle_ids)
+        supported: set[tuple[Any, Any]] = set()
         created = 0
         owner_ids = (
             handle_model.objects.exclude(created_by_id=None)
@@ -1176,7 +1235,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     pools[normalized_name].append(handle)
 
             for handle in handles:
-                if handle.party_id is not None or handle.pk in shared:
+                if handle.pk in shared:
                     continue
                 normalized_name = handle_model.normalize_display_name(handle.display_name)
                 seen_parties: set[Any] = set()
@@ -1190,7 +1249,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     ):
                         continue
                     seen_parties.add(candidate.party_id)
-                    if (candidate.party_id, handle.pk) in existing_pairs:
+                    supported.add((candidate.party_id, handle.pk))
+                    if handle.party_id is not None or (candidate.party_id, handle.pk) in existing_pairs:
                         continue
                     existing_pairs.add((candidate.party_id, handle.pk))
                     created += self._suggest(
@@ -1206,7 +1266,26 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                         },
                         created_by_id=owner_id,
                     )
-        return created
+        return created + self._withdraw_unsupported("display_name", supported, ("party_id", "handle_id"))
+
+    def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, Any]], key: tuple[str, str]) -> int:
+        """Delete the undecided rule suggestions of ``kind`` whose ``key`` pair no evidence supports now.
+
+        Confirmed links and dismissed anti-links are human decisions and stay. The
+        delete re-reads its rows locked under the same filter, so a suggestion a
+        person confirms, or a card upgrades, during the pass is no longer pending
+        and stays. A suggestion never decided its handle's owner, so withdrawing
+        one leaves the owner as it was.
+        """
+
+        pending = self.to_review().filter(source=LinkSource.RULE, metadata__evidence__kind=kind)
+        stale = [pk for pk, *pair in pending.values_list("pk", *key) if tuple(pair) not in supported]
+        if not stale:
+            return 0
+        with transaction.atomic():
+            locked = list(pending.filter(pk__in=stale).lock_if_supported().values_list("pk", flat=True))
+            pending.filter(pk__in=locked).delete()
+        return len(locked)
 
     def _suggest(
         self,
@@ -1240,18 +1319,6 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 },
             )
             return int(created)
-
-    def retract_suggestions(self, *, evidence_kind: str) -> int:
-        """Delete the unreviewed rule links one evidence kind produced.
-
-        Run it when that kind's extraction rule changes; the full suggestion sweep
-        then re-proposes only what the current rule supports. Confirmed links and
-        dismissed anti-links are human decisions and stay. A suggestion owns no
-        handle, so retracting one changes no owner.
-        """
-
-        deleted, _ = self.to_review().filter(source=LinkSource.RULE, metadata__evidence__kind=evidence_kind).delete()
-        return deleted
 
     @staticmethod
     def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
