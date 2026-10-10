@@ -9,7 +9,12 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
   append-only model, which can neither move nor outlive the record and so
   blocks, and a ``DO_NOTHING`` key (history), which keeps pointing at the record;
 - a polymorphic edge (:class:`~angee.base.refs.RecordRefMixin`) follows its
-  model's ``merge_policy``, which blocks unless the edge declares another.
+  model's ``merge_policy``, which blocks unless the edge declares another;
+- any other generic foreign key has no declared policy and blocks, except a
+  reversion snapshot, which is history and keeps pointing at the record.
+
+A row that names a record in a form no reference reads (a resource ledger's
+public id) is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``.
 
 A move re-keys the pointing column. Where the survivor already holds an equal
 row under the reference's identity (an edge's ``merge_identity``, an
@@ -44,9 +49,11 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
+from reversion.models import Version
 
 from angee.base.actors import instance_actor
 from angee.base.identity import instances_from_public_ids
+from angee.base.impl import resolve_hooks
 from angee.base.mixins import AppendOnlyModel, auto_now_stamps
 from angee.base.refs import MergePolicy, RecordRefMixin, concrete_child_models, generic_pointer_model
 from angee.base.scoping import lock_if_supported
@@ -240,8 +247,15 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
                 policy = MergePolicy.MOVE
             yield ForeignKeyReference(relation.related_model, policy, relation.field)
     for edge in sorted(apps.get_models(), key=lambda candidate: candidate._meta.label):
-        if issubclass(edge, RecordRefMixin):
-            yield EdgeReference(edge, edge.merge_policy, edge.record_ref_field())
+        declared = edge.record_ref_field() if issubclass(edge, RecordRefMixin) else None
+        if declared is not None:
+            yield EdgeReference(edge, edge.merge_policy, declared)
+        for pointer in edge._meta.private_fields:
+            if isinstance(pointer, GenericForeignKey) and pointer is not declared:
+                # A pointer no edge declares has no policy: a revision snapshot is
+                # history, and any other one refuses rather than dangling.
+                policy = MergePolicy.KEEP if issubclass(edge, Version) else MergePolicy.BLOCK
+                yield EdgeReference(edge, policy, pointer)
 
 
 class MergeableMixin(models.Model):
@@ -321,12 +335,16 @@ class MergeableMixin(models.Model):
         return self
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
-        """Refuse a merged record that matches a :meth:`merge_blockers` condition or holds stored relationships.
+        """Refuse a merged record that a :meth:`merge_blockers` condition, a stored relationship or a guard holds.
 
+        ``ANGEE_MERGE_GUARDS`` callables take one merged record and return a
+        refusal message, or ``None``: an addon whose rows point at records in a
+        form no reference can read (a resource ledger's public id) refuses there.
         Overrides add rules about the pair, such as a recorded "keep separate".
         """
 
         model = type(self)
+        guards = resolve_hooks("ANGEE_MERGE_GUARDS")
         with system_context(reason=MERGE_REASON):
             for condition, message in model.merge_blockers():
                 refused = model._base_manager.filter(pk__in=[record.pk for record in merged]).filter(condition)
@@ -335,6 +353,9 @@ class MergeableMixin(models.Model):
             for record in merged:
                 if _named_in_relationships(record):
                     raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
+                for guard in guards:
+                    if refusal := guard(record):
+                        raise ValidationError(refusal)
 
     def merge_fields(self, merged: Sequence[Self]) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""
