@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from itertools import chain
+
 from celery import shared_task
 from django.apps import apps
 from rebac import system_context
 
+from angee.base.impl import resolve_hooks
 from angee.jobs.locks import LockKey, task_lock
 
 
@@ -16,23 +19,22 @@ from angee.jobs.locks import LockKey, task_lock
     retry_kwargs={"max_retries": 3},
 )
 def refresh_handle_suggestions(timestamp: int | None = None) -> int:
-    """Refresh parties-owned suggestions from current handle and signature evidence.
+    """Reconcile parties-owned suggestions with current handle and signature evidence.
 
-    Display-name evidence is native to parties. The downstream messaging addon
-    optionally contributes signature evidence and its automated senders, whose
-    display names are no evidence: the app-registry guard keeps parties
-    independently installable, and the task passes only neutral fragment
-    text/hashes, sender, party and owner ids into the manager owner. Both passes
-    partition evidence by audit owner before making any inference. Like the phone
+    Display-name evidence is native to parties. Downstream addons contribute the
+    rest through declared hooks, so parties reads no other addon's models:
+    ``ANGEE_PARTIES_SHARED_SENDERS`` callables return handles whose display names
+    are no evidence (list and notification senders), and
+    ``ANGEE_PARTIES_SIGNINGS`` callables yield :class:`~angee.parties.managers.Signing`
+    rows. Both passes partition evidence by audit owner before any inference, and
+    each withdraws the undecided suggestions its evidence no longer supports, so a
+    rule change heals every deployment on the next run. Like the phone
     renormalization, each run first repairs handle owners stored under an older
     resolution rule.
 
-    Every run reads every signature: whether a number is one sender's own depends
-    on all the mail that carries it, and the whole corpus mines in seconds. After
-    an extraction-rule change, retract that rule's unreviewed suggestions
-    (``PartyHandle.objects.retract_suggestions``) and the next run re-proposes
-    what the current rule supports. The advisory task lock keeps a slow sweep from
-    stacking onto the next tick.
+    Every run reads every signature: whether a number is one person's own depends
+    on all the mail that carries it, and the whole corpus mines in seconds. The
+    advisory task lock keeps a slow sweep from stacking onto the next tick.
     """
 
     del timestamp
@@ -49,23 +51,8 @@ def _refresh_handle_suggestions() -> int:
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
         handles = apps.get_model("parties", "Handle").objects
         changed = int(handles.renormalize_phone_values()) + int(party_handles.resolve_stale_owners())
-        if not apps.is_installed("angee.messaging"):
-            return changed + int(party_handles.suggest_from_display_names())
-
-        automated_senders = apps.get_model("messaging", "Message").objects.automated_sender_ids()
-        created = int(party_handles.suggest_from_display_names(shared_handle_ids=automated_senders))
-        signings = (
-            apps.get_model("messaging", "Part")
-            ._base_manager.filter(role="signature", fragment__isnull=False, message__sender__isnull=False)
-            .order_by("fragment__hash", "message__sender_id")
-            .values_list(
-                "fragment__hash",
-                "fragment__text",
-                "message__sender_id",
-                "message__sender__party_id",
-                "message__created_by_id",
-            )
-            .distinct()
-        )
-        created += int(party_handles.suggest_from_signatures(signings.iterator()))
-    return changed + created
+        shared = frozenset(chain.from_iterable(hook() for hook in resolve_hooks("ANGEE_PARTIES_SHARED_SENDERS")))
+        changed += int(party_handles.suggest_from_display_names(shared_handle_ids=shared))
+        signings = chain.from_iterable(hook() for hook in resolve_hooks("ANGEE_PARTIES_SIGNINGS"))
+        changed += int(party_handles.suggest_from_signatures(signings))
+    return changed

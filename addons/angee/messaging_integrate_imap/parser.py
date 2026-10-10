@@ -44,7 +44,7 @@ from typing import Any, cast
 
 from mailparser_reply import EmailReplyParser
 
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
+from angee.messaging.backends import AUTOMATED_MAIL_HEADERS, ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.parties.models import Handle
 
 # The parties platform email handles live under (`Handle.Platform` owns the value).
@@ -85,13 +85,7 @@ _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
 # better owner (addresses → Participant, Message-ID/References → identity/threading,
 # Subject → the TITLE part, Date → sent_at, Content-* → the part tree) or is
 # transport diagnostics that stay in the lossless ``metadata["headers"]`` envelope.
-_RETAINED_HEADERS = (
-    "list-id",
-    "list-unsubscribe",
-    "reply-to",
-    "auto-submitted",
-    "precedence",
-)
+_RETAINED_HEADERS = ("reply-to", *AUTOMATED_MAIL_HEADERS)
 
 
 def parse_message(

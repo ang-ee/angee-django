@@ -61,6 +61,7 @@ from angee.integrate.models import IntegrationLifecycle, IntegrationManager, Int
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
+from angee.parties.managers import Signing
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
@@ -70,6 +71,8 @@ if TYPE_CHECKING:
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
 _BOILERPLATE_CUTOFF = 100
+_SIGNING_TEXT_BATCH = 2000
+"""Signature fragments whose texts one query loads for signature mining."""
 logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
@@ -2448,7 +2451,8 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
         Automated mail carries a list header (RFC 2369 ``List-Unsubscribe``, RFC 2919
         ``List-Id``), an RFC 3834 ``Auto-Submitted`` other than ``no``, or
-        ``Precedence: bulk``, ``list`` or ``junk``. Such an address speaks for a list
+        ``Precedence: bulk``, ``list`` or ``junk`` (the channel retains these as header
+        parts: :data:`angee.messaging.backends.AUTOMATED_MAIL_HEADERS`). Such an address speaks for a list
         or a system, and its display name names whoever triggered the mail. A person
         who sends the odd vacation auto-reply still writes the rest by hand.
         """
@@ -3760,6 +3764,32 @@ class PartQuerySet(AngeeQuerySet[Any]):
         """Return this actor's readable parts referencing the shared fragment."""
 
         return cast(PartQuerySet, self.filter(fragment=fragment))
+
+    def signings(self) -> Iterator[Signing]:
+        """Yield each pairing of a signature fragment with a sender who signed it, once.
+
+        The distinct rows carry fragment ids; each fragment's text loads once, in
+        batches, rather than riding every row of the DISTINCT.
+        """
+
+        rows = list(
+            self.filter(role=self.model.PartRole.SIGNATURE, fragment__isnull=False, message__sender__isnull=False)
+            .order_by("fragment__hash", "message__sender_id")
+            .values_list(
+                "fragment_id",
+                "fragment__hash",
+                "message__sender_id",
+                "message__sender__party_id",
+                "message__created_by_id",
+            )
+            .distinct()
+        )
+        fragments = self.model._meta.get_field("fragment").related_model._base_manager
+        for start in range(0, len(rows), _SIGNING_TEXT_BATCH):
+            batch = rows[start : start + _SIGNING_TEXT_BATCH]
+            texts = dict(fragments.filter(pk__in={row[0] for row in batch}).values_list("pk", "text"))
+            for fragment_id, fragment_hash, sender_id, party_id, owner_id in batch:
+                yield Signing(fragment_hash, texts[fragment_id] or "", sender_id, party_id, owner_id)
 
     def attachments(self) -> PartQuerySet:
         """Return parts that carry a stored file — a message's attachment parts."""

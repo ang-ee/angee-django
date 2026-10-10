@@ -11,6 +11,7 @@ from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging.testing.models import Address, Channel, Fragment, Handle, Message, Part, Party, PartyHandle
+from angee.parties.managers import Signing
 from angee.parties.mixins import LinkSource
 from angee.parties.tasks import refresh_handle_suggestions
 from tests.conftest import make_integration
@@ -63,10 +64,14 @@ def test_display_name_suggestions_need_a_personal_full_name_the_party_bears(comp
         suggested = set(PartyHandle._base_manager.filter(source=LinkSource.RULE).values_list("party_id", "handle_id"))
         candidate.refresh_from_db()
         ada.refresh_from_db()
-    assert (created, repeated) == (1, 0)
+        # The name changes: the pass withdraws the guess it no longer supports.
+        Handle._base_manager.filter(pk=candidate.pk).update(display_name="Someone Else")
+        withdrawn = PartyHandle.objects.suggest_from_display_names(shared_handle_ids=[notifications.pk])
+    assert (created, repeated, withdrawn) == (1, 0, 1)
     assert suggested == {(ada.pk, candidate.pk)}
     assert candidate.party_id is None
     assert ada.handle_count == 1
+    assert not PartyHandle._base_manager.filter(source=LinkSource.RULE).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -129,14 +134,14 @@ def test_signature_phones_are_mined_only_from_a_senders_own_signature(composed_t
 
 
 @pytest.mark.django_db(transaction=True)
-def test_retracting_suggestions_keeps_reviewed_links(composed_tables: None) -> None:
-    """Retraction deletes only unreviewed rule links of its evidence kind; the confirmed one still owns."""
+def test_a_signature_pass_withdraws_only_undecided_suggestions_it_no_longer_supports(composed_tables: None) -> None:
+    """Once the evidence is gone the guess goes; the confirmed link still owns and the dismissal stays."""
     del composed_tables
-    owner = get_user_model().objects.create_user(username="signature-retraction-owner")
-    with system_context(reason="signature retraction fixture"):
+    owner = get_user_model().objects.create_user(username="signature-withdrawal-owner")
+    with system_context(reason="signature withdrawal fixture"):
         party = Party._base_manager.create(display_name="Ada", created_by=owner)
         PartyHandle.objects.suggest_from_signatures(
-            [("ada-signature", "+1 415 555 2671\n+1 415 555 2672\n+1 415 555 2673", "ada", party.pk, owner.pk)]
+            [Signing("ada-signature", "+1 415 555 2671\n+1 415 555 2672\n+1 415 555 2673", "ada", party.pk, owner.pk)]
         )
         confirmed, dismissed, unreviewed = PartyHandle._base_manager.filter(party=party).order_by(
             "handle__normalized_value"
@@ -144,14 +149,33 @@ def test_retracting_suggestions_keeps_reviewed_links(composed_tables: None) -> N
         with actor_context(owner):
             confirmed.confirm()
             dismissed.dismiss()
-        retracted = PartyHandle.objects.retract_suggestions(evidence_kind="signature_phone")
+        withdrawn = PartyHandle.objects.suggest_from_signatures([])
         remaining = set(PartyHandle._base_manager.filter(party=party).values_list("pk", flat=True))
         handle = Handle._base_manager.get(pk=unreviewed.handle_id)
         party.refresh_from_db()
-    assert retracted == 1
+    assert withdrawn == 1
     assert remaining == {confirmed.pk, dismissed.pk}
     assert handle.party_id is None
     assert party.handle_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_number_is_one_persons_until_another_person_signs_with_it(composed_tables: None) -> None:
+    """Signers count per person: Ada's two addresses are one signer, and Carol makes the number shared."""
+    del composed_tables
+    owner = get_user_model().objects.create_user(username="signature-person-owner")
+    with system_context(reason="signature person fixture"):
+        ada = Party._base_manager.create(display_name="Ada", created_by=owner)
+        carol = Party._base_manager.create(display_name="Carol", created_by=owner)
+        mobile = "Ada Lovelace\n+1 415 555 2671"
+        from_two_addresses = [
+            Signing("ada-work", mobile, "ada-work", ada.pk, owner.pk),
+            Signing("ada-home", mobile, "ada-home", ada.pk, owner.pk),
+        ]
+        assert PartyHandle.objects.suggest_from_signatures(from_two_addresses) == 1
+        shared = [*from_two_addresses, Signing("carol", "Carol\n+1 415 555 2671", "carol", carol.pk, owner.pk)]
+        assert PartyHandle.objects.suggest_from_signatures(shared) == 1
+        assert not PartyHandle._base_manager.filter(source=LinkSource.RULE).exists()
 
 
 @pytest.mark.django_db(transaction=True)

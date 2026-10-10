@@ -60,6 +60,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
+from angee.parties.managers import Signing
 from angee.parties.mixins import LinkSource
 from angee.parties_integrate_carddav import backend as carddav_backend
 from angee.parties_integrate_carddav.backend import (
@@ -905,7 +906,7 @@ def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica
     bases = link.remote_base_hash, link.local_base_hash, link.remote_version
     with system_context(reason="test signature suggestion"):
         created = PartyHandle.objects.suggest_from_signatures(
-            [("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
+            [Signing("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
         )
     assert created == 1
     replica.server.requests.clear()
@@ -924,12 +925,12 @@ def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica
 
 
 def test_a_card_that_lists_a_mined_number_owns_it(replica: Replica) -> None:
-    """The card's assertion replaces the undecided guess, so retracting guesses leaves it."""
+    """The card's assertion replaces the undecided guess, so withdrawing guesses leaves it."""
 
     person, _link = replica.baseline()
     with system_context(reason="test mined number"):
         PartyHandle.objects.suggest_from_signatures(
-            [("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
+            [Signing("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
         )
     replica.server.store(_HREF, _card().replace("END:VCARD", "TEL;type=CELL:+14155552671\r\nEND:VCARD"))
     replica.pull()
@@ -938,7 +939,7 @@ def test_a_card_that_lists_a_mined_number_owns_it(replica: Replica) -> None:
         owned = PartyHandle.objects.select_related("handle").get(party=person, handle__value="+14155552671")
         assert (owned.source, owned.confidence) == (LinkSource.CARDDAV, 1.0)
         assert owned.handle.party_id == person.pk
-        assert PartyHandle.objects.retract_suggestions(evidence_kind="signature_phone") == 0
+        assert PartyHandle.objects.suggest_from_signatures([]) == 0
         assert PartyHandle.objects.filter(pk=owned.pk).exists()
 
 
