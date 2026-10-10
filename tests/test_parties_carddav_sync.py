@@ -45,6 +45,7 @@ from angee.integrate.streams import (
     RemoteRejected,
     advance_stream,
     begin_stream_cycle,
+    preview_push,
     push_stream,
     reconcile_stream,
     sync_bridge,
@@ -707,10 +708,17 @@ def test_read_only_book_sets_a_refused_card_aside_without_failing_the_book(repli
     assert discrepancy.code == "remote_forbidden"
     person.refresh_from_db()
     assert person.notes == "Local edit a shared directory will not take"
-    # A later cycle meets the same refusal on the same discrepancy row; the book
-    # keeps syncing and the shared directory's card is never overwritten.
-    again = push_stream(replica.stream, replica.backend)
-    assert again.count == 0
+    # A later cycle inside the refusal's backoff asks the server nothing, and the
+    # preview shows the card held back.
+    replica.server.requests.clear()
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
+    assert preview_push(replica.stream, replica.backend).held == ("ada",)
+    # Once the backoff passes, the push asks once more and meets the same refusal on
+    # the same discrepancy row; the shared directory's card is never overwritten.
+    SyncDiscrepancy.objects.filter(pk=discrepancy.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
     assert SyncDiscrepancy.objects.filter(link=link).count() == 1
     assert "Local edit" not in replica.server.cards[_HREF][0]
 
@@ -1156,6 +1164,29 @@ def test_conditional_put_preserves_unmapped_vcard_extensions_and_departments(rep
     put = next(request for request in replica.server.requests if request[0] == "PUT")
     assert put[2]["if-match"] == prior_version
     assert not SyncDiscrepancy.objects.exists()
+
+
+def test_push_preview_lists_what_a_push_writes_and_writes_nothing(replica: Replica) -> None:
+    """The preview names the edited card and the new local contact; only the push sends them."""
+
+    person, _link = replica.baseline()
+    assert preview_push(replica.stream, replica.backend).writes == ()
+    person.notes = "Changed locally"
+    person.save(update_fields=["notes"])
+    with system_context(reason="test new local contact"):
+        grace = Person.objects.create(
+            display_name="Grace Hopper", folder_id=person.folder_id, created_by_id=person.created_by_id
+        )
+    replica.server.requests.clear()
+
+    preview = preview_push(replica.stream, replica.backend)
+    assert set(preview.writes) == {"ada", f"angee-{grace.pk}"}
+    assert preview.held == ()
+    assert RecordLink.objects.filter(stream=replica.stream).count() == 1
+    assert not replica.server.requests
+
+    assert push_stream(replica.stream, replica.backend).count == 2
+    assert preview_push(replica.stream, replica.backend).writes == ()
 
 
 def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Replica) -> None:
