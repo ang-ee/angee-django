@@ -1,4 +1,4 @@
-import type { Row, ResourceFilter, ResourceOrder } from "@angee/metadata";
+import type { Row, QueryFilter, ResourceFilter, ResourceOrder } from "@angee/metadata";
 import type { ListSearchDeclaration } from "./search/shortcuts";
 import type {
   ReactNode } from "react";
@@ -202,8 +202,13 @@ export interface ListViewProps<TRow extends Row = Row> {
   tableLayout?: ResourceTableLayout;
   /** Keep column headers visible or accessible-only. Defaults to visible. */
   headerVisibility?: ResourceTableHeaderVisibility;
-  /** Enable row selection and the bulk-selection column. Defaults to true,
-   * except in the embedded presentation. */
+  /** Enable row selection and the bulk-selection column. Defaults to true except
+   * in embedded presentation. Selection survives pagination, page-size and view
+   * changes that keep the same grouping. setView can replace groupStack with the
+   * new view's defaults, clearing selection if the grouping changes. Filter, sort,
+   * group, preset query/fixed-filter, base-filter, resource and Router-history
+   * collection changes clear it. Only one scope holds selection: entering another
+   * inherited scope or selecting at the owner clears the previous scope. */
   selectable?: boolean;
   /** Authored server projection using the same native collection surface. */
   source?: CollectionSource<TRow>;
@@ -279,10 +284,21 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Controls rendered in the toolbar's leading slot, beside the filter — e.g. a
    * "Connect" button for a list whose rows come from a connect flow. */
   toolbarActions?: ReactNode;
-  /** Domain bulk actions rendered for the selected ids instead of generic delete. */
+  /** Domain actions, called only when selectable and something is selected.
+   * The third argument describes the surface's query: an empty filter ({}) means
+   * the whole collection; the server does not check selection membership against
+   * this descriptive filter. selectedRows contains snapshots captured when
+   * selected, in selection-map (object key) order, surviving page unloads and
+   * surface remounts. Ids selected without a row are omitted; retained snapshots
+   * are not refreshed until deselection/reselection. Actions needing fresh rows
+   * must validate them, for example by revision. Surfaces sharing a selection
+   * scope share its snapshots: a row selected through a sibling surface carries
+   * that surface's fields, so actions must check the fields they need.
+   * Rendered content replaces generic delete; null, undefined or false keeps it. */
   bulkActions?: (
     selectedIds: ReadonlySet<string>,
     clear: () => void,
+    collection: { filter: QueryFilter; selectedRows: readonly TRow[] },
   ) => ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { type ModelMetadata, type Row } from "@angee/metadata";
+import { type ModelMetadata, type QueryFilter, type Row } from "@angee/metadata";
 import { type BaseRecord } from "@refinedev/core";
 import { type ColumnDef, type Row as TableRowModel, type Table as TableModel, type VisibilityState } from "@tanstack/react-table";
 import { type Virtualizer } from "@tanstack/react-virtual";
@@ -122,7 +122,7 @@ interface ResourceViewSurfaceBase<TRow extends Row = Row> {
   listState: ResourceListSnapshot<TRow>;
   rows: readonly TRow[];
   requestedFields: readonly string[];
-  mergedFilter: ResourceViewFilter | undefined;
+  mergedFilter: QueryFilter;
   sortOrder: ResourceListOrder | undefined;
 }
 
@@ -167,6 +167,8 @@ export interface RowsResourceViewSurface<TRow extends StringIdRow = StringIdRow>
   listState: ResourceListSnapshot<TRow>;
   rows: readonly TRow[];
   sourceRows: readonly TRow[];
+  /** The normalized filter applied by this surface's native row model. */
+  mergedFilter: QueryFilter;
 }
 
 export interface ResourceRowsSnapshotSource {

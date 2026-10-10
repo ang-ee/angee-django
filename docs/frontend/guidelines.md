@@ -189,7 +189,16 @@ shared UI copy through an addon bundle.
   and TanStack Query, native controlled table state in `ResourceViewProvider`,
   form values/baselines/errors in React Hook Form through `FormView`, and ephemeral interaction state in the
   component that handles it. Lift state when siblings coordinate; do not keep
-  parallel local copies.
+  parallel local copies. Resource-view selection and its observed row snapshots
+  live together in that provider, surviving pagination, page-size changes,
+  surface remounts and view switches that keep the same grouping. Switching views
+  can install a new default grouping, which clears selection. Only one scope
+  holds selection: entering another inherited scope or selecting at the owner
+  clears the previous scope. Collection changes clear them before children
+  render; returning to an inherited base-filter scope after entering another
+  never revives its old selection. See the
+  [selection and bulk-action contracts](../../packages/ui/src/views/resource/resource-view-context.tsx)
+  and [list declarations](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Derive during render.** Do not store `filteredRows`, selected records,
   labels, options, variables, column lists, or capability booleans in state when
   they can be computed from props, route search, GraphQL results, model metadata,

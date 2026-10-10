@@ -24,7 +24,8 @@ import { ganttBarEvent } from "./gantt-bar-event";
 import { GanttLane, withGanttLaneNotes, type GanttLaneDetails } from "./gantt-lane";
 
 interface LinkedGanttCollectionSurfaceProps<TRow extends Row> extends Pick<ListViewProps<TRow>,
-  "availableViews" | "onCreate" | "createLabel" | "toolbarActions" | "className" | "presentation" | "toolbarWrap" | "onRowClick" | "rowHref" | "maxGroupDepth" | "selectable"> {
+  "availableViews" | "onCreate" | "createLabel" | "toolbarActions" | "className" | "presentation" | "toolbarWrap" | "onRowClick" | "rowHref" | "maxGroupDepth"> {
+  selectable: boolean;
   surfaceProps: UseResourceViewSurfaceProps<TRow>;
   gantt: GanttViewSpec;
   searchInput: Omit<UseSearchCatalogInput<TRow>, "rows">;
@@ -144,7 +145,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
   const selectedIds = Object.keys(resourceView.state.rowSelection).filter((id) => resourceView.state.rowSelection[id]);
   return <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className}
     error={list.error} onRetry={refetch} loadingFooter={fetching}
-    selection={selectable === false ? undefined : { count: selectedIds.length, onClear: resourceView.clearSelectedIds }}
+    selection={selectable ? { count: selectedIds.length, onClear: resourceView.clearSelectedIds } : undefined}
     summary={projection.skipped ? t("gantt.skipped", { count: projection.skipped }) : undefined}>
     <GanttView resources={projection.resources} events={projection.events} date={anchor} onDateChange={onDateChange}
       defaultScale="quarter" loading={fetching} fitToEvents={resourceView.state.anchor === calendarDateToAnchor(new Date())}
@@ -153,8 +154,11 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       renderRowContent={gantt.lane || rowHref || onRowClick ? renderResourceContent : undefined}
       onResourceClick={onRowClick || rowHref ? (resource) => openLane(resource.id) : undefined}
       onEventClick={onRowClick || rowHref ? (event) => { if (event.resourceId) openLane(event.resourceId); } : undefined}
-      selectedRows={selectedIds}
-      onSelectedRowsChange={selectable === false ? undefined : (ids) => resourceView.setRowSelection(Object.fromEntries(ids.map((id) => [id, true])))}
+      selectedRows={selectable ? selectedIds : []}
+      onSelectedRowsChange={selectable ? (ids) => {
+        const rowsById = new Map(rows.map((row) => [rowPublicId(row, laneResource), row]));
+        resourceView.setRowSelection(Object.fromEntries(ids.map((id) => [id, true])), (id) => rowsById.get(id));
+      } : undefined}
     />
   </ResourceListFrame>;
 }
