@@ -8,9 +8,13 @@ from typing import Any
 
 import pytest
 import reversion
+import yaml
 from django.apps import AppConfig, apps
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
+from django.test.utils import CaptureQueriesContext
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
@@ -26,9 +30,13 @@ from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import AngeeResource, build_resource
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
+from angee.resources.testing.models import ContentTypeRow
 from angee.resources.widgets import (
+    ContentTypeForeignKeyWidget,
+    ContentTypeManyToManyWidget,
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
+    XrefWidgetMixin,
     resolve_ledger_xref,
     resolve_xref,
 )
@@ -2397,3 +2405,128 @@ def test_empty_structured_entry_retains_its_facet_model(tmp_path: Path) -> None:
     assert group.dataset.headers == ["_xref"]
     assert len(group.dataset) == 0
     assert group.source_rows == []
+
+
+def _content_type_seed(tmp_path: Path, rows: list[dict[str, Any]]) -> AppConfig:
+    """Write one ``ContentTypeRow`` seed and return the addon that owns it."""
+
+    payload = {"_meta": {"model": ContentTypeRow._meta.label}, "rows": rows}
+    (tmp_path / "rows.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return addon(tmp_path, manifest={"master": ({"path": "rows.yaml"},)})
+
+
+def test_only_content_type_relations_take_model_label_widgets(tmp_path: Path) -> None:
+    """Relations to ContentType take label widgets; every other relation keeps a ledger-bound xref widget."""
+
+    ledger = apps.get_model("resources", "Resource")
+    source = entry(tmp_path, {"path": "rows.yaml"})
+    resource = build_resource(ContentTypeRow, source, ledger_model=ledger, addon_aliases={})
+    content_type, content_types, parent = (
+        resource.fields[name].widget for name in ("content_type", "content_types", "parent")
+    )
+
+    assert isinstance(content_type, ContentTypeForeignKeyWidget)
+    assert isinstance(content_types, ContentTypeManyToManyWidget)
+    assert not isinstance(content_type, XrefWidgetMixin) and not isinstance(content_types, XrefWidgetMixin)
+    assert isinstance(parent, XrefForeignKeyWidget) and parent.ledger_model is ledger
+    assert isinstance(AngeeResource.get_m2m_widget(Group._meta.get_field("permissions"))(), XrefManyToManyWidget)
+    with pytest.raises(ValueError, match="model labels must be strings"):
+        content_type.clean(5)
+
+
+@pytest.mark.django_db
+def test_content_type_relations_load_from_model_labels(tmp_path: Path) -> None:
+    """A FK takes one label and an M2M a list or scalar, beside an ordinary xref relation."""
+
+    listed_row = {
+        "_xref": "listed",
+        "name": "Listed",
+        "content_type": "auth.Group",
+        "content_types": ["auth.Group", "auth.permission"],
+    }
+    scalar_row = {"_xref": "scalar", "name": "Scalar", "content_types": "auth.Group", "parent": "resource_addon.listed"}
+    owner = _content_type_seed(tmp_path, [listed_row, scalar_row])
+    ledger = apps.get_model("resources", "Resource")
+    group, permission = (ContentType.objects.get_for_model(model) for model in (Group, Permission))
+
+    with system_context(reason="content-type label seed"):
+        result = ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+        listed = ContentTypeRow.objects.get(name="Listed")
+        scalar = ContentTypeRow.objects.get(name="Scalar")
+
+        assert result.created == 2
+        assert listed.content_type == group
+        assert set(listed.content_types.all()) == {group, permission}
+        assert scalar.content_type is None
+        assert list(scalar.content_types.all()) == [group]
+        assert scalar.parent == listed
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("column", ["content_type", "content_types"])
+def test_unknown_content_type_label_fails_its_row(tmp_path: Path, column: str) -> None:
+    """An unknown label fails the load through the native row diagnostics, naming the row and value."""
+
+    known_row = {"_xref": "known", "name": "Known", column: "auth.Group"}
+    broken_row = {"_xref": "broken", "name": "Broken", column: "auth.Missing"}
+    owner = _content_type_seed(tmp_path, [known_row, broken_row])
+    ledger = apps.get_model("resources", "Resource")
+
+    with system_context(reason="unknown content-type label"):
+        with pytest.raises(ResourceLoadError) as raised:
+            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+        message = str(raised.value)
+        assert "Unknown model label 'auth.Missing'." in message
+        assert ": 2: " in message and "'_xref': 'broken'" in message
+        assert not ContentTypeRow.objects.exists()
+        assert not ledger.objects.filter(source_addon=owner.name).exists()
+
+
+@pytest.mark.django_db
+def test_content_type_label_rows_hash_labels_not_ids(tmp_path: Path) -> None:
+    """Replays write nothing, and the same seed hashes the same under other content-type ids."""
+
+    label = ContentTypeRow._meta.label
+    row = {"_xref": "row", "name": "Row", "content_type": label, "content_types": [label, "auth.Group"]}
+    owner = _content_type_seed(tmp_path, [row])
+    ledger = apps.get_model("resources", "Resource")
+    tables = tuple(
+        connection.ops.quote_name(model._meta.db_table)
+        for model in (ContentTypeRow, ContentTypeRow.content_types.through, ledger)
+    )
+
+    try:
+        with system_context(reason="content-type label hashes"):
+            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+            seeded_hash = ledger.objects.get(source_addon=owner.name, xref="row").content_hash
+            with CaptureQueriesContext(connection) as queries:
+                replay = ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+            assert (replay.loaded, replay.skipped) == (0, 1)
+            assert not [
+                query["sql"]
+                for query in queries
+                if query["sql"].startswith(("INSERT", "UPDATE", "DELETE"))
+                and any(table in query["sql"] for table in tables)
+            ]
+
+            # A fresh database assigns the same label another content-type id.
+            previous_id = ContentType.objects.get_for_model(ContentTypeRow).pk
+            ledger.objects.filter(source_addon=owner.name).delete()
+            ContentTypeRow.objects.all().delete()
+            Permission.objects.filter(content_type_id=previous_id).delete()
+            # A content-type delete through the ORM collects every registered model
+            # relating to content types, including other modules' unmigrated test models.
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {connection.ops.quote_name(ContentType._meta.db_table)} WHERE id = %s",
+                    [previous_id],
+                )
+            ContentType.objects.clear_cache()
+            ledger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+            assert ContentTypeRow.objects.get().content_type_id != previous_id
+            assert ledger.objects.get(source_addon=owner.name, xref="row").content_hash == seeded_hash
+    finally:
+        ContentType.objects.clear_cache()
