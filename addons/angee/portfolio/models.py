@@ -24,6 +24,7 @@ from rebac import (
 )
 
 from angee.base.fields import FractionalRankField, StateField
+from angee.base.merge import MergePolicy
 from angee.base.mixins import AuditMixin, HierarchyMixin
 from angee.base.models import (
     AngeeDataModel,
@@ -429,6 +430,7 @@ class UpdateManager(AngeeManager):
 class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
     """A required-health report on a Project or Initiative, never a Product."""
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "upd_"
 

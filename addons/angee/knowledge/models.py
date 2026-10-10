@@ -37,6 +37,7 @@ from rebac.mixins import RebacModelBase
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
+from angee.base.merge import MergePolicy
 from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
@@ -686,6 +687,7 @@ class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     administrators, and cannot be bound under an actor.
     """
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "krb_"
 

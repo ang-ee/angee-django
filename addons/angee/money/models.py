@@ -34,6 +34,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import GenericTarget, generic_target
 
+from angee.base.merge import MergePolicy
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
@@ -332,6 +333,7 @@ class CurrencyRate(RecordRefMixin, ArchiveMixin, AngeeDataModel):
     different-context row.
     """
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "crt_"
 

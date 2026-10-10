@@ -75,6 +75,7 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.impl import ImplClassField
+from angee.base.merge import MergePolicy
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -1798,6 +1799,7 @@ class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     ``permissions.zed``.
     """
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
 
     sqid_prefix = "fat_"

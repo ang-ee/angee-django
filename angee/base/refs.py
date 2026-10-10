@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -41,6 +41,9 @@ from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
 from angee.base.permissions import effective_rebac_definition
+
+if TYPE_CHECKING:
+    from angee.base.merge import MergePolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +221,12 @@ def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
 
 class RecordRefMixin(models.Model):
     """Project a row reference from the model's single declared generic foreign key."""
+
+    merge_policy: ClassVar[MergePolicy | None] = None
+    """What merging the referenced record does to this edge's rows; ``None`` blocks the merge.
+
+    See :mod:`angee.base.merge`.
+    """
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
