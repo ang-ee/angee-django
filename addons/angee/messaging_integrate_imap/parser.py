@@ -74,7 +74,9 @@ class _EmbeddedMessageBudget:
 # numbers and all, so Czech and Dutch join the original five. The library's other
 # languages misread English: Danish signature openers ("Tak", "Kh") and Swedish
 # "/word" match ordinary body lines without a word boundary, and a single Polish
-# header line ("Do:", "Data:") splits a reply.
+# header line ("Do:", "Data:") splits a reply. Czech and Dutch need two header lines
+# in a row ("Van: …" then "Cc: …"), which English prose rarely writes; when it does, the
+# signature lands in the quoted part and is missed, never mined from the wrong text.
 _REPLY_PARSER = EmailReplyParser(languages=["cs", "de", "en", "es", "fr", "it", "nl"])
 
 # Envelope roles mapped from the address headers that carry them.
