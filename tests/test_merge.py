@@ -12,7 +12,8 @@ import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import DO_NOTHING
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import PermissionDenied, RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
+from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base import merge as merge_module
@@ -21,12 +22,14 @@ from angee.base.merge import EdgeReference, ForeignKeyReference, references
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.graphql import records
 from angee.messaging.testing.models import Party
-from angee.projects.testing.models import Project, Queue, Task
+from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
+from angee.workflows.testing.models import StepWatch
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.mtidemo.models import MtiChild, MtiParent
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
 
@@ -232,6 +235,58 @@ def test_a_record_a_resource_ledger_loaded_refuses_its_merge() -> None:
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
     with system_context(reason="merge test read"):
         assert Tag._base_manager.filter(pk=mobil.pk).exists()
+
+
+def test_a_share_on_a_multi_table_child_row_is_seen_from_its_parent() -> None:
+    """Retiring a parent row deletes its child row, and REBAC cleans the child's shares too."""
+
+    reader = create_user("merge-mti-reader")
+    with system_context(reason="merge test mti share"):
+        child = MtiChild.objects.create(title="Shared", detail="child")
+        parent = MtiParent._base_manager.get(pk=child.pk)
+        assert not merge_module._named_in_relationships(parent)
+        share = RelationshipTuple(resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reader))
+        write_relationships([share])
+        assert merge_module._named_in_relationships(parent)
+
+
+def _links(tag: Any, title: str) -> Any:
+    with system_context(reason="merge test link"):
+        return Link._base_manager.create(
+            content_type=ContentType.objects.get_for_model(Tag),
+            object_id=tag.pk,
+            url="https://example.test/m",
+            title=title,
+        )
+
+
+def test_a_duplicate_that_differs_beyond_its_identity_refuses_unless_its_edge_folds_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping the merged record's copy of one URL would lose its title; an edge may fold it instead."""
+
+    mobile, mobil, _ada, _bob = _vocabulary()
+    _links(mobile, "Kept title")
+    _links(mobil, "Merged title")
+    with actor_context(_curator("merge-differs")), pytest.raises(ValidationError, match="different details"):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+
+    monkeypatch.setattr(Link, "merge_collapse", lambda self, duplicate: True)
+    with actor_context(_curator("merge-folds")):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+    with system_context(reason="merge test read"):
+        assert list(Link._base_manager.filter(url="https://example.test/m").values_list("object_id", "title")) == [
+            (mobile.pk, "Kept title")
+        ]
+
+
+def test_a_pending_watch_keeps_its_wake_when_its_duplicate_collapses(monkeypatch: pytest.MonkeyPatch) -> None:
+    saves: list[Any] = []
+    monkeypatch.setattr(StepWatch, "save", lambda self, **kwargs: saves.append(kwargs["update_fields"]))
+    kept, duplicate = StepWatch(pending=False), StepWatch(pending=True)
+    assert kept.merge_collapse(duplicate)
+    assert kept.pending
+    assert "pending" in saves[0]
 
 
 def test_a_history_key_keeps_pointing_at_the_merged_record() -> None:

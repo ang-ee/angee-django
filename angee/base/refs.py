@@ -243,6 +243,17 @@ class RecordRefMixin(models.Model):
     drops the merged record's copy; any other unique collision refuses the merge.
     """
 
+    def merge_collapse(self, duplicate: Any) -> bool:
+        """Fold ``duplicate``'s state into this row before a merge drops it as the same fact.
+
+        A merge asks only when the two differ beyond their identity and
+        bookkeeping. Return whether the duplicate's state is now kept; the default
+        keeps nothing, so the merge refuses rather than lose it.
+        """
+
+        del duplicate
+        return False
+
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
 
