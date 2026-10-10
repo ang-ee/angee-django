@@ -8,6 +8,8 @@ from typing import Any
 
 SETTINGS = {
     "ANGEE_HOOKS:append": ["ANGEE_WEBFORM_TOKEN_HOOK"],
+    "ANGEE_PARTIES_SHARED_SENDERS:append": ["angee.messaging.evidence.shared_senders"],
+    "ANGEE_PARTIES_SIGNINGS:append": ["angee.messaging.evidence.signings"],
     "ANGEE_IMPL_REGISTRIES:append": ["angee.messaging.backends.ChannelBackend"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
