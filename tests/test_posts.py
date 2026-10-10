@@ -147,7 +147,9 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
 
     scheduler.enqueue_due_bridges(now=_AT + timedelta(hours=1))
 
-    assert queued == [("posts.Feed", feed.pk)]
+    assert queued == [("posts.Feed", feed.pk)], list(Feed._base_manager.filter(pk=feed.pk).values(
+        "concrete_type__model", "lifecycle", "binding_generation", "binding_retry_at", "binding_completed_at",
+    ))
 
 
 @pytest.mark.django_db(transaction=True)

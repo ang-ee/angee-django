@@ -120,7 +120,7 @@ class OAuthClientProtocol:
             grant["code_verifier"] = code_verifier
         if self._uses_json_token_request() and state:
             grant["state"] = state
-        return self._token_request("authorization_code", grant)
+        return self.exchange_grant("authorization_code", **grant)
 
     def refresh_token(self, *, refresh_token: str) -> dict[str, Any]:
         """Exchange a stored refresh token for fresh token material (RFC 6749 §6).
@@ -129,9 +129,9 @@ class OAuthClientProtocol:
         caller persists it. Raises ``OAuthFlowError`` when the grant is rejected.
         """
 
-        return self._token_request("refresh_token", {"refresh_token": refresh_token})
+        return self.exchange_grant("refresh_token", refresh_token=refresh_token)
 
-    def fetch_userinfo(self, access_token: str) -> dict[str, Any]:
+    def fetch_userinfo(self, access_token: str, *, params: Mapping[str, str] | None = None) -> dict[str, Any]:
         """Best-effort fetch of profile claims with one OAuth access token.
 
         Reads the access-token-protected ``userinfo_endpoint`` to label a connected
@@ -146,7 +146,7 @@ class OAuthClientProtocol:
             return {}
         try:
             return _get_json(
-                userinfo_endpoint,
+                with_query(userinfo_endpoint, params or {}),
                 headers={"Authorization": f"Bearer {access_token}"},
                 error_code=USERINFO_FAILED,
                 _transport=self._transport,
@@ -178,8 +178,8 @@ class OAuthClientProtocol:
             return {}
         return dict(discover())
 
-    def _token_request(self, grant_type: str, grant: Mapping[str, Any]) -> dict[str, Any]:
-        """Dispatch one grant to the token endpoint and return validated material.
+    def exchange_grant(self, grant_type: str, **grant: Any) -> dict[str, Any]:
+        """Exchange a standard or provider-specific grant for validated material.
 
         Standard providers go through Authlib's ``OAuth2Client`` (form-encoded per
         RFC 6749). A provider that declares ``token_request_format == "json"`` —
@@ -221,7 +221,7 @@ class OAuthClientProtocol:
                 token = session.fetch_token(endpoint, grant_type=grant_type, **grant, **extra)
         except OAuthError as exc:
             body = {"error": exc.error, "error_description": exc.description}
-            self._log_token_failure(exc.error, body)
+            self._log_token_failure("oauth_refusal", None)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body=body) from exc
         except httpx2.HTTPStatusError as exc:
             # Authlib raises this only for >=500 (it raise_for_status()es server errors).
@@ -237,7 +237,7 @@ class OAuthClientProtocol:
             # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
             # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
             self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
             session.close()
         response = dict(token)
@@ -275,7 +275,7 @@ class OAuthClientProtocol:
                 body=_response_body(exc.response),
             ) from exc
         except (httpx2.HTTPError, ValueError) as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
             client.close()
         if not isinstance(data, dict):
@@ -409,7 +409,7 @@ def with_query(url: str, query: Mapping[str, str]) -> str:
 
     parts = parse.urlsplit(url)
     existing = parse.parse_qsl(parts.query, keep_blank_values=True)
-    encoded = parse.urlencode([*existing, *query.items()])
+    encoded = parse.urlencode([*(pair for pair in existing if pair[0] not in query), *query.items()])
     return parse.urlunsplit((parts.scheme, parts.netloc, parts.path, encoded, parts.fragment))
 
 

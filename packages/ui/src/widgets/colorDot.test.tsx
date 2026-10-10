@@ -1,0 +1,78 @@
+// @vitest-environment happy-dom
+
+import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vitest";
+
+import { colorDotWidget } from "./colorDot";
+import { AppRuntimeProvider } from "../runtime/runtime";
+
+const Dot = colorDotWidget.read;
+
+/** The compatibility widget delegates its first child mark to the Badge owner. */
+function dotClass(container: HTMLElement): string {
+  return container.firstElementChild?.firstElementChild?.className ?? "";
+}
+
+describe("colorDot widget tone", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("reads addon status vocabulary from the composed runtime", () => {
+    const { container } = render(
+      <AppRuntimeProvider runtime={{ statusTones: { reviewed: "accent" } }}>
+        <Dot value="REVIEWED" />
+      </AppRuntimeProvider>,
+    );
+    expect(dotClass(container)).toContain("bg-accent");
+  });
+
+  // The run-state axis the dot was built for, colored from the shared STATUS_TONES
+  // vocabulary by value alone. Neutral keeps the muted-grey dot treatment.
+  test.each([
+    ["RUNNING", "bg-success"],
+    ["STOPPED", "bg-fg-muted"],
+    ["ERROR", "bg-danger"],
+    ["WARNING", "bg-warning"],
+  ])("colors %s via the shared run-state vocabulary", (value, bg) => {
+    const { container } = render(
+      <Dot value={value} field={{ options: [{ value, label: value }] }} />,
+    );
+    expect(dotClass(container)).toContain(bg);
+  });
+
+  test("an explicit tone override wins — a task's blocked reads danger", () => {
+    const { container } = render(
+      <Dot
+        value="BLOCKED"
+        field={{
+          options: [{ value: "BLOCKED", label: "Blocked" }],
+          tone: { BLOCKED: "danger" },
+        }}
+      />,
+    );
+    expect(dotClass(container)).toContain("bg-danger");
+  });
+
+  test("renders the option label beside the dot", () => {
+    const { container, getByText } = render(
+      <Dot value="RUNNING" field={{ options: [{ value: "RUNNING", label: "Running" }] }} />,
+    );
+    const label = getByText("Running");
+    expect(dotClass(container)).toContain("size-2");
+    expect(label.className).toContain("text-inherit");
+    expect(label.className).not.toContain("text-success-text");
+    expect(label.className).not.toContain("h-tag-h");
+  });
+
+  test("keeps the historical raw fallback label", () => {
+    const { getByText } = render(<Dot value="QUEUED_NEW" />);
+    expect(getByText("QUEUED_NEW")).toBeTruthy();
+  });
+
+  test("keeps the historical dot-only empty value", () => {
+    const { container } = render(<Dot />);
+    expect(dotClass(container)).toContain("size-2");
+    expect(container.textContent).toBe("");
+  });
+});

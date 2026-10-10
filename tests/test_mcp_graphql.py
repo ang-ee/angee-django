@@ -9,6 +9,7 @@ Native scoped documents also exercise the synthetic-request MCP execution bounda
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,7 +18,19 @@ import strawberry_django
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
+from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from graphql import (
+    GraphQLArgument,
+    GraphQLField,
+    GraphQLInt,
+    GraphQLNonNull,
+    GraphQLObjectType,
+    GraphQLScalarType,
+    GraphQLSchema,
+    GraphQLString,
+    graphql_sync,
+)
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -38,10 +51,47 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.permissions import session_user
 from angee.mcp import graphql as mcp_graphql
-from angee.mcp.graphql import ACTION_RESULT, GraphQLTool, _compile, execute_under_actor
+from angee.mcp.graphql import ACTION_RESULT, GraphQLTool, _compile, execute_under_actor, register_graphql_tools
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, create_user
 from tests.scopedemo.models import Scope, ScopedDoc
+
+
+@pytest.mark.parametrize("custom_default", [False, True])
+def test_domain_arguments_and_non_null_defaults_execute_without_breaking_registry(
+    monkeypatch: pytest.MonkeyPatch, custom_default: bool,
+) -> None:
+    """Named ids use args; non-literal scalar defaults stay owned by the schema."""
+    scalar = GraphQLScalarType("Settings", serialize=lambda value: value) if custom_default else GraphQLInt
+    default = {"enabled": True} if custom_default else 8
+    item = GraphQLObjectType("Item", {"id": GraphQLField(GraphQLString), "value": GraphQLField(scalar)})
+    schema = GraphQLSchema(query=GraphQLObjectType("Query", {"item": GraphQLField(
+        item,
+        args={"message_id": GraphQLArgument(GraphQLNonNull(GraphQLString)),
+              "value": GraphQLArgument(GraphQLNonNull(scalar), default_value=default)},
+        resolve=lambda source, info, message_id, value: {"id": message_id, "value": value},
+    )}))
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(
+        lambda cls: SimpleNamespace(graphql_schema=lambda name: schema),
+    ))
+    spec = GraphQLTool(operation="item", name="read_item", fields=("sqid", "value"),
+                       description="Read an item.", args=("message_id", "value"))
+    server = FastMCP(name="defaults")
+    register_graphql_tools(server, [spec, GraphQLTool(
+        operation="item", name="read_other_item", fields=("sqid",), description="Read another item.",
+        args=("message_id", "value"),
+    )])
+    assert len(async_to_sync(server.list_tools)()) == 2
+    tool = _compile(spec)
+    assert tool.parameters["required"] == ["message_id"]
+    result = graphql_sync(schema, tool.document, variable_values=tool._variables({"message_id": "msg_example"}))
+    assert result.errors is None
+    assert result.data == {"item": {"id": "msg_example", "value": default}}
+    if not custom_default:
+        result = graphql_sync(schema, tool.document,
+                              variable_values=tool._variables({"message_id": "msg_example", "value": 3}))
+        assert result.errors is None
+        assert result.data["item"]["value"] == 3
 
 
 @strawberry.type

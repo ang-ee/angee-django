@@ -48,7 +48,23 @@ from angee.base.identity import canonical_subject_ref
 from angee.base.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
-from angee.resources.widgets import resolve_xref
+from angee.resources.widgets import resolve_xref, split_xref
+
+
+def referenced_handles(groups: Iterable[GrantGroup], addon_aliases: Mapping[str, str]) -> frozenset[tuple[str, str]]:
+    """Collect row handles with the same literal grammar as grant materialization."""
+
+    references: set[tuple[str, str]] = set()
+    for group in groups:
+        for row in group.rows:
+            for value in (row.resource, row.subject):
+                if value == "*" or _is_literal_ref(value):
+                    continue
+                try:
+                    references.add(split_xref(value, addon_aliases))
+                except ValueError as error:
+                    raise ResourceLoadError(f"{row.entry.display} grant {row.index}: {error}") from error
+    return frozenset(references)
 
 
 def materialize_grant_groups(

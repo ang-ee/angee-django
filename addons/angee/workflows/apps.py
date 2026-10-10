@@ -54,15 +54,16 @@ def connect_record_deletion(sender: Any, **kwargs: Any) -> None:
 
 
 class WorkflowsConfig(AppConfig):
-    """Register workflow source models without the retired engine hooks."""
+    """Connect workflow admission, observation and record lifecycle hooks."""
 
     default = True
     name = "angee.workflows"
 
     def ready(self) -> None:
-        """Subscribe the waiter owner to the decisions lifecycle."""
+        """Connect native sources and watches alongside decision and deletion hooks."""
         from angee.workflows.subjects import check_run_subject_models
         from angee.workflows.triggers import TriggerSource, check_record_changed_models
+        from angee.workflows.watches import RecordWatch
 
         checks.register(check_record_changed_models, checks.Tags.models)
         checks.register(check_run_subject_models, checks.Tags.models)
@@ -79,3 +80,4 @@ class WorkflowsConfig(AppConfig):
             dispatch_uid="workflows.trigger_grants.revoke",
         )
         TriggerSource.connect_registered()
+        RecordWatch.connect_registered()

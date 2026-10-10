@@ -6,7 +6,12 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from angee.messaging.constants import RELEASE_MESSAGES_TASK
+
 SETTINGS = {
+    "CELERY_BEAT_SCHEDULE:append": {
+        RELEASE_MESSAGES_TASK: {"task": RELEASE_MESSAGES_TASK, "schedule": 60.0},
+    },
     "ANGEE_HOOKS:append": ["ANGEE_WEBFORM_TOKEN_HOOK"],
     "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": ["angee.messaging.evidence.shared_senders"],
     "ANGEE_PARTIES_SIGNING_PROVIDERS:append": ["angee.messaging.evidence.signings"],
@@ -32,6 +37,10 @@ SETTINGS = {
     # absent. Outbound messaging must not mistake that floor for an explicitly
     # configured delivery transport.
     "ANGEE_EMAIL_DELIVERY_CONFIGURED": False,
+    # Addons append provenance keys written by their trusted local owners.
+    "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": [
+        "delivery_token", "delivery_conflict", "delivery_error", "delivery_attempts",
+    ],
 }
 
 

@@ -11,6 +11,38 @@ live in code docstrings.
 
 ## Unreleased — in-process agent sessions
 
+- Integrate feed identity discovery, committed live horizons, quota reply
+  reserves and serialized webhook landing with the shared stream and delivery
+  owners. Held replies exclude further answers under the comment lock; reply
+  hold and delivery settlement remain operator and messaging concerns.
+- Publish workflow resource references through the resources ledger. Narrow
+  agents can persistently opt out of the generated resource-reader role.
+  Knowledge can ensure role-bound memory pages, trash them on record deletion,
+  and create pages through vault-scoped GraphQL tools. Deletion teardown takes
+  no extra row lock; every binding write locks and rechecks the canonical target,
+  and one canonical `post_delete` teardown removes committed bindings under
+  PostgreSQL READ COMMITTED.
+  A re-synced message without a receipt time keeps its stored `received_at`.
+
+- Resource selection follows committed routes and its effective filter scope.
+  Bulk actions receive retained `selectedRows` snapshots and explicitly declare
+  whether they replace generic delete. Nonselectable views suppress selection in
+  render. Held actions read one console `action_selection_limit` and clear settled
+  ids for revision-aware reselection. Tags owns the independent record-tag widget.
+  Integration models project and enforce `can_connect`, `can_resume` and
+  `can_retry_binding`; discovery owns a saved feed's read-only display name.
+
+- Restore workflow conversations on persisted ACP turns with status-only
+  watches, bounded deadline recovery, operator retry and explicit close.
+  Compose comment responding through `workflows_posts`: check the posts-owned
+  reply predicate, prepare answer text with an agent, and schedule through
+  the message owner's creation-key replay. The workflow principal holds reply
+  authority; the responding agent receives only read tools and record access.
+  Prompt bindings carry JSON only; publisher authority still gates agent calls.
+  Builtin tool catalogue sync provisions its server and binds resource handles
+  before agent tool selections resolve, without demo resources.
+  Knowledge search groups bounded readable vaults by backend; lexical search
+  scans each group once and MCP exposes `list_vaults`.
 - Enforce transition-owned state assignment guards on composed concrete models,
   including inherited and deferred fields. Reload through `AngeeModel`, and copy
   loaded persisted row values through `StateTransitions.copy_persisted_state`.
@@ -166,9 +198,9 @@ live in code docstrings.
   default; explicitly configuring `None` enables daemon URL derivation.
 - Rebuild the workflows engine around immutable published definitions,
   actor-scoped runs, database steps and durable attempts. Remove the workflows
-  web fragment and the five satellite addons `workflows_agents`,
-  `workflows_extraction`, `workflows_integrate`, `workflows_messaging` and
-  `workflows_parties` pending their ports. Remove
+  web fragment. The `workflows_agents`, `workflows_extraction`,
+  `workflows_integrate`, `workflows_messaging` and `workflows_parties` satellites
+  compose the rebuilt step, settlement and trigger owners. Remove
   `ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT`, `ANGEE_WORKFLOW_SUBJECT_SETTLERS`,
   `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES`, `ANGEE_EXTRACTION_PROFILE_CLASSES`,
   `ANGEE_EXTRACTION_MAX_BYTES` and `ANGEE_EXTRACTION_TIMEOUT_SECONDS`.

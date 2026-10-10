@@ -134,6 +134,48 @@ class AngeeResource(resources.ModelResource):
         self._row_hashes[xref] = self._row_content_hash(row)
         super().before_import_row(row, **kwargs)
 
+    def referenced_handles(
+        self, dataset: tablib.Dataset, *, source_rows: Sequence[int] | None = None,
+    ) -> frozenset[tuple[str, str]]:
+        """Collect relation-widget references, retaining source locations on errors."""
+
+        references: set[tuple[str, str]] = set()
+        for field in self.get_import_fields():
+            if field.readonly or not isinstance(field.widget, XrefWidgetMixin):
+                continue
+            if field.column_name not in (dataset.headers or ()):
+                continue
+            for index, value in enumerate(dataset[field.column_name]):
+                if value is NOT_PROVIDED:
+                    continue
+                try:
+                    references.update(field.widget.referenced_handles(value))
+                except ValueError as error:
+                    line = source_rows[index] if source_rows is not None else index + 1
+                    raise ResourceLoadError(f"{self.entry.display}: {line}: {field.column_name}: {error}") from error
+        return frozenset(references)
+
+    def bind_instance(self, xref: str, instance: models.Model, *, replace: bool = False) -> None:
+        """Ledger an owner-created identity; retarget only through an explicit owner verb."""
+
+        xref = self._row_xref(xref, row_number=0)
+        identity = str(public_id_of(instance))
+        defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
+        manager = self.ledger_model._default_manager
+        if replace:
+            ledger, _created = manager.update_or_create(
+                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
+            )
+        else:
+            ledger, _created = manager.get_or_create(
+                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
+            )
+        self._check_ledger_target(xref, ledger)
+        if ledger.target_id != identity:
+            raise ResourceLoadError(f"{self.entry.addon.name}.{xref} already identifies another record.")
+        self._existing_ledgers[xref] = ledger
+        self._instances[xref] = instance
+
     @functools.cached_property
     def _transition_state_fields(self) -> tuple[fields.Field, ...]:
         """Project model-owned state names onto native import fields."""
@@ -472,15 +514,20 @@ class AngeeResource(resources.ModelResource):
         ledger, _ = self.ledger_model._default_manager.update_or_create(
             source_addon=self.entry.addon.name,
             xref=xref,
-            defaults={
-                "source_path": self.entry.source,
-                "target_model": self._meta.model._meta.label,
-                "content_hash": row_hash,
-                "target_id": public_id_of(instance),
-                "tier": self.entry.tier,
-            },
+            defaults=self._ledger_defaults(instance, row_hash),
         )
         self._existing_ledgers[xref] = ledger
+
+    def _ledger_defaults(self, instance: models.Model, row_hash: str) -> dict[str, Any]:
+        """Project ledger metadata once for file imports and owner-created identities."""
+
+        return {
+            "source_path": self.entry.source,
+            "target_model": self._meta.model._meta.label,
+            "content_hash": row_hash,
+            "target_id": public_id_of(instance),
+            "tier": self.entry.tier,
+        }
 
     def _ledger_resolution_is_stale(
         self,

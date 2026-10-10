@@ -1,0 +1,6 @@
+[addon]
+name = "angee.workflows_agents"
+description = "Agent conversations observed by workflow steps"
+keywords = ["agents", "workflows"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.agents"]

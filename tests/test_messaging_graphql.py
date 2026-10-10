@@ -85,7 +85,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert metadata.roots.aggregate_name == "messages_aggregate"
     assert metadata.roots.group_name == "messages_groups"
     assert metadata.roots.create_name is None
-    assert metadata.roots.update_name == "update_messages_by_pk"
+    assert metadata.roots.update_name is None
     assert metadata.roots.delete_name == "delete_messages_by_pk"
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "has_open_decisions",
@@ -101,6 +101,9 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "channel",
         "subtype",
         "is_trashed",
+        "scheduled_at",
+        "is_held",
+        "is_original_post",
     }
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {
         "thread_title",
@@ -125,9 +128,9 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "channel",
         "subtype",
     }
-    # A message saves its tags with its own write.
-    assert metadata.update_fields == ("status", "tags")
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "update", "delete", "changes")
+    # Status belongs to delivery; tags use their own tag/untag verbs.
+    assert metadata.update_fields == ()
+    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "delete", "changes")
     assert {
         name: (metadata.query.fields[name].relation.model, axis.server.label_key)
         for name, axis in metadata.query.axes.items()
@@ -146,7 +149,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert message["roots"]["groups"] == "messages_groups"
     assert message["roots"]["groupsCount"] == "messages_groups_count"
     assert message["roots"]["create"] is None
-    assert message["roots"]["update"] == "update_messages_by_pk"
+    assert message["roots"]["update"] is None
     assert message["roots"]["delete"] == "delete_messages_by_pk"
     assert message["roots"]["changes"] == "messageChanged"
     assert message["typeNames"]["filter"] == "messages_bool_exp"
@@ -158,11 +161,11 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     assert mailbox_dimension["kind"] == "json"
     # The source does not declare metadata filterable: this axis is a summary.
     assert mailbox_dimension["drill"] is None
-    assert message["updateFields"] == ["status", "tags"]
+    assert message["updateFields"] == []
     status_field = {field["name"]: field for field in message["fields"]}["status"]
     assert message["query"]["fields"]["status"]["filter"] is not None
     assert "status" in message["query"]["axes"]
-    assert status_field["updatable"] is True
+    assert status_field["updatable"] is False
     for name in ("sender_name", "thread_title", "channel_vendor_name"):
         assert message["query"]["fields"][name]["sort"] is not None
         assert message["query"]["fields"][name]["filter"] is None
@@ -909,34 +912,27 @@ def test_messaging_schema_does_not_expose_optional_imap_connect() -> None:
     assert "connect_imap_channel" not in _schema().as_str()
 
 
-def test_message_and_thread_hasura_writes(composed_tables: None) -> None:
-    """Message and thread human edits use generated Hasura mutation roots.
-
-    The write surfaces narrowed with the fragment-backed titles: a message update
-    can set only ``status`` and a thread update only ``visibility`` — ``subject``
-    is no longer a column, so writing it is a schema error, not a silent no-op.
-    """
+def test_message_state_is_read_only_while_thread_visibility_remains_writable(composed_tables: None) -> None:
+    """Message state is verb-owned; thread visibility retains its native update."""
 
     admin = _platform_admin("msg-hasura-admin")
     thread, message = _seed_thread_and_message(admin)
     schema = _schema()
 
-    updated_message = _data(
-        execute_schema(
-            schema,
-            """
-            mutation MarkSent($id: String!) {
-              update_messages_by_pk(pk_columns: {id: $id}, _set: {status: "sent"}) {
-                status
-                title
-              }
-            }
-            """,
-            {"id": message.sqid},
-            request=_request(admin),
-        )
-    )["update_messages_by_pk"]
-    assert updated_message == {"status": "SENT", "title": ""}
+    refused_message = execute_schema(
+        schema,
+        """
+        mutation MarkSent($id: String!) {
+          update_messages_by_pk(pk_columns: {id: $id}, _set: {status: "sent"}) {
+            status
+            title
+          }
+        }
+        """,
+        {"id": message.sqid},
+        request=_request(admin),
+    )
+    assert refused_message.errors is not None
 
     updated_thread = _data(
         execute_schema(
@@ -991,7 +987,7 @@ def test_message_and_thread_hasura_writes(composed_tables: None) -> None:
             request=_request(admin),
         )
     )["delete_messages_by_pk"]
-    assert deleted == {"id": message.sqid, "status": "SENT"}
+    assert deleted == {"id": message.sqid, "status": "SYNCED"}
 
     with system_context(reason="test.messaging.hasura_write.verify"):
         assert messaging_models.Thread.objects.get(sqid=thread.sqid).visibility == "public"

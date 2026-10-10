@@ -8,11 +8,12 @@ from typing import Any
 
 from celery import shared_task
 from celery.signals import worker_shutting_down
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from rebac import system_context
 
 from angee.integrate import scheduler
-from angee.integrate.constants import ENSURE_SESSIONS_TASK, RUN_SESSION_TASK
+from angee.integrate.constants import BINDING_TASK, BINDING_TASK_EXPIRES, ENSURE_SESSIONS_TASK, RUN_SESSION_TASK
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.locks import bridge_is_locked, bridge_session_is_hosted
 from angee.integrate.models import Bridge, IntegrationRuntimeStatus
@@ -25,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 _shutdown = threading.Event()
 """Set on worker shutdown so every live session exits within one wake."""
+
+
+@shared_task(name=BINDING_TASK, expires=BINDING_TASK_EXPIRES)
+def discover_connection(integration_pk: int, credential_pk: int | None, generation: int) -> dict[str, Any]:
+    """Dispatch discovery through the integration's binding owner."""
+
+    with system_context(reason="integrate.connection.discovery"):
+        model = apps.get_model("integrate", "Integration")
+        integration = model.objects.filter(pk=integration_pk).first()
+        if integration is None:
+            return {"ok": False, "reason": "missing"}
+        return integration.run_binding(credential_pk=credential_pk, generation=generation)
 
 
 @worker_shutting_down.connect
@@ -54,7 +67,11 @@ def sync_due_bridges(timestamp: int | None = None) -> None:
     """Queue every bridge row whose ``next_sync_at`` is due."""
 
     del timestamp
-    scheduler.enqueue_due_bridges()
+    for step in (scheduler.enqueue_pending_bindings, scheduler.enqueue_due_bridges):
+        try:
+            step()
+        except Exception as error:  # noqa: BLE001 — independent scheduler steps must all run.
+            logger.error("Integration scheduler step %s failed (%s).", step.__name__, type(error).__name__)
 
 
 @shared_task(name=RUN_SESSION_TASK, time_limit=None, soft_time_limit=None)

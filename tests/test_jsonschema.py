@@ -11,6 +11,7 @@ from angee.base.jsonschema import (
     check_schema,
     embed_schema,
     materialize_schema,
+    relation_positions,
     schema_at,
     schemas_match,
     union_schema,
@@ -21,12 +22,45 @@ from angee.base.jsonschema import (
 )
 
 
+@pytest.mark.parametrize("choice", ["anyOf", "oneOf"])
+def test_relation_positions_share_reference_array_and_valid_branch_semantics(choice):
+    relation = {"resource": "knowledge.Page"}
+    schema = {
+        "$defs": {"Reference": {"type": "string", "relation": relation}},
+        "type": "object",
+        "properties": {
+            "page": {"allOf": [{"$ref": "#/$defs/Reference"}]},
+            "items": {"type": "array", "prefixItems": [{"$ref": "#/$defs/Reference"}], "items": {"type": "string"}},
+            "choice": {choice: [
+                {"type": "object", "properties": {
+                    "kind": {"const": "reference"}, "value": {"$ref": "#/$defs/Reference"},
+                }},
+                {"type": "object", "properties": {"kind": {"const": "literal"}, "value": {"type": "string"}}},
+            ]},
+        },
+    }
+    value = {"page": "example.page", "items": ["example.first", "example.literal"],
+             "choice": {"kind": "literal", "value": "example.ordinary"}}
+    assert list(relation_positions(schema, value)) == [
+        (("page",), relation, "example.page"), (("items", 0), relation, "example.first"),
+    ]
+    value["choice"]["kind"] = "reference"
+    assert list(relation_positions(schema, value))[-1] == (("choice", "value"), relation, "example.ordinary")
+
+
 @pytest.mark.parametrize("schema", [True, False, {}, {"type": "string"}])
 def test_native_boolean_and_object_declarations(schema):
     """Both native schema forms are checked without changing the declaration."""
     before = copy.deepcopy(schema)
     check_schema(schema)
     assert schema == before
+
+
+def test_relation_walk_leaves_recursive_literal_schemas_to_native_validation():
+    schema = {"type": "object", "properties": {"children": {"type": "array", "items": {"$ref": "#"}}}}
+    value = {"children": [{"children": []}]}
+    assert validator(schema).is_valid(value)
+    assert list(relation_positions(schema, value)) == []
 
 
 @pytest.mark.parametrize("schema", [{"type": "missing"}, {"required": "name"}, {"properties": {"bad": 3}}])

@@ -42,14 +42,8 @@ class AccountConnectCompletion:
     integration_id: str = ""
 
 
-def enabled_oauth_client_from_hint(
-    hint: Any,
-    *,
-    owner_label: str,
-    reason: str,
-    vendor_slug: str = "",
-) -> Any:
-    """Resolve an enabled OAuth client from a backend-declared client hint."""
+def oauth_client_slug_from_hint(hint: Any, *, owner_label: str, vendor_slug: str = "") -> str:
+    """Expand a backend's client hint using its vendor identity."""
 
     raw_hint = str(hint or "").strip()
     if not raw_hint:
@@ -58,7 +52,19 @@ def enabled_oauth_client_from_hint(
             400,
             f"{owner_label} has no OAuth client.",
         )
-    slug = raw_hint.format(vendor=vendor_slug)
+    return raw_hint.format(vendor=vendor_slug)
+
+
+def enabled_oauth_client_from_hint(
+    hint: Any,
+    *,
+    owner_label: str,
+    reason: str,
+    vendor_slug: str = "",
+) -> Any:
+    """Resolve a complete enabled registration for an actual OAuth flow."""
+
+    slug = oauth_client_slug_from_hint(hint, owner_label=owner_label, vendor_slug=vendor_slug)
     OAuthClient = cast(Any, apps.get_model("integrate", "OAuthClient"))
     with system_context(reason=reason):
         oauth_client = OAuthClient.objects.enabled_for_slug(slug)
@@ -99,7 +105,9 @@ def complete_account_connect(
         code_verifier=record.code_verifier,
         state=state_token,
     )
-    claims = protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
+    tokens = oauth_client.refine_grant(protocol, tokens)
+    access_token = str(tokens.get("access_token", "") or "")
+    claims = protocol.fetch_userinfo(access_token, params=oauth_client.userinfo_params(protocol, access_token))
     external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         # Restricted tokens may be unable to call userinfo. Anthropic's one-year

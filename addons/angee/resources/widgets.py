@@ -29,6 +29,22 @@ class XrefWidgetMixin:
     model: type[models.Model]
     """Related model bound by the import-export FK/M2M widget base."""
 
+    def referenced_handles(self, value: Any) -> frozenset[tuple[str, str]]:
+        """Parse relation intent without resolving its database target."""
+
+        if self.addon_aliases is None:
+            raise ValueError("xref parsing requires addon aliases")
+        return frozenset(split_xref(ref, self.addon_aliases) for ref in self.reference_values(value))
+
+    def reference_values(self, value: Any) -> list[str]:
+        """Return the single reference accepted by FK and record-reference fields."""
+
+        if value in (None, ""):
+            return []
+        if not isinstance(value, str):
+            raise ValueError("xrefs must be strings")
+        return [value]
+
     def resolve_field_target(self, ref: str) -> models.Model:
         """Resolve one xref to a row assignable to this widget's related field.
 
@@ -41,10 +57,7 @@ class XrefWidgetMixin:
         unrelated type.
         """
 
-        target = resolve_xref(ref, self.ledger_model, self.addon_aliases)
-        if not isinstance(target, self.model):
-            raise ValueError(f"xref {ref!r} targets {target._meta.label}, not {self.model._meta.label}")
-        return target
+        return resolve_xref(ref, self.ledger_model, self.addon_aliases, model=self.model)
 
 
 class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
@@ -63,9 +76,10 @@ class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
         """
 
         del row, kwargs
-        if value in (None, ""):
+        references = self.reference_values(value)
+        if not references:
             return None
-        return generic_target(resolve_xref(value, self.ledger_model, self.addon_aliases))
+        return generic_target(resolve_xref(references[0], self.ledger_model, self.addon_aliases))
 
 
 class RecordRefField(fields.Field):
@@ -119,14 +133,20 @@ class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
         """Return the target object or primary key for one xref value."""
 
         del row, kwargs
-        if value in (None, ""):
+        references = self.reference_values(value)
+        if not references:
             return None
-        target = self.resolve_field_target(value)
+        target = self.resolve_field_target(references[0])
         return target.pk if self.key_is_id else target
 
 
 class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
     """Resolve scalar or list xref values for many-to-many fields."""
+
+    def reference_values(self, value: Any) -> list[str]:
+        """Use the same list grammar for prerequisites and target resolution."""
+
+        return many_to_many_values(value)
 
     def clean(
         self,
@@ -137,7 +157,7 @@ class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
         """Return target model objects for every xref in ``value``."""
 
         del row, kwargs
-        return [self.resolve_field_target(ref) for ref in many_to_many_values(value)]
+        return [self.resolve_field_target(ref) for ref in self.reference_values(value)]
 
 
 class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):
@@ -204,6 +224,7 @@ def resolve_xref(
     value: str,
     ledger_model: type[models.Model] | None,
     addon_aliases: Mapping[str, str] | None,
+    *, model: type[models.Model] | None = None,
 ) -> models.Model:
     """Resolve ``<addon>.<xref>`` through the resource ledger."""
 
@@ -228,30 +249,22 @@ def resolve_xref(
     target = ledger.target_instance()
     if target is None:
         raise ValueError(f"xref {value!r} has no ORM target")
+    if model is not None and not isinstance(target, model):
+        raise ValueError(f"xref {value!r} targets {target._meta.label}, not {model._meta.label}")
     return target
 
 
 def resolve_ledger_xref(handle: str) -> models.Model | None:
     """Resolve a ``<addon>.<xref>`` handle through the composed resource ledger.
 
-    The high-level companion to :func:`resolve_xref`: it binds the concrete
-    ``resources.Resource`` ledger and builds the addon-alias map from the app
-    registry — each installed app's dotted name and short label both resolve to
-    its canonical dotted name, the same alias convention the loader builds per
-    selected addon (:meth:`~angee.resources.managers.ResourceManager._addon_aliases`).
-    So a demo-seed ``after_resource_load`` hook resolves a persona (or any ledger
-    row) by the very xref the grant fixtures use, with a single owner for who a
-    handle names. Returns ``None`` for an unresolved or ambiguous handle so the
-    hook can skip gracefully rather than raise.
+    Delegates aliasing and resolution to ``Resource.objects.resolve``. Returns
+    ``None`` for an unresolved or ambiguous handle, so optional resource hooks
+    can skip missing targets. Alias collisions remain configuration errors.
     """
 
     ledger_model = apps.get_model("resources", "Resource")
-    aliases: dict[str, str] = {}
-    for app_config in apps.get_app_configs():
-        aliases.setdefault(app_config.name, app_config.name)
-        aliases.setdefault(app_config.label, app_config.name)
     try:
-        return resolve_xref(handle, ledger_model, aliases)
+        return ledger_model.objects.resolve(handle)
     except ValueError:
         return None
 

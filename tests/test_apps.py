@@ -148,7 +148,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert gemini["client_id"] == "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     assert gemini["authorize_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
     assert gemini["token_endpoint"] == "https://oauth2.googleapis.com/token"
-    assert gemini["userinfo_endpoint"] == "https://www.googleapis.com/oauth2/v2/userinfo"
+    assert gemini["userinfo_endpoint"] == "https://openidconnect.googleapis.com/v1/userinfo"
     assert gemini["is_enabled"] is True
     # OIDC trust config (issuer/jwks/discovery) lives in the OIDC login addon, not
     # the integrate base seed.

@@ -1251,6 +1251,29 @@ def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None
     assert not RecordRevision.objects.exists()
 
 
+def test_sync_bridge_deadline_partial_page_is_not_a_repeated_cursor(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+
+    class BudgetAdapter(MemoryAdapter):
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            page = super().extract(stream, page_bound, deadline=deadline)
+            if self.extracted == 2:
+                clock[0] = 2.0
+            return page
+
+    page = StreamPage(("partial-event",), {"next": "same"}, exhausted=False)
+    adapter = BudgetAdapter(pages=[page, page])
+    stream_bridge.config = {"sync_time_budget": 1}
+    monkeypatch.setattr(stream_driver, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    with system_context(reason="test budget partial page"):
+        assert sync_bridge(stream_bridge) == 2
+    assert adapter.extracted == 2
+    assert SyncStream.objects.get(integration=stream_bridge, key="records").cursor == {"next": "same"}
+
+
 def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Channel) -> None:
     class RequiredOffset(tzinfo):
         def __init__(self, minutes: int) -> None:

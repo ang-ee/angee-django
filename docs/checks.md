@@ -56,7 +56,12 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
-[locking races](../tests/test_agent_sessions_concurrency.py). The selection
+[locking races](../tests/test_agent_sessions_concurrency.py), plus
+[connection discovery races](../tests/test_integrate_binding_concurrency.py),
+[cross-addon reply and inbound joins](../tests/test_framework_integration.py),
+[delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
+[sweep, advisory-lock and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
+[comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
 runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
 and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
 for each worker. The composed-host subprocess tests use Django's test runner to

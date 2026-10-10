@@ -10,8 +10,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 from angee.base.impl import ImplBase
-from angee.integrate.connect import enabled_oauth_client_from_hint
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
+from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.live import PairingProjection, SessionLoggedOut
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
@@ -38,29 +38,28 @@ class IntegrationImpl(ImplBase):
     label = "Integration"
     icon = ""
     oauth_client: ClassVar[str] = ""
+    requires_connection_discovery: ClassVar[bool] = False
+    """Opt into the asynchronous discover/apply connection lifecycle."""
 
     def __init__(self, integration: Any) -> None:
         """Bind this implementation to its owning integration row."""
 
         self.integration = integration
 
-    def connect_oauth_client(self, owner_label: str) -> Any:
-        """Return the enabled OAuth client this integration connects through.
+    def discover_connection(self, credential: Any) -> ConnectionDiscovery:
+        """Read the provider outside transactions; return facts without writing rows."""
 
-        Falls back to the bound integration's vendor slug when the implementation
-        declares no ``oauth_client`` hint; the vendor slug also feeds the
-        ``{vendor}`` template.
+        return ConnectionDiscovery()
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Apply domain facts through ``self.integration`` using database work only.
+
+        Integrate calls this on a freshly locked row after validating its task's
+        credential and generation. The adapter never writes credential material.
         """
 
-        vendor = self.integration.vendor
-        vendor_slug = str(getattr(vendor, "slug", "") or "")
-        hint = str(self.oauth_client or "")
-        return enabled_oauth_client_from_hint(
-            hint or vendor_slug,
-            owner_label=owner_label,
-            reason="integrate.graphql.connect_integration.oauth_client",
-            vendor_slug=vendor_slug,
-        )
+        if discovery.data:
+            raise AdapterContractError("The adapter must implement apply_discovery for its returned facts.")
 
 
 class BridgeImpl(IntegrationImpl):

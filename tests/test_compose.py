@@ -28,6 +28,7 @@ from angee.compose.apps import ComposeConfig
 from angee.compose.dependencies import AddonDependencyGroupResult
 from angee.compose.management.commands.angee import Command
 from angee.compose.model_composition import ModelComposition
+from angee.compose.project import ProjectContract
 from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
@@ -1247,13 +1248,13 @@ def test_provision_plan_force_rebac_force_overwrites_the_sync() -> None:
     assert ["rebac", "--skip-checks", "sync", "--yes"] not in plan
 
 
-def test_provision_plan_bootstrap_admin_appends_a_final_step() -> None:
-    """``--bootstrap-admin`` appends ``bootstrap_admin`` as the last step."""
+def test_provision_plan_bootstraps_before_loading_resources() -> None:
+    """Resources may reference the operator selected by bootstrap."""
 
     plan = Command._provision_plan(_provision_options(bootstrap_admin=True))
 
-    assert plan[-1] == ["bootstrap_admin"]
-    assert Command._provision_plan(_provision_options())[-1] != ["bootstrap_admin"]
+    assert plan.index(["bootstrap_admin"]) < plan.index(["resources", "load"])
+    assert ["bootstrap_admin"] not in Command._provision_plan(_provision_options())
 
 
 def test_provision_plan_combines_every_flag() -> None:
@@ -1268,9 +1269,9 @@ def test_provision_plan_combines_every_flag() -> None:
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
         ["check", "--database", "default"],
+        ["bootstrap_admin"],
         ["resources", "load", "--include-demo"],
         ["schema"],
-        ["bootstrap_admin"],
     ]
 
 
@@ -1786,8 +1787,6 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
     services set their env explicitly, so read_env must never overwrite it.
     """
 
-    from angee.compose.project import ProjectContract
-
     (tmp_path / ".env").write_text(
         'DATABASE_URL="postgres://angee:pw@127.0.0.1:5433/angee"\nYAMLCONF_SECRET_KEY="from-env-file"\n',
         encoding="utf-8",
@@ -1812,16 +1811,12 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
 def test_project_env_file_is_optional(tmp_path: Path) -> None:
     """A project without .env composes exactly as before — silent no-op."""
 
-    from angee.compose.project import ProjectContract
-
     ProjectContract({})._read_project_env(tmp_path)
 
 
 def test_database_pool_follows_project_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from angee.compose.project import ProjectContract
-
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
     project_settings = ModuleType("test_project_settings")
     project_settings.BASE_DIR = tmp_path
@@ -2059,3 +2054,28 @@ def test_tailwind_sources_resolve_workspace_package_links(tmp_path: Path) -> Non
     assert '@source "../../slot/packages/app/src";' in css
     assert "node_modules" not in css
     assert css == WebRuntime((), runtime_dir=runtime).tailwind_sources_css()
+
+
+def test_database_aliases_preserve_explicit_default_and_environment_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    project = ModuleType("alias_settings")
+    project.BASE_DIR = tmp_path
+    external = {"ENGINE": "django.db.backends.sqlite3", "NAME": "archive.sqlite3"}
+    project.DATABASES = {"archive": external}
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    namespace: dict[str, Any] = {}
+    ProjectContract(namespace)._apply_defaults(project, tmp_path)
+    assert namespace["DATABASES"]["archive"] == external
+    assert namespace["DATABASES"]["default"]["NAME"] == tmp_path / ".angee/data/db.sqlite3"
+    assert "default" not in project.DATABASES
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///environment.sqlite3")
+    ProjectContract(namespace)._apply_defaults(project, tmp_path)
+    assert namespace["DATABASES"]["archive"] == external
+    assert namespace["DATABASES"]["default"]["NAME"] == "environment.sqlite3"
+
+    explicit = {"ENGINE": "django.db.backends.sqlite3", "NAME": "configured.sqlite3"}
+    project.DATABASES["default"] = explicit
+    ProjectContract(namespace)._apply_defaults(project, tmp_path)
+    assert namespace["DATABASES"] == {"default": explicit, "archive": external}

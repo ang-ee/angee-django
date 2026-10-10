@@ -23,6 +23,22 @@ from angee.parties.schema import HandleType
 Handle = apps.get_model("parties", "Handle")
 Feed = apps.get_model("posts", "Feed")
 FeedFollow = apps.get_model("posts", "FeedFollow")
+Message = apps.get_model("messaging", "Message")
+Thread = apps.get_model("messaging", "Thread")
+
+
+@strawberry_django.type(Thread, name="ThreadType", extend=True)
+class PublicThreadType:
+    """The posts-owned URL on the shared messaging thread projection."""
+
+    subject_url: auto
+
+
+@strawberry_django.type(Message, name="MessageType", extend=True)
+class PublicMessageType:
+    """The posts-owned root discriminator on the shared message projection."""
+
+    is_original_post: auto
 
 
 @strawberry_django.type(Feed)
@@ -31,6 +47,7 @@ class FeedType(BridgeTypeMixin, AngeeNode):
 
     feed_backend_class: auto
     external_id: auto
+    reply_hold: auto
     handle: HandleType | None
 
 
@@ -63,8 +80,8 @@ _FEED_RESOURCE = hasura_model_resource(
     sortable=["display_name", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
     groupable=["feed_backend_class", "lifecycle", "runtime_status", "sync_stage"],
-    insert=False,
-    update=False,
+    insertable=["display_name", "feed_backend_class"],
+    updatable=["reply_hold"],
     delete=False,
 )
 _FEED_FOLLOW_RESOURCE = hasura_model_resource(
@@ -91,7 +108,8 @@ _RESOURCE_TYPES = [
 ]
 
 
-_POSTS_SCHEMA_BUCKET = {
+_POSTS_SCHEMA_BUCKET: dict[str, list[type]] = {
+    "type_extensions": [PublicThreadType, PublicMessageType],
     "query": [
         _FEED_RESOURCE.query,
         _FEED_FOLLOW_RESOURCE.query,

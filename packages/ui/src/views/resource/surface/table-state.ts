@@ -10,9 +10,29 @@ import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
-import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
+import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths, idsFromRowSelectionState } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
+
+/** Retain the row observed at selection, including when its page is unloaded. */
+export function useSelectionSnapshots<TRow extends Row>(rows: readonly { id: string; original: TRow }[], selection: RowSelectionState) {
+  const selectedIds = React.useMemo(() => idsFromRowSelectionState(selection), [selection]);
+  const [observed, setObserved] = React.useState(() => ({ selectedIds, rows: rows.filter((row) => selectedIds.has(row.id)) }));
+  const reconcile = (current: typeof observed) => {
+    const retained = [...selectedIds].flatMap((id) => {
+      const row = current.rows.find((row) => row.id === id) ?? rows.find((row) => row.id === id);
+      return row ? [row] : [];
+    });
+    return current.selectedIds.size === selectedIds.size && [...selectedIds].every((id) => current.selectedIds.has(id))
+      && retained.length === current.rows.length
+      && retained.every((row, index) => row === current.rows[index]) ? current : { selectedIds, rows: retained };
+  };
+  const active = reconcile(observed);
+  if (active !== observed) setObserved((current) => reconcile(current));
+  const selectedRows = React.useMemo(() => active.rows.map((row) => row.original), [active.rows]);
+  return { selectedIds: active.selectedIds, selectedRows };
+}
+
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
   options: UseResourceRowsSnapshotOptions<TRow> = {},

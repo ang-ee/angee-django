@@ -70,17 +70,16 @@ STATIC_ROOT = resolve_path(globals().get("STATIC_ROOT", ANGEE_DATA_DIR / "static
 MEDIA_URL = globals().get("MEDIA_URL", "/media/")
 MEDIA_ROOT = resolve_path(globals().get("MEDIA_ROOT", ANGEE_DATA_DIR / "media"))
 
-DATABASES = globals().get(
-    "DATABASES",
-    {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": ANGEE_DATA_DIR / "db.sqlite3",
-            "OPTIONS": {
-                "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
-                "transaction_mode": "IMMEDIATE",
-                "timeout": 20,
-            },
-        }
+# Each explicitly configured alias wins; the framework supplies only default.
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ANGEE_DATA_DIR / "db.sqlite3",
+        "OPTIONS": {
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            "transaction_mode": "IMMEDIATE",
+            "timeout": 20,
+        },
     },
-)
+    **globals().get("DATABASES", {}),
+}

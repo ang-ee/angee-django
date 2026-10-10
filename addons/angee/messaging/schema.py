@@ -27,7 +27,13 @@ from rebac.resources import model_resource_type
 from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
+from angee.graphql.actions import (
+    ActionResult,
+    ActionSelectionInput,
+    action_target,
+    authorized_permission_target,
+    resolve_action_target,
+)
 from angee.graphql.capabilities import held_permissions, permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -409,6 +415,18 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 
         return cast(Any, self).feed_order_key
 
+    @strawberry_django.field
+    def body_text(self) -> str:
+        """Actor-readable BODY text, bounded to 4 KiB of UTF-8."""
+
+        return cast(Any, self).body_text(max_bytes=4096)
+
+    @strawberry_django.field(only=["direction", "status", "is_trashed"])
+    def is_held(self) -> bool:
+        """Project the same held predicate used by delivery verbs and filters."""
+
+        return cast(Any, self).is_held
+
     platform: auto
     direction: auto
     status: auto
@@ -417,8 +435,10 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     preview: auto
     sent_at: auto
     received_at: auto
+    scheduled_at: auto
+    revision: auto
     is_trashed: auto
-    permissions = permissions_field(("delete",))
+    permissions = permissions_field(("write", "delete", "send_held"))
     sender: HandleType | None = actor_scoped_to_one("sender")
 
     @strawberry_django.field(
@@ -1570,7 +1590,19 @@ class MessagingQuery:
 
 @strawberry.type
 class MessagingMutation:
-    """Record-backed chatter mutations."""
+    """Inbox lifecycle verbs and record-backed chatter mutations."""
+
+    @strawberry.mutation(name="send_held_drafts")
+    def send_held_drafts(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Operator send-now, preserving each observed revision and refusal."""
+
+        return Message.objects.send_held_drafts(selection, actor=_request_user(info))
+
+    @strawberry.mutation(name="discard_held_drafts")
+    def discard_held_drafts(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Operator discard through the shared trash owner."""
+
+        return Message.objects.discard_held_drafts(selection, actor=_request_user(info))
 
     @strawberry.mutation(name="mark_thread_notification_read")
     def mark_thread_notification_read(self, info: strawberry.Info, id: strawberry.ID) -> ThreadNotificationType:
@@ -2111,6 +2143,8 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "sender",
         "sent_at",
         "is_trashed",
+        "scheduled_at",
+        *declared_hasura_resource_fields(Message, "hasura_filterable_fields"),
         # The transcript's keyset "load older" cursors on (sent_at, created_at).
         "created_at",
     ],
@@ -2151,7 +2185,7 @@ _MESSAGE_RESOURCE = hasura_model_resource(
     ],
     json_paths={"metadata.mailbox": "str"},
     insert=False,
-    updatable=["status"],
+    update=False,
     field_id_decode={
         "thread": public_pk_decoder(Thread),
         "channel": public_pk_decoder(Integration),

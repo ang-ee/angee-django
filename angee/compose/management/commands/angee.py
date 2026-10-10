@@ -124,9 +124,9 @@ class Command(BaseCommand):
            ``--force-rebac``) — replace old persisted policy before validating it.
         7. ``check`` — enforce the complete model and persisted-REBAC contract
            after migration and sync, before user data or schema output proceeds.
-        8. ``resources load`` (``--include-demo`` when ``--demo``).
-        9. ``schema`` — render the GraphQL SDL.
-        10. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
+        8. ``bootstrap_admin`` — when ``--bootstrap-admin``, before resources need its identity.
+        9. ``resources load`` (``--include-demo`` when ``--demo``).
+        10. ``schema`` — render the GraphQL SDL.
 
         Build runs in the parent. One fresh interpreter then loads the emitted
         models and runs the remaining commands together via ``call_command``.
@@ -179,11 +179,10 @@ class Command(BaseCommand):
             ["reconcile_permissions"],
             rebac_sync,
             ["check", "--database", "default"],
-            resources_load,
-            ["schema"],
         ]
         if options["bootstrap_admin"]:
             plan.append(["bootstrap_admin"])
+        plan.extend([resources_load, ["schema"]])
         return plan
 
     @staticmethod

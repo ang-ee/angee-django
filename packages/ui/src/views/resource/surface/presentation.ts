@@ -8,9 +8,9 @@ import { type ResourceViewFilter, type ResourceViewGroup } from "../resource-vie
 import { GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, isQueryOnlyColumn, tableColumnLabel, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { rowGroupsFromLaneSource, type BoardLaneState } from "../resource-view-board-lanes";
-import { idsFromRowSelectionState, leafTableRows, rowGroupsFromTableRows } from "../resource-view-codecs";
+import { leafTableRows, rowGroupsFromTableRows } from "../resource-view-codecs";
 import { filterForTextSearch, queryForColumns } from "../resource-query";
-import { useResourceViewTableState } from "./table-state";
+import { useResourceViewTableState, useSelectionSnapshots } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_BOARD_PLACEMENTS } from "./types";
 import type { FlatResourceViewPresentationSurface, ResourceViewPresentationSurface } from "./types";
 export function useResourceViewPresentationSurface<TRow extends Row>({
@@ -151,10 +151,7 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   const rowModels = table.getRowModel().rows;
   const groupedRowModels = table.getPreExpandedRowModel().rows;
   const tableRowSelection = table.getState().rowSelection;
-  const selectedIds = React.useMemo(
-    () => idsFromRowSelectionState(tableRowSelection),
-    [tableRowSelection],
-  );
+  const { selectedIds, selectedRows } = useSelectionSnapshots(table.getCoreRowModel().flatRows, tableRowSelection);
   const pageIds = React.useMemo(
     () => leafTableRows(rowModels).map((row) => row.id),
     [rowModels],
@@ -205,6 +202,7 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     toggleVisibleField,
     rowModels,
     selectedIds,
+    selectedRows,
     pageIds,
     allPageSelected: table.getIsAllPageRowsSelected(),
     somePageSelected: table.getIsSomePageRowsSelected(),

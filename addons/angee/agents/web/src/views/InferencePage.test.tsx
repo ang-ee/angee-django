@@ -55,7 +55,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 vi.mock("@angee/integrate", () => ({
-  canConnectRecord: () => true,
+  CONNECT_RECORD_FIELDS: ["credential_status", "is_oauth_connectable"],
   ConnectOAuthButton: ({ next }: { next: string }) => {
     mocks.connectNext = next;
     return null;

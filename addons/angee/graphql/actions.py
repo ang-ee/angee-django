@@ -121,6 +121,27 @@ class ActionSelectionInput:
     expected_revision: int
 
 
+MAX_ACTION_SELECTION = 100
+
+
+@strawberry.type
+class ActionQuery:
+    """Collection action policy shared by console clients."""
+
+    @strawberry.field
+    def action_selection_limit(self) -> int:
+        """Publish the same bound every bulk action validates."""
+
+        return MAX_ACTION_SELECTION
+
+
+def validate_action_selection(selection: list[ActionSelectionInput]) -> None:
+    """One bound and identity rule for console bulk verbs."""
+
+    if not 1 <= len(selection) <= MAX_ACTION_SELECTION or len({item.id for item in selection}) != len(selection):
+        raise ValidationError({"selection": f"Select between 1 and {MAX_ACTION_SELECTION} distinct records."})
+
+
 def many_actions(
     selection: list[ActionSelectionInput], run: Callable[[ActionSelectionInput], ActionResult],
 ) -> list[ActionResult]:
@@ -131,8 +152,7 @@ def many_actions(
     each single verb's eligibility and revision contract, never skip stale checks.
     """
 
-    if not 1 <= len(selection) <= 100 or len({item.id for item in selection}) != len(selection):
-        raise ValidationError({"selection": "Select between 1 and 100 distinct records."})
+    validate_action_selection(selection)
     results: dict[str, ActionResult] = {}
     refused_errors = BASELINE_ACTION_ERRORS + (DomainError, PermissionDenied)
     with transaction.atomic():

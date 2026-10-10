@@ -8,12 +8,15 @@ import re
 from email.utils import formataddr, getaddresses
 from typing import Any
 
+from anymail.exceptions import AnymailAPIError
 from anymail.message import AnymailMessage
 from django.apps import apps
 from django.conf import settings
 from django.utils.html import strip_tags
 
-from angee.messaging.backends import ChannelBackend
+from angee.integrate.errors import IntegrationError
+from angee.messaging.backends import ChannelBackend, DeliveryOutcome
+from angee.messaging.delivery import TransientDeliveryError
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
     label = "Email"
     icon = "mail"
 
-    def deliver(self, message: Any) -> bool:
+    def deliver(self, message: Any) -> DeliveryOutcome:
         """Render and send ``message`` when an email transport is configured."""
 
         if not bool(getattr(settings, "ANGEE_EMAIL_DELIVERY_CONFIGURED", False)):
@@ -41,18 +44,24 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 "Outbound email delivery is not configured; message %s was not sent.",
                 getattr(message, "pk", None),
             )
-            return False
+            raise IntegrationError("Outbound email delivery is not configured.")
         email = self.email_message(message)
         if not email.from_email or not (email.to or email.cc or email.bcc):
             logger.warning(
                 "Outbound email message %s has no complete from/to envelope; it was not sent.",
                 getattr(message, "pk", None),
             )
-            return False
-        accepted = email.send()
+            raise IntegrationError("The email envelope is incomplete.")
+        try:
+            accepted = email.send()
+        except AnymailAPIError as error:
+            if error.status_code == 429:
+                raise TransientDeliveryError("The email provider rate limit was reached.") from error
+            # A server error or timeout may follow acceptance; do not republish.
+            raise IntegrationError("The email provider did not confirm delivery.") from error
         if not accepted:
             logger.warning("The configured email backend declined message %s.", getattr(message, "pk", None))
-        return bool(accepted)
+        return DeliveryOutcome(accepted=bool(accepted))
 
     def email_message(self, message: Any) -> AnymailMessage:
         """Render a messaging ``Message`` into Anymail's provider-neutral message."""

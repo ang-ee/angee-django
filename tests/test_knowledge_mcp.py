@@ -5,8 +5,8 @@ through the same compiler the notes example uses. These tests compile every spec
 the real knowledge ``public`` schema bucket (built standalone, like
 :mod:`tests.test_knowledge_graphql`), so a drift between a tool spec and the schema —
 an unknown field, a missing argument, a renamed operation, an over-deep projection —
-fails here at compile time rather than at the agent's first call. This is the only CI
-check that the knowledge MCP specs stay in sync with the schema.
+fails here at compile time rather than at the agent's first call. Composed search
+contracts also exercise the tools against actor-scoped persisted records.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ knowledge_schema = importlib.import_module("angee.knowledge.schema")
 knowledge_mcp_tools = importlib.import_module("angee.knowledge.mcp_tools")
 
 _EXPECTED_TOOLS = {
+    "create_page",
+    "list_vaults",
     "read_page",
     "search_pages",
     "patch_page_section",
@@ -74,6 +76,14 @@ def test_all_knowledge_tools_compile_and_register() -> None:
 
 
 @pytest.mark.usefixtures("knowledge_discovery")
+def test_create_page_requires_a_vault_and_is_a_write_tool() -> None:
+    tool = _registered_tools()["create_page"]
+    assert set(tool.parameters["required"]) == {"vault", "title"}
+    assert tool.annotations.readOnlyHint is False
+    assert "create_page(vault: $vault" in tool.document
+
+
+@pytest.mark.usefixtures("knowledge_discovery")
 def test_read_page_projects_outline_and_backlinks() -> None:
     """read_page reads one page by sqid with a nested markdown/outline + backlinks projection."""
 
@@ -106,13 +116,21 @@ def test_search_pages_passes_named_arguments() -> None:
     tool = _registered_tools()["search_pages"]
 
     assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
-    assert tool.parameters["required"] == ["vault", "query"]  # first has a schema default
+    assert tool.parameters["required"] == ["query"]
     assert tool.document == (
-        "query ($first: Int!, $vault: ID!, $query: String!) "
+        "query ($first: Int! = 20, $vault: ID, $query: String!) "
         "{ search_pages(first: $first, vault: $vault, query: $query) { id title kind } }"
     )
     # A list operation projects its rows under ``result``.
     assert set(tool.output_schema["properties"]) == {"result"}
+
+
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_list_vaults_projects_the_readable_catalogue() -> None:
+    tool = _registered_tools()["list_vaults"]
+    assert tool.annotations.readOnlyHint is True
+    assert "limit" in tool.parameters["properties"]
+    assert set(tool.output_schema["properties"]["result"]["items"]["properties"]) == {"sqid", "name", "description"}
 
 
 @pytest.mark.usefixtures("knowledge_discovery")

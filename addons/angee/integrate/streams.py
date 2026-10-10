@@ -119,7 +119,18 @@ class BridgeSyncError(IntegrationError):
                 identity += f" ({details['partition']})"
             messages.append(f"{identity}: {details['message']}")
         message = "; ".join(messages)
-        super().__init__(message if len(message) <= 4096 else message[:4095] + "…")
+        transient = bool(self.failures) and all(
+            isinstance(failure.error, IntegrationError) and failure.error.transient
+            for failure in self.failures
+        )
+        hints = [
+            failure.error.retry_after for failure in self.failures
+            if isinstance(failure.error, IntegrationError) and failure.error.retry_after is not None
+        ]
+        super().__init__(
+            message if len(message) <= 4096 else message[:4095] + "…",
+            transient=transient, retry_after=max(hints) if hints else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1105,6 +1116,8 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
             result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
             stream, exhausted = result.stream, result.exhausted
             landed += result.count
+            if monotonic() >= deadline:
+                break
             stage = "continuation"
             previous, resets = result.check_continuation(previous=previous, resets=resets)
             _report(

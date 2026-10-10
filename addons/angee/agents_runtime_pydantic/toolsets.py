@@ -38,13 +38,13 @@ from pydantic_core import SchemaValidator, core_schema
 from rebac import PermissionDenied, SubjectRef, actor_context
 from rebac.backends import backend
 
+from angee.agents.constants import BUILTIN_MCP_ANGEE
 from angee.agents.grants import (
     TOOL_GRANT_RESOURCE_TYPE,
     builtin_mcp_server,
     tool_grant_ids,
     tool_grant_ref,
 )
-from angee.agents.models import BUILTIN_MCP_ANGEE
 from angee.base.serialization import canonical_json, json_safe
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.server import mcp_server

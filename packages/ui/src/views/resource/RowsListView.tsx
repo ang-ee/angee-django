@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { ResourceQuery } from "@angee/metadata";
+import { Filter, type ResourceQuery } from "@angee/metadata";
 
 import type { DndPayload } from "../../lib/dnd";
 import { useUiT } from "../../i18n";
@@ -17,6 +17,7 @@ import {
   type ResourceViewContextValue,
 } from "./resource-view-context";
 import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewGroup } from "./resource-view-model";
+import { EMPTY_SELECTED_IDS } from "./resource-view-codecs";
 import { validateResourceViewState } from "./model/state";
 import { filterForTextSearch, queryForColumns } from "./resource-query";
 import { ResourceQueryError } from "./ResourceQueryError";
@@ -37,6 +38,7 @@ import {
   type ResourceCollectionPresentation,
   type ResourceTableHeaderVisibility,
   type ResourceTableLayout,
+  type ListViewProps,
 } from "./resource-view-types";
 import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
@@ -78,7 +80,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   presentation?: ResourceCollectionPresentation;
   tableLayout?: ResourceTableLayout;
   headerVisibility?: ResourceTableHeaderVisibility;
-  selectable?: boolean;
+  selectable?: ListViewProps<TRow>["selectable"];
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
   toolbarActions?: React.ReactNode;
   /**
@@ -88,10 +90,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
    */
   gallery?: RowsGalleryConfig<TRow>;
   /** Bulk actions rendered in the selection bar when rows are selected. */
-  bulkActions?: (
-    selectedIds: ReadonlySet<string>,
-    clear: () => void,
-  ) => React.ReactNode;
+  bulkActions?: ListViewProps<TRow>["bulkActions"];
   /** Make each row/card draggable by returning its dnd payload, or `null`. */
   draggableRow?: (row: TRow) => DndPayload | null;
   /** Override collection-state ownership. Embedded collections default to local;
@@ -184,7 +183,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   presentation = "page",
   tableLayout = "auto",
   headerVisibility = "visible",
-  selectable = false,
+  selectable: declaredSelectable = false,
   toolbarActions,
   gallery,
   bulkActions,
@@ -194,6 +193,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
   const t = useUiT();
+  const filter = Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter) ?? {};
+  const selectable = declaredSelectable;
   const rowActionSurface = useRowActionsSurface(rowActions);
   const [layout, setLayout] = React.useState<RowLayout>("list");
   const effectiveGroupStack = resourceView.state.groupStack;
@@ -221,6 +222,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     customFilterFields: explicitCustomFilterFields,
     textFilterField: DEFAULT_TEXT_FILTER_FIELD,
   });
+  const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
   const interactive = Boolean(onRowClick || rowHref);
   const filtered = Object.keys(resourceView.state.filter).length > 0;
   const resolvedEmptyContent = filtered
@@ -253,10 +255,10 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
       selection={
         selectable
           ? {
-              count: surface.selectedIds.size,
+              count: selectedIds.size,
               onClear: resourceView.clearSelectedIds,
-              actions: surface.selectedIds.size > 0
-                ? bulkActions?.(surface.selectedIds, resourceView.clearSelectedIds)
+              actions: selectedIds.size > 0
+                ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, { filter, selectedRows: surface.selectedRows })
                 : undefined,
             }
           : undefined
@@ -277,7 +279,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           cardHref={rowHref}
           onCardClick={onRowClick}
           draggableRow={draggableRow}
-          selectedIds={selectable ? surface.selectedIds : undefined}
+          selectedIds={selectedIds}
           onToggleSelected={selectable ? resourceView.toggleSelectedId : undefined}
           fetching={fetching}
           emptyContent={resolvedEmptyContent}

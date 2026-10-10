@@ -24,7 +24,7 @@ import { ganttBarEvent } from "./gantt-bar-event";
 import { GanttLane, withGanttLaneNotes, type GanttLaneDetails } from "./gantt-lane";
 
 interface LinkedGanttCollectionSurfaceProps<TRow extends Row> extends Pick<ListViewProps<TRow>,
-  "availableViews" | "onCreate" | "createLabel" | "toolbarActions" | "className" | "presentation" | "toolbarWrap" | "onRowClick" | "rowHref" | "maxGroupDepth" | "selectable"> {
+  "availableViews" | "onCreate" | "createLabel" | "toolbarActions" | "className" | "presentation" | "toolbarWrap" | "onRowClick" | "rowHref" | "maxGroupDepth"> {
   surfaceProps: UseResourceViewSurfaceProps<TRow>;
   gantt: GanttViewSpec;
   searchInput: Omit<UseSearchCatalogInput<TRow>, "rows">;
@@ -33,7 +33,7 @@ interface LinkedGanttCollectionSurfaceProps<TRow extends Row> extends Pick<ListV
 /** The list resource owns the lane page and view state; the linked resource supplies bars only. */
 export function LinkedGanttCollectionSurface<TRow extends Row>({
   surfaceProps, gantt, searchInput: input, availableViews, onCreate, createLabel,
-  toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref, selectable,
+  toolbarActions, className, presentation, toolbarWrap, maxGroupDepth, onRowClick, rowHref,
 }: LinkedGanttCollectionSurfaceProps<TRow>) {
   const t = useUiT();
   const navigate = useNavigate();
@@ -144,7 +144,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
   const selectedIds = Object.keys(resourceView.state.rowSelection).filter((id) => resourceView.state.rowSelection[id]);
   return <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className}
     error={list.error} onRetry={refetch} loadingFooter={fetching}
-    selection={selectable === false ? undefined : { count: selectedIds.length, onClear: resourceView.clearSelectedIds }}
+    selection={{ count: selectedIds.length, onClear: resourceView.clearSelectedIds }}
     summary={projection.skipped ? t("gantt.skipped", { count: projection.skipped }) : undefined}>
     <GanttView resources={projection.resources} events={projection.events} date={anchor} onDateChange={onDateChange}
       defaultScale="quarter" loading={fetching} fitToEvents={resourceView.state.anchor === calendarDateToAnchor(new Date())}
@@ -154,7 +154,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       onResourceClick={onRowClick || rowHref ? (resource) => openLane(resource.id) : undefined}
       onEventClick={onRowClick || rowHref ? (event) => { if (event.resourceId) openLane(event.resourceId); } : undefined}
       selectedRows={selectedIds}
-      onSelectedRowsChange={selectable === false ? undefined : (ids) => resourceView.setRowSelection(Object.fromEntries(ids.map((id) => [id, true])))}
+      onSelectedRowsChange={(ids) => resourceView.setRowSelection(Object.fromEntries(ids.map((id) => [id, true])))}
     />
   </ResourceListFrame>;
 }

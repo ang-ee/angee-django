@@ -19,3 +19,8 @@ app_label = "posts"
 module = "runtime_migrations.feed_channel_parent"
 # The released body refused feeds that predate sync_run_id; its copies stay valid.
 compatible_source_sha256 = ["e0b0314802a0a876435ae2f0baa32e8b8c717b0600f6b543f8c0945a459408bf"]
+
+[[migrations]]
+name = "feed_live_since"
+app_label = "posts"
+module = "runtime_migrations.feed_live_since"

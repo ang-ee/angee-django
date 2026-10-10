@@ -13,6 +13,7 @@ a backend raises a plain subclass with the message it composed itself.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import DataError
@@ -27,6 +28,30 @@ class IntegrationError(Exception):
     Subclasses compose the message from facts they own (the login name, the
     host, the server's refusal) and never from raw vendor payloads.
     """
+
+    transient = False
+
+    def __init__(
+        self, public_message: str = "", *, transient: bool | None = None,
+        retry_after: timedelta | None = None,
+    ) -> None:
+        """Attach an optional positive provider horizon to this refusal.
+
+        A hint implies transience unless the caller explicitly declares otherwise.
+        Subclasses may declare ``transient = True`` and use the same validation.
+        Aggregate refusals can retain a partition's horizon while declaring the
+        whole operation permanent; a periodic caller still honours that horizon.
+        """
+
+        retryable = self.transient if transient is None else transient
+        if retry_after is not None:
+            if retry_after <= timedelta(0):
+                raise ValueError("retry_after must be a positive timedelta.")
+            if transient is None:
+                retryable = True
+        self.transient = retryable
+        self.retry_after = retry_after
+        super().__init__(public_message)
 
     @property
     def public_message(self) -> str:

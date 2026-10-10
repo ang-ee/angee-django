@@ -1,7 +1,7 @@
 import * as React from "react";
-import { rowPublicId, type Row } from "@angee/metadata";
+import { useResourceInvalidates, type Row } from "@angee/metadata";
 import { Column, ResourceList, Facet, Field, Form, Group, List, useEnumOptions, useRouteHref } from "@angee/ui";
-import { canConnectRecord, ConnectOAuthButton } from "@angee/integrate";
+import { CONNECT_RECORD_FIELDS, ConnectOAuthButton } from "@angee/integrate";
 import { useAuthoredMutation } from "@angee/refine";
 
 import { ConnectInferenceProvider } from "../documents";
@@ -10,6 +10,7 @@ import { inferenceProviderForm } from "./InferenceProviderForm";
 
 const PROVIDER_MODEL = "agents.InferenceProvider";
 const MODEL_MODEL = "agents.InferenceModel";
+const CONNECT_MODELS = [PROVIDER_MODEL, "integrate.Integration"];
 
 export function InferenceProvidersPage(): React.ReactElement {
   const t = useAgentsT();
@@ -19,9 +20,8 @@ export function InferenceProvidersPage(): React.ReactElement {
       form={inferenceProviderForm}
       placement="inline"
       routed
-      cardActions={(row, context) =>
-        canConnectRecord(row) ? <ProviderConnectButton row={row} refresh={context.refresh} /> : null
-      }
+      fields={CONNECT_RECORD_FIELDS}
+      cardActions={(row) => <ProviderConnectButton row={row} />}
     >
       <List resource={PROVIDER_MODEL}>
         <Facet field="vendor" label={t("facet.vendor")} />
@@ -35,27 +35,19 @@ export function InferenceProvidersPage(): React.ReactElement {
   );
 }
 
-function ProviderConnectButton({
-  row,
-  refresh,
-}: {
-  row: Row;
-  refresh: () => void;
-}): React.ReactElement | null {
+function ProviderConnectButton({ row }: { row: Row }): React.ReactElement | null {
   const t = useAgentsT();
   const routeHref = useRouteHref();
-  const [connectProvider] = useAuthoredMutation(ConnectInferenceProvider);
-  const id = rowPublicId(row) ?? "";
-  if (!id) return null;
-
+  const invalidates = useResourceInvalidates(CONNECT_MODELS);
+  const [connectProvider] = useAuthoredMutation(ConnectInferenceProvider, { invalidateModels: CONNECT_MODELS, invalidates });
   return (
     <ConnectOAuthButton
+      row={row}
       label={t("inference.connect.action")}
       connectedTitle={t("inference.connect.connected")}
       startErrorTitle={t("inference.connect.startError")}
       next={routeHref("agents.providers")}
-      onConnected={refresh}
-      start={async ({ redirectUri, next }) => {
+      start={async ({ id, redirectUri, next }) => {
         const result = await connectProvider({ id, redirectUri, next });
         return result?.connect_inference_provider;
       }}

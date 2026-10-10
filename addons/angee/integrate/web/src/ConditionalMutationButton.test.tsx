@@ -217,40 +217,41 @@ describe("ConditionalMutationButton", () => {
   });
 
   test("a typed-args verb opens the shared args form instead of firing on click", async () => {
+    mocks.chrome = { ...mocks.chrome, resource: "users.User", canonicalResource: "users.User" };
     const args = [
-      { name: "username", label: "Username" },
-      { name: "password", label: "Password", widget: "password" },
+      { name: "first_name", label: "First name" },
+      { name: "last_name", label: "Last name" },
+      { name: "confirmed", label: "Confirm", widget: "checkbox" },
+      { name: "expected_revision", label: "Revision", widget: "number" },
     ];
     render(
       <ConditionalMutationButton
-        field="update_imap_channel_credential"
-        label="Update credential"
+        field="rename_user"
+        label="Rename user"
         when={() => true}
         args={args}
       />,
     );
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Update credential" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rename user" }));
 
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     // The id-only verb never fires: the dialog collects the args and submits them
     // beside the record id through the raw-outcome hook.
-    expect(mocks.actions.get("update_imap_channel_credential")).not.toHaveBeenCalled();
+    expect(mocks.actions.get("rename_user")).not.toHaveBeenCalled();
     const dialog = mocks.dialogs.at(-1) as {
       action: { id: string; args: unknown; submit: (values: Record<string, unknown>) => Promise<unknown> };
       context: { record: unknown; selectedIds: readonly string[] };
     };
-    expect(dialog.action).toMatchObject({ id: "update_imap_channel_credential", args });
+    expect(dialog.action).toMatchObject({ id: "rename_user", args });
     expect(dialog.context).toEqual({ record: mocks.chrome.record, selectedIds: ["int_1"] });
 
-    await expect(dialog.action.submit({ username: "ada", password: "pw" })).resolves.toEqual({
+    const values = { first_name: "Morgan", last_name: "Lee", confirmed: true, expected_revision: 4 };
+    await expect(dialog.action.submit(values)).resolves.toEqual({
       ok: true,
       message: "done",
     });
-    expect(mocks.outcomes.get("update_imap_channel_credential")).toHaveBeenCalledWith("int_1", {
-      username: "ada",
-      password: "pw",
-    });
+    expect(mocks.outcomes.get("rename_user")).toHaveBeenCalledWith("int_1", values);
   });
 });

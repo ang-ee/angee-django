@@ -28,6 +28,11 @@ name = "integration_concrete_type"
 app_label = "integrate"
 module = "runtime_migrations.integration_concrete_type"
 
+[[migrations]]
+name = "credential_refreshability"
+app_label = "integrate"
+module = "runtime_migrations.credential_refreshability"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

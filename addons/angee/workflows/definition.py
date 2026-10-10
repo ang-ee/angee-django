@@ -16,11 +16,10 @@ from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.evidence import EvidenceReference
 from angee.base.fields import ModelLabelField
-from angee.base.impl import FORM_SCHEMA_ANNOTATIONS
 from angee.base.jsonschema import (
     compose_schema,
     embed_schema,
-    materialize_schema,
+    relation_positions,
     schema_at,
     schemas_match,
     union_schema,
@@ -1072,34 +1071,10 @@ class Definition(BaseModel):
 
     def _input_references(self, value: Any) -> tuple[tuple[tuple[str | int, ...], EvidenceReference], ...]:
         """Locate the declared record references in the admitted run input."""
-        schema = materialize_schema(
-            self.input_schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"},
+        return tuple(
+            (path, EvidenceReference(model=relation["resource"], id=item))
+            for path, relation, item in relation_positions(self.input_schema, value)
         )
-        references: list[tuple[tuple[str | int, ...], EvidenceReference]] = []
-
-        def visit(node: Any, item: Any, path: tuple[str | int, ...]) -> None:
-            if not isinstance(node, dict) or item is None:
-                return
-            if relation := node.get("relation"):
-                if isinstance(item, str):
-                    references.append((path, EvidenceReference(model=relation["resource"], id=item)))
-            if isinstance(item, dict):
-                for name, child in node.get("properties", {}).items():
-                    if name in item:
-                        visit(child, item[name], (*path, name))
-            elif isinstance(item, list):
-                prefix = node.get("prefixItems", ())
-                for index, element in enumerate(item):
-                    visit(prefix[index] if index < len(prefix) else node.get("items"), element, (*path, index))
-            for child in node.get("allOf", ()):
-                visit(child, item, path)
-            for choice in ("anyOf", "oneOf"):
-                for child in node.get(choice, ()):
-                    if validator(child).is_valid(item):
-                        visit(child, item, path)
-
-        visit(schema, value, ())
-        return tuple(references)
 
     def input_evidence(self, value: Any) -> tuple[EvidenceReference, ...]:
         """Project the declared source identities needed at admission."""

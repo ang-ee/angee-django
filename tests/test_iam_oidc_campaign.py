@@ -60,7 +60,7 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
         lambda self, **kwargs: {"access_token": "test-token", "id_token": "test-id-token"},
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, token, params=None: {})
     completion = identity.complete_login(
         oauth_client, code="test-code", state_token=state_token, redirect_uri=redirect_uri
     )

@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx2
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -32,11 +33,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connection, models, transaction
+from django.db import OperationalError, connection, models, transaction
 from django.db.models import F, OuterRef, Prefetch, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import (
+    PermissionDenied,
     RelationshipTuple,
     app_settings,
     delete_relationship,
@@ -50,6 +52,7 @@ from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
+from angee.base.actors import actor_user_id, instance_actor
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
@@ -64,7 +67,11 @@ from angee.base.refs import (
 )
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.iam.roles import platform_admin_role, subject_has_role
+from angee.integrate.connect import enabled_oauth_client_from_hint, oauth_client_slug_from_hint
+from angee.integrate.constants import BINDING_ATTEMPT_LIMIT, BINDING_TASK, BINDING_TASK_EXPIRES
 from angee.integrate.credentials import CredentialKind, CredentialKindHandler
+from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import (
     INTEGRATION_FAILURE_MESSAGE,
     IntegrationError,
@@ -73,14 +80,16 @@ from angee.integrate.errors import (
 )
 from angee.integrate.events import EventKind
 from angee.integrate.fields import DiscrepancyOpenField
-from angee.integrate.impl import IntegrationImpl
+from angee.integrate.impl import IntegrationImpl, LiveBridgeImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
-from angee.integrate.locks import bridge_is_locked
+from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.oauth.registrations import oauth_client_is_ready
+from angee.integrate.signals import binding_finished
 from angee.integrate.states import (
     UNSET,
     ConflictKeep,
@@ -94,6 +103,7 @@ from angee.integrate.states import (
 from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
+from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 
 logger = logging.getLogger(__name__)
@@ -104,6 +114,7 @@ _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
 _UNSET = object()
 _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
+_BINDING_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
 
 
 class AccountStatus(models.TextChoices):
@@ -129,20 +140,32 @@ class CredentialStatus(models.TextChoices):
 class OAuthClientQuerySet(AngeeQuerySet[Any]):
     """REBAC-scoped reads for OAuth client registration."""
 
-    def connectable(self) -> OAuthClientQuerySet:
-        """Return enabled, client-configured OAuth clients for the connect picker."""
+    def preferred(self, *, environment: str = "prod") -> OAuthClientQuerySet:
+        """Select the first registration per slug under a deterministic priority.
 
-        return cast(
-            OAuthClientQuerySet,
-            self.system_context(reason="integrate.graphql.connectable").filter(is_enabled=True).exclude(client_id=""),
+        Choose the environment before testing readiness: a disabled production
+        registration must not silently fall back to a development registration.
+        """
+
+        alternatives = self.model.objects.sudo(reason="integrate.oauth.environment_preference").filter(
+            slug=OuterRef("slug"),
+        ).order_by(
+            models.Case(models.When(environment=environment, then=0), default=1), "environment", "pk",
         )
+        return cast(OAuthClientQuerySet, self.filter(pk=Subquery(alternatives.values("pk")[:1])))
+
+    def connectable(self) -> OAuthClientQuerySet:
+        """Use the model's readiness rule for the public connection picker."""
+
+        public = self.system_context(reason="integrate.graphql.connectable").preferred()
+        ready_ids = [row.pk for row in public.only(*self.model.readiness_fields) if row.configuration_state == "ready"]
+        return cast(OAuthClientQuerySet, public.filter(pk__in=ready_ids))
 
     def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> Any | None:
-        """Return the preferred OAuth client for a slug when that row is enabled."""
+        """Resolve the same ready registration the picker and projection offer."""
 
-        client = self.filter(slug=slug, environment=environment).first()
-        client = client or self.filter(slug=slug).order_by("environment").first()
-        return client if client is not None and client.is_enabled else None
+        client = self.filter(slug=slug).preferred(environment=environment).first()
+        return client if client is not None and client.configuration_state == "ready" else None
 
 
 class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # type: ignore[misc]
@@ -334,6 +357,9 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             return self.display_name
         return f"{self.slug or '?'} ({self.environment})"
 
+    readiness_fields = ("slug", "is_enabled", "client_id", "discovery_url", "authorize_endpoint", "token_endpoint")
+    """Public facts used by the single connection readiness rule."""
+
     @property
     def configuration_state(self) -> str:
         """Return this OAuth client's operator-facing configuration readiness."""
@@ -347,6 +373,22 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         if not self.discovery_url and not (self.authorize_endpoint and self.token_endpoint):
             return "needs_endpoints"
         return "ready"
+
+    def refine_grant(self, protocol: OAuthClientProtocol, tokens: dict[str, Any]) -> dict[str, Any]:
+        """Let the selected provider refine the grant before credential persistence."""
+
+        return self.provider.refine_grant(protocol, tokens)
+
+    @property
+    def provider(self) -> type[OAuthProviderType]:
+        """Resolve the selected provider preset through its implementation field."""
+
+        return self._meta.get_field("provider_type").resolve_for(self)
+
+    def userinfo_params(self, protocol: OAuthClientProtocol, access_token: str) -> Mapping[str, str]:
+        """Ask the selected preset for profile-request parameters."""
+
+        return self.provider.userinfo_params(protocol, access_token)
 
     @property
     def default_scope_values(self) -> list[str]:
@@ -784,7 +826,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
             "last_refresh_status",
         }
     )
-    operation_fields = frozenset({"kind", "material"})
+    operation_fields = frozenset({"kind", "material", "refreshable"})
 
     _REASON = "integrate.connections.credential"
 
@@ -795,20 +837,11 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         transaction.on_commit(copy(credential).revoke_remote, robust=True)
 
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
-        """Return this user's active, non-expired OAuth credential for one client."""
+        """Reuse a credential whenever its owner does not require fresh consent."""
 
         with system_context(reason="integrate.connections.credential.live"):
-            return (
-                self.filter(
-                    user=user,
-                    oauth_client=oauth_client,
-                    kind=CredentialKind.OAUTH,
-                    status=CredentialStatus.ACTIVE,
-                )
-                .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
-                .select_related("external_account", "oauth_client")
-                .first()
-            )
+            row = self.filter(user=user, oauth_client=oauth_client, kind=CredentialKind.OAUTH).first()
+            return row if row is not None and not row.is_reconnect_required else None
 
     def upsert_for_user(
         self,
@@ -819,6 +852,7 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         /,
         *,
         external_account: Any | None = None,
+        reconnect: bool = True,
         **fields: Any,
     ) -> Any:
         """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
@@ -838,12 +872,30 @@ class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type
         if not str(create_values.get("name") or ""):
             create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
         with system_context(reason=self._REASON), transaction.atomic():
+            existing = self.lock_if_supported().filter(user_id=user.pk, oauth_client_id=oauth_client.pk).first()
+            if (
+                existing is not None and external_account is not None
+                and existing.external_account_id not in (None, external_account.pk)
+                and apps.get_model("integrate", "Integration").objects.filter(
+                    Q(credential_id=existing.pk) | Q(binding_credential_id=existing.pk),
+                ).exists()
+            ):
+                raise IntegrationError(
+                    "Detach this credential from its integrations before changing the external account."
+                )
             instance, _created = self.update_or_create(
                 user_id=user.pk,
                 oauth_client_id=oauth_client.pk,
                 defaults={**operation_values, **update_values},
                 create_defaults=create_values,
             )
+            if reconnect and existing is not None:
+                # The credential row is shared; invalidate every attachment in PK order.
+                integrations = apps.get_model("integrate", "Integration").objects.filter(
+                    Q(credential_id=instance.pk) | Q(binding_credential_id=instance.pk),
+                ).order_by("pk")
+                for integration in integrations:
+                    integration.concrete_capability().attach_connection(instance, connect_disconnected=False)
         return instance
 
     @staticmethod
@@ -1032,6 +1084,19 @@ class Credential(AuditMixin, AngeeDataModel):
     last_refresh_at = models.DateTimeField(null=True, blank=True)
     last_refresh_status = models.CharField(max_length=32, blank=True)
 
+    refreshable = models.BooleanField(default=False, editable=False)
+    """Non-secret evidence of a refresh grant and a refresh-capable client."""
+
+    @property
+    def is_reconnect_required(self) -> bool:
+        """Require consent only for inactive, failed-refresh or unrenewable expired grants."""
+
+        return (
+            self.status != CredentialStatus.ACTIVE
+            or self.last_refresh_status == "failed"
+            or (not self.refreshable and self.expires_at is not None and self.expires_at <= timezone.now())
+        )
+
     objects = CredentialManager()
 
     class Meta:
@@ -1081,6 +1146,17 @@ class Credential(AuditMixin, AngeeDataModel):
 
         return self.handler.reveal(self)
 
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the handler's public refreshability fact with material changes."""
+
+        update_fields = kwargs.get("update_fields")
+        material_fields = {"material", "kind", "oauth_client", "oauth_client_id"}
+        if self._state.adding or update_fields is None or material_fields.intersection(update_fields):
+            self.refreshable = self.handler.can_refresh(self)
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "refreshable"}
+        super().save(*args, **kwargs)
+
     @staticmethod
     def encode_material(material: Mapping[str, Any]) -> str:
         """Encode credential material into its deterministic encrypted-field payload."""
@@ -1107,9 +1183,10 @@ class Credential(AuditMixin, AngeeDataModel):
                         material.pop(key, None)
                     else:
                         material[key] = value
-                row.material = self.encode_material(material)  # type: ignore[assignment]  # EncryptedField descriptor unmodeled by django-stubs
+                # EncryptedField's descriptor is not modeled by django-stubs.
+                row.material = self.encode_material(material)  # type: ignore[assignment]
                 row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+            self.refresh_from_db(fields=["material", "refreshable", "updated_at"])
 
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.
@@ -1178,9 +1255,10 @@ class Credential(AuditMixin, AngeeDataModel):
         non-expiring local token, a still-valid token, or a credential with no refresh
         grant — is a no-op. The refresh is serialized and re-checked under a row lock
         (:meth:`_refresh_locked`), so racing consumers issue at most one network refresh.
-        A provider rejecting the refresh is recorded (``last_refresh_status="failed"``) and
-        logged, not raised, so it never blocks the consumer (the stale token then fails
-        downstream as it would have anyway); unexpected errors propagate.
+        A permanent refresh refusal records ``last_refresh_status="failed"`` and leaves
+        the existing token for the consumer to try. Transient refusals propagate so its
+        retry owner can reschedule without prompting for consent. Unexpected errors
+        also propagate.
         """
 
         if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
@@ -1190,12 +1268,14 @@ class Credential(AuditMixin, AngeeDataModel):
         try:
             self._refresh_locked()
         except (OAuthFlowError, ValueError) as error:
+            if isinstance(error, IntegrationError) and error.transient:
+                raise
             logger.warning(
                 "Credential %s refresh failed (%s); using the existing token.",
                 self.pk,
                 type(error).__name__,
             )
-            self._record_refresh_failure()
+            self._record_refresh_failure(error)
 
     def refresh_now(self) -> None:
         """Force a provider refresh now for an interactive caller, raising on failure.
@@ -1214,8 +1294,8 @@ class Credential(AuditMixin, AngeeDataModel):
             raise ValueError("This credential cannot be refreshed; reconnect the account.")
         try:
             self._refresh_locked(force=True)
-        except OAuthFlowError, ValueError:
-            self._record_refresh_failure()
+        except (OAuthFlowError, ValueError) as error:
+            self._record_refresh_failure(error)
             raise
 
     def _refresh_locked(self, *, force: bool = False) -> None:
@@ -1238,9 +1318,11 @@ class Credential(AuditMixin, AngeeDataModel):
                 self.handler.refresh(locked)
         self.refresh_from_db()
 
-    def _record_refresh_failure(self) -> None:
-        """Persist a failed-refresh marker so the console can prompt re-authorization."""
+    def _record_refresh_failure(self, error: Exception) -> None:
+        """Persist permanent refresh refusals; transport retries do not require consent."""
 
+        if isinstance(error, IntegrationError) and error.transient:
+            return
         self.last_refresh_status = "failed"
         with system_context(reason="integrate.credential.refresh.failed"):
             self.save(update_fields=["last_refresh_status", "updated_at"])
@@ -1284,7 +1366,7 @@ class Vendor(AuditMixin, AngeeDataModel):
 
     The single source of truth for "what is this third party" — branding and
     reference metadata only. New integration addons add their own row via an
-    install-tier resource seed (``adopt: slug``). The connect-side ``OAuthClient``
+    master-tier resource seed (``adopt: slug``). The connect-side ``OAuthClient``
     carries its own ``slug``; that is a deliberately independent namespace, not a
     foreign key into this catalogue.
     """
@@ -1341,6 +1423,7 @@ class IntegrationRuntimeStatus(models.TextChoices):
 
     OK = "ok", "OK"
     ERROR = "error", "Error"
+    PENDING = "pending", "Pending"
 
     @classmethod
     def from_value(cls, value: object) -> IntegrationRuntimeStatus:
@@ -1389,10 +1472,17 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
 
         return self.filter(concrete_type=ContentType.objects.get_for_model(self.model))
 
+    def ready_for_work(self) -> Any:
+        """Exclude pending or unsuccessful discovery through one admission predicate."""
+
+        return self.filter(binding_retry_at__isnull=True).filter(
+            Q(binding_generation=0) | Q(binding_completed_at__isnull=False),
+        )
+
     def due_for_enqueue(self, *, timestamp: datetime, stale_before: datetime) -> Any:
         """Return bridge rows due for a new queue attempt or stale recovery."""
 
-        return self.filter(
+        return self.ready_for_work().filter(
             Q(lifecycle=IntegrationLifecycle.CONNECTED, next_sync_at__lte=timestamp)
             | Q(
                 lifecycle__in=(IntegrationLifecycle.CONNECTED, IntegrationLifecycle.PAUSED),
@@ -1400,6 +1490,13 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
                 updated_at__lte=stale_before,
             )
         )
+
+    def pending_bindings(self, *, now: datetime) -> Any:
+        """Select due discovery, including paused rows whose binding must finish."""
+
+        return self.filter(binding_retry_at__lte=now).exclude(
+            lifecycle=IntegrationLifecycle.DISCONNECTED,
+        ).order_by("pk")
 
     def live_account_owners(
         self,
@@ -1456,6 +1553,14 @@ class IntegrationQuerySet(AngeeQuerySet[Any]):
 
 class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # type: ignore[misc]
     """Manager for integration and bridge collection scopes."""
+
+
+def _save_connected(instance: Any, source: Any, target: Any, **kwargs: Any) -> None:
+    """The connected transition owns discovery and the resulting first poll."""
+
+    save_state(instance, source, target, **kwargs)
+    instance.concrete_capability().await_binding()
+    instance.refresh_from_db()
 
 
 class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
@@ -1576,29 +1681,190 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                     authorized.append(visible)
         return integrity, authorized
 
+    @classmethod
+    def capability_impl_field(cls) -> ImplClassField:
+        """Use the nearest capability's selector, including MTI refinements."""
+
+        for owner in (cls, *cls._meta.get_parent_list()):
+            fields = [field for field in owner._meta.local_fields if isinstance(field, ImplClassField)]
+            if len(fields) == 1:
+                return fields[0]
+            if fields:
+                raise ImproperlyConfigured(
+                    f"{owner._meta.label} must declare one capability implementation field; found {len(fields)}."
+                )
+        raise ImproperlyConfigured(f"{cls._meta.label} has no capability implementation field.")
+
+    @property
+    def capability_impl_class(self) -> type[Any]:
+        """Resolve the selected implementation without opening its transport."""
+
+        field = self.capability_impl_field()
+        key = self.__dict__.get("_connection_impl_key")
+        return field.resolve_class(key) if key is not None else field.resolve_for(self)
+
     @property
     def capability_impl(self) -> Any:
-        """Return the one implementation selected by a concrete capability child."""
+        """Construct the runtime selected by this concrete capability."""
 
-        fields = [field for field in self._meta.get_fields() if isinstance(field, ImplClassField)]
-        if len(fields) != 1:
-            raise ImproperlyConfigured(
-                f"{self._meta.label} must declare exactly one child implementation field; found {len(fields)}."
+        return self.capability_impl_class(self)
+
+    @property
+    def oauth_client_hint(self) -> str:
+        """Select connection intent without constructing the capability runtime."""
+
+        return self.capability_impl_class.oauth_client
+
+    def connect_oauth_client(self, owner_label: str) -> Any:
+        """Resolve the registration for this capability's declared connection."""
+
+        return enabled_oauth_client_from_hint(
+            self.oauth_client_hint, owner_label=owner_label,
+            reason="integrate.integration.connect_oauth_client", vendor_slug=self.connection_vendor_slug(),
+        )
+
+    @classmethod
+    def credential_projection_expressions(cls) -> dict[str, Any]:
+        """Public health scalars from a protected credential, without a joined object."""
+
+        credential = apps.get_model("integrate", "Credential").objects.sudo(
+            reason="integrate.connection.public_health",
+        ).filter(pk=OuterRef("credential_id"))
+        return {
+            f"_connection_{name}": Subquery(credential.values(name)[:1])
+            for name in ("status", "expires_at", "last_refresh_status", "refreshable")
+        }
+
+    @classmethod
+    def oauth_projection_expressions(cls) -> dict[str, Any]:
+        """Read the vendor hint and nearest concrete selector as elevated scalars."""
+
+        vendor = apps.get_model("integrate", "Vendor").objects.sudo(
+            reason="integrate.connection.public_vendor",
+        ).filter(pk=OuterRef("vendor_id"))
+        selectors = []
+        base = apps.get_model("integrate", "Integration")
+        for model in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
+            if model is base or not issubclass(model, base):
+                continue
+            if not any(isinstance(field, ImplClassField) for field in model._meta.fields):
+                continue
+            field = model.capability_impl_field()
+            rows = model.objects.sudo(reason="integrate.connection.public_selector").filter(pk=OuterRef("pk"))
+            selectors.append(models.When(
+                concrete_type_id=ContentType.objects.get_for_model(model).pk,
+                then=Subquery(rows.values(field.name)[:1]),
+            ))
+        return {
+            "_connection_vendor_slug": Subquery(vendor.values("slug")[:1]),
+            "_connection_impl_key": models.Case(*selectors, default=models.Value(""), output_field=models.CharField()),
+        }
+
+    def connection_vendor_slug(self) -> str:
+        """Read branding used by connection selection without requiring Vendor read."""
+
+        if "_connection_vendor_slug" in self.__dict__:
+            return str(self.__dict__["_connection_vendor_slug"] or "")
+        vendor = apps.get_model("integrate", "Vendor")
+        return str(vendor.objects.sudo(reason="integrate.connection.vendor").values_list(
+            "slug", flat=True,
+        ).get(pk=self.vendor_id))
+
+    def is_oauth_connectable(self) -> bool:
+        """Use registration readiness without constructing a runtime or loading secrets."""
+
+        try:
+            slug = oauth_client_slug_from_hint(
+                self.oauth_client_hint, owner_label=self._meta.label, vendor_slug=self.connection_vendor_slug(),
             )
-        impl_class = fields[0].resolve_for(self)
-        return impl_class(self)
+        except OAuthFlowError:
+            return False
+        return oauth_client_is_ready(slug)
+
+    def can_connect(self, actor: Any = None) -> bool:
+        """OAuth Connect requires ownership, write, registration and consent need.
+
+        A healthy grant with failed discovery is repaired by Retry, so that row
+        never offers both Retry and Connect.
+        """
+
+        row = copy(self).with_actor(actor) if actor is not None else self
+        return (
+            row.owner_id == actor_user_id(instance_actor(row)) and row.has_access("write")
+            and row.is_oauth_connectable() and (row.credential_id is None or row.is_reconnect_required)
+        )
+
+    def require_connect(self, actor: Any) -> None:
+        """Enforce the same OAuth admission projected to the record client."""
+
+        self.require_access("write", actor)
+        if not self.can_connect(actor):
+            raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
+
+    def can_resume(self) -> bool:
+        """Operator Resume reuses an attached grant and never substitutes for consent."""
+
+        return self._can_operate_connection() and not self.is_reconnect_required and (
+            self.lifecycle == IntegrationLifecycle.PAUSED
+            or (self.lifecycle == IntegrationLifecycle.DISCONNECTED and self.credential_id is not None)
+        )
+
+    def can_retry_binding(self) -> bool:
+        """Retry only failed, settled discovery with an attached healthy grant."""
+
+        return (
+            self._can_operate_connection() and self.lifecycle in (
+                IntegrationLifecycle.CONNECTED, IntegrationLifecycle.PAUSED,
+            ) and self.credential_id is not None and not self.is_reconnect_required
+            and not self.binding_ready and not self.binding_pending
+        )
+
+    def _can_operate_connection(self) -> bool:
+        """Preserve the console operational verbs' IAM-owned administrator boundary."""
+
+        actor, unscoped = self.effective_actor(strict=True)
+        role = platform_admin_role()
+        return self.has_access("write") and (unscoped or (role is not None and subject_has_role(actor, role)))
+
+    def resume(self) -> None:
+        """Recheck Resume admission under the integration lock before connecting."""
+
+        actor = instance_actor(self)
+        with transaction.atomic():
+            with system_context(reason="integrate.connection.resume"):
+                row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if actor is not None:
+                row.with_actor(actor)
+            if not row.can_resume():
+                raise ValidationError("This integration cannot resume in its current state.")
+            row.connect()
+        self.refresh_from_db()
+
+    def _credential_health(self) -> Credential | None:
+        """Consume optimized public facts, or fetch the same narrow elevated projection."""
+
+        if self.credential_id is None:
+            return None
+        model = apps.get_model("integrate", "Credential")
+        fields = ("status", "expires_at", "last_refresh_status", "refreshable")
+        if all(f"_connection_{field}" in self.__dict__ for field in fields):
+            values = {field: self.__dict__[f"_connection_{field}"] for field in fields}
+            return cast(Credential, model(**values)) if values["status"] is not None else None
+        return model.objects.sudo(reason="integrate.connection.health").only(*fields).get(pk=self.credential_id)
+
+    @property
+    def is_reconnect_required(self) -> bool:
+        """Delegate consent health to the credential owner's non-secret predicate."""
+
+        credential = self._credential_health()
+        return credential is not None and credential.is_reconnect_required
 
     @property
     def credential_status(self) -> str:
-        """Return the attached credential's status, or ``""`` when none is attached.
+        """Expose credential health without granting read access to its protected row."""
 
-        The one fact a console verb needs to know whether a disconnected row can
-        reconnect with what it already holds — projected on every subtype so a
-        form never has to select the credential relation itself.
-        """
-
-        credential = getattr(self, "credential", None)
-        return "" if credential is None else str(getattr(credential, "status", "") or "")
+        credential = self._credential_health()
+        return "" if credential is None else str(credential.status)
 
     def fresh_credential(self) -> Credential | None:
         """Reload the attached credential, including changes to its FK or material."""
@@ -1695,8 +1961,8 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     )
     """Observed health for the integration's last runtime interaction.
 
-    ``OK`` and ``ERROR`` describe the last credential/sync/use outcome; they do
-    not move the lifecycle journey.
+    ``PENDING`` marks discovery in flight; ``OK`` and ``ERROR`` describe the
+    last credential/sync/use outcome. None moves the lifecycle journey.
     """
     last_used_at = models.DateTimeField(null=True, blank=True)
     last_used_status = models.CharField(max_length=64, blank=True)
@@ -1704,6 +1970,20 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     error_count_24h = models.PositiveIntegerField(default=0)
     last_error: str = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
+    binding_credential = models.ForeignKey(
+        "integrate.Credential", on_delete=models.PROTECT, null=True, blank=True, editable=False,
+        related_name="discovered_integrations",
+    )
+    """The original grant retained when discovery attaches a derived credential."""
+    binding_retry_at = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
+    """Durable pending discovery and the earliest provider retry deadline."""
+    binding_completed_at = models.DateTimeField(null=True, blank=True, editable=False)
+    """Evidence that this connection generation applied successfully."""
+    binding_generation = models.PositiveIntegerField(default=0, editable=False)
+    """Fence older callbacks when OAuth rotates material on the same credential row."""
+
+    binding_attempts = models.PositiveIntegerField(default=0, editable=False)
+    """Remote attempts in this generation; lock contention does not consume one."""
 
     lifecycle_transitions = StateTransitions(
         lifecycle,
@@ -1747,7 +2027,10 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             update_fields = kwargs.get("update_fields")
             if changed and update_fields is not None:
                 kwargs["update_fields"] = {*update_fields, "concrete_type"}
+        adding = self._state.adding
         super().save(*args, **kwargs)
+        if adding and self.credential_id is not None and self.requires_connection_discovery:
+            self.await_binding()
 
     @property
     def display_label(self) -> str:
@@ -1773,7 +2056,7 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         lifecycle,
         source=[IntegrationLifecycle.DISCONNECTED, IntegrationLifecycle.PAUSED],
         target=IntegrationLifecycle.CONNECTED,
-        on_success=save_state,
+        on_success=_save_connected,
     )
     def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
@@ -1795,6 +2078,9 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                 if field.is_cached(self):
                     field.delete_cached_value(self)
             fields.add(name)
+            if name == "credential":
+                self.binding_credential_id = None if value is None else value.pk
+                fields.add("binding_credential")
         self.runtime_status = cast(IntegrationRuntimeStatus, IntegrationRuntimeStatus.OK)
         self.last_error = ""
         self.last_error_at = None
@@ -1803,28 +2089,45 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
     def attach_connection(
         self,
-        credential: Any,
+        credential: Any | None,
         *,
         account: Any = _UNSET,
         connect_disconnected: bool = True,
+        discovery_generation: int | None = None,
     ) -> None:
-        """Attach a credential and reset health while preserving paused rows."""
+        """Own every credential attachment, including a fenced derived credential.
 
-        resolved_account = credential.external_account if account is _UNSET else account
+        ``discovery_generation`` is reserved for the apply step already holding
+        this row's lock. Ordinary callers always enter connection discovery.
+        """
+
+        resolved_account = (
+            None if credential is None else credential.external_account
+        ) if account is _UNSET else account
         if self.pk is None:
             self._set_connection_fields(credential=credential, account=resolved_account)
-            if connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
+            if credential is not None and connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 self.lifecycle_transitions.force_state(
-                    self,
-                    IntegrationLifecycle.CONNECTED,
-                    reason="unsaved integration attach resolves initial lifecycle before insert",
+                    self, IntegrationLifecycle.CONNECTED,
+                    reason="unsaved integration attachment declares initial connection intent",
                 )
             return
-        if connect_disconnected and self.lifecycle == IntegrationLifecycle.DISCONNECTED:
-            self.connect(credential=credential, account=resolved_account)
-            return
-        fields = self._set_connection_fields(credential=credential, account=resolved_account)
-        self.save(update_fields=[*fields, "updated_at"])
+        with system_context(reason="integrate.connection.attach"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if discovery_generation is not None:
+                if row.binding_generation != discovery_generation or not row.binding_pending:
+                    raise IntegrationError("Connection discovery has been superseded.")
+                original_grant_id = row.binding_credential_id
+                fields = row._set_connection_fields(credential=credential, account=resolved_account)
+                row.binding_credential_id = original_grant_id
+                row.save(update_fields={*fields, "updated_at"})
+            elif credential is not None and connect_disconnected and row.lifecycle == IntegrationLifecycle.DISCONNECTED:
+                row.connect(credential=credential, account=resolved_account)
+            else:
+                fields = row._set_connection_fields(credential=credential, account=resolved_account)
+                row.save(update_fields={*fields, "updated_at"})
+                row.await_binding()
+        self.refresh_from_db()
 
     @transition(
         lifecycle,
@@ -1844,11 +2147,16 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     def disconnect(self) -> None:
         """Disconnect this integration without changing its runtime health."""
 
+        self.binding_retry_at = None
+        self._transition_fields = {"binding_retry_at"}
+
     def set_lifecycle(self, lifecycle: IntegrationLifecycle | str) -> None:
         """Move to one declared lifecycle state using this model's transition methods."""
 
         target = IntegrationLifecycle.from_value(lifecycle)
         if str(self.lifecycle) == target.value:
+            if target == IntegrationLifecycle.CONNECTED:
+                self.await_binding()
             return
         if target == IntegrationLifecycle.CONNECTED:
             self.connect()
@@ -1859,11 +2167,231 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         else:
             self.lifecycle_transitions.not_allowed(self.lifecycle, target)
 
-    def attach_credential(self, credential: Any) -> None:
-        """Attach a live credential and connect this disconnected integration."""
+    @property
+    def requires_connection_discovery(self) -> bool:
+        """Credential-only capabilities settle attachment without a worker."""
+
+        return False
+
+    @property
+    def binding_pending(self) -> bool:
+        """Whether this connection generation is awaiting discovery or a retry."""
+
+        return self.binding_retry_at is not None
+
+    @property
+    def binding_ready(self) -> bool:
+        """One admission rule for sync, workflow dispatch and outbound delivery.
+
+        Generation zero preserves established integrations until their next
+        attachment or Resume. Every new generation needs successful discovery.
+        """
+
+        return not self.binding_pending and (self.binding_generation == 0 or self.binding_completed_at is not None)
+
+    def prepare_connection_discovery(self) -> None:
+        """Database-only preparation; concrete capabilities may suspend their work."""
+
+    def connection_discovery_finished(self, *, succeeded: bool) -> None:
+        """Database-only completion; concrete capabilities may arm their work."""
+
+    def await_binding(self) -> None:
+        """Invalidate the previous result and dispatch one durable discovery attempt."""
+
+        with system_context(reason="integrate.connection.await"), transaction.atomic():
+            target = self.concrete_capability()
+            if type(target) is not type(self):
+                target.await_binding()
+                self.refresh_from_db()
+                return
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if row.binding_credential_id is not None and row.credential_id != row.binding_credential_id:
+                credential = apps.get_model("integrate", "Credential").objects.get(pk=row.binding_credential_id)
+                fields = row._set_connection_fields(credential=credential, account=row.account)
+                row.save(update_fields={*fields, "updated_at"})
+            if row.binding_credential_id is None:
+                row.binding_credential_id = row.credential_id
+            row.binding_generation += 1
+            row.binding_attempts = 0
+            row.binding_completed_at = None
+            row.binding_retry_at = timezone.now()
+            row.prepare_connection_discovery()
+            row.save(update_fields=[
+                "binding_generation", "binding_attempts", "binding_completed_at", "binding_retry_at",
+                "binding_credential", "updated_at",
+            ])
+            if row.requires_connection_discovery and row.lifecycle == IntegrationLifecycle.DISCONNECTED:
+                row.binding_retry_at = None
+                row.save(update_fields=["binding_retry_at", "updated_at"])
+            elif not row.requires_connection_discovery:
+                row.finish_binding(credential_pk=row.credential_id, generation=row.binding_generation)
+            elif row.credential_id is None:
+                row.finish_binding(
+                    credential_pk=None, generation=row.binding_generation,
+                    error=IntegrationFailure("No credential is attached."),
+                )
+            else:
+                row.report_status(IntegrationRuntimeStatus.PENDING)
+                enqueue_task(
+                    BINDING_TASK,
+                    kwargs={
+                        "integration_pk": row.pk, "credential_pk": row.credential_id,
+                        "generation": row.binding_generation,
+                    },
+                    expires=BINDING_TASK_EXPIRES, robust=True,
+                )
+        self.refresh_from_db()
+
+    def retry_binding(self) -> None:
+        """Retry connection discovery, resetting the bounded attempt budget."""
+
+        actor = instance_actor(self)
+        with transaction.atomic():
+            with system_context(reason="integrate.connection.retry"):
+                row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if actor is not None:
+                row.with_actor(actor)
+            if not row.can_retry_binding():
+                raise ValidationError("This integration cannot retry discovery in its current state.")
+            row.concrete_capability().await_binding()
+        self.refresh_from_db()
+
+    def binding_is_pending(self, credential_pk: int | None, *, generation: int) -> bool:
+        """Fence both credential replacement and rotation on the same credential row."""
+
+        return self.binding_pending and self.credential_id == credential_pk and self.binding_generation == generation
+
+    def defer_binding(self, *, credential_pk: int, generation: int, retry_after: timedelta) -> bool:
+        """Retain a provider deadline unless this generation exhausted its attempts."""
+
+        with system_context(reason="integrate.connection.defer"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not row.binding_is_pending(credential_pk, generation=generation):
+                return False
+            if row.binding_attempts >= BINDING_ATTEMPT_LIMIT:
+                row.finish_binding(
+                    credential_pk=credential_pk, generation=generation,
+                    error=IntegrationFailure(_BINDING_RETRY_EXHAUSTED_MESSAGE),
+                )
+            else:
+                row.binding_retry_at = max(row.binding_retry_at, timezone.now() + retry_after)
+                row.save(update_fields=["binding_retry_at", "updated_at"])
+        self.refresh_from_db()
+        return True
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Apply a credential-only result; bridges add domain database work."""
+
+        if discovery.data or discovery.credential is not None:
+            raise IntegrationError("This integration does not accept external resource discovery.")
+
+    def finish_binding(
+        self, *, credential_pk: int | None, generation: int,
+        discovery: ConnectionDiscovery | None = None, error: IntegrationFailure | None = None,
+    ) -> bool:
+        """Apply remote results only after validating the task's original fence.
+
+        The adapter receives the freshly locked integration. Derived material
+        lands through the credential manager and ``attach_connection`` here,
+        never in the adapter's network phase.
+        """
+
+        with system_context(reason="integrate.connection.finish"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not row.binding_is_pending(credential_pk, generation=generation):
+                return False
+            if error is None:
+                result = discovery or ConnectionDiscovery()
+                row.apply_discovery(result)
+                if result.credential is not None:
+                    source = apps.get_model("integrate", "Credential").objects.get(pk=credential_pk)
+                    derived = result.credential
+                    credential = type(source).objects.create_local_credential(
+                        source.user, kind=derived.kind, name=derived.name, material=dict(derived.material),
+                    )
+                    row.attach_connection(
+                        credential, account=source.external_account, connect_disconnected=False,
+                        discovery_generation=generation,
+                    )
+            row.binding_retry_at = None
+            row.binding_completed_at = timezone.now() if error is None else None
+            row.save(update_fields=["binding_retry_at", "binding_completed_at", "updated_at"])
+            row.report_status(IntegrationRuntimeStatus.ERROR if error else IntegrationRuntimeStatus.OK, error or "")
+            row.connection_discovery_finished(succeeded=error is None)
+            if error is None:
+                transaction.on_commit(
+                    lambda: binding_finished.send(sender=type(row), instance=row), robust=True,
+                )
+        self.refresh_from_db()
+        return True
+
+    def attach_credential(self, credential: Any | None) -> None:
+        """Route parent-addressed attachment through the concrete capability owner."""
 
         with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
-            self.attach_connection(credential)
+            self.concrete_capability().attach_connection(credential)
+        self.refresh_from_db()
+
+    def run_binding(self, *, credential_pk: int | None, generation: int) -> dict[str, Any]:
+        """Discover in autocommit under the sync lock, then apply under the row fence."""
+
+        if connection.in_atomic_block:
+            raise RuntimeError("Connection discovery requires autocommit.")
+        target = self.concrete_capability()
+        with bridge_advisory_lock(target) as acquired:
+            if not acquired:
+                return {"ok": False, "reason": "locked"}
+            with transaction.atomic():
+                row = type(target).objects.lock_if_supported().get(pk=target.pk)
+                if not row.binding_is_pending(credential_pk, generation=generation):
+                    return {"ok": False, "reason": "stale-discovery"}
+                if row.binding_retry_at > timezone.now():
+                    return {"ok": False, "reason": "deferred"}
+                if row.binding_attempts >= BINDING_ATTEMPT_LIMIT:
+                    row.finish_binding(
+                        credential_pk=credential_pk, generation=generation,
+                        error=IntegrationFailure(_BINDING_RETRY_EXHAUSTED_MESSAGE),
+                    )
+                    return {"ok": False, "reason": "attempt-limit"}
+                row.binding_attempts += 1
+                row.save(update_fields=["binding_attempts", "updated_at"])
+            target = row
+            try:
+                if credential_pk is None:
+                    raise IntegrationError("No credential is attached.")
+                discovery = target.discover_connection(row.credential)
+                if not isinstance(discovery, ConnectionDiscovery):
+                    raise IntegrationError("The adapter returned an invalid connection discovery result.")
+                applied = target.finish_binding(
+                    credential_pk=credential_pk, generation=generation, discovery=discovery,
+                )
+                self.refresh_from_db()
+                return {"ok": applied, "reason": "applied" if applied else "stale-discovery"}
+            except Exception as error:  # noqa: BLE001 — provider diagnostics never become public telemetry.
+                retryable = (
+                    isinstance(error, IntegrationError) and error.transient
+                    or isinstance(error, (httpx2.TransportError, OperationalError))
+                    or isinstance(error, httpx2.HTTPStatusError) and error.response.status_code >= 500
+                    or isinstance(error, OAuthFlowError) and error.http_status >= 500
+                )
+                if retryable and credential_pk is not None:
+                    hint = error.retry_after if isinstance(error, IntegrationError) else None
+                    target.defer_binding(
+                        credential_pk=credential_pk, generation=generation,
+                        retry_after=hint or timedelta(minutes=1),
+                    )
+                    self.refresh_from_db()
+                    return {"ok": False, "reason": "deferred" if target.binding_pending else "attempt-limit"}
+                target.finish_binding(
+                    credential_pk=credential_pk, generation=generation, error=_safe_integration_failure(error),
+                )
+                self.refresh_from_db()
+                return {"ok": False, "reason": "discovery-failed"}
+
+    def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
+        """Credential-only discovery is synchronous and has no external resource."""
+
+        return ConnectionDiscovery()
 
     def report_status(self, status: IntegrationRuntimeStatus | str, error: str | IntegrationFailure = "") -> None:
         """Record implementation status telemetry and persist this integration.
@@ -1880,8 +2408,11 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         normalized = IntegrationRuntimeStatus.from_value(status)
         reported_at = timezone.now()
         self.runtime_status = normalized
-        self.last_used_at = reported_at
-        self.last_used_status = raw_status or normalized.value
+        usage_fields: list[str] = []
+        if normalized != IntegrationRuntimeStatus.PENDING:
+            self.last_used_at = reported_at
+            self.last_used_status = raw_status or normalized.value
+            usage_fields = ["last_used_at", "last_used_status"]
         self.last_error = (
             error.message if isinstance(error, IntegrationFailure) else (_INTEGRATION_FAILURE_MESSAGE if error else "")
         )
@@ -1895,8 +2426,7 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                 update_fields=[
                     "last_error",
                     "last_error_at",
-                    "last_used_at",
-                    "last_used_status",
+                    *usage_fields,
                     "runtime_status",
                     "updated_at",
                 ],
@@ -2232,6 +2762,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         expected_run_id = self.sync_run_id
         with system_context(reason="integrate.bridge.claim_dispatch"), transaction.atomic():
             row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not cast(Any, row).binding_ready:
+                return False
             if row.sync_run_id != expected_run_id or (row.sync_run_id == run_id and row.sync_is_dispatched):
                 return False
             row.sync_run_id = run_id
@@ -2317,45 +2849,43 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         kept = {key: value for key, value in existing.items() if key not in self._SYNC_OUTCOME_KEYS}
         return {**kept, **values}
 
-    def mark_sync_started(self, *, now: datetime) -> None:
-        """Persist one scheduler attempt's start, preserving a repeated claim."""
+    def mark_sync_started(self, *, now: datetime) -> bool:
+        """Admit one attempt under the connection gate, preserving repeated starts."""
 
-        if self.sync_stage == self.SyncStage.SYNCING and self.last_sync_started_at == now:
-            return
-        self.last_sync_started_at = now
-        self.sync_stage = self.SyncStage.SYNCING
-        self.sync_error = ""
-        self.sync_progress = self._sync_marker(stage=self.SyncStage.SYNCING, started_at=now.isoformat())
-        with transaction.atomic():
-            self.save(
-                update_fields=[
-                    "last_sync_started_at",
-                    "sync_error",
-                    "sync_progress",
-                    "sync_stage",
-                    "updated_at",
-                ],
-            )
+        fields = ["last_sync_started_at", "sync_error", "sync_progress", "sync_stage"]
+        with system_context(reason="integrate.bridge.start"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not cast(Any, row).binding_ready:
+                return False
+            if row.sync_stage == row.SyncStage.SYNCING and row.last_sync_started_at == now:
+                return True
+            row.last_sync_started_at = now
+            row.sync_stage = row.SyncStage.SYNCING
+            row.sync_error = ""
+            row.sync_progress = row._sync_marker(stage=row.SyncStage.SYNCING, started_at=now.isoformat())
+            row.save(update_fields=[*fields, "updated_at"])
+        self.refresh_from_db(fields=fields)
+        return True
 
-    def claim_sync(self, *, now: datetime) -> None:
-        """Push the next poll one interval out as an in-flight claim.
+    def claim_sync(self, *, now: datetime) -> bool:
+        """Claim the next interval only after the connection is ready for work."""
 
-        The scheduler claims a due row under a row lock before running it, so an
-        overlapping scan — a backfill outliving the tick cadence, or a second
-        worker — re-reads the row, sees a future ``next_sync_at``, and skips
-        instead of double-syncing one source. ``record_sync`` /
-        ``record_sync_error`` recompute the real next poll when the run ends.
-        """
-
-        self.next_sync_at = self._next_sync_at(now=now)
-        with transaction.atomic():
-            self.save(update_fields=["next_sync_at", "updated_at"])
+        with system_context(reason="integrate.bridge.claim"), transaction.atomic():
+            row = type(self).objects.lock_if_supported().get(pk=self.pk)
+            if not cast(Any, row).binding_ready:
+                return False
+            row.next_sync_at = row._next_sync_at(now=now)
+            row.save(update_fields=["next_sync_at", "updated_at"])
+        self.next_sync_at = row.next_sync_at
+        return True
 
     def mark_sync_queued(self, *, now: datetime) -> None:
         """Persist that a worker task has been queued for this bridge."""
 
         with transaction.atomic():
             row = type(self).objects.sudo(reason="integrate.bridge.queue").lock_if_supported().get(pk=self.pk)
+            if not cast(Any, row).binding_ready:
+                raise IntegrationError("Connection discovery must finish before syncing.")
             if not row.sync_is_dispatched:
                 row.sync_stage = self.SyncStage.QUEUED
                 row.sync_error = ""
@@ -2413,6 +2943,60 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_stage = self.SyncStage.IDLE
         return True
 
+    @property
+    def oauth_client_hint(self) -> str:
+        """Retain bridges' default vendor hint when their descriptor omits one."""
+
+        return cast(Any, super()).oauth_client_hint or cast(Any, self).connection_vendor_slug()
+
+    @property
+    def requires_connection_discovery(self) -> bool:
+        """Whether the selected implementation declares asynchronous discovery."""
+
+        if not any(isinstance(field, ImplClassField) for field in self._meta.fields):
+            return False
+        return cast(Any, self).capability_impl_class.requires_connection_discovery
+
+    def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
+        """Invoke the adapter's read-only remote hook outside a transaction."""
+
+        adapter = cast(Any, self).capability_impl
+        try:
+            return adapter.discover_connection(credential)
+        finally:
+            adapter.close()
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Compose the domain's database apply hook under the integration-owned fence."""
+
+        if not cast(Any, self).requires_connection_discovery:
+            if discovery.data or discovery.credential is not None:
+                raise IntegrationError("This bridge does not accept connection discovery results.")
+            return
+        adapter = cast(Any, self).capability_impl
+        try:
+            adapter.apply_discovery(discovery)
+        finally:
+            adapter.close()
+
+    def prepare_connection_discovery(self) -> None:
+        """Suspend polling and cooperatively stop a live session without changing sync ownership."""
+
+        self.next_sync_at = None
+        self.save(update_fields=["next_sync_at", "updated_at"])
+        if not any(isinstance(field, ImplClassField) for field in self._meta.fields):
+            return
+        impl = cast(Any, self).capability_impl_class
+        if issubclass(impl, LiveBridgeImpl):
+            self.update_live_state(identity_key=impl.state_identity_key, desired=self.LiveState.STOPPED)
+
+    def connection_discovery_finished(self, *, succeeded: bool) -> None:
+        """Arm the first eligible poll; retained workflow runs keep their scheduling claim."""
+
+        now = timezone.now()
+        self.next_sync_at = now if succeeded and not self.sync_is_dispatched and self._next_sync_at(now=now) else None
+        self.save(update_fields=["next_sync_at", "updated_at"])
+
     def record_sync(self, result: int, *, now: datetime) -> None:
         """Persist one successful scheduler sync result and healthy status report."""
 
@@ -2430,9 +3014,13 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             "items": result,
             "completed_at": now.isoformat(),
         }
-        self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
-            cast(Any, self).report_status(status=IntegrationRuntimeStatus.OK)
+            # Credential attachment may have started discovery during extraction.
+            type(self).objects.lock_if_supported().get(pk=self.pk)
+            self.refresh_from_db(fields=["binding_retry_at", "binding_generation", "binding_completed_at", "lifecycle"])
+            self.next_sync_at = self._next_sync_at(now=now)
+            if cast(Any, self).binding_ready:
+                cast(Any, self).report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
                     "cursor",
@@ -2455,9 +3043,14 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
-        self.next_sync_at = self._next_sync_at(now=now)
         with transaction.atomic():
-            cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
+            type(self).objects.lock_if_supported().get(pk=self.pk)
+            self.refresh_from_db(fields=["binding_retry_at", "binding_generation", "binding_completed_at", "lifecycle"])
+            self.next_sync_at = self._next_sync_at(now=now)
+            if self.next_sync_at is not None and isinstance(error, IntegrationError) and error.retry_after is not None:
+                self.next_sync_at = max(self.next_sync_at, max(now, timezone.now()) + error.retry_after)
+            if cast(Any, self).binding_ready:
+                cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
                     "next_sync_at",
@@ -2519,7 +3112,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         if self.sync_is_dispatched:
             return SyncDispatch.DISPATCHED
-        self.mark_sync_started(now=now)
+        if not self.mark_sync_started(now=now):
+            raise IntegrationError("Connection discovery must finish before syncing.")
         try:
             with bridge_sync_context(), bridge_progress_context(self):
                 result = self.sync()
@@ -2554,11 +3148,23 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         raise NotImplementedError("Bridge subclasses must implement verify_webhook().")
 
     def dispatch_inbound(self, request_or_payload: Any) -> bool:
-        """Verify one inbound webhook and apply it to this bridge when authentic."""
+        """Land an authentic webhook under the polling and settlement lock.
 
-        if not self.verify_webhook(request_or_payload):
+        False refuses verification; contention raises a transient refusal so
+        the verified delivery can retry. Call outside atomic blocks: the session
+        advisory lock must cover the concrete capability's committed landing.
+        """
+
+        if connection.in_atomic_block:
+            raise IntegrationError("Inbound dispatch requires autocommit.")
+        with system_context(reason="integrate.inbound.capability"):
+            capability = cast(Any, self).concrete_capability()
+        if not capability.verify_webhook(request_or_payload):
             return False
-        self.handle_webhook(request_or_payload)
+        with bridge_advisory_lock(capability) as acquired:
+            if not acquired:
+                raise IntegrationError("The bridge is busy; retry inbound delivery.", transient=True)
+            capability.handle_webhook(request_or_payload)
         return True
 
     def start_live(self) -> None:
@@ -2594,7 +3200,10 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         this to stay out of the poll loop while its live ingest owns delivery.
         """
 
-        if IntegrationLifecycle.from_value(self.lifecycle) is not IntegrationLifecycle.CONNECTED:
+        if (
+            IntegrationLifecycle.from_value(self.lifecycle) is not IntegrationLifecycle.CONNECTED
+            or not cast(Any, self).binding_ready
+        ):
             return None
         return now + timedelta(seconds=int(self.poll_interval))
 

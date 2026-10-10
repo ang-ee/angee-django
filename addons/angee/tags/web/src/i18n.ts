@@ -6,6 +6,8 @@ export const enTagsMessages: Record<string, string> = {
   "col.name": "Name",
   "col.color": "Color",
   "form.details": "Details",
+  "record.label": "Tags",
+  "record.error": "Could not update tags.",
 };
 
 export const useTagsT = createNamespaceT("tags", enTagsMessages);

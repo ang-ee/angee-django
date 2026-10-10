@@ -30,7 +30,7 @@ vi.mock("@angee/ui", async () => {
   };
 });
 
-import { ResumeIntegrationAction, integrationHasCredential } from "./IntegrationLifecycleActions";
+import { ResumeIntegrationAction, RetryBindingAction, integrationHasCredential } from "./IntegrationLifecycleActions";
 
 describe("ResumeIntegrationAction", () => {
   afterEach(cleanup);
@@ -38,22 +38,40 @@ describe("ResumeIntegrationAction", () => {
     mocks.chrome.record = null;
   });
 
-  test("reaches a disconnected subtype row through its projected credential status", () => {
-    mocks.chrome.record = { lifecycle: "DISCONNECTED", credential_status: "active" };
+  test("reaches a subtype row through the model's projected admission", () => {
+    mocks.chrome.record = { can_resume: true };
     render(<ResumeIntegrationAction />);
     expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
   });
 
   test("stays hidden on a disconnected row that holds no credential", () => {
-    mocks.chrome.record = { lifecycle: "DISCONNECTED", credential_status: "" };
+    mocks.chrome.record = { can_resume: false };
     render(<ResumeIntegrationAction />);
     expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
   });
 
-  test("reads either the parent relation or the subtype scalar", () => {
-    expect(integrationHasCredential({ credential: { id: "crd_1" } })).toBe(true);
+  test("requires OAuth reconnect instead of resuming revoked material", () => {
+    mocks.chrome.record = { can_resume: false, lifecycle: "PAUSED", credential_status: "revoked", is_reconnect_required: true };
+    render(<ResumeIntegrationAction />);
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  });
+
+  test("reads only the shared health projection", () => {
+    expect(integrationHasCredential({ credential: { id: "crd_1" } })).toBe(false);
     expect(integrationHasCredential({ credential_status: "active" })).toBe(true);
     expect(integrationHasCredential({ credential: null })).toBe(false);
     expect(integrationHasCredential({})).toBe(false);
+  });
+
+  test("offers discovery recovery only when its owner admits it", () => {
+    mocks.chrome.record = { can_retry_binding: true };
+    const { rerender } = render(<RetryBindingAction />);
+    expect(screen.getByRole("button", { name: "Retry discovery" })).toBeTruthy();
+    mocks.chrome.record = { can_retry_binding: false };
+    rerender(<RetryBindingAction />);
+    expect(screen.queryByRole("button")).toBeNull();
+    mocks.chrome.record = { lifecycle: "PAUSED", credential_status: "active", binding_ready: false, binding_pending: false };
+    rerender(<RetryBindingAction />);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

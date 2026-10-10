@@ -1,7 +1,10 @@
 """Registry and periodic recovery settings contributed by workflows."""
 
 SETTINGS = {
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource"],
+    "ANGEE_IMPL_REGISTRIES:append": [
+        "angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource", "angee.workflows.watches.RecordWatch",
+    ],
+    "ANGEE_WORKFLOW_WATCH_CLASSES": {},
     "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES": {
         "record_changed": "angee.workflows.triggers.RecordChanged",
     },

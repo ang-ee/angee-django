@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enPostsMessages: Record<string, string> = {
+  "feed.replyHold": "Reply hold (hours)",
+  "feed.replyHoldHelp": "Leave blank for approval before sending; zero sends immediately.",
   "feed.name": "Feed",
   "feed.backend": "Backend",
   "feed.handle": "Handle",

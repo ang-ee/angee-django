@@ -113,7 +113,7 @@ def test_group_access_projects_canonical_subject_identity() -> None:
 def test_share_declarations() -> None:
     """Each model advertises only its declared, permission-gated sharing relations."""
 
-    assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
+    assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share", "caller": "share"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Drive.get_rebac_grantable() == {"editor": "share", "viewer": "share"}
     assert Workflow.get_rebac_grantable() == {
