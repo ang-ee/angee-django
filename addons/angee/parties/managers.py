@@ -26,7 +26,20 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
-from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    Exists,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    QuerySet,
+    Subquery,
+    TextField,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce, NullIf
 from django.utils.crypto import salted_hmac
 from phonenumbers import (
@@ -43,7 +56,7 @@ from angee.base.impl import resolve_hooks
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import generic_pointer_model
-from angee.base.scoping import read_scoped_queryset
+from angee.base.scoping import lock_if_supported, read_scoped_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
@@ -624,7 +637,21 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             if not locked.has_access("write"):
                 raise PermissionDenied("write access to the party-handle link is required")
             with system_context(reason=f"parties.party_handle.{action}"):
-                getattr(ScoredLinkMixin, action)(locked)
+                if action == "dismiss":
+                    ScoredLinkMixin.dismiss(locked)
+                else:
+                    # A confirmation is the person's own claim at full confidence,
+                    # beside the sources' claims; the pair's score derives from them.
+                    apps.get_model("parties", "PartyHandleClaim").objects.claim(
+                        locked,
+                        source=cast(LinkSource, LinkSource.MANUAL),
+                        confidence=1.0,
+                        created_by_id=getattr(actor, "pk", None),
+                    )
+                    locked.is_confirmed, locked.is_dismissed = True, False
+                    locked.save(update_fields=["is_confirmed", "is_dismissed", "updated_at"])
+                    self._derive(locked)
+                    locked._resolve_link()
             for field in ("confidence", "source", "is_confirmed", "is_dismissed", "updated_at"):
                 setattr(link, field, getattr(locked, field))
 
@@ -854,9 +881,13 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
-            existing = self.filter(party=locked_party, handle=locked_handle).first()
-            # Record references keep their own key: ``evidence`` describes a rule
-            # suggestion's evidence, and a claim may land on such a row.
+            existing = (
+                apps.get_model("parties", "PartyHandleClaim")
+                ._base_manager.filter(
+                    link__party=locked_party, link__handle=locked_handle, source=LinkSource.EMAIL_MATCH
+                )
+                .first()
+            )
             refs = list((existing.metadata or {}).get("evidence_refs", ())) if existing is not None else []
             if evidence_ref not in refs:
                 refs.append(evidence_ref)
@@ -883,25 +914,28 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         is_confirmed: bool = False,
         metadata: dict[str, Any] | None = None,
         created_by_id: Any = None,
+        claim_defaults: Mapping[str, Any] | None = None,
+        claim_save_kwargs: Mapping[str, Any] | None = None,
     ) -> Any:
-        """Link ``handle`` to ``party`` with ``confidence``, then resolve the handle's owner.
+        """Record ``source``'s claim that ``handle`` is ``party``'s, then resolve the handle's owner.
 
         Every caller declares ``source``: provenance decides whether the link is an
         assertion a directory card may publish or an inference it does not (see
         :meth:`PartyHandleQuerySet.asserted`); confidence decides whether it awaits
-        review. ``is_confirmed`` records a human-strength decision (a connect flow claiming the signed-in user's own
-        handle); it upgrades an existing weaker link to the confirmed self-link.
-        Without it, an undecided link keeps the higher confidence, and an assertion
-        replaces an inference's source, so a card that lists a mined number owns it.
-        An inference never replaces an assertion's source, so a person's link stays
-        published; a stronger inference replaces a weaker one. A dismissed link keeps
-        the human decision.
-        Resolution only re-runs when the link is new, upgraded, or the handle's owner
-        is not already this party, so a re-sync of an unchanged contact does no extra
-        work. Source metadata merges onto the existing link so a later importer can
-        add provenance without erasing prior evidence.
+        review. The source writes only its own claim
+        (:meth:`PartyHandleClaimManager.claim`, which receives ``metadata``,
+        ``claim_defaults`` and ``claim_save_kwargs``), and the pair's score is
+        derived from all its claims (:meth:`_derive`), so a card that lists a mined
+        number owns it while an import and a person's own entry keep theirs.
+        ``is_confirmed`` records a human-strength decision (a connect flow claiming
+        the signed-in user's own handle) on the pair; without it the pair's human
+        decision stays as it is, so a dismissed pair stays dismissed. Resolution only
+        re-runs when the pair is new, its score or decision changed, or the handle's
+        owner is not already this party, so a re-sync of an unchanged contact does no
+        extra work.
         """
 
+        claims = apps.get_model("parties", "PartyHandleClaim").objects
         with transaction.atomic():
             handles, parties = self.lock_identity_rows(
                 party_ids=(party.pk,),
@@ -916,41 +950,80 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     "confidence": confidence,
                     "source": source,
                     "is_confirmed": is_confirmed,
-                    "metadata": metadata or {},
                     "created_by_id": created_by_id,
                 },
             )
-            upgraded = False
-            dirty: list[str] = []
+            claims.claim(
+                link,
+                source=source,
+                confidence=confidence,
+                metadata=metadata,
+                created_by_id=created_by_id,
+                defaults=claim_defaults,
+                save_kwargs=claim_save_kwargs,
+            )
+            changed = self._derive(link)
             if not created and is_confirmed and not link.is_confirmed:
-                link.confidence = confidence
-                link.source = source
-                link.is_confirmed = True
-                link.is_dismissed = False
-                dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
-                upgraded = True
-            elif not created and not link.is_confirmed and not link.is_dismissed:
-                # Provenance outranks score: an assertion replaces an inference's
-                # source (a card that now lists a mined number owns it), and an
-                # inference never replaces an assertion's. A human decision stays.
-                if link.source not in ASSERTING_SOURCES and (
-                    source in ASSERTING_SOURCES or confidence > link.confidence
-                ):
-                    link.source = source
-                    dirty.append("source")
-                if confidence > link.confidence:
-                    link.confidence = confidence
-                    dirty.append("confidence")
-                upgraded = bool(dirty)
-            merged_metadata = {**(link.metadata or {}), **(metadata or {})}
-            if merged_metadata != link.metadata:
-                link.metadata = merged_metadata
-                dirty.append("metadata")
-            if dirty:
-                link.save(update_fields=[*dict.fromkeys(dirty), "updated_at"])
-            if created or upgraded or handle.party_id != party.pk:
+                link.is_confirmed, link.is_dismissed = True, False
+                link.save(update_fields=["is_confirmed", "is_dismissed", "updated_at"])
+                changed = True
+            if created or changed or handle.party_id != party.pk:
                 link._resolve_link()
             return link
+
+    def _derive(self, link: Any) -> bool:
+        """Set the link's ``source`` and ``confidence`` from its claims; return whether they changed.
+
+        The pair's source is its strongest claim's: an assertion before an
+        inference, then the higher confidence. Its confidence is the highest any
+        claim states. This is the one writer of both fields once a link exists; a
+        link without claims (a dismissed pair whose sources withdrew) keeps them.
+        """
+
+        scores = list(
+            apps.get_model("parties", "PartyHandleClaim")
+            ._base_manager.filter(link_id=link.pk)
+            .values_list("source", "confidence")
+        )
+        if not scores:
+            return False
+        source = max(scores, key=lambda score: (score[0] in ASSERTING_SOURCES, score[1], score[0]))[0]
+        confidence = max(score for _source, score in scores)
+        if (link.source, link.confidence) == (source, confidence):
+            return False
+        link.source, link.confidence = source, confidence
+        link.save(update_fields=["source", "confidence", "updated_at"])
+        return True
+
+    def retract(self, claims: QuerySet[Any]) -> int:
+        """Withdraw ``claims`` and re-derive each link they stood under; return how many went.
+
+        A source retracts only its own claims. Each link re-derives under its
+        identity lock and re-resolves its handle; a link left with no claims and no
+        human decision goes, while a confirmed or dismissed pair stays as the
+        person's decision. Rows are re-read locked under ``claims``' own filter, so
+        a claim refreshed meanwhile is withdrawn only if it still matches.
+        """
+
+        retracted = 0
+        pairs = sorted(set(claims.values_list("link_id", "link__party_id", "link__handle_id")))
+        for link_id, party_id, handle_id in pairs:
+            with transaction.atomic():
+                self.lock_identity_rows(party_ids=(party_id,), handle_ids=(handle_id,))
+                stale = list(lock_if_supported(claims.filter(link_id=link_id)).values_list("pk", flat=True))
+                if not stale:
+                    continue
+                remaining = claims.model._base_manager.filter(link_id=link_id)
+                remaining.filter(pk__in=stale).delete()
+                retracted += len(stale)
+                link = self.model._base_manager.filter(pk=link_id).first()
+                if link is None:
+                    continue
+                if not (link.is_confirmed or link.is_dismissed or remaining.exists()):
+                    link.delete()
+                elif self._derive(link):
+                    link._resolve_link()
+        return retracted
 
     def resolve(self, handle: Any) -> None:
         """Materialise ``handle.party`` and its confirmed state from the winning link.
@@ -1191,7 +1264,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 created_by_id=owner_id,
             )
         withdrawn = self._withdraw_unsupported(
-            "signature_phone", supported, ("created_by_id", "party_id", "handle__normalized_value")
+            "signature_phone", supported, ("created_by_id", "link__party_id", "link__handle__normalized_value")
         )
         return created + withdrawn
 
@@ -1272,26 +1345,22 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                         },
                         created_by_id=owner_id,
                     )
-        return created + self._withdraw_unsupported("display_name", supported, ("party_id", "handle_id"))
+        return created + self._withdraw_unsupported("display_name", supported, ("link__party_id", "link__handle_id"))
 
     def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, ...]], key: tuple[str, ...]) -> int:
-        """Delete the undecided rule suggestions of ``kind`` whose ``key`` values no evidence supports now.
+        """Retract the rule claims of ``kind`` whose ``key`` values no evidence supports now.
 
-        Confirmed links and dismissed anti-links are human decisions and stay. The
-        delete re-reads its rows locked under the same filter, so a suggestion a
-        person confirms, or a card upgrades, during the pass is no longer pending
-        and stays. A suggestion never decided its handle's owner, so withdrawing
-        one leaves the owner as it was.
+        Only the rule's own claims go (:meth:`retract`): a pair that a card, an
+        import or a person also claims keeps their claims, and a confirmed or
+        dismissed pair stays as the person's decision. An undecided pair left with no
+        claim is withdrawn.
         """
 
-        pending = self.to_review().filter(source=LinkSource.RULE, metadata__evidence__kind=kind)
-        stale = [pk for pk, *pair in pending.values_list("pk", *key) if tuple(pair) not in supported]
-        if not stale:
-            return 0
-        with transaction.atomic():
-            locked = list(pending.filter(pk__in=stale).lock_if_supported().values_list("pk", flat=True))
-            pending.filter(pk__in=locked).delete()
-        return len(locked)
+        claims = apps.get_model("parties", "PartyHandleClaim")._base_manager.filter(
+            source=LinkSource.RULE, metadata__evidence__kind=kind
+        )
+        stale = [pk for pk, *values in claims.values_list("pk", *key) if tuple(values) not in supported]
+        return self.retract(claims.filter(pk__in=stale)) if stale else 0
 
     def _suggest(
         self,
@@ -1302,7 +1371,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         metadata: dict[str, Any],
         created_by_id: Any,
     ) -> int:
-        """Create one rule link awaiting review, or skip its durable existing pair.
+        """Create one rule link awaiting review with its rule claim, or skip its durable existing pair.
 
         A suggestion never decides its handle's owner, so creating one resolves nothing.
         """
@@ -1314,16 +1383,19 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
-            _, created = self.get_or_create(
+            link, created = self.get_or_create(
                 party_id=locked_party.pk,
                 handle_id=locked_handle.pk,
-                defaults={
-                    "confidence": confidence,
-                    "source": LinkSource.RULE,
-                    "metadata": metadata,
-                    "created_by_id": created_by_id,
-                },
+                defaults={"confidence": confidence, "source": LinkSource.RULE, "created_by_id": created_by_id},
             )
+            if created:
+                apps.get_model("parties", "PartyHandleClaim").objects.claim(
+                    link,
+                    source=cast(LinkSource, LinkSource.RULE),
+                    confidence=confidence,
+                    metadata=metadata,
+                    created_by_id=created_by_id,
+                )
             return int(created)
 
     @staticmethod
@@ -1343,6 +1415,50 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 }
             )
         )
+
+
+class PartyHandleClaimManager(AngeeManager):
+    """Write one source's claim on a party-handle link; the link manager re-derives the pair."""
+
+    def claim(
+        self,
+        link: Any,
+        *,
+        source: LinkSource,
+        confidence: float,
+        metadata: Mapping[str, Any] | None = None,
+        created_by_id: Any = None,
+        defaults: Mapping[str, Any] | None = None,
+        save_kwargs: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Create or refresh ``source``'s claim on ``link`` and return it, writing no other claim.
+
+        ``confidence`` restates the source's own score and ``metadata`` merges onto
+        its evidence. An addon that extends the claim sets its own fields through
+        ``defaults`` when the claim is created, and passes ``save_kwargs`` (its
+        cooperative ownership argument) to the saves that refresh an existing
+        claim; a new claim carries its identity in ``defaults``. The caller holds
+        the pair's identity lock and re-derives the link
+        (:meth:`PartyHandleManager.link`).
+        """
+
+        claim = self.model._base_manager.filter(link_id=link.pk, source=source).first()
+        if claim is None:
+            values = {"confidence": confidence, "metadata": dict(metadata or {}), "created_by_id": created_by_id}
+            claim = self.model(link=link, source=source, **{**values, **(defaults or {})})
+            claim.save()
+            return claim
+        fields = []
+        if claim.confidence != confidence:
+            claim.confidence = confidence
+            fields.append("confidence")
+        merged = {**(claim.metadata or {}), **(metadata or {})}
+        if merged != claim.metadata:
+            claim.metadata = merged
+            fields.append("metadata")
+        if fields:
+            claim.save(update_fields=[*fields, "updated_at"], **(save_kwargs or {}))
+        return claim
 
 
 @dataclass(frozen=True, slots=True)
@@ -2310,12 +2426,13 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     source=LinkSource.CARDDAV,
                     created_by_id=created_by_id,
                 )
-            # Retire only this source's vanished associations. Shared Handle rows
-            # and links established by another source retain their own lifecycle.
-            party_handle_model.objects.filter(
-                party_id=person.pk,
-                source=LinkSource.CARDDAV,
-            ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
+            # Retract only the card's own vanished claims. Another source's claim
+            # and a person's decision on the pair keep their own lifecycle.
+            party_handle_model.objects.retract(
+                apps.get_model("parties", "PartyHandleClaim")
+                ._base_manager.filter(link__party_id=person.pk, source=LinkSource.CARDDAV)
+                .exclude(link__handle_id__in=[handle.pk for handle in handles])
+            )
 
             # Addresses carry no stable id, so mirror the parsed set wholesale —
             # idempotent because the result is exactly the source's.
