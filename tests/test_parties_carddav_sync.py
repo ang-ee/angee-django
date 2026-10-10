@@ -1042,6 +1042,45 @@ def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) ->
     assert push_stream(replica.stream, replica.backend).count == 0
 
 
+def test_a_number_listed_twice_keeps_both_lines_when_another_number_changes(replica: Replica) -> None:
+    """A card may repeat one number under two Apple labels; the projection holds it once."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item1.TEL;type=CELL:+14155552671\r\nitem1.X-ABLabel:WhatsApp\r\n"
+            "item2.TEL;type=CELL:+14155552671\r\nitem2.X-ABLabel:Signal\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test duplicate lines"):
+        handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
+        PartyHandle.objects.link(
+            person, handle, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=person.created_by_id
+        )
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert sorted((line.group or "", line.value) for line in card.tel_list) == [
+        ("", "+14155550199"),
+        ("item1", "+14155552671"),
+        ("item2", "+14155552671"),
+    ]
+    assert {line.group: line.value for line in card.contents["x-ablabel"]} == {"item1": "WhatsApp", "item2": "Signal"}
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
+def test_a_country_the_field_cannot_resolve_stays_as_written() -> None:
+    """The stored form converts each component through its field and keeps what a field refuses."""
+
+    addresses = Person._meta.get_field("addresses").related_model.objects
+    stored = addresses.as_stored(ParsedAddress(label="home", city="Springfield", country="USA"))
+    assert (stored.label, stored.city, stored.country) == ("home", "Springfield", "US")
+    assert addresses.as_stored(ParsedAddress(country="Atlantis")).country == "Atlantis"
+
+
 def test_written_out_country_survives_an_address_edit(replica: Replica) -> None:
     """The card's "USA" is the "US" parties stores, so adding an address keeps that line."""
 

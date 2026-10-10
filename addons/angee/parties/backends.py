@@ -14,7 +14,6 @@ from datetime import date, timedelta
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.db.models import CharField, Exists, OuterRef, Q, Subquery, Value
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast, Coalesce, Concat, NullIf
@@ -24,7 +23,6 @@ from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import DiscrepancyKind, StreamDirection, StreamKind
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamDefinition
-from angee.parties.fields import normalize_country_code
 
 
 @dataclass(frozen=True)
@@ -63,19 +61,6 @@ class ParsedAddress:
     region: str = ""
     postal_code: str = ""
     country: str = ""
-
-    def canonical(self) -> ParsedAddress:
-        """Return the address as parties stores it, its country named by ISO code.
-
-        A source writes "USA" or "Netherlands" where parties keeps "US" or "NL";
-        comparing the stored form keeps the same country from reading as a change.
-        A country parties cannot resolve stays as written, for ingest to refuse.
-        """
-
-        try:
-            return replace(self, country=normalize_country_code(self.country))
-        except ValidationError:
-            return self
 
 
 @dataclass(frozen=True)
@@ -141,8 +126,8 @@ def contact_projection(contact: ParsedContact) -> dict[str, Any]:
     """Return the same JSON comparison shape for a remote card and a local person.
 
     Collection ordering is immaterial. Photos compare their content addresses.
-    Source and local bases remain separate because domain fields (for example
-    countries) may normalize the observed value.
+    A fetched contact arrives in its stored form (``prepare_contact``), so a
+    country a source spells out compares equal to the stored code.
     """
 
     result = {name: getattr(contact, name) for name in CONTACT_FIELDS}
@@ -243,7 +228,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return dict(revision.source_payload) if revision is not None else {}
 
     def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
-        """Store fetched media before the driver's page transaction begins."""
+        """Store fetched media and take the stored form before the driver's page transaction begins."""
 
         return apps.get_model("parties", "Party").objects.prepare_contact(parsed, created_by_id=self.bridge.owner_id)
 

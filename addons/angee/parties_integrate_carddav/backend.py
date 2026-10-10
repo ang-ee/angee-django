@@ -630,7 +630,8 @@ def _render_vcard(
             if types:
                 item.params["TYPE"] = types
     if "addresses" in changed:
-        for address in _retain_lines(card, "adr", contact.addresses, lambda line: _address(line).canonical()):
+        stored = apps.get_model("parties", "Address").objects.as_stored
+        for address in _retain_lines(card, "adr", contact.addresses, lambda line: stored(_address(line))):
             item = card.add("adr")
             item.value = vobject.vcard.Address(
                 box=address.po_box,
@@ -671,6 +672,9 @@ def _retain_lines[T](card: Any, prop: str, wanted: Sequence[T], parse: Callable[
         value = parse(line)
         if value in missing:
             missing.remove(value)
+            kept.append(line)
+        elif value in wanted:
+            # The card's own repeat of a kept value (one number under two Apple labels).
             kept.append(line)
         elif line.group:
             gone.add(line.group.lower())
