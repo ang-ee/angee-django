@@ -49,6 +49,10 @@ from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
 from angee.storage.models import UploadState
 
+# An undecided link below this confidence is a suggestion awaiting review.
+_REVIEW_CONFIDENCE = 0.5
+_AWAITING_REVIEW = Q(is_confirmed=False, is_dismissed=False, confidence__lt=_REVIEW_CONFIDENCE)
+
 
 class HandleAssociationStatus(StrEnum):
     """Nondisclosing assessment of one claimed Handle for a candidate Party."""
@@ -478,6 +482,24 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 class PartyHandleQuerySet(AngeeQuerySet):
     """Require association mutations to pass through the resolution owner."""
 
+    def to_review(self) -> Self:
+        """Keep the suggestions awaiting review: undecided links below review confidence.
+
+        The review queue shows exactly these, and none of them decides who owns its
+        handle (see :meth:`decisive`).
+        """
+
+        return self.filter(_AWAITING_REVIEW)
+
+    def decisive(self) -> Self:
+        """Keep the links that may decide their handle's owner.
+
+        A dismissed link is the durable anti-link, and a suggestion awaiting review is
+        only a guess until someone confirms it.
+        """
+
+        return self.filter(is_dismissed=False).exclude(_AWAITING_REVIEW)
+
     def asserted(self) -> Self:
         """Keep links a directory card or a person asserted, never an unreviewed inference.
 
@@ -801,7 +823,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         """Retain a claim after the caller authorized exact Handle and evidence reads."""
 
         party.require_access("write", actor)
-        if not 0 < confidence < 0.5:
+        if not 0 < confidence < _REVIEW_CONFIDENCE:
             raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
         evidence_model = generic_pointer_model(type(evidence))
         evidence_ref = {
@@ -897,9 +919,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         """Materialise ``handle.party`` and its confirmed state from the winning link.
 
         The resolution ordering (``-is_confirmed, -confidence``) is the contacts
-        rule: a human-confirmed link wins, then the strongest score. A handle with
-        no surviving link is left unowned. A demotion (a dismissed winner) recounts
-        the previous owner too, so its ``handle_count`` never goes stale.
+        rule: a human-confirmed link wins, then the strongest score. Only a
+        :meth:`~PartyHandleQuerySet.decisive` link competes, so a suggestion awaiting
+        review never decides who sent a message. A handle with no decisive link is
+        left unowned. A demotion (a dismissed winner) recounts the previous owner
+        too, so its ``handle_count`` never goes stale.
         """
 
         with transaction.atomic():
@@ -909,9 +933,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
             handle = handles[handle.pk]
             previous_pk = handle.party_id
-            winner = (
-                self.filter(handle=handle, is_dismissed=False).order_by("-is_confirmed", "-confidence", "sqid").first()
-            )
+            winner = self.filter(handle=handle).decisive().order_by("-is_confirmed", "-confidence", "sqid").first()
             resolved = winner.party if winner else None
             resolved_pk = resolved.pk if resolved else None
             is_confirmed = bool(winner and winner.is_confirmed)
@@ -945,6 +967,23 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         if party.handle_count != count:
             party.handle_count = count
             party.save(update_fields=["handle_count", "updated_at"])
+
+    def resolve_stale_owners(self) -> int:
+        """Re-resolve handles whose stored owner holds no decisive link to them.
+
+        ``Handle.party`` is materialised, so a resolution rule change leaves handles
+        owned the old way, such as through a suggestion that now awaits review. The
+        repair is idempotent and finds nothing in steady state.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        decisive = self.filter(handle_id=OuterRef("pk"), party_id=OuterRef("party_id")).decisive()
+        stale = handle_model.objects.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
+        repaired = 0
+        for handle in stale.iterator():
+            self.resolve(handle)
+            repaired += 1
+        return repaired
 
     def suggest_for(self, handle: Any) -> Any:
         """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
@@ -1065,15 +1104,21 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
         return created
 
-    def suggest_from_display_names(self) -> int:
-        """Pool normalized display names per audit owner into weak identity links.
+    def suggest_from_display_names(self, *, shared_handle_ids: Iterable[Any] = ()) -> int:
+        """Pool normalized full names per audit owner into weak identity links.
 
         A resolved handle supplies evidence only to an unresolved handle on another
-        platform. Each distinct candidate party receives one ``0.4`` rule link;
-        existing pairs, including dismissed links, remain untouched.
+        platform, and only for a party that bears the same full name itself. A
+        one-word name (a first name, a brand) identifies nobody, and a party named
+        otherwise, such as a nameless card holding several people's numbers, is not
+        that person. ``shared_handle_ids`` are addresses several people speak through,
+        such as list or notification senders: their display names name whoever spoke
+        last and are no evidence. Each distinct candidate party receives one ``0.4``
+        rule link; existing pairs, including dismissed links, remain untouched.
         """
 
         handle_model = apps.get_model("parties", "Handle")
+        shared = frozenset(shared_handle_ids)
         created = 0
         owner_ids = (
             handle_model.objects.exclude(created_by_id=None)
@@ -1099,11 +1144,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             pools: defaultdict[str, list[Any]] = defaultdict(list)
             for handle in handles:
                 normalized_name = handle_model.normalize_display_name(handle.display_name)
-                if normalized_name:
+                if " " in normalized_name and handle.pk not in shared:
                     pools[normalized_name].append(handle)
 
             for handle in handles:
-                if handle.party_id is not None:
+                if handle.party_id is not None or handle.pk in shared:
                     continue
                 normalized_name = handle_model.normalize_display_name(handle.display_name)
                 seen_parties: set[Any] = set()
@@ -1111,6 +1156,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     if (
                         candidate.party_id is None
                         or candidate.party.created_by_id != owner_id
+                        or handle_model.normalize_display_name(candidate.party.display_name) != normalized_name
                         or candidate.platform == handle.platform
                         or candidate.party_id in seen_parties
                     ):
@@ -1143,7 +1189,10 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         metadata: dict[str, Any],
         created_by_id: Any,
     ) -> int:
-        """Create one unconfirmed rule link, or skip its durable existing pair."""
+        """Create one rule link awaiting review, or skip its durable existing pair.
+
+        A suggestion never decides its handle's owner, so creating one resolves nothing.
+        """
 
         with transaction.atomic():
             handles, parties = self.lock_identity_rows(
@@ -1162,26 +1211,18 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     "created_by_id": created_by_id,
                 },
             )
-            if not created:
-                return 0
-            self.resolve(locked_handle)
-            return 1
+            return int(created)
 
     def retract_suggestions(self, *, evidence_kind: str) -> int:
         """Delete the unreviewed rule links one evidence kind produced.
 
         Run it when that kind's extraction rule changes; the full suggestion sweep
         then re-proposes only what the current rule supports. Confirmed links and
-        dismissed anti-links are human decisions and stay. The link delete
-        receivers re-resolve every affected handle.
+        dismissed anti-links are human decisions and stay. A suggestion owns no
+        handle, so retracting one changes no owner.
         """
 
-        deleted, _ = self.filter(
-            source=LinkSource.RULE,
-            is_confirmed=False,
-            is_dismissed=False,
-            metadata__evidence__kind=evidence_kind,
-        ).delete()
+        deleted, _ = self.to_review().filter(source=LinkSource.RULE, metadata__evidence__kind=evidence_kind).delete()
         return deleted
 
     @staticmethod
@@ -1391,14 +1432,7 @@ class PartyQuerySet(AngeeQuerySet):
 
         party_handle_model = apps.get_model("parties", "PartyHandle")
         visible_review_link = (
-            party_handle_model.objects.all()
-            .scoped_for_aggregate()
-            .filter(
-                party_id=OuterRef("pk"),
-                confidence__lt=0.5,
-                is_confirmed=False,
-                is_dismissed=False,
-            )
+            party_handle_model.objects.all().scoped_for_aggregate().to_review().filter(party_id=OuterRef("pk"))
         )
         return (
             self.canonical()

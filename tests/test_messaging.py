@@ -2115,7 +2115,7 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
 
 @pytest.mark.django_db(transaction=True)
 def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
-    """An inbound sender matching a tracked domain receives the weak organization link."""
+    """An inbound sender matching a tracked domain receives the weak organization link for review."""
 
     with system_context(reason="test ingest organization sender"):
         owner = channel.owner
@@ -2134,10 +2134,42 @@ def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
 
     assert link is not None
     sender.refresh_from_db()
-    assert sender.party_id == acme.pk
+    assert sender.party_id is None
     assert link.confidence == 0.4
     assert link.source == LinkSource.RULE
     assert not link.is_confirmed
+
+
+@pytest.mark.django_db(transaction=True)
+def test_automated_senders_send_only_list_or_auto_submitted_mail(channel: Any) -> None:
+    """A sender is automated only when every message it sent carries an automation header."""
+
+    mail = (
+        ("list-1", "notifications@example.test", (("list-id", "<repo.example.test>"),)),
+        ("bulk-1", "news@example.test", (("precedence", "Bulk"),)),
+        ("person-1", "ada@example.test", ()),
+        ("person-2", "ada@example.test", (("auto-submitted", "auto-replied"),)),
+        ("manual-1", "grace@example.test", (("auto-submitted", "no"),)),
+    )
+    with system_context(reason="test automated senders"):
+        for external_id, value, headers in mail:
+            parsed = ParsedMessage(
+                external_id=external_id,
+                platform="email",
+                subject="Automation",
+                sender=ParsedHandle(platform="email", value=value, display_name="Sender"),
+                body=ParsedPart(text=external_id),
+                headers=headers,
+            )
+            Message.objects.ingest([parsed], channel=channel, quote_edges=False)
+        automated = set(Message.objects.automated_sender_ids())
+        expected = set(
+            Handle._base_manager.filter(value__in=("notifications@example.test", "news@example.test")).values_list(
+                "pk", flat=True
+            )
+        )
+
+    assert automated == expected
 
 
 @pytest.mark.django_db(transaction=True)

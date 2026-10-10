@@ -2443,6 +2443,34 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
         return cast(MessageQuerySet, self.exclude(thread__attachments__role="chatter"))
 
+    def automated_sender_ids(self) -> models.QuerySet[Any]:
+        """Return the senders whose every message here is automated mail.
+
+        Automated mail carries a list header (RFC 2369 ``List-Unsubscribe``, RFC 2919
+        ``List-Id``), an RFC 3834 ``Auto-Submitted`` other than ``no``, or
+        ``Precedence: bulk``, ``list`` or ``junk``. Such an address speaks for a list
+        or a system, and its display name names whoever triggered the mail. A person
+        who sends the odd vacation auto-reply still writes the rest by hand.
+        """
+
+        part_model = apps.get_model("messaging", "Part")
+        automated = part_model._base_manager.filter(
+            models.Q(name__in=("list-id", "list-unsubscribe"))
+            | (models.Q(name="auto-submitted") & ~models.Q(fragment__text__iexact="no"))
+            | models.Q(name="precedence", fragment__text__iregex=r"^\s*(bulk|list|junk)\s*$"),
+            message=models.OuterRef("pk"),
+            role=part_model.PartRole.HEADER,
+        )
+        return (
+            self.filter(sender__isnull=False)
+            .annotate(_automated=models.Exists(automated))
+            .order_by()
+            .values("sender_id")
+            .annotate(_sent=models.Count("pk"), _automated_sent=models.Count("pk", filter=models.Q(_automated=True)))
+            .filter(_automated_sent=models.F("_sent"))
+            .values_list("sender_id", flat=True)
+        )
+
     def searching(self, term: str) -> MessageQuerySet:
         """Return messages matching one Odoo-style chatter search token."""
 

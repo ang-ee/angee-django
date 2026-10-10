@@ -293,7 +293,8 @@ that participates in identity, communication, and relationship facts.
 **Handle** — a normalized contact point such as an email address or account.
 The Handle's owner records the **control** fact (who may act through it), while
 **PartyHandle** records the **identity** fact (which Party it reaches); neither
-fact implies the other.
+fact implies the other. A **suggestion** is an undecided PartyHandle below 0.5
+confidence: it awaits review and never decides which Party the Handle reaches.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
