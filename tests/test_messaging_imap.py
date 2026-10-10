@@ -25,6 +25,7 @@ from rebac import system_context
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
+from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
 from angee.messaging_integrate_imap import backend as imap_backend
 from angee.messaging_integrate_imap import parser as imap_parser
@@ -2249,6 +2250,13 @@ def test_attributed_quote_reuses_the_original_body_fragment(
         message=reply, role=Part.PartRole.QUOTED, fragment__text="Are we still on for Thursday?"
     )
     assert quoted.fragment_id == root_body.fragment_id
+
+
+def test_retained_headers_keep_their_emitted_order_and_every_automation_header() -> None:
+    """The emitted order is part of the ingest sync hash; automation detection reads these parts."""
+
+    assert imap_parser._RETAINED_HEADERS == ("list-id", "list-unsubscribe", "reply-to", "auto-submitted", "precedence")
+    assert set(AUTOMATED_MAIL_HEADERS) <= set(imap_parser._RETAINED_HEADERS)
 
 
 @pytest.mark.django_db(transaction=True)
