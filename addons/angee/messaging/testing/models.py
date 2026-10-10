@@ -34,6 +34,7 @@ from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
 from angee.parties.models import PartyHandle as AbstractPartyHandle
+from angee.parties.models import PartyHandleClaim as AbstractPartyHandleClaim
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
@@ -115,6 +116,16 @@ class PartyHandle(AbstractPartyHandle):
         app_label = "parties"
         db_table = "test_parties_party_handle"
         rebac_resource_type = "parties/party_handle"
+
+
+class PartyHandleClaim(AbstractPartyHandleClaim):
+    """Concrete source claim beneath a party-handle link."""
+
+    class Meta(AbstractPartyHandleClaim.Meta):
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_party_handle_claim"
+        rebac_resource_type = "parties/party_handle_claim"
 
 
 class Fragment(AbstractFragment):

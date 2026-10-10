@@ -17,6 +17,11 @@ name = "directory_sync_status"
 app_label = "parties"
 module = "runtime_migrations.directory_sync_status"
 
+[[migrations]]
+name = "party_handle_claims"
+app_label = "parties"
+module = "runtime_migrations.party_handle_claims"
+
 [resources]
 master = [
   { path = "resources/master/010_parties.relationshipkind.yaml", adopt = "slug" },

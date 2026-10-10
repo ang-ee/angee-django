@@ -97,6 +97,19 @@ definition parties/party_handle {
     permission delete = owner + admin->member
 }
 
+// One source's claim under a party-handle link. It is read with its link, and
+// whoever may change the link may change the claims beneath it.
+definition parties/party_handle_claim {
+    relation link: parties/party_handle // rebac:field=link
+    relation owner: auth/user // rebac:field=created_by
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = link->read
+    permission write  = owner + link->write + admin->member
+    permission delete = owner + link->write + admin->member
+}
+
 // A keep-separate decision follows the same per-row ownership shape as the
 // identity claims it governs. Pair canonicalization is a database/model fact;
 // this definition owns only who may read, write, or delete the decision row.

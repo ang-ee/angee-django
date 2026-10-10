@@ -41,18 +41,8 @@ Every other source is an inference, which no card publishes until a human confir
 """
 
 
-class ScoredLinkMixin(models.Model):
-    """A confidence-bearing link between two rows, reviewable by a human.
-
-    Carries the score (``confidence`` in ``0..1``), its ``source``, and the two
-    review flags (``is_confirmed`` / ``is_dismissed``). :meth:`confirm` and
-    :meth:`dismiss` are plain flag-flips followed by a re-resolve hook — they carry
-    **no** REBAC awareness. A subclass whose confirm/dismiss must gate the actor or
-    cascade a derived pointer overrides them and calls ``super()`` (see
-    :class:`~angee.parties.models.PartyHandle`). Consumers also compose
-    :class:`~angee.base.mixins.AuditMixin`; the transition saves include its
-    ``updated_at`` field.
-    """
+class ScoredMixin(models.Model):
+    """A score and where it came from: ``confidence`` in ``0..1`` and its ``source``."""
 
     confidence = models.FloatField(
         default=1.0,
@@ -62,6 +52,25 @@ class ScoredLinkMixin(models.Model):
 
     source = StateField(choices_enum=LinkSource, default=LinkSource.MANUAL)
     """Where the link came from (a sync, a rule, an email match, a human)."""
+
+    class Meta:
+        """Django model options for scored abstract inheritance."""
+
+        abstract = True
+
+
+class ScoredLinkMixin(ScoredMixin):
+    """A confidence-bearing link between two rows, reviewable by a human.
+
+    Carries the score (:class:`ScoredMixin`) and the two review flags
+    (``is_confirmed`` / ``is_dismissed``). :meth:`confirm` and
+    :meth:`dismiss` are plain flag-flips followed by a re-resolve hook — they carry
+    **no** REBAC awareness. A subclass whose confirm/dismiss must gate the actor or
+    cascade a derived pointer overrides them and calls ``super()`` (see
+    :class:`~angee.parties.models.PartyHandle`). Consumers also compose
+    :class:`~angee.base.mixins.AuditMixin`; the transition saves include its
+    ``updated_at`` field.
+    """
 
     is_confirmed = models.BooleanField(default=False)
     """Whether a human accepted the link — the strongest resolution signal."""
