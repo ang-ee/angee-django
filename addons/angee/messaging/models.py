@@ -62,7 +62,7 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
-from angee.base.refs import RecordRefMixin, generic_pointer_model
+from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
@@ -1505,6 +1505,8 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
 class ThreadAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
+    # Two records' chatter threads must merge, not re-key; until that mover exists, a merge refuses.
+    merge_policy = MergePolicy.BLOCK
     runtime = True
 
     class AttachmentRole(models.TextChoices):

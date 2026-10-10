@@ -37,7 +37,6 @@ from rebac.mixins import RebacModelBase
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.merge import MergePolicy
 from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
@@ -50,6 +49,7 @@ from angee.base.mixins import (
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import (
+    MergePolicy,
     RecordRef,
     RecordRefMixin,
     concrete_child,
