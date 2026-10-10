@@ -23,7 +23,7 @@ is a typed, directed party↔party edge whose vocabulary
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -759,13 +759,38 @@ class AddressManager(AngeeManager):
 
     components = ("po_box", "extended", "street", "city", "region", "postal_code", "country")
 
-    def _normalize_components(self, values: Mapping[str, Any]) -> dict[str, str]:
-        """Normalize address components through their owning model fields."""
+    def as_stored(self, address: Any) -> Any:
+        """Return a parsed address as its fields store it: a country name becomes its ISO code.
 
-        return {
-            name: self.model._meta.get_field(name).to_python(" ".join(str(values.get(name) or "").split()).strip())
-            for name in self.components
-        }
+        A card's components keep their whitespace (a street may span lines), and a
+        value its field refuses (an unresolvable country) stays as written, for
+        ingest to refuse. Both sides of a directory sync compare this form, so a
+        card's "USA" reads as the stored "US".
+        """
+
+        values = {name: getattr(address, name) for name in self.components}
+        return replace(address, **self._through_fields(values, lenient=True))
+
+    def _normalize_components(self, values: Mapping[str, Any]) -> dict[str, str]:
+        """Collapse the whitespace of free-text components, then store them through their fields."""
+
+        return self._through_fields({name: " ".join(str(values.get(name) or "").split()) for name in self.components})
+
+    def _through_fields(self, values: Mapping[str, Any], *, lenient: bool = False) -> dict[str, Any]:
+        """Pass each component through its own field's ``to_python``.
+
+        A refused value raises, or with ``lenient`` stays as written.
+        """
+
+        stored: dict[str, Any] = {}
+        for name in self.components:
+            try:
+                stored[name] = self.model._meta.get_field(name).to_python(values[name])
+            except ValidationError:
+                if not lenient:
+                    raise
+                stored[name] = values[name]
+        return stored
 
     def identity_key(self, values: Mapping[str, Any]) -> tuple[str, ...]:
         """Return the field-normalized, case-insensitive identity of an address."""
