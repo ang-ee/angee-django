@@ -75,7 +75,6 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.impl import ImplClassField
-from angee.base.merge import MergePolicy
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -87,7 +86,7 @@ from angee.base.mixins import (
     TrashQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend

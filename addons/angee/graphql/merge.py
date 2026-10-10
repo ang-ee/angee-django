@@ -5,16 +5,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 import strawberry
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from rebac import PermissionDenied
 from rebac.resources import model_for_resource_type
-from strawberry.scalars import JSON
 
 from angee.base.merge import MergeableMixin
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID, public_id_value
-
-MERGE_PERMISSION = "write"
-"""The survivor permission the verb resolves through; ``absorb`` checks each merged record's ``delete``."""
 
 
 @strawberry.type
@@ -27,23 +24,23 @@ class MergeMutation:
         self,
         info: strawberry.Info,
         target_type: str,
-        survivor_id: PublicID,
-        ids: list[PublicID],
+        target_id: PublicID,
+        records: list[PublicID],
         confirm: bool,
-        values: JSON | None = None,
     ) -> ActionResult:
-        """Merge the confirmed records into the survivor, optionally setting its fields."""
+        """Merge the confirmed ``records`` into the target record, which is kept."""
 
         if not confirm:
             raise ValidationError({"confirm": "Confirm the change to apply it."})
         model = model_for_resource_type(target_type)
         if model is None or not issubclass(model, MergeableMixin):
             raise ValidationError({"target_type": f"Records of type {target_type!r} cannot be merged."})
-        if values is not None and not isinstance(values, dict):
-            raise ValidationError({"values": "Values must name fields of the record that is kept."})
-        survivor = cast(
+        target = cast(
             MergeableMixin,
-            authorized_permission_target(info, cast(Any, model), survivor_id, MERGE_PERMISSION),
+            authorized_permission_target(info, cast(Any, model), target_id, model.MERGE_PERMISSION),
         )
-        survivor.absorb(records=[public_id_value(value) for value in ids], values=values)
+        try:
+            target.merge(records=[public_id_value(value) for value in records])
+        except PermissionDenied as error:
+            raise ValidationError({NON_FIELD_ERRORS: [str(error)]}) from error
         return ActionResult(ok=True, message="Merged.")

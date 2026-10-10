@@ -374,7 +374,7 @@ class DataResourceMetadata:
     concrete_kinds: tuple[str, ...] = ()
     record_edges: tuple[str, ...] = ()
     mergeable: bool = False
-    """Whether the model composes ``MergeableMixin``, so the shared ``mergeRecords`` verb serves it."""
+    """Whether the model composes ``MergeableMixin``, so the shared ``merge_records`` verb serves it."""
     row_model: str = "server"
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] = ()

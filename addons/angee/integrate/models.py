@@ -52,10 +52,10 @@ from strawberry_django.descriptors import model_property
 
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.merge import MergePolicy
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
+    MergePolicy,
     RecordRefMixin,
     concrete_child,
     concrete_child_accessor,
@@ -3308,6 +3308,7 @@ class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
         rebac_resource_type = "integrate/record_link"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
+        indexes = (models.Index(fields=("target_content_type", "target_object_id")),)
 
 
 class RecordRevisionQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):

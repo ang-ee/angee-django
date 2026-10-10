@@ -26,7 +26,6 @@ from rebac.field_backing import canonical_model
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.merge import MergePolicy
 from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
@@ -40,7 +39,7 @@ from angee.base.mixins import (
     RevisionMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
