@@ -20,6 +20,7 @@ export type {
   DataResourceTypeMetadata,
   ModelEnumValueMetadata,
   ModelFieldKind,
+  StatusDisplay,
 } from "./artifact-schema.js";
 
 import { canonicalModelLabelOrNull } from "./canonical-model-label.js";
@@ -38,6 +39,7 @@ export type ModelFieldMetadata =
     | "values"
     | "widget"
     | "currencyField"
+    | "statusDisplay"
     | "readable"
     | "aggregatable"
     | "creatable"

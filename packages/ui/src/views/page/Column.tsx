@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { QueryField, RelationRepresentationSelection } from "@angee/metadata";
 import type { Tone } from "../../lib/tones";
-import type { WidgetOption } from "../../widgets/types";
+import type { StatusDisplay, WidgetOption } from "../../widgets/types";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
 
@@ -38,6 +38,12 @@ export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   /** Render this cell only when the row predicate matches; the column remains aligned. */
   showWhen?: (row: TRow) => boolean;
   tone?: Record<string, Tone>;
+  /** Path of a second field rendered beneath the value as a stacked label/value pair. */
+  subline?: string;
+  /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
+  currencyField?: string;
+  /** Status widget shape projected from the field unless explicitly authored. */
+  statusDisplay?: StatusDisplay;
 }
 
 export interface ColumnDescriptor<
@@ -72,8 +78,14 @@ export interface ColumnDescriptor<
   /** Render this cell only when the row predicate matches; the column remains aligned. */
   showWhen?: (row: TRow) => boolean;
   tone?: Record<string, Tone>;
+  /** Path of a second field rendered beneath the value as a stacked label/value pair. */
+  subline?: string;
+  /** Metadata-resolved descriptor for {@link subline}. */
+  sublineColumn?: ColumnDescriptor<TRow>;
   /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
   currencyField?: string;
+  /** Status widget shape projected from the field unless explicitly authored. */
+  statusDisplay?: StatusDisplay;
 }
 
 /**

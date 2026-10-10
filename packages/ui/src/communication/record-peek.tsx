@@ -5,7 +5,7 @@ import { useUiT } from "../i18n";
 import { ControlBandProvider } from "../layouts/ControlBand";
 import { useResourceRecordHrefLookup } from "../runtime";
 import { Button } from "../ui/button";
-import { TextLink } from "../ui/text-link";
+import { NavLink } from "../ui/nav-link";
 import { FormView } from "../views/form/FormView";
 import { RegisteredFormView, useRegisteredForm } from "../views/form/registered-form";
 import { recordTargetHref } from "../views/resource/record-navigation-context";
@@ -102,7 +102,7 @@ function RecordPeek({ references, openRecord, goBack }: {
             </Button>
             <Glyph name="chevron-right" />
           </React.Fragment>)}
-          {href ? <TextLink href={href} target="_blank" className="ml-auto">{t("chatter.openRecord")}</TextLink> : null}
+          {href ? <NavLink href={href} target="_blank" variant="inline" className="ml-auto">{t("chatter.openRecord")}</NavLink> : null}
         </nav>
         <div>
           <RecordForm key={`${reference.model}:${reference.id}:${reference.tab ?? ""}`} resource={reference.model} id={reference.id} readOnly hideRecordChrome recordPresentation="workspace"

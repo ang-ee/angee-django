@@ -15,6 +15,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { toneGlyph, type Tone } from "../lib/tones";
 import { tv } from "../lib/variants";
+import { SectionEyebrow } from "./section-eyebrow";
 import { Skeleton } from "./skeleton";
 
 /**
@@ -309,12 +310,16 @@ export function Tree({
         {smartFlat.length ? (
           <div className="mt-4" role="group">
             {smartLabel ? (
-              <span
+              <SectionEyebrow
+                as="span"
                 aria-hidden
-                className="block px-2 pb-1 text-2xs font-semibold uppercase tracking-wider text-fg-subtle"
+                className="block"
+                spacing="menu"
+                tone="subtle"
+                tracking="wider"
               >
                 {smartLabel}
-              </span>
+              </SectionEyebrow>
             ) : null}
             {smartFlat.map(renderRow)}
           </div>

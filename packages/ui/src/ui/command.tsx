@@ -5,6 +5,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_ITEM, POPUP_LIST } from "./popover";
+import { SectionEyebrow } from "./section-eyebrow";
 import { textRoleVariants } from "./text";
 
 const COMMAND_ITEM = cn(
@@ -26,8 +27,7 @@ export const commandVariants = tv({
       "max-h-72 [&_[cmdk-list-sizer]]:flex [&_[cmdk-list-sizer]]:flex-col [&_[cmdk-list-sizer]]:gap-1",
     ),
     empty: cn(textRoleVariants({ role: "meta" }), "px-4 py-6 text-center"),
-    group:
-      "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-fg-muted [&_[cmdk-group-heading]]:uppercase",
+    group: "",
     item: COMMAND_ITEM,
     separator: "my-1 h-px bg-border-subtle",
     loading: cn(textRoleVariants({ role: "meta" }), "px-4 py-3"),
@@ -155,12 +155,17 @@ export type CommandGroupProps = Omit<
 export const CommandGroup = React.forwardRef<
   HTMLDivElement,
   CommandGroupProps
->(function CommandGroup({ className, ...props }, ref) {
+>(function CommandGroup({ className, heading, ...props }, ref) {
   const styles = commandVariants();
   return (
     <CmdkCommand.Group
       ref={ref}
       className={styles.group({ className })}
+      heading={heading ? (
+        <SectionEyebrow as="span" tracking="normal" className="block px-3 py-1.5">
+          {heading}
+        </SectionEyebrow>
+      ) : undefined}
       {...props}
     />
   );

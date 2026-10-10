@@ -224,6 +224,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs |
 | i18next | Runtime translation, plural defaults and interpolation | `@angee/ui` owns the shared native initializer and provider-less defaults; `@angee/app` owns the composed active instance and provider; addons contribute namespace-relative bundles |
 | date-fns | Date and relative-time formatting | Date and timestamp widgets |
+| @number-flow/react | Animated numeric text, Intl formatting and reduced-motion-aware transitions | `MetricTile` provides the typed numeric path, binds shared motion tokens and keeps animation opt-in |
 | use-debounce | Debounced React values and callbacks | Search and filter inputs |
 | Tailwind 4 | Token styling engine | Semantic token set |
 | tailwind-merge | Safe class merging | `cn()` helper |

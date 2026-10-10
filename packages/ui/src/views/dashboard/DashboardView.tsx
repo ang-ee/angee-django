@@ -30,14 +30,7 @@ export function DashboardView({
   for (const child of pageChildren(children)) {
     const metric = pageElementProps<MetricProps>(child, "metric");
     if (metric) {
-      metrics.push({
-        label: metric.label,
-        value: dashboardMetricValue(metric),
-        icon: metric.icon,
-        tone: metric.tone,
-        detail: metric.detail,
-        href: metric.href,
-      });
+      metrics.push(dashboardMetric(metric));
     } else {
       content.push(child);
     }
@@ -51,14 +44,26 @@ export function DashboardView({
   );
 }
 
-function dashboardMetricValue(metric: MetricProps): ReactNode {
-  if (metric.format !== "count") return metric.value;
-  if (metric.value == null && metric.loading) return "—";
-  const value = typeof metric.value === "number" && Number.isFinite(metric.value)
+/** Counts take the tile's typed numeric path so they format and animate there. */
+function dashboardMetric(metric: MetricProps): MetricTileValue {
+  const tile: MetricTileValue = {
+    label: metric.label,
+    value: metric.value,
+    icon: metric.icon,
+    tone: metric.tone,
+    detail: metric.detail,
+    href: metric.href,
+  };
+  if (metric.format !== "count") return tile;
+  if (metric.value == null && metric.loading) return { ...tile, value: "—" };
+  const count = typeof metric.value === "number" && Number.isFinite(metric.value)
     ? metric.value
     : 0;
-  if (metric.max !== undefined && value > metric.max) {
-    return `${metric.max.toLocaleString()}+`;
-  }
-  return value.toLocaleString();
+  const bounded = metric.max !== undefined && count > metric.max;
+  return {
+    ...tile,
+    animate: true,
+    numericValue: bounded ? metric.max : count,
+    suffix: bounded ? "+" : undefined,
+  };
 }

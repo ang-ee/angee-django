@@ -1,5 +1,5 @@
 import {
-  Avatar, Badge, Card, CardContent, CardFooter, CardHeader, InlineEmpty, Skeleton, SkeletonText, TextLink,
+  Avatar, Badge, Card, CardContent, CardFooter, CardHeader, InlineEmpty, NavLink, Skeleton, SkeletonText,
   avatarInitials, useRouteHref, useStatusTone, type JsonValue, type StringIdRow,
 } from "@angee/ui";
 import type { ReactElement } from "react";
@@ -72,9 +72,9 @@ export function TaskAccessDecisions({
       </CardContent>
       <CardFooter className="flex-wrap">
         {canManage ? <TaskAccessActions need={need} /> : null}
-        {need.access_decision ? <TextLink className="text-xs" href={routeHref("decisions.inbox.record", {
+        {need.access_decision ? <NavLink className="text-xs" href={routeHref("decisions.inbox.record", {
           id: need.access_decision.id,
-        })}>{t("access.audit")}</TextLink> : null}
+        })} variant="inline">{t("access.audit")}</NavLink> : null}
       </CardFooter>
     </Card>;
   })}</div>;

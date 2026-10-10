@@ -2,7 +2,7 @@ import * as React from "react";
 import {
   ListView,
   Tag,
-  TextLink,
+  NavLink,
   type ListColumn,
   type RecordPanelContext,
   useRouteSearch,
@@ -58,9 +58,9 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
         render: (row) => row.evidence_refs?.length
           ? <span className="flex flex-wrap gap-2">{row.evidence_refs.map((ref, index) => {
             const href = recordHref(ref.model, ref.id);
-            return href ? <TextLink key={`${ref.model}:${ref.id}`} href={href}>
+            return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
               {t("identity.evidenceSource", { number: index + 1 })}
-            </TextLink> : null;
+            </NavLink> : null;
           })}{row.evidence_truncated ? <span>{t("identity.evidenceTruncated")}</span> : null}</span>
           : t("identity.evidenceUnavailable"),
       },

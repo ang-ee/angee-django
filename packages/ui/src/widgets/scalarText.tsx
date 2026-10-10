@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { Input } from "../ui/input";
-import { TextLink } from "../ui/text-link";
+import { NavLink } from "../ui/nav-link";
 import { widgetLabel } from "./label";
 import type {
   WidgetDefinition,
@@ -67,13 +67,14 @@ function UrlRead({
   const label = value?.trim() ?? "";
   if (!label) return <span className="text-13 text-fg" />;
   return (
-    <TextLink
+    <NavLink
       href={label}
       target="_blank"
+      variant="inline"
       className="inline-block max-w-full truncate text-13"
     >
       {label}
-    </TextLink>
+    </NavLink>
   );
 }
 

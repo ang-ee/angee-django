@@ -31,17 +31,17 @@ function DataState({ data, children, skeleton }: DashboardWidgetRenderProps & { 
 
 function StatWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   const suffix = typeof props.spec.options.suffix === "string" ? props.spec.options.suffix : "";
-  const value = props.data.value == null
-    ? "—"
-    : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(props.data.value)}${suffix}`;
   return (
     <DataState {...props} skeleton={<><Skeleton className="h-5 w-1/2" /><Skeleton className="h-8 w-2/3" /></>}>
       <MetricTile
         className="h-full border-0 bg-transparent p-0 shadow-none"
         density="compact"
+        format={{ maximumFractionDigits: 2 }}
         label={<span className="sr-only">{props.spec.title}</span>}
-        value={value}
-        valueClassName="text-xl font-semibold leading-6 tabular-nums"
+        numericValue={props.data.value ?? undefined}
+        suffix={suffix}
+        value="—"
+        valueSize="lg"
       />
     </DataState>
   );

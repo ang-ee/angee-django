@@ -3,6 +3,7 @@ import { DataResourceQuerySchema } from "./query-schema.js";
 
 /** The generated resource wire contract; output types come from these schemas. */
 const FieldKindSchema = v.picklist(["scalar", "enum", "relation", "list", "object"]);
+const StatusDisplaySchema = v.picklist(["pill", "dot", "text"]);
 const OptionalString = v.nullish(v.string());
 const Strings = v.pipe(v.array(v.string()), v.readonly());
 const MutationArguments = v.pipe(
@@ -20,6 +21,7 @@ const ResourceFieldSchema = v.looseObject({
   values: v.optional(v.pipe(v.array(EnumValueSchema), v.readonly())),
   widget: OptionalString,
   currencyField: OptionalString,
+  statusDisplay: v.nullish(StatusDisplaySchema),
   readable: v.boolean(),
   aggregatable: v.boolean(),
   creatable: v.boolean(),
@@ -142,6 +144,7 @@ const SchemaMetadataSchema = v.looseObject({
 });
 
 export type ModelFieldKind = v.InferOutput<typeof FieldKindSchema>;
+export type StatusDisplay = v.InferOutput<typeof StatusDisplaySchema>;
 export type ModelEnumValueMetadata = v.InferOutput<typeof EnumValueSchema>;
 export type DataResourceFieldMetadata = v.InferOutput<typeof ResourceFieldSchema>;
 export type DataResourceAggregateMeasureMetadata = v.InferOutput<typeof MeasureSchema>;

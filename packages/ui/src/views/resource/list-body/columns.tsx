@@ -2,8 +2,9 @@ import * as React from "react";
 import { type CellContext, type Column as TableColumn, type ColumnDef, type Row as TableRow } from "@tanstack/react-table";
 import { resourceOrderFieldForPath, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
-import { useUiT } from "../../../i18n";
-import { useResolvedWidget } from "../../../widgets";
+import { DefinitionPair } from "../../../fragments/DefinitionPair";
+import { useUiT, type UiTranslate } from "../../../i18n";
+import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, readPath } from "./cell-utils";
@@ -124,7 +125,35 @@ export function ListCellContent<TRow extends Row>({
 }): React.ReactNode {
   const t = useUiT();
   const widget = useResolvedWidget(column.widget ?? "");
+  const sublineColumn = column.sublineColumn;
+  const sublineWidget = useResolvedWidget(sublineColumn?.widget ?? "");
   if (column.showWhen && !column.showWhen(row)) return null;
+  const primary = resolvedCellContent(column, row, t, metadata, widget);
+  if (!sublineColumn) return primary;
+  return (
+    <DefinitionPair
+      as="div"
+      density="cell"
+      detail={resolvedCellContent(
+        sublineColumn,
+        row,
+        t,
+        metadata,
+        sublineWidget,
+      )}
+      orientation="stacked"
+      value={primary}
+    />
+  );
+}
+
+function resolvedCellContent<TRow extends Row>(
+  column: ColumnDescriptor<TRow>,
+  row: TRow,
+  t: UiTranslate,
+  metadata: ModelMetadata | null | undefined,
+  widget: WidgetDefinition | undefined,
+): React.ReactNode {
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
     return (
@@ -137,6 +166,7 @@ export function ListCellContent<TRow extends Row>({
           options: column.options,
           tone: column.tone,
           ...(column.currencyField ? { currencyField: column.currencyField } : {}),
+          ...(column.statusDisplay ? { statusDisplay: column.statusDisplay } : {}),
         }}
         readOnly
       />

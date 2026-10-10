@@ -21,7 +21,15 @@ export const collapsibleVariants = tv({
     )}`,
     icon:
       "flex size-4 shrink-0 -rotate-90 items-center justify-center text-fg-muted transition-transform group-data-[panel-open]:rotate-0 [&_.glyph]:size-3.5",
-    panel: cn(textRoleVariants({ role: "description" }), "overflow-hidden leading-relaxed"),
+    // Base UI measures the open panel into --collapsible-panel-height, so the
+    // slide animates between h-0 and the measured height on the theme timing.
+    panel: cn(
+      textRoleVariants({ role: "description" }),
+      "overflow-hidden leading-relaxed",
+      "h-[var(--collapsible-panel-height)] motion-safe:transition-[height,opacity]",
+      "data-[starting-style]:h-0 data-[starting-style]:opacity-0",
+      "data-[ending-style]:h-0 data-[ending-style]:opacity-0",
+    ),
   },
   variants: {
     variant: {

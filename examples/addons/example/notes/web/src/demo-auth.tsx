@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Button } from "@angee/ui";
+import { Button, SectionEyebrow } from "@angee/ui";
 
 import { useNotesT } from "./i18n";
 
@@ -38,9 +38,9 @@ export function DemoForgotPasswordHint(): ReactElement {
 function DemoLoginTooltip({ label }: { label: string }): ReactElement {
   return (
     <div className="w-56 text-left">
-      <p className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+      <SectionEyebrow size="sm">
         {label}
-      </p>
+      </SectionEyebrow>
       <ul className="mt-2 space-y-1.5 text-13">
         {DEMO_LOGINS.map((login) => (
           <li

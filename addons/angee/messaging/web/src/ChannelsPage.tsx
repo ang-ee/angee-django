@@ -25,7 +25,7 @@ export function ChannelsPage(): React.ReactElement {
       <List resource={CHANNEL_MODEL} defaultGroups={{ list: { field: "backend_class" } }}>
         <Column field="display_name" header={t("channel.name")} />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" widget="colorDot" />
+        <Column field="runtime_status" />
         <Column field="backend_class" />
         {IntegrationSyncColumns()}
       </List>

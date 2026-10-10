@@ -157,6 +157,7 @@ function FieldDescriptorControlInstance({
     ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
     ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),
+    ...(field.statusDisplay ? { statusDisplay: field.statusDisplay } : {}),
   };
   return (
     <Component

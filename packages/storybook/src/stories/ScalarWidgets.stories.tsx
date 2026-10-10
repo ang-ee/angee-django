@@ -150,10 +150,10 @@ export const EditAndRead: Story = {
               field={{ label: "Status", options: statusOptions }}
             />
             <WidgetExample
-              kind="colorDot"
-              widget={defaultWidgets.colorDot}
+              kind="statusBadge (dot)"
+              widget={defaultWidgets.statusBadge}
               initialValue="RUNNING"
-              field={{ label: "Runtime", options: runtimeOptions }}
+              field={{ label: "Runtime", options: runtimeOptions, statusDisplay: "dot" }}
             />
             <WidgetExample<number | null>
               kind="progressBar"

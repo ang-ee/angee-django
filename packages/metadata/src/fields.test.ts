@@ -39,6 +39,17 @@ describe("field metadata helpers", () => {
     expect(filterFieldType("amount", field)).toBe("number");
   });
 
+  test("resolves status-display metadata to the status widget", () => {
+    const field = resourceField({
+      name: "runtime_status",
+      kind: "enum",
+      widget: "select",
+      statusDisplay: "dot",
+    });
+
+    expect(defaultWidgetForModelField(field)).toBe("statusBadge");
+  });
+
   test("defaults a relation list to the relation multi-select and a value list to the tag input", () => {
     const members = resourceField({ name: "members", kind: "list", relationModelLabel: "iam.User" });
     const keywords = resourceField({ name: "keywords", kind: "list", scalar: "String" });

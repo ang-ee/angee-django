@@ -3,9 +3,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { AppRuntimeProvider } from "@angee/ui";
 import { baseIcons, defaultWidgets, type Tone, type WidgetField } from "@angee/ui";
 
-// The run-state axis the colorDot widget was built for: stopped/running/error/warning
-// → grey/green/red/amber, resolved from the shared STATUS_TONES vocabulary by value
-// alone (no per-view config). The same dot the agent list and operator console render.
+// A run-state field declares the dot display once; stopped/running/error/warning
+// then resolve to grey/green/red/amber through the shared status vocabulary.
 const runtimeOptions = [
   { value: "STOPPED", label: "Stopped" },
   { value: "RUNNING", label: "Running" },
@@ -13,10 +12,7 @@ const runtimeOptions = [
   { value: "WARNING", label: "Warning" },
 ];
 
-// A second palette, reusing the same widget for a project task's stage. These words
-// aren't in the shared vocabulary, so the field declares their tones explicitly — the
-// `<Column tone>` / `field.tone` override that always wins. Proof the widget generalises
-// to any small status enum (blocked/ready/…) without touching the framework vocabulary.
+// A product field can use the same display while owning its vocabulary locally.
 const taskOptions = [
   { value: "BLOCKED", label: "Blocked" },
   { value: "READY", label: "Ready for next stage" },
@@ -32,7 +28,7 @@ const taskTone: Record<string, Tone> = {
 };
 
 const meta = {
-  title: "Widgets/Color Dot",
+  title: "Widgets/Status Display",
   parameters: { layout: "padded" },
 } satisfies Meta;
 
@@ -40,7 +36,7 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-const Read = defaultWidgets.colorDot.read;
+const Read = defaultWidgets.statusBadge.read;
 
 function Palette({
   title,
@@ -56,7 +52,12 @@ function Palette({
       <h3 className="text-2xs font-semibold uppercase text-fg-muted">{title}</h3>
       <div className="flex flex-col items-start gap-1.5">
         {(options ?? []).map((option) => (
-          <Read key={option.value} value={option.value} field={{ options, tone }} readOnly />
+          <Read
+            key={option.value}
+            value={option.value}
+            field={{ options, statusDisplay: "dot", tone }}
+            readOnly
+          />
         ))}
       </div>
     </section>

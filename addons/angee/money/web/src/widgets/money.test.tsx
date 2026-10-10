@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { moneyWidget, type MoneyWidgetField } from "./money";
+import { moneyWidget } from "./money";
 
 // Rendering runs under happy-dom in the environment's default locale (en-US on
 // CI, full ICU). The assertions lean on currency-driven facts — the symbol and
@@ -27,7 +27,7 @@ describe("moneyWidget.read", () => {
   });
 
   it("resolves a one-hop currency path from field metadata", () => {
-    const field: MoneyWidgetField = { currencyField: "order.currency" };
+    const field = { currencyField: "order.currency" };
     const { container } = render(
       createElement(moneyWidget.read, {
         value: "1000",

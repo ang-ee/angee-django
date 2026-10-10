@@ -893,6 +893,7 @@ def test_final_fields_share_declared_presentation_metadata_across_output_and_inp
     presentation = {
         "angee_widget": "money",
         "angee_currency_field": "currency",
+        "angee_status_display": "dot",
     }
 
     @strawberry_django.type(HasuraResourceThing, name="FinalDjangoSourceThingType")
@@ -932,6 +933,7 @@ def test_final_fields_share_declared_presentation_metadata_across_output_and_inp
     assert display.scalar == "Decimal"
     assert display.widget == "money"
     assert display.currency_field == "currency"
+    assert display.status_display == "dot"
     assert display.aggregatable is False
     assert display.creatable is False
     assert display.updatable is False
@@ -973,6 +975,7 @@ def test_final_fields_share_declared_presentation_metadata_across_output_and_inp
     assert accepted.scalar == "Decimal"
     assert accepted.widget == display.widget == "money"
     assert accepted.currency_field == display.currency_field == "currency"
+    assert accepted.status_display == display.status_display == "dot"
     assert accepted.creatable is True
     assert accepted.required_on_create is True
 
@@ -1337,6 +1340,10 @@ def test_data_resource_metadata_rejects_duplicate_field_metadata() -> None:
         (
             DataResourceFieldMetadata(name="name", kind="scalar", widget="slider"),
             "unsupported widget 'slider'",
+        ),
+        (
+            DataResourceFieldMetadata(name="name", kind="enum", status_display=cast(Any, "badge")),
+            "unsupported status display 'badge'",
         ),
         (
             DataResourceFieldMetadata(name="name", kind="relation", scalar="String"),

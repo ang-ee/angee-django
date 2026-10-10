@@ -131,6 +131,38 @@ describe("statusBadge widget tone", () => {
     expect(screen.getByText("Bespoke").className).toContain("bg-brand-soft");
   });
 
+  test("renders the pill, dot, and text field displays from one badge owner", () => {
+    render(<>
+      <Badge value="ACTIVE" field={{ statusDisplay: "pill", options: [{ value: "ACTIVE", label: "Pill status" }] }} />
+      <Badge value="STOPPED" field={{ statusDisplay: "pill", options: [{ value: "STOPPED", label: "Neutral pill" }] }} />
+      <Badge value="RUNNING" field={{ statusDisplay: "dot", options: [{ value: "RUNNING", label: "Dot status" }] }} />
+      <Badge value="BESPOKE" field={{ statusDisplay: "text", options: [{ value: "BESPOKE", label: "Text status" }] }} />
+    </>);
+
+    const pill = screen.getByText("Pill status");
+    expect(pill.className).toContain("rounded-full");
+    expect(pill.className).toContain("bg-success-soft");
+    expect(pill.firstElementChild?.className).toContain("text-success-text");
+
+    const neutralPill = screen.getByText("Neutral pill");
+    expect(neutralPill.className).toContain("rounded-full");
+    expect(neutralPill.className).toContain("bg-inset");
+    expect(neutralPill.firstElementChild).toBeNull();
+
+    const dot = screen.getByText("Dot status");
+    expect(dot.className).toContain("bg-transparent");
+    expect(dot.className).toContain("text-inherit");
+    expect(dot.className).not.toContain("text-success-text");
+    expect(dot.className).not.toContain("h-tag-h");
+    expect(dot.firstElementChild?.className).toContain("bg-success");
+    expect(dot.firstElementChild?.className).toContain("size-2");
+
+    const text = screen.getByText("Text status");
+    expect(text.className).toContain("bg-transparent");
+    expect(text.className).toContain("text-brand-soft-text");
+    expect(text.firstElementChild).toBeNull();
+  });
+
   test("edit renders the shared status select owner", () => {
     const Edit = statusBadgeWidget.edit;
 

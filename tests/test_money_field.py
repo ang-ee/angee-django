@@ -24,9 +24,11 @@ import angee.base.fields as base_fields
 from angee.base.fields import SqidField
 from angee.data.field_classification import (
     MONEY_CURRENCY_FIELD_METADATA_KEY,
+    STATUS_DISPLAY_METADATA_KEY,
     model_field_scalar,
     money_currency_field,
     resource_field_widget,
+    status_display,
 )
 from angee.data.metadata import (
     DataResourceRoots,
@@ -44,6 +46,7 @@ class DeclaredProjectionField(models.Field):
     angee_widget = "money"
     angee_scalar_hint = "Decimal"
     angee_currency_field = "currency"
+    angee_status_display = "dot"
 
 
 def test_declared_projection_facts_classify_without_concrete_field_type() -> None:
@@ -54,8 +57,10 @@ def test_declared_projection_facts_classify_without_concrete_field_type() -> Non
     assert model_field_scalar(field) == "Decimal"
     assert resource_field_widget(field, "scalar") == "money"
     assert money_currency_field(field) == "currency"
+    assert status_display(field) == "dot"
     assert resource_field_widget(field, "scalar", {"angee_widget": "integer"}) == "integer"
     assert MONEY_CURRENCY_FIELD_METADATA_KEY == "angee_currency_field"
+    assert STATUS_DISPLAY_METADATA_KEY == "angee_status_display"
     assert (
         money_currency_field(
             field,
@@ -63,6 +68,7 @@ def test_declared_projection_facts_classify_without_concrete_field_type() -> Non
         )
         == "ledger_currency"
     )
+    assert status_display(field, {STATUS_DISPLAY_METADATA_KEY: "text"}) == "text"
 
 
 def test_sqid_field_declares_id_scalar_for_metadata() -> None:

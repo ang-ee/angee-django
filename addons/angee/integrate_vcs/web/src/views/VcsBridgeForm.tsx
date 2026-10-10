@@ -85,7 +85,7 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
         />
         <Field name="credential" />
         <Field name="lifecycle" widget="statusbar" status readOnly />
-        <Field name="runtime_status" widget="colorDot" readOnly />
+        <Field name="runtime_status" readOnly />
         <Field
           name="config"
           widget="json"

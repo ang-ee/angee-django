@@ -48,10 +48,10 @@ export interface EditableLinesProps {
   /** Initially visible editable fields; others remain available in the header menu and save diff. */
   primaryFields?: readonly string[];
   /**
-   * Authored presentation for named line fields — header, help text, choices or
-   * widget — over the child metadata. Every line field still renders from its
-   * metadata; help text lists under the lines, so a column kept behind the header
-   * menu still explains itself.
+   * Authored presentation for named line fields — header, help text, choices,
+   * widget, currency path, or status display — over the child metadata. Every
+   * line field still renders from its metadata; help text lists under the lines,
+   * so a column kept behind the header menu still explains itself.
    */
   fields?: readonly EditableLineField[];
   /** Read-only projections supplied by the composing domain. */
@@ -64,7 +64,10 @@ export interface EditableLinesProps {
 }
 
 /** Authored presentation of one line field, keyed by its name. */
-export interface EditableLineField extends Pick<FieldDescriptor, "name" | "description" | "options" | "widget"> {
+export interface EditableLineField extends Pick<
+  FieldDescriptor,
+  "name" | "currencyField" | "description" | "options" | "statusDisplay" | "widget"
+> {
   /** Column header and the cells' accessible name. */
   label?: string;
 }
@@ -143,14 +146,18 @@ export function EditableLines({
     const relation = customWidget ? null : relationFieldInfoForField(field, schemaMetadata);
     const relationMulti = customWidget ? null : relationListFieldInfoForField(field, schemaMetadata);
     const header = authored?.label ?? titleCase(field.name);
+    const currencyField = authored?.currencyField ?? field.currencyField;
+    const statusDisplay = authored?.statusDisplay ?? field.statusDisplay;
     const descriptor: FieldDescriptor = {
       name: field.name, label: header, widget, options: authored?.options ?? enumOptions(field),
-      ...(field.currencyField ? { currencyField: field.currencyField } : {}),
+      ...(currencyField ? { currencyField } : {}),
+      ...(statusDisplay ? { statusDisplay } : {}),
     };
     const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
     return {
       id: field.name, field: `value.${field.name}`, header, widget,
-      ...(field.currencyField ? { currencyField: field.currencyField } : {}),
+      ...(currencyField ? { currencyField } : {}),
+      ...(statusDisplay ? { statusDisplay } : {}),
       sortable: false, interactive: true,
       hiddenByDefault: Boolean(primary && !primary.has(field.name)),
       // Validation reveals an optional field even if the user previously hid it.

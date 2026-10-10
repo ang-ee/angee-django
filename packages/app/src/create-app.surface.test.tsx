@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { TextLink } from "@angee/ui/ui/text-link";
+import { NavLink } from "@angee/ui/ui/nav-link";
 import { ContainerOutlet } from "@angee/ui/lib/container-outlet";
 import { useContainer } from "@angee/ui/runtime";
 import { RecordChrome } from "@angee/ui/views/index";
@@ -149,7 +149,7 @@ test("the app supplies in-app link navigation from the home it lands on", async 
   history.replaceState(null, "", "/");
   const app = createApp({
     addons: [{ id: "desk", routes: [
-      { name: "desk.home", path: "/desk", component: () => <TextLink href="/records/7?preset=open">Follow record</TextLink> },
+      { name: "desk.home", path: "/desk", component: () => <NavLink href="/records/7?preset=open" variant="inline">Follow record</NavLink> },
       { name: "desk.record", path: "/records/$id", component: () => <div>Record page</div> },
     ], menus: [{ id: "desk", route: "desk.home" }] }],
     layouts: { console: { requireAuth: false } }, schemas: TEST_SCHEMAS, defaultSchema: "console", location: { search: "" },

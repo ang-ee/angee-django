@@ -3,13 +3,14 @@ import * as React from "react";
 import { cn } from "../lib/cn";
 import { toneText } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
+import { sectionEyebrowVariants } from "./section-eyebrow";
 
 export const labelVariants = tv({
   base: "inline-flex min-w-0 items-center gap-1",
   variants: {
     variant: {
       standard: "text-13 normal-case tracking-normal",
-      eyebrow: "text-2xs uppercase tracking-wide",
+      eyebrow: sectionEyebrowVariants(),
     },
     size: {
       sm: "text-xs",

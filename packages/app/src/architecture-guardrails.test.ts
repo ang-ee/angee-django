@@ -113,6 +113,7 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("ViewAsBanner", "@angee/ui", "src/chrome/ViewAs.tsx"),
   frameworkCriticalExport("viewAsAuth", "@angee/refine", "src/transport-auth.ts"),
   frameworkCriticalExport("StatusToneMap", "@angee/ui", "src/widgets/status-tones.ts"),
+  frameworkCriticalExport("StatusDisplay", "@angee/metadata", "src/artifact-schema.ts"),
   frameworkCriticalExport("statusTone", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("useStatusTone", "@angee/ui", "src/widgets/use-status-tone.ts"),
   frameworkCriticalExport("ManageAccessDialog", "@angee/ui", "src/views/access/ManageAccessDialog.tsx"),

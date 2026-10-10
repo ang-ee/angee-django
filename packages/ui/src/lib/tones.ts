@@ -25,10 +25,26 @@ export const TONES = [
 
 export type Tone = (typeof TONES)[number];
 
+/** The feedback intents that carry a status glyph (a curated subset of the tones). */
+export const FEEDBACK_INTENTS = [
+  "info",
+  "success",
+  "warning",
+  "danger",
+] as const satisfies readonly Tone[];
+
+/** A feedback intent — a tone that carries a status glyph. */
+export type FeedbackIntent = (typeof FEEDBACK_INTENTS)[number];
+
 /** Whether `value` is one of the known tones — the membership guard at the boundary
  *  where an untyped value (Refine meta, JSON) must be narrowed to a `Tone`. */
 export function isTone(value: unknown): value is Tone {
   return TONES.includes(value as Tone);
+}
+
+/** Whether `value` is a feedback tone that carries a status glyph. */
+export function isFeedbackIntent(value: unknown): value is FeedbackIntent {
+  return (FEEDBACK_INTENTS as readonly unknown[]).includes(value);
 }
 
 /**
@@ -213,17 +229,6 @@ export const toneFill: Record<Tone, Record<Fill, string>> = {
 export function toneClass(tone: Tone, fill: Fill = "soft"): string {
   return toneFill[tone][fill];
 }
-
-/** The feedback intents that carry a status glyph (a curated subset of the tones). */
-export const FEEDBACK_INTENTS = [
-  "info",
-  "success",
-  "warning",
-  "danger",
-] as const satisfies readonly Tone[];
-
-/** A feedback intent — a tone that carries a status glyph. */
-export type FeedbackIntent = (typeof FEEDBACK_INTENTS)[number];
 
 /**
  * The canonical icon-registry glyph name for each feedback intent. One owner for

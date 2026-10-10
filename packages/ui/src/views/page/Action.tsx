@@ -85,6 +85,7 @@ interface ActionArgBase extends Pick<
   | "placeholder"
   | "description"
   | "currencyField"
+  | "statusDisplay"
   | "defaultValue"
 > {
   /** Not required before the form may submit (e.g. an optional amount). */

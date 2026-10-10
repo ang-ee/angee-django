@@ -41,11 +41,20 @@ export function requestedFieldPaths<TRow extends Row>(
       : null;
   const query = queryForColumns(columns, modelMetadata, groups);
   const paths = new Set<string>([query.contract.identity.field]);
-  for (const column of columns) {
-    const selections = column.selectionPaths ?? query.fields[column.field]?.row?.paths ?? [column.field];
+  const addSelections = (
+    field: string,
+    explicit?: readonly string[],
+  ) => {
+    const selections = explicit ?? query.fields[field]?.row?.paths ?? [field];
     for (const path of selections) {
       const head = path.split(".", 1)[0] ?? path;
       if (knownNames === null || knownNames.has(head)) paths.add(path);
+    }
+  };
+  for (const column of columns) {
+    addSelections(column.field, column.selectionPaths);
+    if (column.sublineColumn) {
+      addSelections(column.sublineColumn.field, column.sublineColumn.selectionPaths);
     }
   }
   for (const extra of extraFields ?? []) paths.add(extra);

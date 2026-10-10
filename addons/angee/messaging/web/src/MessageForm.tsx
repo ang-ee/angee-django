@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
   Action, Field, Form, Group, ListView, LoadingPanel, ErrorBanner,
-  registerForm, TextLink, useResourceRecordHrefLookup,
+  NavLink, registerForm, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
   type RegisteredFormProps, useTrashActions,
 } from "@angee/ui";
@@ -105,7 +105,7 @@ function partColumns(
         if (!label) return null;
         const href = file?.id ? recordHref(FILE_MODEL, file.id) : undefined;
         return href ? (
-          <TextLink href={href}>{label}</TextLink>
+          <NavLink href={href} variant="inline">{label}</NavLink>
         ) : (
           <span className="text-fg-subtle">{label}</span>
         );

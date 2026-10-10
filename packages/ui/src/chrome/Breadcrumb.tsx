@@ -11,7 +11,7 @@ import { useUiT } from "../i18n";
 import { InAppLinkProvider, useInAppNavigator } from "../lib/in-app-link";
 import { useLatestRef } from "../lib/use-latest-ref";
 import { cn } from "../lib/cn";
-import { TextLink } from "../ui/text-link";
+import { NavLink } from "../ui/nav-link";
 import { useOptionalChromePlace } from "./refine-menu";
 
 const breadcrumbTrailSchema = v.array(v.object({ label: v.string(), href: v.optional(v.string()) }));
@@ -197,12 +197,12 @@ function BreadcrumbTrail({
   );
 }
 
-function BreadcrumbLink({ href, trailPrefix, ...props }: React.ComponentProps<typeof TextLink> & {
+function BreadcrumbLink({ href, trailPrefix, ...props }: React.ComponentProps<typeof NavLink> & {
   href: string;
   trailPrefix: readonly BreadcrumbItem[];
 }): ReactElement {
   return <BreadcrumbContentLinks trail={trailPrefix}>
-    <TextLink href={href} variant="muted" {...props} />
+    <NavLink href={href} variant="muted" {...props} />
   </BreadcrumbContentLinks>;
 }
 

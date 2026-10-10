@@ -1,11 +1,12 @@
 import type { ReactElement } from "react";
 
 import {
+  formatNumber,
   Input,
   rowValueAtPath,
+  textRoleVariants,
   widgetLabel,
   type WidgetDefinition,
-  type WidgetField,
   type WidgetRenderProps,
 } from "@angee/ui";
 
@@ -15,16 +16,6 @@ import {
  * is accepted for robustness.
  */
 type MoneyWidgetValue = string | number | null;
-
-/**
- * The field metadata a MoneyField projects (via the backend classifier): the
- * path to the FK that owns the row's currency, a sibling `"currency"` or a
- * one-hop `"order.currency"`. Widened locally over {@link WidgetField} — the
- * currency path is money's own contract, resolved from resource metadata.
- */
-export interface MoneyWidgetField extends WidgetField {
-  currencyField?: string;
-}
 
 /**
  * Resolve the ISO-4217 code that denominates the amount from the row, following
@@ -63,7 +54,7 @@ export function formatMoney(value: MoneyWidgetValue | undefined, code: string | 
   if (amount === null) return "";
   if (code) {
     try {
-      return new Intl.NumberFormat(undefined, { style: "currency", currency: code }).format(amount);
+      return formatNumber(amount, { style: "currency", currency: code });
     } catch {
       // Unknown/blank code — fall through to the neutral format.
     }
@@ -72,15 +63,15 @@ export function formatMoney(value: MoneyWidgetValue | undefined, code: string | 
   // neutral two fraction digits rather than exposing the stored Decimal's full
   // scale (e.g. a 6dp `24.900000`). The currency-styled path above already renders
   // each currency's own minor-unit digits from CLDR when the code is known.
-  return new Intl.NumberFormat(undefined, {
+  return formatNumber(amount, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount);
+  });
 }
 
 function MoneyRead({ value, row, field }: WidgetRenderProps<MoneyWidgetValue>): ReactElement {
-  const code = resolveCurrencyCode(row, (field as MoneyWidgetField | undefined)?.currencyField);
-  return <span className="text-13 tabular-nums text-fg">{formatMoney(value, code)}</span>;
+  const code = resolveCurrencyCode(row, field?.currencyField);
+  return <span className={textRoleVariants({ role: "value" })}>{formatMoney(value, code)}</span>;
 }
 
 function MoneyEdit({
@@ -91,7 +82,7 @@ function MoneyEdit({
   readOnly,
   controlRef,
 }: WidgetRenderProps<MoneyWidgetValue>): ReactElement {
-  const code = resolveCurrencyCode(row, (field as MoneyWidgetField | undefined)?.currencyField);
+  const code = resolveCurrencyCode(row, field?.currencyField);
   const stored = typeof value === "string" ? /^([-+]?\d+)\.(\d{6})$/.exec(value) : null;
   const integer = stored?.[1] ?? "";
   const fraction = stored?.[2] ?? "";

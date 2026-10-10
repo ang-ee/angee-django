@@ -14,6 +14,7 @@ import { FormGrid } from "../../ui/form-layout";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Collapsible } from "../../ui/collapsible";
 import { useDeveloperFieldTitle } from "../../chrome/DeveloperMode";
+import { sectionEyebrowVariants } from "../../ui/section-eyebrow";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
@@ -69,8 +70,12 @@ const EDITABLE_FIELD_CONTROL_CLASS = cn(
 );
 const READONLY_FIELD_CONTROL_CLASS = "min-h-8 text-13 text-fg";
 const FIELD_ROOT_CLASS = "block min-w-0";
-const FIELD_LABEL_CLASS =
-  "mb-1 flex min-h-4 items-center justify-between gap-2 text-xs font-medium uppercase tracking-wide text-fg-muted";
+const FIELD_LABEL_CLASS = sectionEyebrowVariants({
+  className: "flex min-h-4 items-center justify-between gap-2",
+  size: "sm",
+  spacing: "field",
+  weight: "medium",
+});
 const FIELD_CONTROL_CLASS = "min-w-0";
 
 function WrappingTitleEditor({
