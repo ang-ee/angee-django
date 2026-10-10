@@ -26,6 +26,7 @@ def test_bootstrap_admin_creates_platform_admin(monkeypatch: Any) -> None:
     assert user.is_superuser is True
     assert user.password == "first-secret"
     assert manager.granted_user is user
+    assert manager.bound_operator is user
 
 
 def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monkeypatch: Any) -> None:
@@ -45,11 +46,15 @@ def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monke
     assert existing.password == "kept-secret"
     assert existing.saved_update_fields == ["email", "is_active", "is_staff", "is_superuser"]
     assert manager.granted_user is existing
+    assert manager.bound_operator is existing
 
 
 def _patch_command_owners(monkeypatch: Any, manager: "_Manager") -> None:
     """Patch framework owners so the command can be tested without a database."""
 
+    monkeypatch.setattr(
+        bootstrap_admin, "bind_deployment_operator", lambda user: setattr(manager, "bound_operator", user),
+    )
     _User._default_manager = manager
     monkeypatch.setattr(bootstrap_admin, "get_user_model", lambda: _User)
     monkeypatch.setattr(bootstrap_admin.transaction, "atomic", lambda: nullcontext())
@@ -72,6 +77,7 @@ class _Manager:
         self.user = user
         self.system_reason: str | None = None
         self.granted_user: _User | None = None
+        self.bound_operator: _User | None = None
 
     def system_context(self, *, reason: str) -> "_QuerySet":
         """Record the system-scope reason and return this manager."""

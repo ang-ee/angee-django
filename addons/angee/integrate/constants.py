@@ -16,6 +16,12 @@ ENSURE_SESSIONS_TASK = "integrate.ensure_bridge_sessions"
 RECONCILER_INTERVAL = 60.0
 """Beat period for :data:`ENSURE_SESSIONS_TASK`."""
 
+BINDING_TASK = "integrate.discover_connection"
+"""Discover the resource authorized by an attached credential."""
+
+BINDING_TASK_EXPIRES = RECONCILER_INTERVAL
+"""Pending rows recover an expired or lost dispatch on the next scheduler tick."""
+
 SESSION_START_EXPIRES = RECONCILER_INTERVAL
 """Discard an unconsumed live-session start after one reconciler tick."""
 
@@ -27,3 +33,6 @@ STOP_JOIN_SECONDS = 30.0
 
 SESSION_PROCESS_STOP_SECONDS = WAKE_SECONDS + STOP_JOIN_SECONDS + 5.0
 """Process shutdown allows one session wake, vendor cleanup, and headroom."""
+
+BINDING_ATTEMPT_LIMIT = 5
+"""Maximum remote discovery attempts for one connection generation."""

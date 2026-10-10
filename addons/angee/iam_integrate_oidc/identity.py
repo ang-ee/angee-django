@@ -141,7 +141,10 @@ class OidcLoginCompletion:
             state=state_token,
         )
         claims = self.protocol.verify_id_token(str(tokens.get("id_token", "")), nonce=record.nonce)
-        userinfo = self.protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
+        access_token = str(tokens.get("access_token", "") or "")
+        userinfo = self.protocol.fetch_userinfo(
+            access_token, params=self.oauth_client.userinfo_params(self.protocol, access_token),
+        )
         if userinfo:
             claims = {**userinfo, **claims}
         return tokens, claims

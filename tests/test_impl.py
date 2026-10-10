@@ -358,6 +358,30 @@ def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
 @isolate_apps()
+def test_impl_refresh_accepts_native_queryset_and_iterable_fields() -> None:
+    """Native hydration leaves the create-only key ready for a later config write."""
+
+    class RefreshRecord(ImplDefaultsMixin):
+        adapter = ImplClassField(_BaseImpl, create_only=True)
+        config = models.JSONField(default=dict)
+
+        class Meta:
+            app_label = "tests"
+
+    with model_tables((RefreshRecord,)):
+        record = RefreshRecord.objects.create(adapter="typed", config={"retries": 1})
+        deferred = RefreshRecord.objects.only("pk", "config").get(pk=record.pk)
+        deferred.refresh_from_db(None, iter(("adapter",)), RefreshRecord.objects.filter(pk=record.pk))
+        deferred.config = {"retries": "4"}
+        deferred.save(update_fields={"config"})
+        stored = RefreshRecord.objects.get(pk=record.pk)
+        assert stored.adapter == "typed"
+        assert stored.config == {"endpoint": "https://example.test", "retries": 4}
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
 def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_num_queries) -> None:
     """An unrelated save neither reads nor rewrites the deferred config and selector."""
 

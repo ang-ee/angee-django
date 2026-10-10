@@ -229,7 +229,7 @@ class ProjectContract:
                             "ANGEE_DB_POOL_TIMEOUT", default=float(seed.get("ANGEE_DB_POOL_TIMEOUT", 5))
                         ),
                     }
-            seed.setdefault("DATABASES", {"default": database})
+            seed["DATABASES"] = {"default": database, **seed.get("DATABASES", {})}
         if "CACHE_URL" in os.environ:
             seed.setdefault("CACHES", {"default": self.env.cache()})
         if "EMAIL_BACKEND" in os.environ:

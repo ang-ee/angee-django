@@ -1084,7 +1084,7 @@ def test_complete_link_populates_credential_token_fields(
         "verify_id_token",
         lambda self, id_token, **kwargs: {"sub": "sub-token-fields", "email": "tokens@example.com"},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     before = timezone.now()
     result = identity.complete_link(
@@ -1147,7 +1147,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
         return tokens
 
     monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
-    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token: claims)
+    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token, params=None: claims)
     monkeypatch.setattr(
         OAuthClientOidcProtocol,
         "verify_id_token",
@@ -1217,7 +1217,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(
         }
 
     monkeypatch.setattr(OAuthClientProtocol, "exchange_code", exchange_code)
-    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     result = complete_account_connect(
         oauth_client,
@@ -1266,7 +1266,7 @@ def test_complete_account_connect_rejects_missing_stable_external_id(
     monkeypatch.setattr(
         OAuthClientProtocol,
         "fetch_userinfo",
-        lambda self, access_token: {"email": "missing@example.com"},
+        lambda self, access_token, params=None: {"email": "missing@example.com"},
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
@@ -1490,7 +1490,14 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
 
     monkeypatch.setattr(OAuthClientOidcProtocol, "exchange_code", lambda self, **kwargs: token_response)
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: id_claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: userinfo_claims)
+    userinfo_calls = []
+
+    def fetch_userinfo(self, access_token, *, params=None):
+        userinfo_calls.append((access_token, params))
+        return userinfo_claims
+
+    monkeypatch.setattr(type(oauth_client), "userinfo_params", lambda self, protocol, token: {"proof": token})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", fetch_userinfo)
     monkeypatch.setattr(identity, "resolve", resolve_user)
 
     login_state, _login_record = oauth_state.issue(
@@ -1541,6 +1548,7 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert link_result.claims == expected_claims
     assert link_result.next_path == "/link-next"
     assert account.identity_claims == expected_claims
+    assert userinfo_calls == [("access", {"proof": "access"}), ("access", {"proof": "access"})]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1566,7 +1574,7 @@ def test_complete_login_does_not_claim_an_unverified_email(
         lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
     monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
     monkeypatch.setattr(identity, "_claim_login_handle", lambda user_arg, email, claims_arg: claimed.append(email))
 
@@ -1604,7 +1612,7 @@ def test_complete_login_contains_parties_bookkeeping_failure(
         lambda self, **kwargs: {"access_token": "access", "id_token": "id-token"},
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, id_token, **kwargs: claims)
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
     monkeypatch.setattr(identity, "resolve", lambda *args, **kwargs: user)
 
     def fail_bookkeeping(user_arg: Any, email: str, claims_arg: dict[str, Any]) -> None:
@@ -1657,7 +1665,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
         "verify_id_token",
         lambda self, id_token, **kwargs: {"sub": "sub-linked", "email": "other@example.com"},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     with pytest.raises(OAuthFlowError) as exc_info:
         identity.complete_link(
@@ -1697,7 +1705,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(
         "verify_id_token",
         lambda self, id_token, **kwargs: {"sub": "sub-swapped", "email": "start@example.com"},
     )
-    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token: {})
+    monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, access_token, params=None: {})
 
     result = identity.complete_link(
         oauth_client,

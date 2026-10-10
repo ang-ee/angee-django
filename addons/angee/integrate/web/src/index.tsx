@@ -28,8 +28,10 @@ import {
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
   INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  INTEGRATION_RETRY_BINDING_ACTION_ID,
   PauseIntegrationAction,
   ResumeIntegrationAction,
+  RetryBindingAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
 
@@ -148,12 +150,17 @@ const integrate = defineBaseAddon({
       },
     },
     [`${INTEGRATION_MODEL}#actions`]: {
-      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, content: <PauseIntegrationAction /> },
-      [INTEGRATION_RESUME_ACTION_ID]: { sequence: 12, content: <ResumeIntegrationAction /> },
+      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["lifecycle"], content: <PauseIntegrationAction /> },
+      [INTEGRATION_RESUME_ACTION_ID]: {
+        sequence: 12, requiredFields: ["can_resume"], content: <ResumeIntegrationAction />,
+      },
     },
     [`${INTEGRATION_MODEL}#actions-menu`]: {
-      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, content: <DisconnectIntegrationAction /> },
-      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, content: <TestConnectionAction /> },
+      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["lifecycle"], content: <DisconnectIntegrationAction /> },
+      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["lifecycle"], content: <TestConnectionAction /> },
+      [INTEGRATION_RETRY_BINDING_ACTION_ID]: {
+        sequence: 15, requiredFields: ["can_retry_binding"], content: <RetryBindingAction />,
+      },
     },
   },
   icons: {
@@ -164,9 +171,11 @@ const integrate = defineBaseAddon({
   },
 });
 
+export { ConnectIntegration } from "./documents";
 export {
-  canConnectRecord,
+  CONNECT_RECORD_FIELDS,
   ConnectOAuthButton,
+  type ConnectOAuthButtonProps,
   parseManualCode,
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
@@ -177,12 +186,14 @@ export {
 } from "./ConditionalMutationButton";
 export {
   DisconnectIntegrationAction,
+  INTEGRATION_CONNECTION_FIELDS,
   INTEGRATION_DISCONNECT_ACTION_ID,
   INTEGRATION_MODEL,
   INTEGRATION_LIFECYCLE_TOKENS,
   INTEGRATION_PAUSE_ACTION_ID,
   INTEGRATION_RESUME_ACTION_ID,
   INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  INTEGRATION_RETRY_BINDING_ACTION_ID,
   integrationHasCredential,
   integrationLifecycle,
   integrationLifecycleIs,
@@ -190,6 +201,7 @@ export {
   isConnectedOrPaused,
   PauseIntegrationAction,
   ResumeIntegrationAction,
+  RetryBindingAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
 export {

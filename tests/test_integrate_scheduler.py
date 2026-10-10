@@ -786,10 +786,11 @@ def test_periodic_task_drives_the_due_scan(monkeypatch: pytest.MonkeyPatch) -> N
     """The queue tick calls the pure due-scan; registration is by stable task name."""
 
     calls: list[bool] = []
+    monkeypatch.setattr(integrate_tasks.scheduler, "enqueue_pending_bindings", lambda: calls.append(False))
     monkeypatch.setattr(integrate_tasks.scheduler, "enqueue_due_bridges", lambda: calls.append(True))
     integrate_tasks.sync_due_bridges()
 
-    assert calls == [True]
+    assert calls == [False, True]
     assert integrate_tasks.sync_due_bridges.name == "integrate.sync_due_bridges"
 
 

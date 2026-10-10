@@ -17,6 +17,94 @@ existing capability overrides remain valid.
 | Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed); `manage.py preview_push <integration>` lists what a push would write ([`preview_push`](streams.py)) |
 | Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
 
+Provider presets are contributed through the existing implementation registry:
+subclass `OAuthProviderType`, declare a unique `key`, and contribute
+`"ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.<key>"` from the owning addon's autoconfig.
+`OAuthClient.provider_type` choices and defaults come from `ImplClassField`.
+The provider's `refine_grant(protocol, tokens)` runs after code exchange and
+before profile lookup or credential persistence. It can call
+`OAuthClientProtocol.exchange_grant(grant_type, **grant)` for an additional
+wire exchange. Those names distinguish refinement from a token request.
+Product presets and registrations belong to their capability addons.
+
+Connection adapters declare `IntegrationImpl.requires_connection_discovery = True`
+to opt into asynchronous `discover_connection`/`apply_discovery`. `FeedBackend`
+declares this by default; manual and credential-only implementations leave it
+false. Overriding a method alone does not enable discovery.
+
+`Bridge.dispatch_inbound` verifies and lands through the concrete capability
+under its polling advisory lock. Call it outside atomic blocks so the lock
+covers committed landing. A busy bridge raises transient `IntegrationError`;
+the inbound transport must arrange redelivery.
+
+Provider presets can compute `userinfo_params(protocol, access_token)`;
+connect and OIDC login/link pass them to
+`OAuthClientProtocol.fetch_userinfo(access_token, params=…)`.
+Provider proofs and query vocabulary stay in the provider addon.
+
+`OAuthClient.configuration_state` is the readiness rule used by the picker,
+connect and the operation-local [registration snapshot](oauth/registrations.py).
+The snapshot reads public configuration fields, never client secrets. Host
+settings are applied through `oauth_clients` after resources load.
+`Credential.is_reconnect_required` uses status, failed refresh and expiry only
+when the stored non-secret `refreshable` fact is false. Ordinary access-token
+expiry with a refresh grant does not ask for new consent.
+
+Connection discovery locates the external resource; a REBAC binding grants a
+relationship. The public `binding_*` handshake names remain on Integration,
+while the task is named `integrate.discover_connection`. Every credential attach
+enters `await_binding`, clears completion and advances `binding_generation`.
+No-op discovery settles synchronously. The worker runs
+`IntegrationImpl.discover_connection(credential) -> ConnectionDiscovery` outside
+transactions under the sync advisory lock. The result contains adapter-owned
+`data` and, optionally, a `DerivedCredential(kind, name, material)`.
+
+`finish_binding(credential_pk=…, generation=…, discovery=…)` locks the
+integration, verifies both original task values, and invokes the adapter's
+`apply_discovery(discovery)` with a freshly loaded row. This hook performs only
+database work. Integrate persists derived material through the credential
+manager and `attach_connection`; adapters never persist credentials or implement
+the generation fence. Integrate then settles and sends
+`signals.binding_finished.send(sender=type(instance), instance=instance)` on commit.
+The source grant is retained in `binding_credential` so reconnect can regenerate
+resource-specific credentials. A shared OAuth reconnect re-discovers every
+attached integration, including derived attachments, preserving pauses. Switching
+the external account on an in-use credential is refused.
+
+The minute scheduler redispatches due pending discovery, with robust sends and
+independent scheduler steps. Transport errors, timeouts and server failures
+retry; five remote attempts exhaust one generation. Lock contention consumes no
+attempt. `retry_binding`, Resume and Connect reset discovery's budget. Discovery
+suspends live desire through `Bridge.update_live_state(desired=STOPPED, …)` so
+an existing session cooperatively releases the advisory lock. It leaves sync
+stages and retained workflow runs intact. `binding_ready` / `ready_for_work()`
+are the shared admission rule; generation zero preserves existing integrations
+until their next attachment or Resume. There is no separate polling repair scan.
+
+`IntegrationError(public_message, transient=…, retry_after=…)` owns the optional
+positive provider horizon. A hint implies transience unless explicitly declared
+otherwise. Aggregate failures retain a partition's horizon even when another
+partition has a permanent refusal. `BridgeSyncError` retains stream
+and partition identity and is transient when all failed partitions are transient,
+using their longest hint. Bridge schedules at the later of its normal interval
+and that hint, while paused rows stay unscheduled.
+
+Concrete types compose `IntegrationOAuthMixin` (included in `BridgeTypeMixin`)
+and the public connection projection. Native scalar annotations read credential
+health, vendor hints and the selected concrete implementation through elevated
+subqueries, without REBAC-checked joins or optimizer-store mutation.
+`ConnectOAuthButton` accepts optional vendor-owned labels. Its optional `row`
+path consumes `CONNECT_RECORD_FIELDS`; existing callers may keep their own
+selection and supply `start({redirectUri, next})` without a row.
+
+Generic Hasura resources with an editable credential use
+`IntegrationWriteBackend`; authored patches use `apply_integration_patch_fields`.
+Both retain native authorization and route attachment through the model owner.
+The `credential_refreshability` addon data migration backfills existing rows.
+It applies after the host-generated `refreshable` column exists; regenerate
+schema migrations, then build again to materialize that data migration before
+applying the complete migration graph.
+
 Event feeds compose their domain's idempotent ingest verb and never create links
 or revisions. Messaging uses conversation partitions for Slack and mailbox
 partitions for IMAP. Their legacy bridge cursor slices seed the first stream row

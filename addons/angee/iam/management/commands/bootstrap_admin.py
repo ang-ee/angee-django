@@ -12,6 +12,9 @@ from django.db import transaction
 from rebac import ObjectRef, app_settings, system_context
 from rebac.memberships import grant as grant_membership
 
+from angee.iam.deployment import bind_deployment_operator
+from angee.resources.exceptions import ResourceLoadError
+
 
 class Command(BaseCommand):
     """Ensure the configured first admin exists."""
@@ -76,6 +79,13 @@ class Command(BaseCommand):
             if not role:
                 raise CommandError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
             grant_membership(subject=user, container=ObjectRef.parse(role))
+            try:
+                operator = bind_deployment_operator(user)
+            except ResourceLoadError as error:
+                raise CommandError(str(error)) from error
+
+        if operator is None or operator.pk != user.pk:
+            self.stdout.write("Existing deployment operator retained; use rebind_deployment_operator to change it.")
 
         action = "created" if created else "ensured"
         self.stdout.write(self.style.SUCCESS(f"bootstrap admin: {action} '{username}'"))

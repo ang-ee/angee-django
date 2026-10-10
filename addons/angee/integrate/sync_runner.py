@@ -31,6 +31,8 @@ def run_bridge_sync_job(
     with system_context(reason="integrate.bridge_sync_job"), ExitStack() as locks:
         with transaction.atomic():
             bridge = model._default_manager.lock_if_supported().get(pk=pk)
+            if not bridge.binding_ready:
+                return {"ok": False, "items": 0, "skipped": True, "reason": "connection-not-ready"}
             if require_queue_token and not bridge.sync_queue_token_matches(now):
                 return {"ok": True, "items": 0, "skipped": True, "stale": True}
             acquired = locks.enter_context(bridge_advisory_lock(bridge))

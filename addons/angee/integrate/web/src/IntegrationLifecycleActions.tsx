@@ -15,10 +15,16 @@ import { useIntegrateT } from "./i18n";
  */
 export const INTEGRATION_MODEL = "integrate.Integration";
 
+export const INTEGRATION_RETRY_BINDING_ACTION_ID = "integrate.connection.retryDiscovery";
 export const INTEGRATION_TEST_CONNECTION_ACTION_ID = "integrate.connection.test";
 export const INTEGRATION_PAUSE_ACTION_ID = "integrate.lifecycle.pause";
 export const INTEGRATION_RESUME_ACTION_ID = "integrate.lifecycle.resume";
 export const INTEGRATION_DISCONNECT_ACTION_ID = "integrate.lifecycle.disconnect";
+
+/** Credential-health facts shared by lifecycle and OAuth actions. */
+export const INTEGRATION_CONNECTION_FIELDS = [
+  "credential_status", "is_reconnect_required", "binding_ready", "binding_pending",
+] as const;
 
 /** Lifecycle tokens owned by integrate's transition vocabulary. */
 export const INTEGRATION_LIFECYCLE_TOKENS = [
@@ -46,38 +52,10 @@ export const isConnectedOrPaused = ({
 }: ConditionalMutationButtonContext): boolean =>
   ["connected", "paused"].includes(integrationLifecycle(record));
 
-/**
- * Whether an integration row holds a credential, read from either projection:
- * the parent `IntegrationType` selects the `credential` relation, every subtype
- * (channel, directory, mount, feed) carries the shared `credential_status`
- * scalar instead — so a subtype form declares one cheap field and this gate
- * never has to select the relation itself.
- */
+/** Read the shared credential projection on the parent and its capabilities. */
 export function integrationHasCredential(record: Row): boolean {
-  return record.credential != null || Boolean(record.credential_status);
+  return Boolean(record.credential_status);
 }
-
-/**
- * Rows Resume reaches. `Integration.connect` declares
- * `source=[DISCONNECTED, PAUSED]`, so a *disconnected* row that still holds its
- * credential can honestly reconnect. Gating on `paused` alone left it stranded:
- * Disconnect reaches every subtype, but a vendor's own Connect authors a **new**
- * row (IMAP's `connect_imap_channel`, CardDAV's directory connect both
- * `create(...)`), so a disconnected row was unreachable from the console with its
- * credential still attached.
- *
- * A row with no credential has nothing to reconnect *with* — its vendor's Connect
- * authors one, so Resume stays hidden. A form that selects neither `credential`
- * nor `credential_status` reads as having none: Resume stays paused-only there
- * rather than offering a reconnect it cannot substantiate.
- */
-const canResume = (context: ConditionalMutationButtonContext): boolean => {
-  const lifecycle = integrationLifecycle(context.record);
-  return (
-    lifecycle === "paused" ||
-    (lifecycle === "disconnected" && integrationHasCredential(context.record))
-  );
-};
 
 /**
  * Exercise a credentialed integration's connection and toast the server's answer.
@@ -105,8 +83,7 @@ export function TestConnectionAction(): React.ReactElement {
  * Connecting is deliberately absent: it means a real handshake for every subtype
  * that has credentials (an OAuth exchange, a CardDAV login, a WhatsApp pairing),
  * and the addon that owns the vendor owns that UX. `mark_integration_connected`
- * is a credential-free flag flip, correct only as the inverse of a pause — so it
- * backs Resume below and nothing else.
+ * resumes the existing connection and repeats discovery through its model owner.
  */
 export function PauseIntegrationAction(): React.ReactElement {
   const t = useIntegrateT();
@@ -126,10 +103,17 @@ export function ResumeIntegrationAction(): React.ReactElement {
     <ConditionalMutationButton
       field="mark_integration_connected"
       label={t("lifecycle.resume")}
-      when={canResume}
+      when={({ record }) => record.can_resume === true}
       variant="primary"
     />
   );
+}
+
+/** Reset failed discovery through the integration's explicit recovery verb. */
+export function RetryBindingAction(): React.ReactElement {
+  const t = useIntegrateT();
+  return <ConditionalMutationButton field="retry_binding" label={t("connection.retryDiscovery")}
+    when={({ record }) => record.can_retry_binding === true} />;
 }
 
 /** Disconnect a running or paused integration. */

@@ -17,24 +17,25 @@ from django.test.utils import isolate_apps
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
+from angee.integrate.testing.integration import Integration
 from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
     WebhookSubscription,
     make_integration,
 )
+from tests.tables import model_tables
 
 
 @pytest.fixture
-def dispatch_bridge() -> Iterator[Bridge]:
-    """Keep the in-memory dispatch fixture out of installed bridge discovery."""
+def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
+    """Persist an isolated bridge so inbound dispatch has a real lock identity."""
 
     with isolate_apps():
 
-        class DispatchBridge(Bridge, AngeeModel):
+        class DispatchBridge(Bridge, Integration):
             """Concrete bridge fixture used only for inbound dispatch tests."""
 
             class Meta(Bridge.Meta):
@@ -67,7 +68,9 @@ def dispatch_bridge() -> Iterator[Bridge]:
             def stop_live(self) -> None:
                 """No-op live subscription stop for the fixture."""
 
-        yield DispatchBridge()
+        with model_tables((DispatchBridge,)):
+            bridge = make_integration("inbound-dispatch", model=DispatchBridge)
+            yield bridge
 
 
 @pytest.mark.django_db(transaction=True)

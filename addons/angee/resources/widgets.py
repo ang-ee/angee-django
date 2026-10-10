@@ -29,6 +29,22 @@ class XrefWidgetMixin:
     model: type[models.Model]
     """Related model bound by the import-export FK/M2M widget base."""
 
+    def referenced_handles(self, value: Any) -> frozenset[tuple[str, str]]:
+        """Parse relation intent without resolving its database target."""
+
+        if self.addon_aliases is None:
+            raise ValueError("xref parsing requires addon aliases")
+        return frozenset(split_xref(ref, self.addon_aliases) for ref in self.reference_values(value))
+
+    def reference_values(self, value: Any) -> list[str]:
+        """Return the single reference accepted by FK and record-reference fields."""
+
+        if value in (None, ""):
+            return []
+        if not isinstance(value, str):
+            raise ValueError("xrefs must be strings")
+        return [value]
+
     def resolve_field_target(self, ref: str) -> models.Model:
         """Resolve one xref to a row assignable to this widget's related field.
 
@@ -63,9 +79,10 @@ class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
         """
 
         del row, kwargs
-        if value in (None, ""):
+        references = self.reference_values(value)
+        if not references:
             return None
-        return generic_target(resolve_xref(value, self.ledger_model, self.addon_aliases))
+        return generic_target(resolve_xref(references[0], self.ledger_model, self.addon_aliases))
 
 
 class RecordRefField(fields.Field):
@@ -119,14 +136,20 @@ class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
         """Return the target object or primary key for one xref value."""
 
         del row, kwargs
-        if value in (None, ""):
+        references = self.reference_values(value)
+        if not references:
             return None
-        target = self.resolve_field_target(value)
+        target = self.resolve_field_target(references[0])
         return target.pk if self.key_is_id else target
 
 
 class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
     """Resolve scalar or list xref values for many-to-many fields."""
+
+    def reference_values(self, value: Any) -> list[str]:
+        """Use the same list grammar for prerequisites and target resolution."""
+
+        return many_to_many_values(value)
 
     def clean(
         self,
@@ -137,7 +160,7 @@ class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
         """Return target model objects for every xref in ``value``."""
 
         del row, kwargs
-        return [self.resolve_field_target(ref) for ref in many_to_many_values(value)]
+        return [self.resolve_field_target(ref) for ref in self.reference_values(value)]
 
 
 class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):

@@ -50,7 +50,7 @@ class OAuthFlowError(IntegrationError):
         self.code = code
         self.http_status = http_status
         self.body = body
-        super().__init__(message or code)
+        super().__init__(message or code, transient=http_status >= 500 or http_status == 429)
 
     @property
     def public_message(self) -> str:

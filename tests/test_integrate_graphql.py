@@ -973,6 +973,31 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         assert persisted.credential_id == credential.pk
 
 
+def test_connection_admissions_project_ownership_without_loading_credentials(composed_tables: None) -> None:
+    bridge = make_integration(
+        "connect-admissions", kind=CredentialKind.OAUTH, backend_class="stub", model=VcsBridge,
+    )
+    admin = _platform_admin("connect-admissions-admin")
+    with system_context(reason="test.integrate.connect_admissions"):
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+    query = """
+        query Admission($id: String!) {
+          vcs_bridges_by_pk(id: $id) { can_connect can_resume can_retry_binding }
+        }
+    """
+    variables = {"id": _public_id(bridge)}
+    assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"] == {
+        "can_connect": True, "can_resume": False, "can_retry_binding": False,
+    }
+    assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"] == {
+        "can_connect": False, "can_resume": False, "can_retry_binding": False,
+    }
+    with system_context(reason="test.integrate.resume_admissions"):
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=bridge.credential, lifecycle="paused")
+    assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"]["can_resume"] is False
+    assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"]["can_resume"] is True
+
+
 def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
     composed_tables: None,
 ) -> None:

@@ -4,10 +4,14 @@ import { createNamespaceT } from "@angee/ui";
 // runtime owns the active translations; these are the defaults used when a key is
 // missing — model-driven `<Column>`/`<Field>` labels stay metadata-driven and are
 // not listed here. Keys are dotted within the `integrate` namespace.
+// The addon that owns a vendor owns its connect label; this addon supplies
+// optional generic defaults and the shared authorization dialog copy.
 export const enIntegrateMessages: Record<string, string> = {
-  // Shared integration lifecycle record actions. Connect is absent by design:
-  // it is a real handshake per subtype, so the addon that owns the vendor owns
-  // its label as well as its UX.
+  "connect.action": "Connect",
+  "connect.reconnect": "Reconnect",
+  "connect.connected": "Connection saved",
+  "connect.startError": "Could not start authorization",
+  "connection.retryDiscovery": "Retry discovery",
   "connection.test": "Test connection",
   "streams.title": "Streams",
   "streams.openDiscrepancies": "Open discrepancies",
@@ -71,7 +75,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "webhooks.signingSecret": "Signing secret",
   "webhooks.rotated": "Signing secret rotated.",
   // --- Connect surface (outbound OAuth: providers, accounts, credentials) ---
-  // Cohesive block; relocatable to a future `iam_integrate_oidc/web` as a unit.
+  // Integrate owns outbound account connection; login copy belongs to its login addon.
   // OAuth providers page — form-section labels and actions.
   "providers.group.client": "Client",
   "providers.group.endpoints": "Endpoints",
