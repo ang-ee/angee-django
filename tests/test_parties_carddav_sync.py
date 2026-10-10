@@ -990,6 +990,31 @@ def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) ->
     assert push_stream(replica.stream, replica.backend).count == 0
 
 
+def test_written_out_country_survives_an_address_edit(replica: Replica) -> None:
+    """The card's "USA" is the "US" parties stores, so adding an address keeps that line."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item3.ADR;type=HOME:;;1 Main St;Springfield;IL;62701;USA\r\nitem3.X-ABADR:us\r\nEND:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    assert person.addresses.get().country == "US"
+    with system_context(reason="test address edit"):
+        person.addresses.create(street="2 Rue Neuve", city="Paris", country="FR", created_by_id=person.created_by_id)
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert {line.value.street: (line.group, line.value.country) for line in card.adr_list} == {
+        "1 Main St": ("item3", "USA"),
+        "2 Rue Neuve": (None, "FR"),
+    }
+    assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
+    assert push_stream(replica.stream, replica.backend).count == 0
+
+
 def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> None:
     replica.server.store(_HREF, "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nTEL:+14155552671\r\nEND:VCARD\r\n")
     person, link = replica.baseline()
