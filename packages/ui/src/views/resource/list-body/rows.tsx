@@ -32,7 +32,7 @@ interface RowReorder {
 
 function RecordRowInner<TRow extends Row>({
   row,
-  selected,
+  selected: storedSelected,
   onToggleSelected,
   interactive,
   selectable = true,
@@ -66,6 +66,7 @@ function RecordRowInner<TRow extends Row>({
   renderRowActions?: (row: TRow) => React.ReactNode;
   reorder?: RowReorder;
 }): React.ReactElement {
+  const selected = selectable && storedSelected;
   const t = useUiT();
   const preview = useRuntimeViewAs();
   const blocked = Boolean(preview.viewAs || preview.pending);

@@ -10,6 +10,8 @@ const router = vi.hoisted(() => ({ navigate: vi.fn() }));
 
 vi.mock("@tanstack/react-router", () => ({
   useSearch: () => ({ sort: "name:asc", page: 3 }),
+  useRouter: () => ({ state: { location: { search: { sort: "name:asc", page: 3 } } } }),
+  useRouterState: () => ({ sort: "name:asc", page: 3 }),
   useNavigate: () => router.navigate,
 }));
 

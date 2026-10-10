@@ -1,7 +1,16 @@
 // Bespoke console operations owned by the rendered base view layer.
 
-import type { TypedDocumentNode } from "@angee/refine";
+import { useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import { gql } from "graphql-tag";
+
+/** Mirrors the bulk-action bound owned by `angee.graphql.actions.ActionQuery`. */
+export const ActionSelectionLimit: TypedDocumentNode<{ action_selection_limit: number }, Record<string, never>> = gql`
+  query ActionSelectionLimit { action_selection_limit }
+`;
+
+export function useActionSelectionLimit(): number | undefined {
+  return useAuthoredQuery(ActionSelectionLimit).data?.action_selection_limit;
+}
 
 /** Mirrors the core-owned `ImplChoice` projection in `angee/graphql/impl.py`. */
 export interface ImplChoice {

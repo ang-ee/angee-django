@@ -6,6 +6,7 @@ Direct sharing (:mod:`angee.graphql.sharing`) serves records declaring
 ``MergeableMixin``.
 """
 
+from angee.graphql.actions import ActionQuery
 from angee.graphql.merge import MergeMutation
 from angee.graphql.sharing import RecordAccessMutation, RecordAccessOption, RecordAccessQuery, RecordAccessType
 from angee.graphql.trash import TrashMutation
@@ -15,7 +16,7 @@ schemas = {
         "mutation": [MergeMutation, TrashMutation],
     },
     "console": {
-        "query": [RecordAccessQuery],
+        "query": [RecordAccessQuery, ActionQuery],
         "mutation": [MergeMutation, RecordAccessMutation, TrashMutation],
         "types": [RecordAccessType, RecordAccessOption],
     },

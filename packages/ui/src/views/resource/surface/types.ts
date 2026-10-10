@@ -96,6 +96,7 @@ export interface ResourceViewPresentationSurface<TRow extends Row = Row> {
   toggleVisibleField: (id: string, visible: boolean) => void;
   rowModels: readonly TableRowModel<TRow>[];
   selectedIds: ReadonlySet<string>;
+  selectedRows: readonly TRow[];
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
 }
