@@ -970,6 +970,57 @@ def test_removing_one_line_of_a_shared_group_keeps_its_other_properties(replica:
     assert push_stream(replica.stream, replica.backend).count == 0
 
 
+def test_removing_a_line_takes_its_own_label_when_labels_are_equal(replica: Replica) -> None:
+    """vobject compares lines without their group, so a companion leaves by its group alone."""
+
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            "item1.TEL;type=CELL:+14155552671\r\n"
+            "item1.X-ABLabel:Other\r\n"
+            "item2.TEL;type=CELL:+14155550199\r\n"
+            "item2.X-ABLabel:Other\r\n"
+            "END:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test equal labels"):
+        PartyHandle.objects.filter(party=person, handle__value="+14155550199").delete()
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [(line.group, line.value) for line in card.tel_list] == [("item1", "+14155552671")]
+    assert [(line.group, line.value) for line in card.contents["x-ablabel"]] == [("item1", "Other")]
+
+
+@pytest.mark.parametrize(
+    ("first", "then", "kept"),
+    [
+        ((LinkSource.EMAIL_MATCH, 1.0), (LinkSource.CARDDAV, 1.0), LinkSource.CARDDAV),
+        ((LinkSource.RULE, 0.4), (LinkSource.EMAIL_MATCH, 1.0), LinkSource.EMAIL_MATCH),
+        ((LinkSource.MANUAL, 0.4), (LinkSource.EMAIL_MATCH, 1.0), LinkSource.MANUAL),
+        ((LinkSource.MANUAL, 0.4), (LinkSource.CARDDAV, 1.0), LinkSource.MANUAL),
+        ((LinkSource.EMAIL_MATCH, 1.0), (LinkSource.RULE, 0.4), LinkSource.EMAIL_MATCH),
+    ],
+)
+def test_an_undecided_link_keeps_the_strongest_provenance(
+    replica: Replica, first: tuple[LinkSource, float], then: tuple[LinkSource, float], kept: LinkSource
+) -> None:
+    """An assertion replaces an inference's source; an inference never unpublishes an assertion."""
+
+    person, _link = replica.baseline()
+    with system_context(reason="test link provenance"):
+        handle = Handle.objects.upsert(platform="phone", value="+14155552671", created_by_id=person.created_by_id)
+        for source, confidence in (first, then):
+            PartyHandle.objects.link(
+                person, handle, confidence=confidence, source=source, created_by_id=person.created_by_id
+            )
+        link = PartyHandle.objects.select_related("handle").get(party=person, handle=handle)
+    assert (link.source, link.confidence) == (kept, 1.0)
+    assert link.handle.party_id == person.pk
+
+
 @pytest.mark.parametrize(
     ("source", "confirmed", "written"),
     [
