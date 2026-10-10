@@ -1449,13 +1449,17 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
     """Provider connect resolves OAuth from provider.backend."""
 
     del composed_tables
-    provider = _provider("agt-provider-connect", backend_class="anthropic", name="Anthropic")
+    provider = _provider(
+        "agt-provider-connect", backend_class="anthropic", name="Anthropic", credential=None, lifecycle="disconnected",
+    )
     provider_id = _public_id(provider.sqid)
     with system_context(reason="test.agents.provider_connect.seed"):
         oauth_client = OAuthClient.objects.create(
             slug="anthropic-personal",
             display_name="Anthropic Personal",
             client_id="anthropic-client",
+            authorize_endpoint="https://provider.example/authorize",
+            token_endpoint="https://provider.example/token",
         )
         credential = Credential.objects.upsert_for_user(
             provider.owner,
@@ -1463,6 +1467,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
             str(CredentialKind.OAUTH),
             {"access_token": "anthropic-token"},
         )
+        assert provider.connect_oauth_client("Inference provider").pk == oauth_client.pk
     mutation = """
         mutation ConnectProvider($id: ID!) {
           connect_inference_provider(id: $id) {

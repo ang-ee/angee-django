@@ -17,6 +17,7 @@ CLIENT_NOT_CONFIGURED = "client_not_configured"
 DISCOVERY_FAILED = "discovery_failed"
 MISSING_ENDPOINT = "missing_endpoint"
 TOKEN_EXCHANGE_FAILED = "token_exchange_failed"
+PROVIDER_UNAVAILABLE = "provider_unavailable"
 INVALID_ID_TOKEN = "invalid_id_token"
 USERINFO_FAILED = "userinfo_failed"
 EXTERNAL_ACCOUNT_RESOLUTION_FAILED = "external_account_resolution_failed"
@@ -27,12 +28,14 @@ _PUBLIC_MESSAGES = {
     DISCOVERY_FAILED: "The provider configuration could not be loaded.",
     MISSING_ENDPOINT: "The provider does not expose the required endpoint.",
     TOKEN_EXCHANGE_FAILED: "The provider could not complete authorization.",
+    PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable. Try again later.",
     INVALID_ID_TOKEN: "The provider returned an invalid identity token.",
     USERINFO_FAILED: "The provider identity could not be loaded.",
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED: "The connected account could not be resolved.",
     "redirect_uri_required": "An OAuth redirect URI is required.",
     "oauth_client_not_connectable": "This connection is not available.",
     "account_already_linked": "This account is already linked.",
+    "account_switch_refused": "Detach this credential from its integrations before changing the external account.",
 }
 
 
@@ -50,7 +53,7 @@ class OAuthFlowError(IntegrationError):
         self.code = code
         self.http_status = http_status
         self.body = body
-        super().__init__(message or code)
+        super().__init__(message or code, transient=http_status >= 500 or http_status == 429)
 
     @property
     def public_message(self) -> str:

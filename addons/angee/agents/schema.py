@@ -45,6 +45,7 @@ from angee.integrate.schema import (
     CredentialType,
     ExternalAccountType,
     IntegrationLabelMixin,
+    IntegrationOAuthMixin,
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
@@ -73,7 +74,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(IntegrationLabelMixin, AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, AngeeNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
@@ -514,12 +515,6 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
 )
 
 
-def _provider_oauth_client(provider: Any) -> Any:
-    """Return the OAuth client selected by this provider's backend."""
-
-    return provider.backend.connect_oauth_client("Inference provider")
-
-
 @strawberry.type
 class InferenceProviderCreateMutation:
     """Admin create for an inference provider child row."""
@@ -573,7 +568,7 @@ class InferenceProviderConnectMutation:
             return connect_integration_target(
                 info,
                 provider,
-                _provider_oauth_client(provider),
+                provider.connect_oauth_client("Inference provider"),
                 redirect_uri=redirect_uri,
                 next_path=next,
             )

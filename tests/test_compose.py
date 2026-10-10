@@ -28,6 +28,7 @@ from angee.compose.apps import ComposeConfig
 from angee.compose.dependencies import AddonDependencyGroupResult
 from angee.compose.management.commands.angee import Command
 from angee.compose.model_composition import ModelComposition
+from angee.compose.project import ProjectContract
 from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
@@ -1786,8 +1787,6 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
     services set their env explicitly, so read_env must never overwrite it.
     """
 
-    from angee.compose.project import ProjectContract
-
     (tmp_path / ".env").write_text(
         'DATABASE_URL="postgres://angee:pw@127.0.0.1:5433/angee"\nYAMLCONF_SECRET_KEY="from-env-file"\n',
         encoding="utf-8",
@@ -1812,16 +1811,12 @@ def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, m
 def test_project_env_file_is_optional(tmp_path: Path) -> None:
     """A project without .env composes exactly as before — silent no-op."""
 
-    from angee.compose.project import ProjectContract
-
     ProjectContract({})._read_project_env(tmp_path)
 
 
 def test_database_pool_follows_project_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from angee.compose.project import ProjectContract
-
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db")
     project_settings = ModuleType("test_project_settings")
     project_settings.BASE_DIR = tmp_path

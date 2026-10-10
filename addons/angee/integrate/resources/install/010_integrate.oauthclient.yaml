@@ -1,8 +1,8 @@
-# Public OAuth client seeds (install tier). Model inferred from the
+# OAuth registration seeds (install tier). Model inferred from the
 # `integrate.oauthclient` filename; adopted by (slug, environment) so a pre-existing
-# row is linked, not duplicated. Public clients intentionally omit client secrets;
-# deployment-specific private clients still belong in settings. The OIDC refinement
-# (issuer/JWKS/discovery) for the login-capable providers is owned and seeded by
+# row is linked, not duplicated. Public clients omit client secrets; confidential
+# registrations acquire app credentials from host settings. The OIDC login policy
+# (issuer/JWKS) for the login-capable providers is owned and seeded by
 # the iam_integrate_oidc addon, not here.
 - xref: oauth_anthropic_platform
   # Anthropic ships two distinct OAuth surfaces on one public client id. They differ
@@ -82,7 +82,9 @@
   client_id: 681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com
   authorize_endpoint: https://accounts.google.com/o/oauth2/v2/auth
   token_endpoint: https://oauth2.googleapis.com/token
-  userinfo_endpoint: https://www.googleapis.com/oauth2/v2/userinfo
+  discovery_url: https://accounts.google.com/.well-known/openid-configuration
+  # Clear the former v2 profile override; discovery supplies the preset's OIDC profile.
+  userinfo_endpoint: ""
   is_enabled: true
   supports_pkce: true
   supports_refresh: true

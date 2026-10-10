@@ -16,10 +16,10 @@ from rebac import current_actor
 from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
+from strawberry_django.fields.field import StrawberryDjangoField
 
 from angee.base.permissions import effective_rebac_definition
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset, system_queryset
-from angee.graphql.introspection import django_model
 
 _ACTOR = "_angee_permission_actor"
 
@@ -37,27 +37,37 @@ def permission_annotations(model: type[models.Model], names: Iterable[str]) -> d
     annotations: dict[str, Any] = {_ACTOR: models.Value(str(actor))}
     for name in names:
         annotations[f"_angee_permission_{name}"] = _permission_annotation(model, name)
+        annotations[f"_angee_permission_owner_{name}"] = models.Value(model._meta.label_lower)
     return annotations
 
 
-def held_permissions(record: models.Model, names: Iterable[str]) -> frozenset[str]:
+def held_permissions(
+    record: models.Model, names: Iterable[str], *, model: type[models.Model] | None = None,
+) -> frozenset[str]:
     """Return declared permission names held by the ambient actor on this row.
 
     List projections reuse SQL annotations; single records use the same
     annotations on a one-row queryset. Neither instance-local nor ambient
     elevation grants a capability: the permission scopes pin the concrete
     ambient actor. Without an actor no capabilities are granted.
+    ``model`` may name an MTI ancestor owning the requested permission; its row
+    shares the record's primary key.
     """
 
     actor = current_actor()
     if actor is None:
         return frozenset()
+    owner = _permission_model(type(record), model)
     names = tuple(names)
     values = record.__dict__
-    if values.get(_ACTOR) != str(actor) or any(f"_angee_permission_{name}" not in values for name in names):
-        annotations = permission_annotations(type(record), names)
+    if values.get(_ACTOR) != str(actor) or any(
+        f"_angee_permission_{name}" not in values
+        or values.get(f"_angee_permission_owner_{name}", record._meta.label_lower) != owner._meta.label_lower
+        for name in names
+    ):
+        annotations = permission_annotations(owner, names)
         values = (
-            system_queryset(type(record)).filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
+            system_queryset(owner).filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
             or {}
         )
     return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))
@@ -70,24 +80,42 @@ def _permission_enum(names: tuple[str, ...]) -> Any:
     return strawberry.enum(cast(Any, Enum(enum_name, {name: name for name in names})))
 
 
-class _PermissionsExtension(FieldExtension):
-    def __init__(self, names: tuple[str, ...]) -> None:
+class PermissionsExtension(FieldExtension):
+    """Add native permission projections to a computed field's optimizer hints."""
+
+    def __init__(self, names: tuple[str, ...], *, model: type[models.Model] | None = None) -> None:
         self.names = names
+        self.model = model
 
     def apply(self, field: StrawberryField) -> None:
-        model = django_model(cast(type, field.origin))
+        django_field = cast(StrawberryDjangoField, field)
+        django_definition = django_field.origin_django_type
+        if django_definition is None:
+            raise ImproperlyConfigured("Permission projections require a strawberry_django field.")
+        model = _permission_model(django_definition.model, self.model)
         definition = effective_rebac_definition(model)
         declared = {permission.name for permission in definition.permissions} if definition is not None else set()
         if unknown := set(self.names) - declared:
             raise ImproperlyConfigured(
                 f"{model._meta.label} declares unknown permissions: {', '.join(sorted(unknown))}"
             )
-        cast(Any, field).store.annotate.update(
+        django_field.store.annotate.update(
             {
                 _ACTOR: lambda info: models.Value(str(current_actor())),
                 **{f"_angee_permission_{name}": partial(_permission_annotation, model, name) for name in self.names},
+                **{f"_angee_permission_owner_{name}": models.Value(model._meta.label_lower) for name in self.names},
             }
         )
+
+
+def _permission_model(model: type[models.Model], owner: type[models.Model] | None) -> type[models.Model]:
+    """Require a permission owner on the record's concrete MTI parent chain."""
+
+    if owner is None or owner is model:
+        return model
+    if owner not in model._meta.get_parent_list():
+        raise ImproperlyConfigured(f"{owner._meta.label} is not an MTI ancestor of {model._meta.label}.")
+    return owner
 
 
 def _permission_annotation(model: type[models.Model], name: str, info: Any = None) -> Any:
@@ -118,4 +146,4 @@ def permissions_field(names: Iterable[str]) -> Any:
         return [enum(name) for name in names if name in held]
 
     resolve.__annotations__["return"] = GenericAlias(list, (enum,))
-    return strawberry_django.field(resolver=resolve, extensions=[_PermissionsExtension(names)])
+    return strawberry_django.field(resolver=resolve, extensions=[PermissionsExtension(names)])

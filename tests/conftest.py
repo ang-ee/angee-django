@@ -72,7 +72,10 @@ from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 from angee.workflows_integrate.testing import models as sync_cycle_models  # noqa: F401 -- register bridge test subject
-from tests import extraction_models  # noqa: F401 -- register shared FK targets before database setup
+from tests import (
+    extraction_models,  # noqa: F401 -- register shared FK targets before database setup
+    integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
+)
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
@@ -319,6 +322,8 @@ def make_integration(
             slug=slug,
             display_name=slug.title(),
             client_id=f"{slug}-cid",
+            authorize_endpoint="https://provider.example/auth",
+            token_endpoint="https://provider.example/token",
         )
         credential = Credential.objects.upsert_for_user(user, oauth_client, kind, material)
         vendor = Vendor.objects.create(slug=slug, display_name=slug.title())
@@ -421,6 +426,7 @@ class StubFeedBackend(FeedBackend):
     """
 
     key = "stub"
+    requires_connection_discovery = False
     label = "Stub"
     _posts: dict[Any, list[ParsedPost]] = {}
 
