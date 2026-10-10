@@ -16,11 +16,10 @@ from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.evidence import EvidenceReference
 from angee.base.fields import ModelLabelField
-from angee.base.impl import FORM_SCHEMA_ANNOTATIONS
 from angee.base.jsonschema import (
     compose_schema,
     embed_schema,
-    materialize_schema,
+    relation_positions,
     schema_at,
     schemas_match,
     union_schema,
@@ -1070,36 +1069,25 @@ class Definition(BaseModel):
         validate(self._validator(self.input_schema), value)
         return value
 
+    def config_references(self) -> Iterator[tuple[str, tuple[str | int, ...], dict[str, Any], str]]:
+        """Locate only schema-declared configuration relations, including map bodies."""
+        for key, node, path in self.declarations():
+            try:
+                step = self.step(key)
+            except ImproperlyConfigured:
+                continue  # Definition.issues owns unknown-step diagnostics.
+            if step.config_model is not None:
+                for nested, relation, item in relation_positions(
+                    step.config_model.model_json_schema(by_alias=True), node.config,
+                ):
+                    yield key, (*path, "config", *nested), relation, item
+
     def _input_references(self, value: Any) -> tuple[tuple[tuple[str | int, ...], EvidenceReference], ...]:
         """Locate the declared record references in the admitted run input."""
-        schema = materialize_schema(
-            self.input_schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"},
+        return tuple(
+            (path, EvidenceReference(model=relation["resource"], id=item))
+            for path, relation, item in relation_positions(self.input_schema, value)
         )
-        references: list[tuple[tuple[str | int, ...], EvidenceReference]] = []
-
-        def visit(node: Any, item: Any, path: tuple[str | int, ...]) -> None:
-            if not isinstance(node, dict) or item is None:
-                return
-            if relation := node.get("relation"):
-                if isinstance(item, str):
-                    references.append((path, EvidenceReference(model=relation["resource"], id=item)))
-            if isinstance(item, dict):
-                for name, child in node.get("properties", {}).items():
-                    if name in item:
-                        visit(child, item[name], (*path, name))
-            elif isinstance(item, list):
-                prefix = node.get("prefixItems", ())
-                for index, element in enumerate(item):
-                    visit(prefix[index] if index < len(prefix) else node.get("items"), element, (*path, index))
-            for child in node.get("allOf", ()):
-                visit(child, item, path)
-            for choice in ("anyOf", "oneOf"):
-                for child in node.get(choice, ()):
-                    if validator(child).is_valid(item):
-                        visit(child, item, path)
-
-        visit(schema, value, ())
-        return tuple(references)
 
     def input_evidence(self, value: Any) -> tuple[EvidenceReference, ...]:
         """Project the declared source identities needed at admission."""

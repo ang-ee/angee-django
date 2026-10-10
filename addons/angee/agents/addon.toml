@@ -5,7 +5,7 @@ name = "angee.agents"
 description = "AI agents — the inference provider/model catalogue and the runtimes agents run on"
 keywords = ["agents", "ai", "inference"]
 category = "Agents"
-depends_on = ["angee.integrate", "angee.integrate_vcs", "angee.operator", "angee.mcp", "angee.iam", "angee.jobs", "angee.graphql"]
+depends_on = ["angee.integrate", "angee.integrate_vcs", "angee.operator", "angee.mcp", "angee.iam", "angee.jobs", "angee.graphql", "angee.resources"]
 dependencies = ["pydantic-ai-slim>=2.13", "httpx>=0.28.1,<0.29", "agent-client-protocol==1.0.0rc2"]
 
 [resources]

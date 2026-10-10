@@ -184,6 +184,17 @@ class TriggerSource(ImplBase):
                 source.connect()
 
     @classmethod
+    def observes(cls, model: Any) -> bool:
+        """Whether a registered source captures this model's native changes."""
+        for source in cls.registered():
+            try:
+                source.validate_model(model)
+            except ValidationError:
+                continue
+            return True
+        return False
+
+    @classmethod
     def choice(cls) -> Any:
         """Expose the fixed model to editors without duplicating its declaration."""
         choice = super().choice()
@@ -210,17 +221,6 @@ class TriggerSource(ImplBase):
             raise ValidationError("Workflow and decision models cannot be trigger sources.")
         if cls.model_label and model._meta.label != ModelLabelField.normalize(cls.model_label):
             raise ValidationError("This model does not belong to the fixed workflow source.")
-
-    @classmethod
-    def check_watch_model(cls, model: Any) -> None:
-        """Require a registered native source capable of observing this model."""
-        for source in TriggerSource.registered():
-            try:
-                source.validate_model(model)
-            except ValidationError:
-                continue
-            return
-        raise ValidationError("This model has no registered workflow event source.")
 
     @classmethod
     def dispatch(cls, model: Any, record: Any) -> None:
@@ -335,14 +335,19 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
         Sources call this through TriggerSource.dispatch so watches also observe
         their event. The savepoint preserves writes when ledger capture fails.
         """
+        if record.pk is None:
+            return
         try:
+            triggers = apps.get_model("workflows", "Trigger")
+            implementation = triggers._meta.get_field("source").resolve_class(source)
+            try:
+                implementation.validate_model(model)
+            except ValidationError:
+                return  # This source does not observe the model.
             with transaction.atomic(), system_context(reason="workflows.capture"):
-                triggers = apps.get_model("workflows", "Trigger")
-                implementation = triggers._meta.get_field("source").resolve_class(source)
                 queryset = system_queryset(triggers).filter(enabled=True, source=source)
                 if not implementation.model_label:
                     queryset = queryset.filter(model_label=model._meta.label)
-                implementation.validate_model(model)
                 content_type = ContentType.objects.get_for_model(model)
                 for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
                     system_queryset(self.model).update_or_create(

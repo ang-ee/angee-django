@@ -189,6 +189,7 @@ class AgentType(AngeeNode):
     skills: list[SkillType]
     mcp_servers: list[MCPServerType]
     mcp_tools: list[MCPToolType]
+    resource_reader: auto
     runtime_class: auto
     workspace_template: TemplateType | None
     service_inputs: JSON
@@ -341,6 +342,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills",
         "mcp_servers",
         "mcp_tools",
+        "resource_reader",
         "runtime_class",
         "workspace_template",
         "service_inputs",
@@ -356,6 +358,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills",
         "mcp_servers",
         "mcp_tools",
+        "resource_reader",
         "runtime_class",
         "workspace_template",
         "service_inputs",

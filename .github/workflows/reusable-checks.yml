@@ -114,6 +114,7 @@ jobs:
             tests/test_workflows_retention.py \
             tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
             tests/test_workflows_triggers_concurrency.py tests/test_workflows_messaging.py \
+            tests/test_workflows_posts.py \
             tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
             tests/test_workflows_parties.py \
             tests/test_composed_note_workflow.py \
