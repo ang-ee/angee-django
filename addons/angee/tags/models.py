@@ -46,6 +46,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields import ColorField
 from angee.base.identity import instance_from_public_id
+from angee.base.merge import MergeableMixin
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -57,7 +58,7 @@ from angee.base.models import (
     AngeeQuerySet,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 
 
 class TagQuerySet(
@@ -70,7 +71,7 @@ class TagQuerySet(
 TagManager = AngeeManager.from_queryset(TagQuerySet)
 
 
-class Tag(ArchiveMixin, AngeeDataModel):
+class Tag(MergeableMixin, ArchiveMixin, AngeeDataModel):
     """One label in a vocabulary shared by every non-anonymous actor."""
 
     runtime = True
@@ -211,6 +212,8 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
     relations and the models composing :class:`TaggedModel` to match.
     """
 
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("tag", "content_type", "object_id"),)
     runtime = True
     sqid_prefix = "tga_"
 

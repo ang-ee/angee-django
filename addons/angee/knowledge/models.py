@@ -49,6 +49,7 @@ from angee.base.mixins import (
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import (
+    MergePolicy,
     RecordRef,
     RecordRefMixin,
     concrete_child,
@@ -686,6 +687,8 @@ class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     administrators, and cannot be bound under an actor.
     """
 
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("page", "content_type", "object_id", "role"), ("vault", "content_type", "object_id", "role"))
     runtime = True
     sqid_prefix = "krb_"
 

@@ -37,7 +37,7 @@ from rebac import GenericTarget, generic_target
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.money.rounding import RoundingMode, rounding_constant
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
@@ -332,6 +332,7 @@ class CurrencyRate(RecordRefMixin, ArchiveMixin, AngeeDataModel):
     different-context row.
     """
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "crt_"
 

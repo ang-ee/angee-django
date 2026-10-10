@@ -86,7 +86,7 @@ from angee.base.mixins import (
     TrashQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
@@ -1798,6 +1798,8 @@ class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
     ``permissions.zed``.
     """
 
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("file", "content_type", "object_id"),)
     runtime = True
 
     sqid_prefix = "fat_"

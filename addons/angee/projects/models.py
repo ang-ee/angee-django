@@ -39,7 +39,7 @@ from angee.base.mixins import (
     RevisionMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
@@ -1402,6 +1402,8 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     binding is not moved: the library refuses a retargeting save under an actor.
     """
 
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("project", "content_type", "object_id"),)
     runtime = True
     sqid_prefix = "pbd_"
 
@@ -1459,6 +1461,8 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
 class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
     """A URL-keyed external reference attached to a project or task."""
 
+    merge_policy = MergePolicy.MOVE
+    merge_identity = (("content_type", "object_id", "url"),)
     runtime = True
     sqid_prefix = "plk_"
 

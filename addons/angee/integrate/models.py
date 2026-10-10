@@ -55,6 +55,7 @@ from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
+    MergePolicy,
     RecordRefMixin,
     concrete_child,
     concrete_child_accessor,
@@ -3284,6 +3285,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
 class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
     """A stable remote identity with the two last-applied comparison bases."""
 
+    merge_policy = MergePolicy.BLOCK
     runtime = True
     sqid_prefix = "rlk_"
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
@@ -3318,6 +3320,7 @@ class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
         rebac_resource_type = "integrate/record_link"
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
+        indexes = (models.Index(fields=("target_content_type", "target_object_id")),)
 
 
 class RecordRevisionQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):

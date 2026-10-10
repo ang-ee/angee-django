@@ -2,19 +2,21 @@
 
 Direct sharing (:mod:`angee.graphql.sharing`) serves records declaring
 ``rebac_grantable``; trash (:mod:`angee.graphql.trash`) serves records composing
-``TrashMixin``.
+``TrashMixin``; merge (:mod:`angee.graphql.merge`) serves records composing
+``MergeableMixin``.
 """
 
+from angee.graphql.merge import MergeMutation
 from angee.graphql.sharing import RecordAccessMutation, RecordAccessOption, RecordAccessQuery, RecordAccessType
 from angee.graphql.trash import TrashMutation
 
 schemas = {
     "public": {
-        "mutation": [TrashMutation],
+        "mutation": [MergeMutation, TrashMutation],
     },
     "console": {
         "query": [RecordAccessQuery],
-        "mutation": [RecordAccessMutation, TrashMutation],
+        "mutation": [MergeMutation, RecordAccessMutation, TrashMutation],
         "types": [RecordAccessType, RecordAccessOption],
     },
 }

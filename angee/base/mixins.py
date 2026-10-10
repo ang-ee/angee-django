@@ -99,7 +99,19 @@ def update_fields_with_auto_now(instance: models.Model, update_fields: Any) -> s
     fields = set(update_fields)
     if not fields:
         return fields
-    return fields | {field.name for field in instance._meta.fields if getattr(field, "auto_now", False)}
+    return fields | set(_auto_now_fields(type(instance)))
+
+
+def auto_now_stamps(model: type[models.Model], now: datetime) -> dict[str, Any]:
+    """Return the ``auto_now`` columns a queryset update of ``model`` must stamp itself."""
+
+    return dict.fromkeys(_auto_now_fields(model), now)
+
+
+def _auto_now_fields(model: type[models.Model]) -> tuple[str, ...]:
+    """Return the names of ``model``'s ``auto_now`` fields, which every write stamps."""
+
+    return tuple(field.name for field in model._meta.concrete_fields if getattr(field, "auto_now", False))
 
 
 class SqidMixin(models.Model):
@@ -694,7 +706,7 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
 
         now = timezone.now()
         return self.untrashed().update(
-            **self._auto_now_stamps(now),
+            **auto_now_stamps(self.model, now),
             is_trashed=True,
             trashed_at=at or now,
             trashed_by_id=actor_user_id(current_actor()),
@@ -707,12 +719,7 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
         The protected counterpart of :meth:`trash`, with the same contract.
         """
 
-        return self.trashed().update(**self._auto_now_stamps(timezone.now()), **TrashMixin.UNTRASHED_VALUES)
-
-    def _auto_now_stamps(self, now: datetime) -> dict[str, Any]:
-        """Return the ``auto_now`` columns a queryset update must stamp itself."""
-
-        return {field.name: now for field in self.model._meta.concrete_fields if getattr(field, "auto_now", False)}
+        return self.trashed().update(**auto_now_stamps(self.model, timezone.now()), **TrashMixin.UNTRASHED_VALUES)
 
 
 class ModelHistory(HistoricalRecords):

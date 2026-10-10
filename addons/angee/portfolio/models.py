@@ -30,7 +30,7 @@ from angee.base.models import (
     AngeeManager,
     role_anchor,
 )
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 
@@ -429,6 +429,7 @@ class UpdateManager(AngeeManager):
 class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
     """A required-health report on a Project or Initiative, never a Product."""
 
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "upd_"
 
