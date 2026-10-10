@@ -1103,16 +1103,19 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
           no longer support is withdrawn. With no provider registered there is no
           signature evidence to judge, and the signature suggestions stay.
 
-        A provider that raises does so before its pass writes anything. Returns the
-        suggestions created plus those withdrawn.
+        A provider that raises does so before its pass writes anything. The verb
+        runs as named system work: complete evidence spans every owner's mail,
+        whatever the caller may read. Returns the suggestions created plus those
+        withdrawn.
         """
 
-        shared = frozenset(
-            chain.from_iterable(provider() for provider in resolve_hooks("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS"))
-        )
-        changed = self._reconcile_display_names(shared)
-        if providers := resolve_hooks("ANGEE_PARTIES_SIGNING_PROVIDERS"):
-            changed += self._reconcile_signatures(chain.from_iterable(provider() for provider in providers))
+        with system_context(reason="parties.reconcile_suggestions"):
+            shared = frozenset(
+                chain.from_iterable(provider() for provider in resolve_hooks("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS"))
+            )
+            changed = self._reconcile_display_names(shared)
+            if providers := resolve_hooks("ANGEE_PARTIES_SIGNING_PROVIDERS"):
+                changed += self._reconcile_signatures(chain.from_iterable(provider() for provider in providers))
         return changed
 
     def _reconcile_signatures(self, signings: Iterable[Signing]) -> int:
@@ -1149,10 +1152,10 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 signers[signing.owner_id, value].add(signer)
                 if signing.party_id is not None:
                     evidence.setdefault((signing.owner_id, signing.party_id, value), signing.fragment_hash)
-        supported = {
-            (party_id, value) for owner_id, party_id, value in evidence if len(signers[owner_id, value]) == 1
-        }
-        party_ids = {party_id for party_id, _value in supported}
+        # Support stays inside the owner partition: another owner's mail never
+        # proposes, or keeps, a suggestion in this owner's review queue.
+        supported = {key for key in evidence if len(signers[key[0], key[2]]) == 1}
+        party_ids = {party_id for _owner_id, party_id, _value in supported}
         existing = set(
             self.filter(handle__platform=handle_model.Platform.PHONE, party_id__in=party_ids).values_list(
                 "party_id", "handle__normalized_value"
@@ -1161,10 +1164,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         parties = party_model.objects.in_bulk(party_ids)
         created = 0
         ordered = sorted(evidence.items(), key=lambda item: (item[0][2], str(item[0][1])))
-        for (owner_id, party_id, value), fragment_hash in ordered:
+        for key, fragment_hash in ordered:
+            owner_id, party_id, value = key
             party = parties.get(party_id)
             if (
-                (party_id, value) not in supported
+                key not in supported
                 or (party_id, value) in existing
                 or party is None
                 or party.created_by_id != owner_id
@@ -1186,7 +1190,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 metadata={"evidence": {"kind": "signature_phone", "fragment_hash": fragment_hash}},
                 created_by_id=owner_id,
             )
-        withdrawn = self._withdraw_unsupported("signature_phone", supported, ("party_id", "handle__normalized_value"))
+        withdrawn = self._withdraw_unsupported(
+            "signature_phone", supported, ("created_by_id", "party_id", "handle__normalized_value")
+        )
         return created + withdrawn
 
     def _reconcile_display_names(self, shared: frozenset[Any]) -> int:
@@ -1268,8 +1274,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     )
         return created + self._withdraw_unsupported("display_name", supported, ("party_id", "handle_id"))
 
-    def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, Any]], key: tuple[str, str]) -> int:
-        """Delete the undecided rule suggestions of ``kind`` whose ``key`` pair no evidence supports now.
+    def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, ...]], key: tuple[str, ...]) -> int:
+        """Delete the undecided rule suggestions of ``kind`` whose ``key`` values no evidence supports now.
 
         Confirmed links and dismissed anti-links are human decisions and stay. The
         delete re-reads its rows locked under the same filter, so a suggestion a
