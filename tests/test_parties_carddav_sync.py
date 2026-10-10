@@ -1157,6 +1157,31 @@ def test_written_out_country_survives_an_address_edit(replica: Replica) -> None:
     assert push_stream(replica.stream, replica.backend).count == 0
 
 
+def test_deleting_one_of_two_equal_addresses_reaches_the_card(replica: Replica) -> None:
+    """Addresses compare as a list, so the card keeps one line per local address."""
+
+    line = ";;1 Main St;Springfield;IL;62701;USA"
+    replica.server.store(
+        _HREF,
+        _card().replace(
+            "END:VCARD",
+            f"item3.ADR;type=HOME:{line}\r\nitem3.X-ABADR:us\r\n"
+            f"item4.ADR;type=HOME:{line}\r\nitem4.X-ABADR:us\r\nEND:VCARD",
+        ),
+    )
+    person, _link = replica.baseline()
+    with system_context(reason="test equal addresses"):
+        person.addresses.order_by("pk").last().delete()
+    assert push_stream(replica.stream, replica.backend).count == 1
+
+    card = vobject.readOne(replica.server.cards[_HREF][0])
+    assert [line.group for line in card.adr_list] == ["item3"]
+    assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
+    assert push_stream(replica.stream, replica.backend).count == 0
+    assert replica.pull().count == 0
+    assert person.addresses.count() == 1
+
+
 def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> None:
     replica.server.store(_HREF, "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:ada\r\nTEL:+14155552671\r\nEND:VCARD\r\n")
     person, link = replica.baseline()
