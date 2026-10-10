@@ -1435,16 +1435,18 @@ class PartyHandleClaimManager(AngeeManager):
 
         ``confidence`` restates the source's own score and ``metadata`` merges onto
         its evidence. An addon that extends the claim sets its own fields through
-        ``defaults`` when the claim is created and passes ``save_kwargs`` to every
-        save (its cooperative ownership argument). The caller holds the pair's
-        identity lock and re-derives the link (:meth:`PartyHandleManager.link`).
+        ``defaults`` when the claim is created, and passes ``save_kwargs`` (its
+        cooperative ownership argument) to the saves that refresh an existing
+        claim; a new claim carries its identity in ``defaults``. The caller holds
+        the pair's identity lock and re-derives the link
+        (:meth:`PartyHandleManager.link`).
         """
 
         claim = self.model._base_manager.filter(link_id=link.pk, source=source).first()
         if claim is None:
             values = {"confidence": confidence, "metadata": dict(metadata or {}), "created_by_id": created_by_id}
             claim = self.model(link=link, source=source, **{**values, **(defaults or {})})
-            claim.save(**(save_kwargs or {}))
+            claim.save()
             return claim
         fields = []
         if claim.confidence != confidence:
