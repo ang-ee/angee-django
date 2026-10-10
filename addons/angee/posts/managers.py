@@ -1,13 +1,4 @@
-"""Managers that own the posts write path and its chainable read scopes.
-
-Following the repo's Manager/QuerySet canon (``storage.FileQuerySet``/``FileManager``
-via ``from_queryset``; the very split the messaging ORM review flagged as **H3**):
-read predicates are chainable scopes on a ``*QuerySet``; the managers own the
-writes. The feed-ingest overlay reuses ``messaging.Message.objects.ingest`` for the
-message core, and per-actor reactions reuse the single ``messaging.Reaction`` table,
-so these managers own only the remaining posts layer — engagement counts, following,
-and the per-integration API quota ledger.
-"""
+"""Posts factories, engagement writes, following scopes, and API quota accounting."""
 
 from __future__ import annotations
 
@@ -147,10 +138,10 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
         with transaction.atomic():
             period = self.open_period(integration=integration, limit=limit, now=moment)
             locked = self.locked_get(pk=period.pk)
-            if locked.quota_used + units > locked.quota_limit:
+            if locked.quota_used + units > limit:
                 return False
-            self.filter(pk=locked.pk).update(
+            consumed = self.filter(pk=locked.pk, quota_used__lte=limit - units).update(
                 quota_used=models.F("quota_used") + units,
                 last_updated=moment,
             )
-        return True
+        return consumed == 1

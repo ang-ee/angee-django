@@ -6,6 +6,22 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enMessagingMessages: Record<string, string> = {
+  "messages.held": "Held drafts",
+  "messages.sendNow": "Send now",
+  "messages.discard": "Discard",
+  "messages.discardTitle": "Discard held drafts?",
+  "messages.discardBody_one": "Discard this held draft? It will be retained in the trash.",
+  "messages.discardBody_other": "Discard {count} held drafts? They will be retained in the trash.",
+  "messages.sendTitle": "Send held drafts now?",
+  "messages.sendBody_one": "Publish this held draft now?",
+  "messages.sendBody_other": "Publish {count} held drafts now?",
+  "messages.queued_one": "Queued one held draft.",
+  "messages.queued_other": "Queued {count} held drafts.",
+  "messages.discarded_one": "Discarded one held draft.",
+  "messages.discarded_other": "Discarded {count} held drafts.",
+  "messages.selectionLimit": "Select at most {count} held drafts.",
+  "messages.selectionLoading": "Loading the action selection limit.",
+  "messages.selectionUnavailable": "Select readable held drafts with permission to send or discard them.",
   "sources.empty": "No source conversations",
   "sources.emptyHint": "Source messages linked to this record will appear here.",
   "sources.loading": "Loading source conversations",

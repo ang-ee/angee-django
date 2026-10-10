@@ -29,12 +29,13 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from functools import reduce
 from itertools import batched
 from operator import or_
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from django.apps import apps
@@ -53,14 +54,19 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
+from angee.base.identity import instances_from_public_ids
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
+from angee.integrate.errors import _safe_integration_failure
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
+from angee.messaging.backends import DeliveryOutcome, ParsedPart
+from angee.messaging.delivery import DELIVERY_TASK_EXPIRES, MAX_DELIVERY_ATTEMPTS, TransientDeliveryError
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
@@ -68,7 +74,7 @@ from angee.parties.managers import Signing
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
-    from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
+    from angee.messaging.backends import ParsedMessage, ParsedThread
     from angee.messaging.models import Message, NotificationPolicy, Part
 
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
@@ -465,22 +471,25 @@ def _parsed_sync_hash(
     *,
     channel_id: Any,
     metadata: dict[str, Any],
+    received_at: datetime | None = None,
 ) -> str:
     """Return a stable digest of everything an ingest of ``parsed`` would write.
 
     Covers the message columns, its Part tree, and its participants for the given
     channel, so an identical re-sync hashes equal and can skip the rewrite. The thread
     is excluded — a re-thread must still reconcile counters even when nothing else
-    changed — and is compared separately by the caller.
+    changed — and is compared separately by the caller. ``received_at`` is the
+    effective receipt time ingest writes; it defaults to the parsed one.
     """
 
+    received_at = received_at if received_at is not None else parsed.received_at
     payload = {
         "channel_id": str(channel_id) if channel_id is not None else None,
         "direction": parsed.direction,
         "subject": strip_null_bytes(parsed.subject),
         "headers": [[name, value] for name, value in strip_null_bytes(list(parsed.headers))],
         "sent_at": parsed.sent_at.isoformat() if parsed.sent_at is not None else None,
-        "received_at": parsed.received_at.isoformat() if parsed.received_at is not None else None,
+        "received_at": received_at.isoformat() if received_at is not None else None,
         "metadata": metadata,
         "sender": (
             None
@@ -2421,6 +2430,19 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
         return self.inbox()
 
+    def due_deliveries(self, *, now: datetime) -> MessageQuerySet:
+        """Due holds/retries and expired leases; legacy queued rows stay inert."""
+
+        due = models.Q(scheduled_at__lte=now, **self.model.held_draft_fields()) | models.Q(
+            scheduled_at__lte=now, status="queued", delivery_lease_until__isnull=False,
+        )
+        lost = models.Q(status="queued", delivery_lease_until__lte=now)
+        return cast(MessageQuerySet, self.untrashed().filter(
+            due | lost, direction="outbound", channel__isnull=False,
+        ).exclude(external_id="").filter(
+            models.Q(metadata__local__isnull=True) | ~models.Q(metadata__local__has_key="delivery_conflict"),
+        ))
+
     @staticmethod
     def chronological_time(prefix: str = "") -> Any:
         """Message chronology as a SQL expression, including through a joined message."""
@@ -2704,6 +2726,263 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
     """Owns the message ingest write path (idempotent, null-safe, F()-counted)."""
+
+    def compose_reply(
+        self, parent: Any, *, body: str, sender: Any, actor: Any,
+        local: Mapping[str, Any] | None = None, creation_key: str | None = None,
+        scheduled_at: datetime | None = None, queued: bool = False,
+        admit: Callable[[Any], None] | None = None,
+    ) -> Any:
+        """Create an exact-once outbound reply under the channel's narrow reply grant.
+
+        Hold facts are final at insert. Drafts do not advance public counters;
+        successful settlement does. Callers may contribute provenance, but not
+        messaging's delivery state. ``admit(parent)`` checks domain eligibility
+        only on insertion, after creation-key replay and fingerprint validation.
+        """
+
+        parent = parent.with_actor(actor)
+        body = strip_null_bytes(body).strip()
+        if not body:
+            raise ValidationError({"body": "Reply text is required."})
+        if parent.pk is None or parent.thread_id is None or parent.channel_id is None:
+            raise ValidationError("A reply requires a saved parent, thread, and channel.")
+        channel = parent.transport_channel(reason="messaging.reply.channel").with_actor(actor)
+        if actor is None or not parent.has_access("read") or not channel.has_access("reply"):
+            raise PermissionDenied("Comment read and channel reply access are required.")
+        if sender is None or sender.pk is None or sender.platform != parent.platform:
+            raise ValidationError({"sender": "The reply sender must use the comment's platform."})
+        values = dict(local or {})
+        if any(key.startswith("delivery_") for key in values):
+            raise ValidationError({"local": "Delivery facts are owned by messaging."})
+        scope = None
+        fingerprint = ""
+        if creation_key is not None:
+            self.model._meta.get_field("client_creation_key").clean(creation_key, None)
+            if not creation_key.strip() or "\x00" in creation_key:
+                raise ValidationError({"creation_key": "Creation key must be nonblank and contain no null bytes."})
+            scope = str(to_subject_ref(actor))
+            fingerprint = canonical_json_sha256({
+                "parent": str(parent.pk), "body": body, "sender": str(sender.pk), "local": values,
+            })
+        created_by_id = actor_user_id(to_subject_ref(actor))
+        with system_context(reason="messaging.reply.compose"), transaction.atomic():
+            def insert() -> Any:
+                if admit is not None:
+                    admit(parent)
+                return self.create(
+                    parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
+                    platform=parent.platform, direction=self.model.Direction.OUTBOUND,
+                    status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
+                    scheduled_at=scheduled_at, message_type=parent.message_type,
+                    external_id=str(uuid4()), preview=body[: self.model._meta.get_field("preview").max_length],
+                    metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
+                    creation_actor=scope, client_creation_key=creation_key, creation_fingerprint=fingerprint,
+                )
+            reply, created = self.replay_or_insert(scope, creation_key, fingerprint, insert)
+            if created:
+                self._build_parts(reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id)
+                if queued:
+                    reply.deliver()
+        return reply.with_actor(actor)
+
+    def write_protected_local(self, messages: Sequence[Any], values: Mapping[str, Any], *, reason: str) -> None:
+        """Trusted Python provenance writer, explicitly audited and never provider input."""
+
+        if not reason.strip() or not set(values).issubset(self.model.protected_local_keys()):
+            raise ValidationError("Provide a reason and only declared protected local keys.")
+        pks = {message.pk for message in messages}
+        if None in pks:
+            raise ValidationError("Protected metadata requires saved messages.")
+        with system_context(reason=reason), transaction.atomic():
+            rows = self.sudo(reason=reason).lock_if_supported().filter(pk__in=pks).order_by("pk")
+            for row in rows:
+                row.metadata = _bounded_message_metadata({
+                    **(row.metadata or {}), "local": {**row.local_metadata, **values},
+                })
+                row.save(update_fields=("metadata", "updated_at"))
+
+    def cancel_delivery(self, message: Any, *, using: str | None = None) -> None:
+        """Disarm a removed outbound draft/queue under the same settlement row lock."""
+
+        with system_context(reason="messaging.delivery.cancel"), transaction.atomic(using=using):
+            row = self.sudo(reason="messaging.delivery.cancel").using(using).lock_if_supported().get(pk=message.pk)
+            if row.direction == "outbound" and row.status in ("draft", "queued"):
+                row.status = self.model.MessageStatus.FAILED
+                row.scheduled_at = row.delivery_lease_until = None
+                row.metadata = {
+                    **(row.metadata or {}), "local": {**row.local_metadata, "delivery_error": "Delivery cancelled."},
+                }
+                row.save(update_fields=("status", "scheduled_at", "delivery_lease_until", "metadata", "updated_at"))
+            message.status = row.status
+            message.scheduled_at = row.scheduled_at
+            message.delivery_lease_until = row.delivery_lease_until
+            message.metadata = row.metadata
+
+    def claim_delivery(self, pk: Any, *, token: str) -> Any | None:
+        """Recheck a queued token; invalid envelopes settle instead of poisoning tasks."""
+
+        with system_context(reason="messaging.delivery.claim"), transaction.atomic():
+            row = self.sudo(reason="messaging.delivery.claim").lock_if_supported().filter(
+                pk=pk, external_id=token, status="queued",
+            ).first()
+            if row is None or row.delivery_blocked or row.delivery_held:
+                return None
+            try:
+                row.validate_delivery()
+            except ValidationError as error:
+                self.record_delivery(pk, token=token, error=error)
+                return None
+            row.delivery_lease_until = timezone.now() + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+            row.scheduled_at = None
+            row.save(update_fields=("delivery_lease_until", "scheduled_at", "updated_at"))
+            return row
+
+    def record_delivery(
+        self, pk: Any, *, token: str, outcome: DeliveryOutcome | None = None,
+        error: Exception | None = None, contention: bool = False, sent_at: datetime | None = None,
+    ) -> str:
+        """Settle acceptance or refusal once; contention does not consume an attempt.
+
+        A collision is a successful publish with evidence, never a resend cue.
+        Acceptance racing with trash is still sent: removal cannot undo a publish.
+        Only TransientDeliveryError retries; absent hints back off exponentially,
+        and the fourth unsuccessful publish is terminal.
+        """
+
+        provider_id = outcome.provider_id if outcome is not None else None
+        with system_context(reason="messaging.delivery.settle"), transaction.atomic():
+            pending = models.Q(status="queued")
+            if outcome is not None and outcome.accepted:
+                pending |= models.Q(status="failed", direction="outbound", is_trashed=True)
+            row = self.sudo(reason="messaging.delivery.settle").lock_if_supported().filter(
+                pending, pk=pk, external_id=token,
+            ).first()
+            if row is None:
+                return "stale-delivery-token"
+            now = sent_at or timezone.now()
+            local = row.local_metadata
+            row.delivery_lease_until = None
+            fields = ["status", "scheduled_at", "delivery_lease_until", "metadata", "updated_at"]
+            if contention:
+                row.scheduled_at = now + timedelta(seconds=30)
+                row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                result = "retry"
+            else:
+                attempts = int(local.get("delivery_attempts", 0)) + 1
+                local["delivery_attempts"] = attempts
+                if (isinstance(error, TransientDeliveryError)
+                        and attempts < MAX_DELIVERY_ATTEMPTS and not row.delivery_blocked):
+                    delay = (error.retry_after if error.retry_after is not None
+                             else timedelta(seconds=60 * 2 ** (attempts - 1)))
+                    row.scheduled_at = now + max(delay, timedelta(seconds=1))
+                    row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                    local["delivery_error"] = _safe_integration_failure(error).message
+                    result = "retry"
+                else:
+                    row.scheduled_at = None
+                    accepted = outcome is not None and outcome.accepted
+                    row.status = self.model.MessageStatus.SENT if accepted else self.model.MessageStatus.FAILED
+                    result = "sent" if accepted else "failed"
+                    if accepted:
+                        local.pop("delivery_error", None)
+                        row.sent_at = now
+                        fields.append("sent_at")
+                        if provider_id:
+                            local["delivery_token"] = token
+                            row.external_id = provider_id
+                            fields.append("external_id")
+                    else:
+                        local["delivery_error"] = (
+                            _safe_integration_failure(error).message if error else "Delivery was declined."
+                        )
+            row.metadata = {**(row.metadata or {}), "local": local}
+            try:
+                with transaction.atomic():
+                    row.save(update_fields=fields)
+            except IntegrityError:
+                collision = provider_id is not None and _external_id_annotated(
+                    self.sudo(reason="messaging.delivery.collision"),
+                ).filter(_external_id_q(provider_id), channel_id=row.channel_id).exclude(pk=pk).exists()
+                if not collision:
+                    raise
+                row.external_id = token
+                local["delivery_conflict"] = provider_id
+                row.save(update_fields=[field for field in fields if field != "external_id"])
+            if result == "sent" and row.thread_id:
+                row._recount_thread()
+            return result
+
+    def send_held_drafts(self, selection: list[ActionSelectionInput], *, actor: Any) -> list[ActionResult]:
+        """Send an operator's revision-checked selection through many_actions."""
+
+        return self._act_on_held_drafts(selection, actor=actor, discard=False)
+
+    def discard_held_drafts(self, selection: list[ActionSelectionInput], *, actor: Any) -> list[ActionResult]:
+        """Discard an operator's revision-checked selection and recount threads once."""
+
+        return self._act_on_held_drafts(selection, actor=actor, discard=True)
+
+    def _act_on_held_drafts(
+        self, selection: list[ActionSelectionInput], *, actor: Any, discard: bool,
+    ) -> list[ActionResult]:
+        validate_action_selection(selection)
+        if actor is None:
+            raise PermissionDenied("Authentication required.")
+        with transaction.atomic():
+            # send_held is precisely channel write, including for discard. The
+            # identity owner decodes once and performs one scoped pk__in query.
+            scoped = (
+                read_scoped_queryset(self.model, actor, action="send_held").inbox().lock_if_supported().order_by("pk")
+            )
+            rows = instances_from_public_ids(self.model, [str(item.id) for item in selection], queryset=scoped)
+            threads = []
+            if discard:
+                thread_model = apps.get_model("messaging", "Thread")
+                with system_context(reason="messaging.held.recount"):
+                    threads = list(thread_model._base_manager.select_for_update().filter(
+                        pk__in={row.thread_id for row in rows.values() if row.thread_id is not None},
+                    ).order_by("pk"))
+            def run(item: ActionSelectionInput) -> ActionResult:
+                row = rows.get(str(item.id))
+                if row is None:
+                    raise ValidationError("A selected held draft is unavailable.")
+                row.require_revision(item.expected_revision)
+                row.validate_held_draft()
+                with system_context(reason="messaging.held.discard" if discard else "messaging.held.send"):
+                    if discard:
+                        row.trash(reason="Discarded held draft.", recount=False)
+                    else:
+                        row.scheduled_at = None
+                        row.save(update_fields=("scheduled_at", "updated_at"))
+                        row.deliver()
+                return ActionResult(ok=True, message="Held draft discarded." if discard else "Held draft queued.")
+            results = many_actions(selection, run)
+            with system_context(reason="messaging.held.recount"):
+                for thread in threads:
+                    self._recount_thread(thread)
+            return results
+
+    def release_held_messages(self, *, now: datetime | None = None, limit: int = 200) -> int:
+        """SQL-scoped skip-locked release, with a savepoint for every row."""
+
+        moment = now or timezone.now()
+        if not 1 <= limit <= 1000:
+            raise ValueError("Release limit must be between 1 and 1000.")
+        count = 0
+        with system_context(reason="messaging.delivery.release"), transaction.atomic():
+            rows = self.sudo(reason="messaging.delivery.release").due_deliveries(now=moment).lock_if_supported(
+                skip_locked=True,
+            ).order_by("pk")[:limit]
+            for row in rows:
+                try:
+                    with transaction.atomic():
+                        count += row.deliver()
+                except ValidationError as error:
+                    row.status = self.model.MessageStatus.QUEUED
+                    row.save(update_fields=("status", "updated_at"))
+                    self.record_delivery(row.pk, token=row.external_id, error=error)
+        return count
 
     def for_record(
         self,
@@ -3152,7 +3431,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         recounted by aggregate. Call with the locked ``thread`` row.
         """
 
-        untrashed = models.Q(is_trashed=False)
+        untrashed = models.Q(is_trashed=False) & ~models.Q(direction="outbound", sent_at__isnull=True)
         summary = self.model._base_manager.filter(thread=thread).aggregate(
             total=models.Count("pk"),
             count=models.Count("pk", filter=untrashed),
@@ -3243,6 +3522,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         quote_edges: bool = True,
         explicit_thread: Any = None,
         historical: bool = False,
+        after_landing: Callable[[Any], None] | None = None,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
 
@@ -3276,6 +3556,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         external ID into a different explicit thread is rejected. ``historical``
         suppresses the live message event and party-suggestion side effects while
         retaining original timestamps, content history and thread counters.
+        ``after_landing`` writes an addon's overlay and moderation before counters
+        and live events; it also runs on unchanged observations without re-emitting.
         """
 
         created_by_id = created_by_id if created_by_id is not None else channel.owner_id
@@ -3300,6 +3582,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     visibility=visibility,
                     explicit_thread=explicit_thread,
                     historical=historical,
+                    after_landing=after_landing,
                 )
                 ingested.append(message)
                 for handle in handles:
@@ -3390,14 +3673,30 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         visibility: Any = None,
         explicit_thread: Any = None,
         historical: bool = False,
+        after_landing: Callable[[Any], None] | None = None,
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
-        envelope_metadata = _bounded_message_metadata(parsed.metadata)
-        thread = (
-            explicit_thread
-            if explicit_thread is not None
-            else thread_model.objects.resolve(
+        envelope_metadata = self.model.ingest_metadata(_bounded_message_metadata(parsed.metadata))
+        # Resolve identity before provider facts can create a thread or sender:
+        # an outbound echo belongs to the locally authored envelope.
+        prior = (
+            _external_id_annotated(self.model._base_manager)
+            .filter(_external_id_q(parsed.external_id), channel=channel)
+            .values("pk", "thread_id", "parent_id", "direction", "metadata", "received_at")
+            .first()
+        )
+        authored_message = None
+        if prior is not None and prior["direction"] == self.model.Direction.OUTBOUND:
+            authored_message = (
+                self.model._base_manager.select_for_update(of=("self",)).select_related("thread").get(pk=prior["pk"])
+            )
+        if authored_message is not None:
+            thread = authored_message.thread
+        elif explicit_thread is not None:
+            thread = explicit_thread
+        else:
+            thread = thread_model.objects.resolve(
                 platform=parsed.platform,
                 channel=channel,
                 subject=parsed.subject,
@@ -3409,9 +3708,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 visibility=visibility,
                 thread=parsed.thread,
             )
-        )
         sender = None
-        if parsed.sender is not None:
+        if parsed.sender is not None and authored_message is None:
             sender = handle_model.objects.upsert(
                 platform=parsed.sender.platform,
                 value=parsed.sender.value,
@@ -3420,24 +3718,17 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 external_id=parsed.sender.external_id,
                 metadata=parsed.sender.metadata,
             )
-        # Capture the message's prior state before the upsert moves it: the prior
-        # thread (a re-sync that re-resolves to a different thread must reconcile both
-        # threads' counters below) and the digest its last sync stored (an identical
-        # re-sync is a no-op). The read rides the channel-scoped MD5 identity index.
-        prior = (
-            _external_id_annotated(self.model._base_manager)
-            .filter(_external_id_q(parsed.external_id), channel=channel)
-            .values("pk", "thread_id", "parent_id", "metadata")
-            .first()
-        )
+        # The prior digest makes an unchanged provider observation a no-op.
+        received_at = parsed.received_at if parsed.received_at is not None else prior["received_at"] if prior else None
         content_hash = _parsed_sync_hash(
             parsed,
             channel_id=channel.pk,
             metadata=envelope_metadata,
+            received_at=received_at,
         )
         if (
             prior is not None
-            and prior["thread_id"] == thread.pk
+            and prior["thread_id"] == (thread.pk if thread is not None else None)
             and (prior["metadata"] or {}).get(_SYNC_HASH_KEY) == content_hash
         ):
             # Idempotent re-sync into the same thread with identical content: nothing
@@ -3446,17 +3737,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # precise exception: a reply that landed before its parent keeps NULL, so
             # the re-sync backfills the pointer once its parent exists (this is how a
             # resumed backup import heals reply order across batches).
-            message = self.model._base_manager.select_related("thread").get(pk=prior["pk"])
-            if parsed.in_reply_to and prior["parent_id"] is None:
+            message = authored_message or self.model._base_manager.select_related("thread").get(pk=prior["pk"])
+            if authored_message is None and parsed.in_reply_to and prior["parent_id"] is None:
                 parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
                 if parent is not None:
                     message.parent = parent
                     message.save(update_fields=("parent", "updated_at"))
+            if after_landing is not None:
+                after_landing(message)
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
         defaults = {
-            "thread_id": thread.pk,
+            "thread_id": thread.pk if thread is not None else None,
             "channel_id": channel.pk if channel is not None else None,
             "sender_id": sender.pk if sender is not None else None,
             "parent_id": parent.pk if parent is not None else None,
@@ -3466,14 +3759,16 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # Record chatter and public posts share the native COMMENT kind.
             "message_type": (
                 self.model.MessageKind.COMMENT
-                if thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
+                if thread is not None and (
+                    thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
+                )
                 else self.model.MessageKind.CHAT
                 if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
             ),
             "preview": strip_null_bytes(_preview(parsed.body))[: self.model._meta.get_field("preview").max_length],
             "sent_at": parsed.sent_at,
-            "received_at": parsed.received_at,
+            "received_at": received_at,
             "metadata": metadata,
         }
         created = prior is None
@@ -3494,29 +3789,46 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     raise
                 created = False
         prior_hashes: list[str] = []
+        retain_outbound_parts = False
         if not created:
-            message = self.model._base_manager.select_for_update().get(pk=prior["pk"])
-            if explicit_thread is not None and message.thread_id != thread.pk:
+            message = authored_message or self.model._base_manager.select_for_update().get(pk=prior["pk"])
+            defaults["metadata"] = _bounded_message_metadata(
+                self.model.ingest_metadata(metadata, previous=message.metadata),
+            )
+            if message.direction == self.model.Direction.OUTBOUND:
+                # Provider echoes cannot change locally authored envelope identity.
+                defaults["direction"] = message.direction
+                defaults["sender_id"] = message.sender_id
+                defaults["message_type"] = message.message_type
+                defaults["status"] = message.status
+                for field in ("thread_id", "parent_id", "platform", "preview", "sent_at"):
+                    defaults[field] = getattr(message, field)
+                thread = message.thread
+                retain_outbound_parts = True
+            if explicit_thread is not None and message.thread_id != explicit_thread.pk:
                 raise ValueError("Source message already belongs to a different explicit thread.")
             prior_hashes = self._content_fragment_hashes(part_model, message)
             for field, value in defaults.items():
                 setattr(message, field, value)
             message.save()
-        message.parts.all().delete()
-        position = self._write_envelope_parts(message, parsed, created_by_id=created_by_id)
-        if parsed.body is not None:
-            self._build_parts(message, parsed.body, parent=None, position=position, created_by_id=created_by_id)
-        if not created:
-            new_hashes = self._content_fragment_hashes(part_model, message)
-            if new_hashes != prior_hashes:
-                # A provider edit: the row survives, the parts relinked — record what
-                # was replaced by hash (the old text lives on as shared fragments).
-                message.edit_history = [
-                    _edit_history_entry(edited_by_id=None, prev_fragment_hashes=prior_hashes),
-                    *(message.edit_history or []),
-                ]
-                message.save(update_fields=("edit_history", "updated_at"))
-        handles = self._write_participants(message, thread, parsed, sender, created_by_id)
+        if not retain_outbound_parts:
+            message.parts.all().delete()
+            position = self._write_envelope_parts(message, parsed, created_by_id=created_by_id)
+            if parsed.body is not None:
+                self._build_parts(message, parsed.body, parent=None, position=position, created_by_id=created_by_id)
+            if not created:
+                new_hashes = self._content_fragment_hashes(part_model, message)
+                if new_hashes != prior_hashes:
+                    # A provider edit: the row survives, the parts relinked — record what
+                    # was replaced by hash (the old text lives on as shared fragments).
+                    message.edit_history = [
+                        _edit_history_entry(edited_by_id=None, prev_fragment_hashes=prior_hashes),
+                        *(message.edit_history or []),
+                    ]
+                    message.save(update_fields=("edit_history", "updated_at"))
+        handles = (
+            () if retain_outbound_parts else self._write_participants(message, thread, parsed, sender, created_by_id)
+        )
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -3525,13 +3837,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # the winner still gains the message and there is no
         # loser to recount. Gating the winner's bump on ``created`` alone dropped exactly
         # that NULL-prior re-home; an idempotent re-sync into the same thread is a no-op.
-        thread_changed = prior is not None and prior["thread_id"] != thread.pk
+        thread_changed = prior is not None and prior["thread_id"] != message.thread_id
         if thread_changed and prior["thread_id"] is not None:
             losing_thread = thread_model._base_manager.select_for_update().get(pk=prior["thread_id"])
             self._recount_thread(losing_thread)
-        if created or thread_changed:
+        if after_landing is not None:
+            after_landing(message)
+        if (created or thread_changed) and not message.is_trashed and thread is not None:
             self._bump_thread(thread_model, thread.pk, parsed.sent_at)
-            if not historical:
+            if not historical and not message.is_trashed and message.direction != self.model.Direction.OUTBOUND:
                 message_ingested.send(sender=self.model, instance=message)
         return message, handles
 

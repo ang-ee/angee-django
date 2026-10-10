@@ -121,7 +121,9 @@ jobs:
             tests/test_composed_extraction_workflow.py \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
-            tests/test_integrate_binding_concurrency.py
+            tests/test_integrate_binding_concurrency.py \
+            tests/test_framework_integration.py \
+            tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   pnpm:

@@ -60,13 +60,14 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OptimisticLockMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
+from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
     FragmentManager,
@@ -1120,7 +1121,7 @@ class Channel(Bridge):
     """
 
     runtime = True
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "write", "replier": "write"}
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
@@ -1870,7 +1871,9 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
+class Message(
+    ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel,
+):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1917,6 +1920,11 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         SYNCED = "synced", "Synced"
         EDITED = "edited", "Edited"
         FAILED = "failed", "Failed"
+
+    ACTIVE_OUTBOUND_STATUSES = (MessageStatus.DRAFT, MessageStatus.QUEUED, MessageStatus.SENT)
+    """Prepared or accepted outbound messages that still answer their parent."""
+    PUBLISHED_STATUSES = (MessageStatus.SYNCED, MessageStatus.EDITED, MessageStatus.SENT)
+    """Provider-visible messages, whether ingested or sent locally."""
 
     class MessageKind(models.TextChoices):
         """Odoo-style functional kind of a message.
@@ -1981,10 +1989,104 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
     preview = models.CharField(max_length=512, blank=True, default="")
     sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
     received_at = models.DateTimeField(null=True, blank=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    """Release time for an outbound draft, or retry horizon for a queued delivery."""
+    delivery_lease_until = models.DateTimeField(null=True, blank=True)
+    """Established by enqueue and retained for retries; unleased queues stay inert."""
     edit_history = models.JSONField(blank=True, default=list)
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = MessageManager()
+
+    @classmethod
+    def protected_local_keys(cls) -> frozenset[str]:
+        """Trusted provenance and delivery facts contributed through autoconfig."""
+
+        return frozenset(settings.ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS)
+
+    @staticmethod
+    def held_draft_fields() -> dict[str, Any]:
+        """The shared held predicate, including approval-only unscheduled drafts."""
+
+        return {"direction": "outbound", "status": "draft", "is_trashed": False}
+
+    @property
+    def is_held(self) -> bool:
+        """Whether this retained draft awaits its due time or operator approval."""
+
+        return all(getattr(self, key) == value for key, value in self.held_draft_fields().items())
+
+    hasura_filter_expressions = {
+        "is_held": lambda rows: models.ExpressionWrapper(
+            models.Q(**rows.model.held_draft_fields()), output_field=models.BooleanField(),
+        ),
+    }
+
+    @classmethod
+    def ingest_metadata(cls, incoming: dict[str, Any], *, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Replace provider metadata while retaining trusted local facts."""
+
+        metadata = dict(incoming)
+        protected = cls.protected_local_keys()
+        local = metadata.get("local")
+        local = (
+            {key: value for key, value in local.items() if key not in protected}
+            if isinstance(local, dict) else {}
+        )
+        retained = (previous or {}).get("local", {})
+        if isinstance(retained, dict):
+            local.update({key: value for key, value in retained.items() if key in protected})
+        if local:
+            metadata["local"] = local
+        else:
+            metadata.pop("local", None)
+        return metadata
+
+    @property
+    def local_metadata(self) -> dict[str, Any]:
+        """Copy the local facts; older untyped provider values are not local facts."""
+
+        local = (self.metadata or {}).get("local")
+        return dict(local) if isinstance(local, dict) else {}
+
+    @property
+    def delivery_blocked(self) -> bool:
+        """Whether removal, discard, or a provider identity collision prevents a send."""
+
+        return self.is_trashed or bool(self.local_metadata.get("delivery_conflict"))
+
+    @property
+    def delivery_held(self) -> bool:
+        """Whether this message's release time is still in the future."""
+
+        return self.scheduled_at is not None and self.scheduled_at > timezone.now()
+
+    def validate_delivery(self) -> None:
+        """Require the persisted outbound envelope used by every delivery entrypoint."""
+
+        if self.direction != self.Direction.OUTBOUND or self.channel_id is None or not self.external_id.strip():
+            raise ValidationError("Delivery requires an outbound message, a channel, and a stable external id.")
+
+    def validate_held_draft(self) -> None:
+        """Require an outbound retained draft before an operator acts on it."""
+
+        self.validate_delivery()
+        if not self.is_held or self.delivery_blocked:
+            raise ValidationError("Only held outbound drafts may be sent or discarded.")
+
+    def body_text(self, *, max_bytes: int | None = None) -> str:
+        """Read plain-text BODY fragments in native order, optionally byte-bounded."""
+
+        if not self.has_access("read"):
+            raise PermissionDenied("Message read access is required.")
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("Text byte limit cannot be negative.")
+        parts = apps.get_model("messaging", "Part").objects.reading_order_for_message(self)
+        text = "\n\n".join(
+            part.fragment.text for part in parts
+            if part.role == Part.PartRole.BODY and part.type == "text/plain" and part.fragment_id is not None
+        )
+        return text if max_bytes is None else text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
 
     class Meta:
         """Django model options for the message source model."""
@@ -2005,6 +2107,13 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             ),
         )
         indexes = (
+            models.Index(
+                fields=("scheduled_at",), condition=models.Q(scheduled_at__isnull=False), name="ix_message_due_hold",
+            ),
+            models.Index(
+                fields=("delivery_lease_until",), condition=models.Q(delivery_lease_until__isnull=False),
+                name="ix_message_delivery_lease",
+            ),
             # The exact keyset the feed orders and cursors by
             # (``MessageQuerySet.chronological_time()`` + pk tiebreak): one expression index
             # serves the hot page query verbatim, trailing id for cursor scans.
@@ -2099,12 +2208,14 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
 
         return moderate_access and not self.is_trashed and self.trash_error() is None
 
-    def trash(self, *, reason: str = "", using: str | None = None) -> None:
-        """Trash this message and recount its thread without it."""
+    def trash(self, *, reason: str = "", using: str | None = None, recount: bool = True) -> None:
+        """Trash and cancel unsent delivery; restoring never re-arms a send."""
 
         with transaction.atomic(using=using):
+            type(self).objects.cancel_delivery(self, using=using)
             super().trash(reason=reason, using=using)
-            self._recount_thread()
+            if recount:
+                self._recount_thread()
 
     def restore(self, *, using: str | None = None) -> None:
         """Restore this message and recount its thread with it."""
@@ -2331,8 +2442,6 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         envelope participants, and parts, then call ``message.deliver()``. The
         transport always runs through ``angee.jobs``, never in the request.
         """
-
-        from angee.messaging.delivery import queue_message_delivery
 
         return queue_message_delivery(self)
 

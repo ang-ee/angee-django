@@ -2,7 +2,8 @@
 
 A :class:`~angee.posts.models.Feed` (a ``messaging.Channel`` child and ``Bridge``)
 selects one ``FeedBackend`` by registry key. The backend does the per-platform
-*transport* + *parse* — ``fetch_posts`` returns neutral :class:`ParsedPost` rows.
+*transport* + *parse* through integrate ``streams``/``extract`` returning
+:class:`ParsedPost` records; the shared driver owns cursor commits and quarantine.
 Each post's *core* (thread/message/parts) reuses messaging's neutral
 :class:`~angee.messaging.backends.ParsedMessage`, so the idempotent channel-scoped
 external-id upsert, the Part/Fragment tree, and thread resolution stay owned by
@@ -19,11 +20,21 @@ non-empty when no source is installed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from typing import Any, ClassVar
 
+from django.apps import apps
+
+from angee.integrate.discovery import ConnectionDiscovery
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import BridgeImpl
-from angee.messaging.backends import ManualChannelBackend, ParsedHandle, ParsedMessage
+from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.locks import bridge_advisory_lock
+from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
+from angee.messaging.backends import DeliveryOutcome, ManualChannelBackend, ParsedHandle, ParsedMessage
+from angee.posts.ingest import land_post_relations, land_posts
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,8 @@ class ParsedPost:
     metrics: ParsedMetrics | None = None
     reactions: tuple[ParsedReaction, ...] = ()
     relations: tuple[ParsedRelation, ...] = ()
+    hidden: bool = False
+    """Provider moderation state, landed through messaging trash before live events."""
 
 
 class FeedBackend(BridgeImpl, HttpClientMixin):
@@ -91,18 +104,71 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
 
     ``self.bridge`` is the ``Feed`` row — its ``config`` carries the source settings
     and ``self.bridge.credential`` authenticates — and ``self.http`` is the shared
-    SSRF-pinned client. Incremental state lives on ``self.bridge.cursor``.
+    SSRF-pinned client. Incremental state lives on integrate's durable per-partition ``SyncStream``.
     """
     registry_setting = "ANGEE_POSTS_FEED_BACKEND_CLASSES"
+    requires_connection_discovery: ClassVar[bool] = True
 
     category = "feed"
     label = "Feed"
     icon = "rss"
+    defaults = {"backend_class": "feed"}
 
-    def fetch_posts(self) -> list[ParsedPost]:
-        """Return new posts since the feed cursor as neutral dataclasses."""
+    def discover_connection(self, credential: Any) -> ConnectionDiscovery:
+        """Require source adapters to discover their publishing identity."""
 
-        raise NotImplementedError("FeedBackend subclasses must implement fetch_posts().")
+        raise AdapterContractError("Feed adapters must implement discover_connection().")
+
+    def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
+        """Apply feed identity through the parties handle owner on the locked feed."""
+
+        fields = []
+        for name in ("external_id", "display_name"):
+            if name in discovery.data:
+                field = self.bridge._meta.get_field(name)
+                value = discovery.data[name]
+                if name == "display_name":
+                    value = str(value or "")[:field.max_length]
+                setattr(self.bridge, name, field.clean(value, self.bridge))
+                fields.append(name)
+        if "handle" in discovery.data:
+            parsed = discovery.data["handle"]
+            if not isinstance(parsed, ParsedHandle):
+                raise AdapterContractError("Feed discovery handle must be a ParsedHandle.")
+            self.bridge.handle = apps.get_model("parties", "Handle").objects.upsert(
+                platform=parsed.platform, value=parsed.value, external_id=parsed.external_id,
+                display_name=parsed.display_name, metadata=parsed.metadata, created_by_id=self.bridge.owner_id,
+            )
+            fields.append("handle")
+        if fields:
+            self.bridge.save(update_fields=(*fields, "updated_at"))
+
+    def record_key(self, record: ParsedPost) -> str:
+        """Safe event identity for integrate's per-record quarantine."""
+
+        return record.message.external_id
+
+    def apply_record(self, stream: Any, record: ParsedPost) -> ApplyResult:
+        """Land one record, with live classification independent of its stream."""
+
+        if not record.message.external_id:
+            raise SemanticError("missing_external_id")
+        (message,) = land_posts(
+            self.bridge, [record], owner_id=self.bridge.owner_id,
+            historical=self.bridge.is_historical(record), relations=False,
+        )
+        return ApplyResult(target=message)
+
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
+        """Resolve cross-post relations after all successful records are visible."""
+
+        messages = [outcome.bound_target for outcome in outcomes if outcome.bound_target is not None]
+        land_post_relations(self.bridge, page.records, messages, owner_id=self.bridge.owner_id)
+
+    def deliver(self, message: Any) -> DeliveryOutcome:
+        """Reply publish; bridges return acceptance or raise a typed refusal."""
+
+        return DeliveryOutcome(accepted=False)
 
 
 class ManualFeedBackend(FeedBackend):
@@ -116,10 +182,12 @@ class ManualFeedBackend(FeedBackend):
     key = "manual"
     label = "Manual"
 
-    def fetch_posts(self) -> list[ParsedPost]:
-        """Return no posts — a manual feed is populated by hand."""
+    requires_connection_discovery: ClassVar[bool] = False
 
-        return []
+    def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
+        """Manual feeds have no remote partitions."""
+
+        return ()
 
 
 class FeedChannelBackend(ManualChannelBackend):
@@ -129,3 +197,27 @@ class FeedChannelBackend(ManualChannelBackend):
     category = "feed"
     label = "Feed"
     icon = "rss"
+
+    def __init__(self, integration: Any) -> None:
+        """Resolve the feed child once; it owns both publish and sync identity."""
+
+        feed = integration.concrete_capability()
+        if not isinstance(feed, apps.get_model("posts", "Feed")):
+            raise IntegrationError("This channel's feed source is unavailable.")
+        super().__init__(feed)
+        self._backend = feed.backend
+
+    def delivery_lock(self) -> AbstractContextManager[bool]:
+        """Serialize publish and settlement with the feed's stream sync."""
+
+        return bridge_advisory_lock(self.bridge)
+
+    def deliver(self, message: Any) -> DeliveryOutcome:
+        """Dispatch the Channel transport to its Feed's one publishing backend."""
+
+        return self._backend.deliver(message)
+
+    def close(self) -> None:
+        """Close the same backend instance used for delivery."""
+
+        self._backend.close()

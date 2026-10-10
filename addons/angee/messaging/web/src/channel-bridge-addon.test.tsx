@@ -5,6 +5,7 @@ import integrate, {
   INTEGRATION_DISCONNECT_ACTION_ID,
   INTEGRATION_MODEL,
   INTEGRATION_RESUME_ACTION_ID,
+  INTEGRATION_RETRY_BINDING_ACTION_ID,
 } from "@angee/integrate";
 import { resolveContainer, type ComposedContainerChild } from "@angee/ui";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -122,13 +123,14 @@ describe("defineChannelBridgeAddon live bridges", () => {
     expect(summary(own.menu)).toEqual([
       { id: `${VENDOR}.disconnect`, sequence: 13 },
       { id: "integrate.connection.test", sequence: 14 },
+      { id: INTEGRATION_RETRY_BINDING_ACTION_ID, sequence: 15 },
     ]);
     expect(own.menu[0]?.variant).toEqual({ of: INTEGRATION_DISCONNECT_ACTION_ID, impl: "example" });
 
     // Another backend's rows keep integrate's verbs untouched.
     const other = channelVerbs(manifest, "imap");
     expect(other.toolbar.map((child) => child.id)).toEqual(["integrate.lifecycle.pause", INTEGRATION_RESUME_ACTION_ID]);
-    expect(other.menu.map((child) => child.id)).toEqual([INTEGRATION_DISCONNECT_ACTION_ID, "integrate.connection.test"]);
+    expect(other.menu.map((child) => child.id)).toEqual([INTEGRATION_DISCONNECT_ACTION_ID, "integrate.connection.test", INTEGRATION_RETRY_BINDING_ACTION_ID]);
 
     render(childContent(own.menu, `${VENDOR}.disconnect`) as React.ReactElement);
     expect(screen.getByRole("button", { name: "channel.pairing.disconnect" })).toBeTruthy();
@@ -214,6 +216,7 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
     expect(own.map((child) => child.id)).toEqual([
       INTEGRATION_DISCONNECT_ACTION_ID,
       "integrate.connection.test",
+      INTEGRATION_RETRY_BINDING_ACTION_ID,
       `${VENDOR}.credential`,
     ]);
     expect(channelVerbs(manifest, "imap").menu.map((child) => child.id)).not.toContain(`${VENDOR}.credential`);
@@ -227,7 +230,6 @@ describe("defineChannelPollBridgeAddon poll bridges", () => {
     expect(channelToolbar(manifest)).toEqual([{ id: `${VENDOR}.connect`, sequence: 22 }]);
     // Integrate's lifecycle verbs reach the vendor's rows unspecialized.
     const { toolbar, menu } = channelVerbs(manifest, "example");
-    expect([...toolbar, ...menu].map((child) => child.owner)).toEqual(["integrate", "integrate", "integrate", "integrate"]);
+    expect([...toolbar, ...menu].map((child) => child.owner)).toEqual(["integrate", "integrate", "integrate", "integrate", "integrate"]);
   });
 });
-

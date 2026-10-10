@@ -150,7 +150,7 @@ class MessageInbox:
         self.messages = (
             queryset.inbox()
             .untrashed()
-            .filter(status__in=("synced", "edited", "sent"))
+            .filter(status__in=queryset.model.PUBLISHED_STATUSES)
             .exclude(thread__modality="public_thread")
             .for_feed()
         )

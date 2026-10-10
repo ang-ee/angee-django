@@ -2423,6 +2423,38 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(channel: Any, monkeypatch) -> None:
+    received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
+    assert _ingest([received], channel=channel) == 1
+    message = Message._base_manager.get(external_id="m1")
+    part_pks = set(Part._base_manager.filter(message=message).values_list("pk", flat=True))
+    saves = []
+    original = Message.save
+
+    def save(row, *args, **kwargs):
+        saves.append(row.pk)
+        return original(row, *args, **kwargs)
+
+    monkeypatch.setattr(Message, "save", save)
+    assert _ingest([replace(received, received_at=None)], channel=channel) == 1
+    assert saves == []
+    message.refresh_from_db()
+    assert message.received_at == received.received_at
+    assert set(Part._base_manager.filter(message=message).values_list("pk", flat=True)) == part_pks
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
+    received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
+    assert _ingest([received], channel=channel) == 1
+    assert _ingest([_parsed("m1", sent_at=_AT, text="Edited body")], channel=channel) == 1
+    message = Message._base_manager.get(external_id="m1")
+    assert message.received_at == received.received_at
+    with system_context(reason="test receipt time body"):
+        assert message.body_text() == "Edited body"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_counter_survives_null_sent_at(channel: Any) -> None:
     """A message with no sent_at bumps the count without crashing (the M1 bug).
 
