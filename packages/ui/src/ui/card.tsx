@@ -165,8 +165,8 @@ export const Card = React.forwardRef<HTMLElement, CardProps>(function Card(
     children: asChild ? undefined : children,
   };
 
-  if (interactive || type !== undefined) {
-    renderProps.type = interactive ? (type ?? "button") : type;
+  if (type !== undefined || (interactive && !asChild)) {
+    renderProps.type = interactive && !asChild ? (type ?? "button") : type;
   }
 
   return useRender<CardState, HTMLElement>({

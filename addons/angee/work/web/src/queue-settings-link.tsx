@@ -1,4 +1,4 @@
-import { Button, TextLink, useResourceRecordHref } from "@angee/ui";
+import { Button, NavLink, useResourceRecordHref } from "@angee/ui";
 import * as React from "react";
 
 import { useWorkT } from "./i18n";
@@ -15,7 +15,7 @@ export function QueueSettingsLink({ queueId }: { queueId: string }): React.React
   if (!queueId || !href) return null;
   return (
     <Button asChild size="sm">
-      <TextLink href={href}>{t("queue.settings")}</TextLink>
+      <NavLink href={href} variant="inline">{t("queue.settings")}</NavLink>
     </Button>
   );
 }

@@ -527,7 +527,7 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
             audience={typeof widget.options.audience === "string" ? widget.options.audience : undefined}
           />
         </div>
-        {!editing && fullViewHref ? <NavLink href={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} className="shrink-0 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring"><Glyph name="arrow-up-right" size={14} /></NavLink> : null}
+        {!editing && fullViewHref ? <NavLink href={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} affordance="outward" className="shrink-0 rounded-4 p-1 text-sm text-fg-muted hover:text-fg focus-visible:focus-ring" /> : null}
         {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
         {editing ? (
           <Input

@@ -8,6 +8,7 @@ import type {
 import { isDateField, rowValueAtPath, resourceFieldPathToSnake } from "@angee/metadata";
 import { type UiTranslate } from "../../../i18n";
 import { enumValueLabel, groupFieldLabel, statusLabel } from "../../../lib/labels";
+import { formatNumber, isNumericString } from "../../../lib/format-number";
 import { titleCase } from "../../../lib/titleCase";
 import { Badge } from "../../../ui/badge";
 import { ChipList } from "../../../ui/chip";
@@ -198,19 +199,14 @@ export function formatMeasure(
   value: unknown,
   measure: Pick<GroupMeasure, "unit">,
 ): string {
-  const formatted = formatMeasureValue(value);
+  const formatted = value == null
+    ? ""
+    : typeof value === "number"
+    || typeof value === "bigint"
+    || (typeof value === "string" && isNumericString(value))
+      ? formatNumber(value)
+      : String(value);
   return measure.unit ? `${formatted} ${measure.unit}` : formatted;
-}
-
-function formatMeasureValue(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value.toLocaleString();
-  }
-  if (typeof value === "bigint") return value.toLocaleString();
-  if (typeof value === "string" && /^-?\d+$/.test(value)) {
-    return BigInt(value).toLocaleString();
-  }
-  return value == null ? "" : String(value);
 }
 
 function displayValue(value: unknown, t: UiTranslate): React.ReactNode {

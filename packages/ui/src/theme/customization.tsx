@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
+import { SectionEyebrow } from "../ui/section-eyebrow";
 import type { ThemeOptionsEditorProps } from "./index";
 import {
   isThemeCustomizationOptions,
@@ -135,7 +136,7 @@ function CustomizationSection({
   title: string;
 }): ReactElement {
   return <section className="grid gap-3">
-    <h3 className="text-12 font-semibold uppercase tracking-wide text-fg-muted">{title}</h3>
+    <SectionEyebrow as="h3" size="sm">{title}</SectionEyebrow>
     {children}
   </section>;
 }

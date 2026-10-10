@@ -49,6 +49,7 @@ export {
   type DataResourceTypeMetadata,
   type ModelEnumValueMetadata,
   type ModelFieldKind,
+  type StatusDisplay,
   type ModelFieldMetadata,
   type ModelMetadata,
   RelationRepresentationError,

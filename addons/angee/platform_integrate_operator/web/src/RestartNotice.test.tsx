@@ -43,7 +43,7 @@ vi.mock("@angee/operator/runtime", () => ({
 vi.mock("@angee/ui", () => ({
   Banner: ({ title, children }: { title: string; children?: ReactNode }) => <div><strong>{title}</strong>{children}</div>,
   Button: ({ children }: { children?: ReactNode }) => <button>{children}</button>,
-  TextLink: ({ children }: { children?: ReactNode }) => <a>{children}</a>,
+  NavLink: ({ children }: { children?: ReactNode }) => <a>{children}</a>,
   useRouteHref: () => () => "/operator/operations",
 }));
 

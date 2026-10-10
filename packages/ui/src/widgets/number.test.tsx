@@ -16,6 +16,15 @@ test("number list cells show an em dash for missing values while preserving zero
   expect(screen.getByText("0")).toBeTruthy();
 });
 
+test("number reads preserve ungrouped integer, decimal, and negative spellings", () => {
+  const IntegerRead = integerWidget.read;
+  const FloatRead = floatWidget.read;
+  render(<><IntegerRead value={1234} /><FloatRead value={1.5} /><FloatRead value={-2.5} /></>);
+  expect(screen.getByText("1234")).toBeTruthy();
+  expect(screen.getByText("1.5")).toBeTruthy();
+  expect(screen.getByText("-2.5")).toBeTruthy();
+});
+
 test("a cleared decimal stays editable and publishes blank form state", () => {
   const FloatEdit = floatWidget.edit!;
   function Harness() {

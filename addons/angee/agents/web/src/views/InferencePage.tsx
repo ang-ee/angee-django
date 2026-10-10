@@ -28,7 +28,7 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Column field="name" />
         <Column field="backend_class" />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" widget="colorDot" />
+        <Column field="runtime_status" />
         <Column field="credential.display_name" header={t("inference.credential")} />
       </List>
     </ResourceList>

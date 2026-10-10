@@ -13,6 +13,18 @@ export {
   type DetailSurfaceProps,
 } from "./DetailSurface";
 export {
+  DefinitionPair,
+  definitionFromTuple,
+  definitionPairVariants,
+  type DefinitionPairDensity,
+  type DefinitionPairElement,
+  type DefinitionPairLayout,
+  type DefinitionPairOrientation,
+  type DefinitionPairProps,
+  type DefinitionPairTuple,
+  type DefinitionPairValue,
+} from "./DefinitionPair";
+export {
   EmptyState,
   emptyStateVariants,
   type EmptyStateProps,

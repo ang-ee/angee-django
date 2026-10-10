@@ -15,7 +15,7 @@ import {
   RelationPicker,
   SegmentedControl,
   Tag,
-  TextLink,
+  NavLink,
   Workbench,
   useChatter,
   useResourceRecordHrefLookup,
@@ -259,7 +259,7 @@ function Inspector({
                     ) : null}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {path ? <Button asChild size="sm"><TextLink href={path}>{t("graph.openRecord")}</TextLink></Button> : null}
+                    {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
                     {isPartyNode(node) || isCircleNode(node) ? (
                       <Button size="sm" variant="ghost" onClick={() => openTimeline(node)}>{t("graph.openTimeline")}</Button>
                     ) : null}
@@ -269,9 +269,9 @@ function Inspector({
             })}
             {nodes.length === 2 && mergeHref ? (
               <Button asChild variant="primary">
-                <TextLink href={mergeHref}>
+                <NavLink href={mergeHref} variant="inline">
                   {t("graph.merge")}
-                </TextLink>
+                </NavLink>
               </Button>
             ) : (
               <p className="text-2xs text-fg-muted">{t("graph.mergeHint")}</p>
@@ -302,7 +302,7 @@ function EdgeDetails({
         <Tag tone={edge.kind === "tie_fading" ? "warning" : "neutral"}>{edge.kind.replaceAll("_", " ")}</Tag>
         {typeof edge.meta?.gravity === "number" ? <Tag tone="brand">{t("ties.gravity")} {edge.meta.gravity.toFixed(2)}</Tag> : null}
       </div>
-      {path ? <Button asChild size="sm"><TextLink href={path}>{t("graph.openRecord")}</TextLink></Button> : null}
+      {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
     </div>
   );
 }

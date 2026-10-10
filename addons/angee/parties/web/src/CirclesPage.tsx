@@ -37,7 +37,7 @@ export function CirclesPage(): React.ReactElement {
       <List resource={MODEL}>
         <Column field="name" />
         <Column field="parent.name" header={t("circle.parent")} />
-        <Column field="color" widget="colorDot" />
+        <Column field="color" />
         <Column field="position" />
         <Column field="created_at" />
       </List>

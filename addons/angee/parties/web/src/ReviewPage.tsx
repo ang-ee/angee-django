@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, Page, PageBody, PageHeader, RailPanel, Tag, TextLink, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
+import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Tag, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
 import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
 import { usePartyHandleRowActions } from "./party-handle-row-actions";
@@ -45,9 +45,9 @@ export function ReviewPage(): React.ReactElement {
         header: t("identity.evidence"),
         render: (row) => <span className="flex flex-wrap gap-2">{row.evidence_refs?.map((ref, index) => {
           const href = recordHref(ref.model, ref.id);
-          return href ? <TextLink key={`${ref.model}:${ref.id}`} href={href}>
+          return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
             {t("identity.evidenceSource", { number: index + 1 })}
-          </TextLink> : null;
+          </NavLink> : null;
         })}{row.evidence_truncated ? <span>{t("identity.evidenceTruncated")}</span> : null}</span>,
       },
     ],
@@ -117,7 +117,7 @@ export function ReviewPage(): React.ReactElement {
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {duplicateCandidates.map((candidate) => (
-                  <TextLink
+                  <NavLink
                     key={`${candidate.left.id}:${candidate.right.id}`}
                     variant="block-card"
                     href={routeHref("parties.merge", {
@@ -141,7 +141,7 @@ export function ReviewPage(): React.ReactElement {
                         {t("review.possibleDuplicates.compare")}
                       </span>
                     </span>
-                  </TextLink>
+                  </NavLink>
                 ))}
               </div>
             )}

@@ -433,6 +433,18 @@ def test_state_field_deconstruct_and_clone_preserve_index_choice(db_index: bool)
     assert cloned.deconstruct() == declaration
 
 
+def test_state_field_status_display_is_presentation_only() -> None:
+    """The status shape reaches metadata without entering migration state."""
+
+    class Status(models.TextChoices):
+        ENABLED = "enabled", "Enabled"
+
+    field = StateField(choices_enum=Status, status_display="dot")
+
+    assert field.angee_status_display == "dot"
+    assert "status_display" not in field.deconstruct()[3]
+
+
 def test_active_model_state_fields_pass_checks() -> None:
     """Concrete composed fields satisfy the optional-state declaration rule."""
 

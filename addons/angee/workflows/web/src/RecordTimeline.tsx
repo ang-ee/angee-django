@@ -6,7 +6,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import {
   Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
   SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useStatusTone,
-  formatDateTime, type StepListItem,
+  formatDateTime, textRoleVariants, type StepListItem,
 } from "@angee/ui";
 import { RecordTimelineDocument, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -80,7 +80,7 @@ export function RecordTimelineView({ data, openCount, set = false }: {
       else group.set(decision.id, { entries: [entry], decision });
     }
     return <div className="grid min-w-0 gap-4">
-      <header className="grid gap-2"><h2 className="text-15 font-semibold">{t("timeline.title")} <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
+      <header className="grid gap-2"><h2 className={textRoleVariants({ role: "title" })}>{t("timeline.title")} <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
         <p className="text-13 text-fg-muted">{t("timeline.records", { count: data.length })} · {t("timeline.decisions", { count })} · {t("timeline.heldRuns", { count: runs.filter((run) => held(run).length).length })}</p>
         <SegmentedControl<"record" | "question"> aria-label={t("timeline.groupBy")} value={grouping} onValueChange={setGrouping}
           options={[{ value: "record", label: t("timeline.byRecord") }, { value: "question", label: t("timeline.byQuestion") }]} />
@@ -107,7 +107,7 @@ export function RecordTimelineView({ data, openCount, set = false }: {
   const inRuns = new Set(runs.flatMap((run) => runSteps(run).flatMap((step) => step.decision ? [step.decision.id] : [])));
   return <div className="grid min-w-0 gap-4">
     <header className="grid min-w-0 gap-1.5"><div className="flex min-w-0 items-center gap-2">
-      <h2 className="min-w-0 truncate text-15 font-semibold">{single?.version?.workflow?.display_name ?? t("timeline.workflows", { count: runs.length })}</h2>
+      <h2 className={textRoleVariants({ role: "title", truncate: true, className: "min-w-0" })}>{single?.version?.workflow?.display_name ?? t("timeline.workflows", { count: runs.length })}</h2>
       <CountBadge tone={count ? "warning" : "neutral"} value={count} title={t("timeline.decisions", { count })} />
     </div>{single ? <div className="flex flex-wrap items-center gap-2"><RunStatus run={single} />
       <time dateTime={single.created_at}>{formatDateTime(new Date(single.created_at))}</time>

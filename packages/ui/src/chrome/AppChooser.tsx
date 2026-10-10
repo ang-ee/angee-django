@@ -141,7 +141,7 @@ function AppChooserBody({
                 <Glyph name="angee" size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className="m-0 truncate text-15 font-semibold text-fg">
+                <h2 className={cn(textRoleVariants({ role: "title", truncate: true }), "m-0")}>
                   {resolvedTitle}
                 </h2>
                 <p className={cn(textRoleVariants({ role: "caption", truncate: true }), "mt-0.5")}>

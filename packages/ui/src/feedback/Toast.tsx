@@ -149,7 +149,7 @@ function ToastItem({
       swipeDirection={["right", "down"]}
       className={cn(
         "pointer-events-auto absolute bottom-0 right-0 w-full rounded-6 border p-3 shadow-popover outline-none",
-        "transition-[opacity,transform,height] duration-200 ease-out focus-visible:focus-ring",
+        "transition-[opacity,transform,height] focus-visible:focus-ring",
         "translate-x-[var(--toast-swipe-movement-x)] translate-y-[calc((var(--toast-index)*-0.625rem)+var(--toast-swipe-movement-y))]",
         "scale-[calc(1-(var(--toast-index)*0.04))] [z-index:calc(20-var(--toast-index))]",
         "data-[expanded]:translate-y-[calc((var(--toast-offset-y)*-1)+var(--toast-swipe-movement-y))] data-[expanded]:scale-100",

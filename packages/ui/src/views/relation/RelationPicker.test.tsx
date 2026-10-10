@@ -181,6 +181,22 @@ describe("RelationPicker edit affordance", () => {
     );
   });
 
+  test("renders an outward glyph for an internal follow destination", () => {
+    renderPicker(
+      <RelationPicker
+        value="client-1"
+        options={options}
+        followHref="/oauth-clients/client-1"
+        aria-label="OAuth Client"
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "Open record" });
+    expect(link.getAttribute("href")).toBe("/oauth-clients/client-1");
+    expect(link.className).toContain("inline-flex");
+    expect(link.querySelector(".glyph")).toBeTruthy();
+  });
+
   test("commits a portal selection after changing the relation", async () => {
     const onChange = vi.fn();
     const onCommit = vi.fn();

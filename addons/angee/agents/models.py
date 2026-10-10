@@ -252,9 +252,9 @@ class RuntimeStatus(models.TextChoices):
 
     Orthogonal to a provision lifecycle (:class:`AgentLifecycle`): stopped/running/
     error/warning is "is it up right now, and is anything wrong", the grey/green/red/
-    amber dot the frontend renders through the ``colorDot`` widget. Reused for any
-    model that has a run state; the operator daemon reports the same vocabulary for
-    its services (see ``docs/frontend/guidelines.md`` for the shared tone mapping).
+    amber dot selected by the field's ``status_display="dot"`` metadata. Reused for
+    any model that has a run state; the operator daemon reports the same vocabulary
+    for its services (see ``docs/frontend/guidelines.md`` for the shared tone mapping).
     """
 
     STOPPED = "stopped", "Stopped"
@@ -919,7 +919,11 @@ class Agent(AuditMixin, AngeeDataModel):
     """Operator workspace instance this agent records as its own; unique among agents when set."""
     lifecycle = StateField(choices_enum=AgentLifecycle, default=AgentLifecycle.DRAFT)
     """Provision-pipeline position (:class:`AgentLifecycle`), set by the render flow."""
-    runtime_status = StateField(choices_enum=RuntimeStatus, default=RuntimeStatus.STOPPED)
+    runtime_status = StateField(
+        choices_enum=RuntimeStatus,
+        default=RuntimeStatus.STOPPED,
+        status_display="dot",
+    )
     """Observed run state (:class:`RuntimeStatus`) — the colored dot; ``ERROR`` pairs
     with ``last_error``. Set by the render flow; the daemon owns the live truth."""
     last_error: str = DiagnosticTextField(blank=True)

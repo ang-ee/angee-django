@@ -2,7 +2,7 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  TextLink,
+  NavLink,
   ListView, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
@@ -34,18 +34,18 @@ function columns(
       field: "model",
       header: t("col.model"),
       render: (row) => (
-        <TextLink href={routeHref("platform.models.record", { id: row.model })}>
+        <NavLink href={routeHref("platform.models.record", { id: row.model })} variant="inline">
           {row.model}
-        </TextLink>
+        </NavLink>
       ),
     },
     {
       field: "addon",
       header: t("col.addon"),
       render: (row) => (
-        <TextLink href={routeHref("platform.addons.record", { id: row.addon })}>
+        <NavLink href={routeHref("platform.addons.record", { id: row.addon })} variant="inline">
           {row.addon}
-        </TextLink>
+        </NavLink>
       ),
     },
     { field: "kind", header: t("col.type") },
@@ -54,9 +54,9 @@ function columns(
       header: t("col.relationTarget"),
       render: (row) =>
         row.relation_target ? (
-          <TextLink href={routeHref("platform.models.record", { id: row.relation_target })}>
+          <NavLink href={routeHref("platform.models.record", { id: row.relation_target })} variant="inline">
             {row.relation_target}
-          </TextLink>
+          </NavLink>
         ) : null,
     },
   ];

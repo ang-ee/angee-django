@@ -1,4 +1,4 @@
-import { Page, PageBody, PageHeader, TextLink, useRouteHref, useRouteParam } from "@angee/ui";
+import { NavLink, Page, PageBody, PageHeader, useRouteHref, useRouteParam } from "@angee/ui";
 import * as React from "react";
 import { useRoundComparisonData } from "../comparison-data";
 import { RoundComparisonBody } from "../comparison-body";
@@ -19,9 +19,9 @@ export function RoundComparisonPage(): React.ReactElement {
         title={t("comparison.title", { round: roundName })}
         description={t("comparison.description")}
         crumbs={
-          <TextLink href={routeHref("proposals.rounds.record", { id })}>
+          <NavLink href={routeHref("proposals.rounds.record", { id })} variant="inline">
             {t("comparison.back")}
-          </TextLink>
+          </NavLink>
         }
         actions={
           data.round ? (

@@ -372,6 +372,16 @@ shared UI copy through an addon bundle.
   without colliding. Removing another addon's verb from a model instead
   displaces it for every row of that model and caps the model at one vendor.
 - Tokens beat color props and one-off variants. Theme by overriding tokens.
+- **Typography composes named text roles.**
+  [`textRoleVariants`](../../packages/ui/src/ui/text.tsx) owns the shared
+  display/title/heading/value and secondary-text typography; callers add only
+  layout. A two-tone heading repeats the same role with `tone: "muted"`, while
+  a cell that needs only aligned figures uses the `numeric` modifier.
+- **Definition pairs have one owner.**
+  [`DefinitionPair`](../../packages/ui/src/fragments/DefinitionPair.tsx) owns one
+  label, value, optional muted detail, and optional action. Collections keep
+  their own structure: `MetaGrid` owns its shared label column, while metric
+  tiles own their cards, links, and icons.
 - Implementation inspection reuses field-owned choice metadata. Platform owns
   the registered-type catalogue and source viewer; configured records and domain
   contracts stay with their addon. Render declared configuration with the
@@ -389,14 +399,18 @@ shared UI copy through an addon bundle.
   claims, including claims on framework defaults. Every React surface resolves
   tones with [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
   which reads the current app's runtime; custom surfaces use the same hook as
-  `statusBadge`, `colorDot`, and form headers.
+  `statusBadge` and form headers.
   The pure `statusTone` resolver remains for non-React transforms with explicit
   vocabulary. An explicit `<Column tone>` map wins, then addon tones, then the shared
   convention, else `brand`. Scoped `resources.<model>.fields.<field>.tones`
   colors one column without claiming a global status word; its option label
   remains the displayed text. Bare enum columns use `statusBadge`, and scalar
-  stages can declare it. A run
-  state — stopped/running/error/warning — renders as `colorDot` (grey/green/red/amber);
+  stages can declare it. A field's backend `status_display` metadata selects the
+  `pill` (default), `dot`, or `text` Badge recipe everywhere that field renders;
+  `<Column statusDisplay>` and `<Field statusDisplay>` are explicit authored
+  overrides. The deprecated `colorDot` compatibility widget name defaults this
+  same owner to `dot`; it is not a separate renderer. A run
+  state — stopped/running/error/warning — therefore uses the dot display (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
   rather than overloading one column with both axes.
@@ -421,7 +435,7 @@ shared UI copy through an addon bundle.
   form, or detail in an addon — compose the shared resource actions
   (`ResourceList`/`ResourceCreate`/`ResourceEdit`/`ResourceShow`), `List`/`Form`
   declarations, and record fragments (`RecordHeader`/`MetaGrid`/`MetricStrip`);
-  for a linked cell, compose `TextLink`/`Chip`/`MetricTile`, never a bespoke link
+  for a linked cell, compose `NavLink`/`Chip`/`MetricTile`, never a bespoke link
   class, and for a list of values, `ChipList`. If a shared view lacks what your case needs, extend it in `@angee/ui`
   (the owner) so every addon gets it. The shared-primitive rule lives in the
   [constitution](../../AGENTS.md#constitution).

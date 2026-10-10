@@ -23,7 +23,7 @@ export function MountsPage(): React.ReactElement {
         <Column field="display_name" header={t("mount.name")} />
         <Column field="mode" />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" widget="colorDot" />
+        <Column field="runtime_status" />
         {IntegrationSyncColumns({ fields: ["sync_stage", "last_sync_completed_at"] })}
       </List>
     </ResourceList>

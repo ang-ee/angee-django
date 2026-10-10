@@ -51,18 +51,20 @@ export interface ChoiceFacetSupport {
 
 /**
  * The default widget family for a generated resource field. The backend owns the
- * widget vocabulary (`angee.graphql.data.field_classification`), so an explicit
- * `widget` — e.g. `"money"` over a Decimal scalar — wins. A field with no backend
- * widget falls back to the kind/scalar-derived default: a computed, model-less
- * field, and a to-many relation, which the backend leaves unclassified. A list
- * carrying a relation target picks its related records (`many2many`); a plain
- * value list is a tag input. UI owns the actual component registry.
+ * widget vocabulary (`angee.graphql.data.field_classification`). Status-display
+ * metadata selects the status owner; otherwise an explicit `widget` — e.g.
+ * `"money"` over a Decimal scalar — wins. A field with no backend widget falls
+ * back to the kind/scalar-derived default: a computed, model-less field, and a
+ * to-many relation, which the backend leaves unclassified. A list carrying a
+ * relation target picks its related records (`many2many`); a plain value list is
+ * a tag input. UI owns the actual component registry.
  */
 export function defaultWidgetForModelField(
   field: ModelFieldMetadata | undefined,
   model?: ModelMetadata | null,
 ): string | undefined {
   if (!field) return undefined;
+  if (field.statusDisplay) return "statusBadge";
   if (field.widget) return field.widget;
   if (field.kind === "enum") return "select";
   if (field.kind === "relation") return "many2one";

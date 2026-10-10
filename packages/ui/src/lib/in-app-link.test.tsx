@@ -8,7 +8,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import { SectionNav } from "../page/SectionNav";
 import { MetricTile } from "../fragments/MetricStrip";
 import { NavLink } from "../ui/nav-link";
-import { TextLink } from "../ui/text-link";
 import { GalleryView } from "../views/GalleryView";
 import { InAppLinkProvider, routerNavigator, routerPreloader, useInAppLink } from "./in-app-link";
 
@@ -52,15 +51,13 @@ test("a caller can prevent navigation, and disabled primitives do not follow", (
   const navigate = vi.fn();
   render(<InAppLinkProvider navigate={navigate}>
     <Anchor onClick={(event) => event.preventDefault()} />
-    <TextLink href="/records/7" disabled>Disabled</TextLink>
-    <NavLink href="/records/7" disabled>Disabled nav</NavLink>
+    <NavLink href="/records/7" disabled>Disabled</NavLink>
   </InAppLinkProvider>);
   for (const link of screen.getAllByRole("link")) expect(fireEvent.click(link)).toBe(false);
   expect(navigate).not.toHaveBeenCalled();
 });
 
 const primitives = [
-  ["TextLink", <TextLink href="/records/7?view=all">Follow</TextLink>],
   ["SectionNav", <SectionNav items={[{ id: "records", label: "Records", href: "/records/7?view=all" }]} />],
   ["NavLink", <NavLink href="/records/7?view=all">Follow</NavLink>],
   ["MetricTile", <MetricTile href="/records/7?view=all" label="Records" value={7} />],
@@ -98,7 +95,7 @@ test("gallery links retain their record-opening callback on plain clicks only", 
 test("slotted anchor hrefs use the owner and metric native attributes remain native", () => {
   const navigate = vi.fn();
   render(<InAppLinkProvider navigate={navigate}>
-    <TextLink asChild><a href="/records/7">Slotted</a></TextLink>
+    <NavLink asChild><a href="/records/7">Slotted</a></NavLink>
     <MetricTile href="/records/7" label="Download" value={7} download="records.csv" />
     <MetricTile href="/records/7" label="New tab" value={7} target="_blank" />
   </InAppLinkProvider>);
@@ -114,12 +111,12 @@ test("intent preloads an in-app link after the delay; a pass-over, native destin
   try {
     const preload = vi.fn();
     render(<InAppLinkProvider navigate={vi.fn()} preload={{ preload, delay: 50 }}>
-      <TextLink href="/records/7?view=all">Hover</TextLink>
+      <NavLink href="/records/7?view=all">Hover</NavLink>
       <NavLink href="/records/8">Focus</NavLink>
       <MetricTile href="/records/9" label="Touch" value={9} />
-      <TextLink href="/admin/" rel="external">External</TextLink>
-      <TextLink href="/records/10" target="_blank">New tab</TextLink>
-      <TextLink href="/records/11" disabled>Disabled</TextLink>
+      <NavLink href="/admin/" rel="external">External</NavLink>
+      <NavLink href="/records/10" target="_blank">New tab</NavLink>
+      <NavLink href="/records/11" disabled>Disabled</NavLink>
     </InAppLinkProvider>);
     const hover = screen.getByRole("link", { name: "Hover" });
     fireEvent.mouseEnter(hover);
@@ -150,7 +147,7 @@ test("intent preloads an in-app link after the delay; a pass-over, native destin
 test("the host router preloads a hovered link's code-split route without navigating", async () => {
   const loadNote = vi.fn(async () => ({ NotePage: () => <p>Note</p> }));
   const root = createRootRoute({ component: () => <InAppLinkProvider navigate={routerNavigator(router)} preload={routerPreloader(router)}>
-    <TextLink href="/notes/7?view=all">Note 7</TextLink>
+    <NavLink href="/notes/7?view=all">Note 7</NavLink>
   </InAppLinkProvider> });
   const router = createRouter({
     routeTree: root.addChildren([

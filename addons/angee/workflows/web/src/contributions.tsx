@@ -1,7 +1,7 @@
 import { useDecision } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import { useMemo, type ReactNode } from "react";
-import { ErrorBanner, MetaSection, REFINE_CREATE_ID, TextLink, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { ErrorBanner, MetaSection, NavLink, REFINE_CREATE_ID, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 
 import { DecisionWaitingRunsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -24,8 +24,8 @@ export function DecisionRunOrigin() {
   const steps = query.data?.steprun.flatMap((step) => step.run ? [{ ...step, run: step.run }] : []) ?? [];
   if (!steps.length) return null;
   return <MetaSection headingLevel={2} title={t("catalogue.waitingRuns")}><ul className="space-y-2">{steps.map((step) =>
-    <li key={step.id}><TextLink href={href("workflows.runs.record", { id: step.run.id })}>
-      {step.run.display_name}</TextLink>{" · "}{step.node_label}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
+    <li key={step.id}><NavLink href={href("workflows.runs.record", { id: step.run.id })} variant="inline">
+      {step.run.display_name}</NavLink>{" · "}{step.node_label}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
 }
 
 /** The record aside uses the same timeline a page can publish on the left. */

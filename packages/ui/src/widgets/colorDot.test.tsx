@@ -8,9 +8,9 @@ import { AppRuntimeProvider } from "../runtime/runtime";
 
 const Dot = colorDotWidget.read;
 
-/** The dot is the `role="img"` mark; assert on the solid-fill class it carries. */
+/** The compatibility widget delegates its first child mark to the Badge owner. */
 function dotClass(container: HTMLElement): string {
-  return container.querySelector('[role="img"]')?.className ?? "";
+  return container.firstElementChild?.firstElementChild?.className ?? "";
 }
 
 describe("colorDot widget tone", () => {
@@ -55,9 +55,24 @@ describe("colorDot widget tone", () => {
   });
 
   test("renders the option label beside the dot", () => {
-    const { getByText } = render(
+    const { container, getByText } = render(
       <Dot value="RUNNING" field={{ options: [{ value: "RUNNING", label: "Running" }] }} />,
     );
-    expect(getByText("Running")).toBeTruthy();
+    const label = getByText("Running");
+    expect(dotClass(container)).toContain("size-2");
+    expect(label.className).toContain("text-inherit");
+    expect(label.className).not.toContain("text-success-text");
+    expect(label.className).not.toContain("h-tag-h");
+  });
+
+  test("keeps the historical raw fallback label", () => {
+    const { getByText } = render(<Dot value="QUEUED_NEW" />);
+    expect(getByText("QUEUED_NEW")).toBeTruthy();
+  });
+
+  test("keeps the historical dot-only empty value", () => {
+    const { container } = render(<Dot />);
+    expect(dotClass(container)).toContain("size-2");
+    expect(container.textContent).toBe("");
   });
 });

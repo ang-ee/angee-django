@@ -9,6 +9,7 @@ import {
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { sectionEyebrowVariants } from "./section-eyebrow";
 
 export const calendarVariants = tv({
   slots: {
@@ -29,9 +30,11 @@ export const calendarVariants = tv({
       "pointer-events-auto inline-flex size-6 cursor-pointer items-center justify-center rounded-6 text-fg-muted outline-none hover:bg-inset hover:text-fg focus-visible:focus-ring disabled:pointer-events-none disabled:opacity-40",
     chevron: "size-4",
     monthGrid: "w-full border-collapse",
-    weekdays: "grid grid-cols-7 gap-0.5 text-2xs tabular-nums",
-    weekday:
-      "grid h-7 place-content-center text-center font-semibold uppercase text-fg-muted",
+    weekdays: "grid grid-cols-7 gap-0.5",
+    weekday: sectionEyebrowVariants({
+      className: "grid h-7 place-content-center text-center tabular-nums",
+      tracking: "normal",
+    }),
     weeks: "grid gap-0.5",
     week: "grid grid-cols-7 gap-0.5",
     day: "grid size-8 place-content-center p-0 text-13 text-fg",

@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { SectionEyebrow } from "../ui/section-eyebrow";
 import { Select } from "../ui/select";
 import type { DashboardRegistry } from "./headless";
 import {
@@ -151,9 +152,9 @@ export function DashboardWidgetPickerDialog({
                 <div className="grid gap-4">
                   {grouped.map(([group, choices]) => (
                     <section key={group} className="grid gap-1">
-                      <h3 className="sticky top-0 z-10 bg-sheet py-1 text-2xs font-semibold tracking-wide text-fg-muted uppercase">
+                      <SectionEyebrow as="h3" className="sticky top-0 z-10 bg-sheet py-1">
                         {group}
-                      </h3>
+                      </SectionEyebrow>
                       {choices.map((entry) => (
                         <button
                           key={entry.id}

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
-  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, TextLink, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
+  EmptyState, Glyph, NavLink, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId, useRouteSearch, routeSearchParam, updateRouteSearch } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
@@ -100,10 +100,10 @@ export function AgentSessionsPage(): React.ReactElement {
         label={t("sessions.railLabel")}
         className="h-auto max-h-[40%] shrink-0"
         action={
-          <TextLink className={buttonVariants({ variant: "ghost", size: "sm" })} href={agentsHref}>
+          <NavLink className={buttonVariants({ variant: "ghost", size: "sm" })} href={agentsHref} variant="inline">
             <Glyph name="plus" />
             {t("sessions.new")}
-          </TextLink>
+          </NavLink>
         }
       >
         {agents.map((agent) => (
@@ -117,7 +117,7 @@ export function AgentSessionsPage(): React.ReactElement {
               />
             }
             handle={agent.model?.name ?? undefined}
-            render={<TextLink href={router.buildLocation({ to: sessionHref(agent.id), search: updateRouteSearch({ session: undefined })(search) }).href} />}
+            render={<NavLink href={router.buildLocation({ to: sessionHref(agent.id), search: updateRouteSearch({ session: undefined })(search) }).href} variant="inline" />}
           >
             {agent.name}
           </SessionRailItem>
@@ -147,9 +147,9 @@ export function AgentSessionsPage(): React.ReactElement {
           title={t("agent.noRunningAgent")}
           description={t("agent.chatUnavailable")}
           actions={
-            <TextLink className={buttonVariants({ variant: "primary", size: "sm" })} href={agentsHref}>
+            <NavLink className={buttonVariants({ variant: "primary", size: "sm" })} href={agentsHref} variant="inline">
               {t("agent.setupAssistant")}
-            </TextLink>
+            </NavLink>
           }
           fill
         />

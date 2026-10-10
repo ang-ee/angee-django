@@ -1,4 +1,4 @@
-import { Code, DetailSection, DetailSurface, TextLink, useRouteRecordId } from "@angee/ui";
+import { Code, DetailSection, DetailSurface, NavLink, useRouteRecordId } from "@angee/ui";
 import { type ReactElement } from "react";
 
 import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
@@ -71,9 +71,9 @@ export function ServiceDetail(): ReactElement {
               [
                 t("services.detail.endpoint"),
                 resolved?.url ? (
-                  <TextLink href={resolved.url} target="_blank">
+                  <NavLink href={resolved.url} target="_blank" variant="inline">
                     {resolved.url}
-                  </TextLink>
+                  </NavLink>
                 ) : (
                   "—"
                 ),

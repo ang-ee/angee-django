@@ -3,6 +3,7 @@ import { useState, type ReactElement } from "react";
 import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { textRoleVariants } from "../ui/text";
 import {
   DatePopover,
   dateFromValue,
@@ -102,7 +103,7 @@ function DatetimeRead({
   const date = dateFromValue(value);
   const label = formatDateTime(date);
   return (
-    <span className="text-13 tabular-nums text-fg" title={valueLabel(value)}>
+    <span className={textRoleVariants({ role: "value" })} title={valueLabel(value)}>
       {label || "—"}
     </span>
   );
@@ -110,7 +111,7 @@ function DatetimeRead({
 
 function DatetimeCell({ value }: WidgetRenderProps<DateWidgetValue>): ReactElement {
   const date = dateFromValue(value);
-  return <span className="tabular-nums" title={formatDateTime(date)}>
+  return <span className={textRoleVariants({ numeric: true })} title={formatDateTime(date)}>
     {formatDateTime(date, { density: "list" }) || "—"}
   </span>;
 }

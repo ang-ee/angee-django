@@ -15,7 +15,7 @@ function MountForm({ resource: _resource, ...props }: RegisteredFormProps): Reac
       <Field name="backend_class" readOnly />
       <Field name="drive" readOnly />
       <Field name="lifecycle" readOnly />
-      <Field name="runtime_status" widget="colorDot" readOnly />
+      <Field name="runtime_status" readOnly />
       <Field name="config" widget="json" readOnly />
       {IntegrationSyncFields({ label: t("mount.group.sync") })}
       {syncAction}

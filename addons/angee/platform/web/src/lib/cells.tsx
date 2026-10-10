@@ -1,4 +1,4 @@
-import { Chip, TextLink } from "@angee/ui";
+import { Chip, NavLink } from "@angee/ui";
 import type { ReactElement } from "react";
 
 const MAX_CHIPS = 6;
@@ -6,7 +6,7 @@ const MAX_CHIPS = 6;
 /**
  * A wrap of linked chips for a dependency summary (depends-on / depended-by):
  * each chip navigates to a detail page, overflow collapses to a count. A local
- * cell renderer composed from `TextLink` + `Chip` — not a new design-system surface.
+ * cell renderer composed from `NavLink` + `Chip` — not a new design-system surface.
  */
 export function LinkedChips({
   items,
@@ -25,12 +25,11 @@ export function LinkedChips({
   return (
     <span className="flex flex-wrap items-center gap-1">
       {shown.map((item) => (
-        <TextLink key={item} href={href(item)} variant="muted">
+        <NavLink key={item} href={href(item)} variant="muted">
           <Chip tone="muted" size="sm">{format ? format(item) : item}</Chip>
-        </TextLink>
+        </NavLink>
       ))}
       {overflow > 0 ? <Chip tone="muted" size="sm">{`+${overflow}`}</Chip> : null}
     </span>
   );
 }
-

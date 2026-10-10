@@ -22,6 +22,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_BASE, PORTALED_CONTROL_LAYER } from "./popover";
+import { sectionEyebrowVariants } from "./section-eyebrow";
 import { widgetControlSurface, widgetControlPresentationProps, type WidgetControlSurfaceProps } from "./widget-control";
 
 export const selectVariants = tv({
@@ -42,7 +43,10 @@ export const selectVariants = tv({
     itemText: "min-w-0 flex-1 truncate",
     indicator:
       "absolute right-2 flex size-3.5 items-center justify-center text-brand [&_svg]:size-3.5",
-    label: "px-2 py-1.5 text-2xs font-semibold uppercase text-fg-muted",
+    label: sectionEyebrowVariants({
+      spacing: "popupGroup",
+      tracking: "normal",
+    }),
     separator: "-mx-1 my-1 h-px bg-border-subtle",
   },
   variants: {

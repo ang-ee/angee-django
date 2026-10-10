@@ -2,7 +2,7 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  TextLink,
+  NavLink,
   Code, ListView, textRoleVariants, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
@@ -36,9 +36,9 @@ function columns(
       header: t("col.model"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <TextLink href={routeHref("platform.models.record", { id: row.id })} className="font-medium">
+          <NavLink href={routeHref("platform.models.record", { id: row.id })} variant="inline" className="font-medium">
             {row.model_name}
-          </TextLink>
+          </NavLink>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
         </span>
       ),
@@ -48,9 +48,9 @@ function columns(
       header: t("col.addon"),
       render: (row) =>
         row.addon_id ? (
-          <TextLink href={routeHref("platform.addons.record", { id: row.addon_id })}>
+          <NavLink href={routeHref("platform.addons.record", { id: row.addon_id })} variant="inline">
             {row.addon_label}
-          </TextLink>
+          </NavLink>
         ) : (
           row.addon_label
         ),
@@ -64,15 +64,16 @@ function columns(
       field: "field_count",
       header: t("col.fields"),
       render: (row) => (
-        <TextLink
+        <NavLink
           href={routeHref(
             "platform.fields",
             undefined,
             platformScopeSearch({ model: row.id }),
           )}
+          variant="inline"
         >
           {row.field_count}
-        </TextLink>
+        </NavLink>
       ),
     },
     { field: "relation_count", header: t("col.relations") },

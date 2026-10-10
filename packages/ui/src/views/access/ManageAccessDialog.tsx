@@ -13,12 +13,15 @@ import { useUiT } from "../../i18n";
 import { ControlBandProvider } from "../../layouts/ControlBand";
 import { Button } from "../../ui/button";
 import { FieldLabel, FieldRoot } from "../../ui/field";
+import { sectionEyebrowVariants } from "../../ui/section-eyebrow";
 import { Select } from "../../ui/select";
 import { titleCase } from "../../lib/titleCase";
 import { Skeleton } from "../../ui/skeleton";
 import { SubjectPicker } from "./SubjectPicker";
 import { defineRowAction } from "../resource/RowActions";
 import { RowsListView } from "../resource/RowsListView";
+
+const ACCESS_SECTION_HEADING_CLASS = sectionEyebrowVariants({ size: "sm" });
 
 /** Presentation contract; the contributing addon owns its typed API adapter. */
 export type RecordAccessEntry = {
@@ -291,7 +294,7 @@ function PeopleContents({
       <Button size="sm" onClick={onRetry}>{t("collection.retry")}</Button>
     ) : undefined} />
     <section className="grid gap-2" aria-label={t("access.people")}>
-      <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">{t("access.people")} · {people.length}</div>
+      <div className={ACCESS_SECTION_HEADING_CLASS}>{t("access.people")} · {people.length}</div>
       {fetching && people.length === 0 ? <div className="grid gap-2" aria-label={t("access.people")}>
         <Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" />
       </div> : people.length === 0 ? <InlineEmpty label={t("access.noReaders")} /> : people.map((person) => {
@@ -314,7 +317,7 @@ function PeopleContents({
       })}
     </section>
     {entries.length > 0 ? <section aria-label={t("access.direct")} className="grid gap-2">
-      <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">{t("access.direct")}</div>
+      <div className={ACCESS_SECTION_HEADING_CLASS}>{t("access.direct")}</div>
       <RowsListView scope="local" presentation="embedded" rows={entries} fetching={fetching}
         columns={[{ field: "label", header: t("access.recipient") },
           { field: "subjectTypeLabel", header: t("access.recipientType") },
@@ -322,7 +325,7 @@ function PeopleContents({
         rowActions={directActions} emptyContent={t("access.empty")} />
     </section> : null}
     {choices.length > 0 ? <section className="grid gap-3" aria-label={t("access.addPerson")}>
-      <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">{t("access.addPerson")}</div>
+      <div className={ACCESS_SECTION_HEADING_CLASS}>{t("access.addPerson")}</div>
       {choices.length > 1 ? <Select aria-label={t("access.relation")} value={choice?.id ?? ""}
         disabled={pending || fetching} options={choices.map(({ id, label }) => ({ value: id, label }))}
         onValueChange={(value) => { setSelected(value ?? ""); setSubject(""); }} />
@@ -342,7 +345,7 @@ function PeopleContents({
         }}>{t("access.add")}</Button>
     </section> : null}
     {visibility.length > 0 ? <section className="grid gap-3" aria-label={t("access.visibility")}>
-      <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">{t("access.visibility")}</div>
+      <div className={ACCESS_SECTION_HEADING_CLASS}>{t("access.visibility")}</div>
       {visibility.map((policy) => <div key={policy.id} className="grid gap-1">
         <div className="flex items-center justify-between gap-3"><span className="text-sm font-medium">{policy.label}</span>
           {policy.onAct && policy.actionLabel ? <Button type="button" variant="secondary" size="sm" disabled={pending}

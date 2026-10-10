@@ -25,6 +25,7 @@
     "@angee/theme-aurora": "workspace:*",
     "@angee/theme-carbon": "workspace:*",
     "@angee/theme-fyltr": "workspace:*",
+    "@angee/theme-ledger": "workspace:*",
     "@angee/theme-midnight": "workspace:*",
     "@angee/theme-stock": "workspace:*",
     "@angee/theme-warm-red": "workspace:*",

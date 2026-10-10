@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { barVariants } from "../layouts/bar";
 import { tv, type VariantProps } from "../lib/variants";
+import { sectionEyebrowVariants } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 
 export const pageHeaderVariants = tv({
@@ -18,7 +19,7 @@ export const pageHeaderVariants = tv({
     }),
     main: "min-w-0 flex-1",
     crumbs: `${textRoleVariants({ role: "meta" })} mb-1 flex min-w-0 items-center gap-1`,
-    eyebrow: "mb-1 text-2xs font-semibold uppercase text-fg-muted",
+    eyebrow: sectionEyebrowVariants({ className: "mb-1" }),
     title: `${textRoleVariants({ role: "title", truncate: true })} leading-6`,
     description: `${textRoleVariants({ role: "description" })} mt-1 max-w-prose`,
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",

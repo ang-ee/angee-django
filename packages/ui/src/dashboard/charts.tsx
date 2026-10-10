@@ -1,4 +1,5 @@
 import * as React from "react";
+import { formatNumber, numberFormatter } from "../lib/format-number";
 import { useDashboardT } from "./i18n";
 
 export interface DashboardSeriesPoint {
@@ -28,9 +29,7 @@ function seriesColor(point: DashboardSeriesPoint, index: number): string {
     : (SERIES_COLORS[index % SERIES_COLORS.length] ?? "var(--chart-1)");
 }
 
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
-}
+const formatChartNumber = numberFormatter({ maximumFractionDigits: 2 });
 
 function AccessibleSeriesTable({ points }: { points: readonly DashboardSeriesPoint[] }): React.ReactElement {
   const t = useDashboardT();
@@ -39,7 +38,7 @@ function AccessibleSeriesTable({ points }: { points: readonly DashboardSeriesPoi
       <thead><tr><th>{t("widget.category")}</th><th>{t("widget.value")}</th></tr></thead>
       <tbody>
         {points.map((point) => (
-          <tr key={point.key}><th>{point.label}</th><td>{formatNumber(point.value)}</td></tr>
+          <tr key={point.key}><th>{point.label}</th><td>{formatChartNumber(point.value)}</td></tr>
         ))}
       </tbody>
     </table>
@@ -94,7 +93,7 @@ export function DashboardBars({
                   ? "col-start-2 row-start-1 ml-1 justify-self-end text-12 text-fg-muted"
                   : "col-start-1 row-start-1 mr-1 justify-self-end text-12 text-fg-muted"}
               >
-                {formatNumber(point.value)}
+                {formatChartNumber(point.value)}
               </span>
             </span>
           </li>
@@ -151,7 +150,7 @@ export function DashboardDonut({
           })}
         </g>
         <text x="90" y="88" textAnchor="middle" className="fill-fg text-[24px] font-semibold">
-          {new Intl.NumberFormat(undefined, { notation: "compact" }).format(total)}
+          {formatNumber(total, { notation: "compact" })}
         </text>
         {totalLabel ? <text x="90" y="107" textAnchor="middle" className="fill-fg-muted text-[11px]">{totalLabel}</text> : null}
       </svg>
@@ -160,7 +159,7 @@ export function DashboardDonut({
           <li key={point.key} className="flex min-w-0 items-center gap-2 text-12">
             <span className="size-2.5 shrink-0 rounded-2" style={{ backgroundColor: seriesColor(point, index) }} />
             <span className="min-w-0 flex-1 truncate text-fg">{point.label}</span>
-            <span className="shrink-0 text-fg-muted">{formatNumber(point.value)} <span className="text-fg-subtle">{Math.round(point.value / total * 100)}%</span></span>
+            <span className="shrink-0 text-fg-muted">{formatChartNumber(point.value)} <span className="text-fg-subtle">{Math.round(point.value / total * 100)}%</span></span>
           </li>
         ))}
       </ul>

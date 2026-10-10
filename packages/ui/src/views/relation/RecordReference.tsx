@@ -3,7 +3,7 @@ import { useModelMetadata } from "@angee/metadata";
 
 import { useResourceRecordHrefLookup } from "../../runtime";
 import { ChipList } from "../../ui/chip";
-import { TextLink } from "../../ui/text-link";
+import { NavLink } from "../../ui/nav-link";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
 import { recordTargetHref, type RecordTargetSearch } from "../resource/record-navigation-context";
 import { useRelationSelectedOption } from "./relation-options";
@@ -21,7 +21,7 @@ export function RecordReference({ model, id, label, tab, search }: RecordReferen
   const content = label || <RecordReferenceLabel model={model} id={id} />;
   const href = recordHref(model, id);
   const className = "max-w-full whitespace-normal text-left leading-snug [overflow-wrap:anywhere]";
-  return href ? <TextLink href={recordTargetHref(href, { tab, search })} className={className}>{content}</TextLink> : <span className={className}>{content}</span>;
+  return href ? <NavLink href={recordTargetHref(href, { tab, search })} variant="inline" className={className}>{content}</NavLink> : <span className={className}>{content}</span>;
 }
 
 /** Related records as one chip each, every chip a {@link RecordReference}. */

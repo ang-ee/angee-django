@@ -16,7 +16,12 @@ export type ThemeTokenName =
   | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--elevation-xs" | "--elevation-sm"
   | "--elevation-md" | "--elevation-lg" | "--elevation-popover" | "--r-2" | "--r-4" | "--r-6" | "--r-8"
   | "--r-10" | "--r-12" | "--r-full" | "--rail-w" | "--topbar-h" | "--breadcrumbbar-h" | "--controlpanel-h" | "--chatter-w"
-  | "--control-h-sm" | "--control-h-md" | "--control-h-lg";
+  | "--control-h-sm" | "--control-h-md" | "--control-h-lg"
+  | "--fw-regular" | "--fw-medium" | "--fw-semibold" | "--fw-bold"
+  | "--fs-15" | "--lh-15" | "--fs-18" | "--lh-18" | "--fs-22" | "--lh-22"
+  | "--chart-1" | "--chart-2" | "--chart-3" | "--chart-4" | "--chart-5" | "--chart-6" | "--chart-7" | "--chart-8"
+  | "--chart-other" | "--chart-surface"
+  | "--dur-fast" | "--dur-base" | "--dur-slow" | "--ease";
 export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
 export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
 export interface ThemeOptionsEnvelope { version: number; value: unknown }

@@ -26,7 +26,7 @@ vi.mock("@angee/ui", async () => {
     Badge: box("span"), Card: box("article"), CardContent: box("div"),
     CardFooter: box("div"), CardHeader: box("div"),
     Skeleton: box("div"), SkeletonText: box("div"),
-    TextLink: ({ href, children }: { href: string; children: ReactNode }) =>
+    NavLink: ({ href, children }: { href: string; children: ReactNode }) =>
       React.createElement("a", { href }, children),
     avatarInitials: (name: string) => name.slice(0, 1),
     createNamespaceT: (_namespace: string, messages: Record<string, string>) => () =>

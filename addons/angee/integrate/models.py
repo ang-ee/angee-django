@@ -1687,7 +1687,11 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     intentionally stopped, and disconnected releases the connection. Runtime
     health lives separately on ``runtime_status``.
     """
-    runtime_status = StateField(choices_enum=IntegrationRuntimeStatus, default=IntegrationRuntimeStatus.OK)
+    runtime_status = StateField(
+        choices_enum=IntegrationRuntimeStatus,
+        default=IntegrationRuntimeStatus.OK,
+        status_display="dot",
+    )
     """Observed health for the integration's last runtime interaction.
 
     ``OK`` and ``ERROR`` describe the last credential/sync/use outcome; they do

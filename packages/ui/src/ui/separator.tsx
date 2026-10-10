@@ -6,6 +6,7 @@ import {
 
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { sectionEyebrowVariants } from "./section-eyebrow";
 
 export const separatorVariants = tv({
   base: "shrink-0 bg-border",
@@ -96,7 +97,11 @@ export function Divider({
       role="separator"
       aria-orientation={orientation}
       className={cn(
-        "flex items-center gap-3 text-2xs uppercase tracking-wider text-fg-muted",
+        sectionEyebrowVariants({
+          className: "flex items-center gap-3",
+          tracking: "wider",
+          weight: "regular",
+        }),
         orientation === "vertical" && "h-full flex-col",
         className,
       )}

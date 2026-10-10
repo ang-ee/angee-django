@@ -1429,6 +1429,9 @@ and current contracts before applying a historical example to a new deployment.
 - **Data-resource field widgets are backend-owned vocabulary.** Add or rename
   widget keys in `angee.data.field_classification` with the matching
   frontend renderer; resource callers declare fields, not ad hoc widget strings.
+  Status shape is likewise a field-owned projection fact: a field or Strawberry
+  surface declares `angee_status_display`, metadata emits `status_display`, and
+  the wire alias is `statusDisplay`.
 - **Scoped feed roots share payload construction.** Pass an authorized domain
   queryset to Messaging's feed payload factories; root membership and search
   predicates remain with their querysets.

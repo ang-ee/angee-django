@@ -1,16 +1,35 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { InAppLinkProvider } from "../lib/in-app-link";
+import type { NumberFlowProps } from "@number-flow/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { InAppLinkProvider } from "../lib/in-app-link";
+import { setHumanDateLocale } from "../lib/human-locale";
 import { MetricStrip, MetricTile } from "./MetricStrip";
 
-afterEach(() => cleanup());
+const numberFlow = vi.hoisted(() => ({ props: null as NumberFlowProps | null }));
+
+vi.mock("@number-flow/react", () => ({
+  default: (props: NumberFlowProps) => {
+    numberFlow.props = props;
+    const formatted = new Intl.NumberFormat(props.locales, props.format)
+      .format(props.value as number);
+    return <span data-testid="number-flow">{formatted}{props.suffix}</span>;
+  },
+}));
+
+afterEach(() => {
+  cleanup();
+  numberFlow.props = null;
+  setHumanDateLocale("en");
+  document.documentElement.style.removeProperty("--dur-base");
+  document.documentElement.style.removeProperty("--ease");
+});
 
 describe("MetricStrip", () => {
   test("renders a tile per metric with label and value", () => {
-    render(
+    const { container } = render(
       <MetricStrip
         metrics={[
           { label: "Fields", value: 12 },
@@ -21,6 +40,8 @@ describe("MetricStrip", () => {
     expect(screen.getByText("Fields")).toBeTruthy();
     expect(screen.getByText("12")).toBeTruthy();
     expect(screen.getByText("Relations")).toBeTruthy();
+    expect(container.querySelectorAll("dt")).toHaveLength(2);
+    expect(container.querySelectorAll("dd")).toHaveLength(2);
   });
 
   test("prominent density keeps tone labels in the same metric family", () => {
@@ -32,6 +53,113 @@ describe("MetricStrip", () => {
     );
     expect(screen.getByText("Failures")).toBeTruthy();
     expect(container.querySelector("dd")?.className).toContain("text-2xl");
+  });
+
+  test("large value typography stays independent of compact tile density", () => {
+    render(<MetricTile density="compact" label="Revenue" value={24} valueSize="lg" />);
+    const value = screen.getByText("24");
+    expect(value.className).toContain("text-xl");
+    expect(value.className).toContain("font-semibold");
+    expect(value.className).toContain("leading-6");
+    expect(value.className).toContain("tabular-nums");
+    expect(value.closest("dd")?.parentElement?.className).toContain("gap-y-1");
+  });
+
+  test("formats a non-animated numeric value as plain text", () => {
+    setHumanDateLocale("en-US");
+    const expected = new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 2,
+    }).format(1234.56);
+    render(
+      <MetricTile
+        format={{ maximumFractionDigits: 2 }}
+        label="Revenue"
+        numericValue={1234.56}
+        suffix=" total"
+        value="Fallback"
+      />,
+    );
+
+    expect(screen.getByText(`${expected} total`)).toBeTruthy();
+    expect(screen.queryByTestId("number-flow")).toBeNull();
+  });
+
+  test("forwards numeric value, format, suffix, and motion timing to NumberFlow", () => {
+    setHumanDateLocale("en-US");
+    document.documentElement.style.setProperty("--dur-base", "240ms");
+    document.documentElement.style.setProperty("--ease", "cubic-bezier(0.1, 0.7, 0.2, 1)");
+    const expected = new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 2,
+    }).format(1234.56);
+    render(
+      <MetricTile
+        animate
+        format={{ maximumFractionDigits: 2 }}
+        label="Revenue"
+        numericValue={1234.56}
+        suffix=" total"
+        value="Fallback"
+      />,
+    );
+
+    expect(screen.getByTestId("number-flow").textContent).toBe(`${expected} total`);
+    expect(numberFlow.props).toMatchObject({
+      animated: true,
+      format: { maximumFractionDigits: 2 },
+      locales: "en-US",
+      opacityTiming: { duration: 240, easing: "cubic-bezier(0.1, 0.7, 0.2, 1)" },
+      respectMotionPreference: true,
+      spinTiming: { duration: 240, easing: "cubic-bezier(0.1, 0.7, 0.2, 1)" },
+      suffix: " total",
+      transformTiming: { duration: 240, easing: "cubic-bezier(0.1, 0.7, 0.2, 1)" },
+      value: 1234.56,
+    });
+  });
+
+  test("passes a decimal string through to Intl and NumberFlow without Number coercion", () => {
+    setHumanDateLocale("en-US");
+    const format = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    const precise = "12345678901234567890.10";
+    const { rerender } = render(
+      <MetricTile format={format} label="Payable" numericValue={precise} value="Fallback" />,
+    );
+    expect(screen.getByText("12,345,678,901,234,567,890.10")).toBeTruthy();
+
+    rerender(<MetricTile animate format={format} label="Payable" numericValue={precise} value="Fallback" />);
+    expect(numberFlow.props).toMatchObject({ format, value: precise });
+  });
+
+  test("keeps an animated tile mounted when its value changes", () => {
+    const { rerender } = render(
+      <MetricStrip metrics={[{
+        animate: true,
+        id: "revenue",
+        label: "Revenue",
+        numericValue: 1,
+        value: 1,
+      }]} />,
+    );
+    const mounted = screen.getByTestId("number-flow");
+
+    rerender(
+      <MetricStrip metrics={[{
+        animate: true,
+        id: "revenue",
+        label: "Revenue total",
+        numericValue: 2,
+        value: 2,
+      }]} />,
+    );
+
+    expect(screen.getByTestId("number-flow")).toBe(mounted);
+  });
+
+  test("routes tile detail through the definition pair caption slot", () => {
+    render(<MetricTile detail="Since last month" label="Revenue" value={24} />);
+    const detail = screen.getByText("Since last month");
+    expect(detail.className).toContain("text-2xs");
+    expect(detail.className).toContain("text-fg-muted");
+    expect(detail.parentElement?.querySelector("dd")?.textContent).toBe("24");
   });
 
   test("a non-navigable tile renders no link", () => {
@@ -46,6 +174,9 @@ describe("MetricStrip", () => {
     );
     const link = screen.getByRole("link");
     expect(link.getAttribute("href")).toBe("/fields?model=Note");
+    expect(link.getAttribute("type")).toBeNull();
+    expect(link.className).toContain("hover:border-border-strong");
+    expect(link.className).toContain("hover:shadow-sm");
     fireEvent.click(link);
     expect(onNavigate).toHaveBeenCalledWith("/fields?model=Note");
   });

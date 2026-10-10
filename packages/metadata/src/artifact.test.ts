@@ -97,6 +97,30 @@ describe("generated subtitle metadata", () => {
 
 
 describe("generated resource wire contract", () => {
+  test.each(["pill", "dot", "text"] as const)("round-trips the %s status display", (statusDisplay) => {
+    const resource = testDataResource("work.Task", {
+      fields: [{
+        name: "status", kind: "enum", statusDisplay,
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+      }],
+    });
+    const wire = { angee: { resources: [resource] } };
+
+    expect(defineAngeeSchemaMetadata(wire)).toEqual(wire);
+  });
+
+  test("rejects an unknown status display", () => {
+    const resource = testDataResource("work.Task", {
+      fields: [{
+        name: "status", kind: "enum", statusDisplay: "badge" as never,
+        readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+      }],
+    });
+
+    expect(() => defineAngeeSchemaMetadata({ angee: { resources: [resource] } }))
+      .toThrow("schema metadata.angee.resources[0].fields[0].statusDisplay");
+  });
+
   test("accepts a computed object field with no relation target", () => {
     const resource = testDataResource("workflows.StepRecord", {
       fields: [{

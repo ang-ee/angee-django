@@ -27,6 +27,7 @@ import {
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useDndKitSensors } from "../lib/dnd";
+import { StatusDot } from "../ui/status-icon";
 import { moveRailItem, railSortableMove, railTooltip, sameRailOrder } from "./app-rail-model";
 import type { ChromeMenuNode } from "./menu-tree";
 
@@ -201,10 +202,7 @@ export function useRailSortableItem(item: ChromeMenuNode, label: string, descrip
 /** The default app's mark: a dot on its row's glyph or button. */
 export function RailDefaultMark({ className }: { className: string }): ReactElement {
   return (
-    <span
-      aria-hidden="true"
-      className={cn("absolute size-1.5 rounded-full border border-rail bg-success", className)}
-    />
+    <StatusDot className={cn("absolute border border-rail", className)} size="sm" tone="success" />
   );
 }
 

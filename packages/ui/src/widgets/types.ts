@@ -1,8 +1,12 @@
 import type { ComponentType, ReactNode } from "react";
 
+import type { StatusDisplay as MetadataStatusDisplay } from "@angee/metadata";
 import type { ActionOutcome, AuthoredDocument } from "@angee/refine";
 import type { Tone } from "../lib/tones";
 import type { WidgetControlSurfaceProps } from "../ui/widget-control";
+
+/** The field-owned shape for status presentation across forms and cells. */
+export type StatusDisplay = MetadataStatusDisplay;
 
 /** A verb binding; allowed values are returned by the record's authorization owner. */
 export interface VisibilityBinding {
@@ -128,6 +132,8 @@ export interface FieldPresentation {
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).
    */
   currencyField?: string;
+  /** Status widget shape; absent fields use the status widget's pill default. */
+  statusDisplay?: StatusDisplay;
 }
 
 

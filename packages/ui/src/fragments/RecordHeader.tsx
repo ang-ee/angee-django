@@ -13,7 +13,7 @@ export const recordHeaderVariants = tv({
     main: "min-w-0 flex-1 space-y-1",
     crumbs: textRoleVariants({ role: "caption" }),
     titleRow: "flex min-w-0 flex-wrap items-center gap-2",
-    title: "min-w-0 truncate text-lg font-semibold leading-tight text-fg",
+    title: cn(textRoleVariants({ role: "heading", truncate: true }), "min-w-0 leading-tight"),
     meta: cn(textRoleVariants({ role: "meta" }), "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"),
     description: cn(textRoleVariants({ role: "description" }), "max-w-prose leading-relaxed"),
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",

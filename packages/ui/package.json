@@ -790,6 +790,7 @@
     "@fullcalendar/interaction": "^6.1.21",
     "@fullcalendar/react": "^6.1.21",
     "@fullcalendar/timegrid": "^6.1.21",
+    "@number-flow/react": "^0.6.2",
     "@refinedev/core": "^5.0.12",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.3",
@@ -815,10 +816,10 @@
     "valibot": "^1.4.2"
   },
   "peerDependencies": {
+    "@tanstack/react-query": "^5.101.1",
     "@tanstack/react-router": "^1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "@tanstack/react-query": "^5.101.1"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.101.1",

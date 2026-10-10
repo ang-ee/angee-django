@@ -75,7 +75,7 @@ export function IntegrationsPage(): React.ReactElement {
         <Column field="kind" header={t("col.type")} />
         <Column field="vendor.display_name" header={t("col.vendor")} />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtime_status" widget="colorDot" />
+        <Column field="runtime_status" />
         <Column field="credential.display_name" header={t("col.credential")} />
         <Column field="concrete_target.state" header={t("integrations.targetState")} />
         <Column field="last_error" header={t("col.lastError")} />

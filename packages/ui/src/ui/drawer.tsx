@@ -30,7 +30,8 @@ import {
 export const drawerVariants = tv({
   slots: {
     content:
-      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none transition-transform duration-200 ease-out",
+      // Tailwind 4 emits `translate` (not `transform`) for translate-x/y-full.
+      "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none motion-safe:transition-[translate]",
     header: "space-y-1.5 border-b border-border-subtle px-5 py-4",
     body: cn(textRoleVariants({ role: "description" }), "min-h-0 flex-1 overflow-y-auto px-5 py-4"),
     footer:

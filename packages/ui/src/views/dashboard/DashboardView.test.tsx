@@ -1,15 +1,45 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { NumberFlowProps } from "@number-flow/react";
 import { InAppLinkProvider } from "../../lib/in-app-link";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DashboardView } from "./DashboardView";
 import { Metric } from "./Metric";
 
-afterEach(() => cleanup());
+const numberFlow = vi.hoisted(() => ({ props: [] as NumberFlowProps[] }));
+
+vi.mock("@number-flow/react", () => ({
+  default: (props: NumberFlowProps) => {
+    numberFlow.props.push(props);
+    return <span data-testid="number-flow">{String(props.value)}{props.suffix}</span>;
+  },
+}));
+
+afterEach(() => {
+  cleanup();
+  numberFlow.props = [];
+});
 
 describe("DashboardView", () => {
+  test("counts animate through the tile's numeric path and cap at max+", () => {
+    render(
+      <DashboardView>
+        <Metric label="Users" value={128} format="count" />
+        <Metric label="Grants" value={1500} format="count" max={999} />
+        <Metric label="Pending" format="count" loading />
+      </DashboardView>,
+    );
+
+    expect(screen.getAllByTestId("number-flow").map((node) => node.textContent)).toEqual(["128", "999+"]);
+    expect(numberFlow.props.map(({ animated, suffix, value }) => ({ animated, suffix, value }))).toEqual([
+      { animated: true, suffix: undefined, value: 128 },
+      { animated: true, suffix: "+", value: 999 },
+    ]);
+    expect(screen.getByText("—")).toBeTruthy();
+  });
+
   test("folds Metric children into one metric band and renders the rest below", () => {
     render(
       <DashboardView>

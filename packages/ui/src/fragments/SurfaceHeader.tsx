@@ -4,12 +4,13 @@ import { tv } from "../lib/variants";
 import { PageHeader, type PageHeaderProps } from "../page";
 import { Tag } from "../ui/badge";
 import { IconTile } from "../ui/icon-tile";
+import { textRoleVariants } from "../ui/text";
 
 export const surfaceHeaderVariants = tv({
   slots: {
     main: "min-w-0 flex-1",
     titleRow: "flex min-w-0 flex-wrap items-center gap-2",
-    title: "min-w-0 truncate font-semibold leading-tight text-fg",
+    title: "min-w-0 truncate leading-tight",
     subtitle: "text-fg-muted",
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
   },
@@ -19,11 +20,11 @@ export const surfaceHeaderVariants = tv({
   variants: {
     density: {
       comfortable: {
-        title: "text-22",
+        title: textRoleVariants({ role: "display" }),
         subtitle: "mt-1 max-w-prose text-13 leading-relaxed",
       },
       compact: {
-        title: "text-15",
+        title: textRoleVariants({ role: "title" }),
         subtitle: "truncate text-13",
       },
     },

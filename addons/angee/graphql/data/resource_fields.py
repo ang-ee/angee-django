@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_args
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
@@ -24,6 +24,7 @@ from angee.data.field_classification import (
     money_currency_field,
     resource_field_kind,
     resource_field_widget,
+    status_display,
 )
 from angee.data.field_classification import (
     RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
@@ -208,6 +209,7 @@ def final_resource_fields(
                 archivable=is_archive_field(model_field),
                 trashable=is_trash_field(model_field),
                 currency_field=money_currency_field(model_field, source_metadata),
+                status_display=status_display(model_field, source_metadata),
                 relation_model_label=relation_model_label,
                 relation_object=kind == "relation" and is_object,
                 model_field_name=model_field_name if model_field is not None else None,
@@ -284,6 +286,7 @@ def final_input_only_resource_fields(
                 archivable=is_archive_field(model_field),
                 trashable=is_trash_field(model_field),
                 currency_field=money_currency_field(model_field, source_metadata),
+                status_display=status_display(model_field, source_metadata),
                 relation_model_label=_relation_model_label(model_field),
                 relation_object=False,
                 model_field_name=python_name if model_field is not None else None,
@@ -572,6 +575,11 @@ def _validate_resource_field(model_label: str, field: data_contract.DataResource
     if field.widget is not None and not is_resource_field_widget(field.widget):
         raise ImproperlyConfigured(
             f"resource metadata for {model_label} field '{field.name}' declares unsupported widget '{field.widget}'."
+        )
+    if field.status_display is not None and field.status_display not in get_args(data_contract.StatusDisplay):
+        raise ImproperlyConfigured(
+            f"resource metadata for {model_label} field '{field.name}' declares "
+            f"unsupported status display '{field.status_display}'."
         )
     if field.kind in {"enum", "relation"} and field.scalar is not None:
         raise ImproperlyConfigured(

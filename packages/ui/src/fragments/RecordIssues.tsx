@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import type { FeedbackIntent } from "../lib/tones";
 import { useResourceRecordHrefLookup } from "../runtime";
 import { Banner } from "../ui/alert";
-import { TextLink } from "../ui/text-link";
+import { NavLink } from "../ui/nav-link";
 import type { RecordFieldFocusOptions } from "../views/form/form-view-surface";
 
 /** One caller-owned issue and its optional field or record destination. */
@@ -32,13 +32,14 @@ export function RecordIssues({ items, onFocusField }: RecordIssuesProps): ReactE
       const field = item.field;
       const href = item.record ? recordHref(item.record.resource, item.record.id) : undefined;
       const message = field && onFocusField
-        ? <TextLink
+        ? <NavLink
           render={<button type="button" />}
           className="text-left [overflow-wrap:anywhere]"
           onClick={() => onFocusField(field, item.recordTabId ? { recordTabId: item.recordTabId } : undefined)}
-        >{item.message}</TextLink>
+          variant="inline"
+        >{item.message}</NavLink>
         : href
-          ? <TextLink href={href} className="[overflow-wrap:anywhere]">{item.message}</TextLink>
+          ? <NavLink href={href} variant="inline" className="[overflow-wrap:anywhere]">{item.message}</NavLink>
           : item.message;
       return <li key={item.id}>
         <Banner format="alert" tone={item.tone}>{message}</Banner>

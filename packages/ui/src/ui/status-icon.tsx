@@ -2,24 +2,29 @@ import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import type { IconComponent } from "../chrome/icon-registry";
-import { INTENT_GLYPHS, TONES, toneSolidBg, toneText, type FeedbackIntent, type Tone } from "../lib/tones";
+import {
+  FEEDBACK_INTENTS,
+  INTENT_GLYPHS,
+  TONES,
+  toneSolidBg,
+  toneText,
+  type FeedbackIntent,
+  type Tone,
+} from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
 /** A tinted status glyph speaks in feedback tones (+ a `muted` quiet state). */
 export type StatusIconTone = FeedbackIntent | "muted";
 
-const STATUS_ICON_TONES: Record<StatusIconTone, string> = {
-  info: toneText("info"),
-  success: toneText("success"),
-  warning: toneText("warning"),
-  danger: toneText("danger"),
-  muted: "text-fg-muted",
-};
+const STATUS_ICON_TONE_CLASSES = Object.fromEntries([
+  ...FEEDBACK_INTENTS.map((tone) => [tone, toneText(tone)] as const),
+  ["muted", "text-fg-muted"] as const,
+]) as Record<StatusIconTone, string>;
 
 export const statusIconVariants = tv({
   base: "inline-flex shrink-0 items-center justify-center rounded-full [&_.glyph]:shrink-0 [&>svg]:shrink-0",
   variants: {
-    tone: STATUS_ICON_TONES,
+    tone: STATUS_ICON_TONE_CLASSES,
     size: {
       sm: "size-4 [&_.glyph]:size-4 [&>svg]:size-4",
       md: "size-5 [&_.glyph]:size-5 [&>svg]:size-5",

@@ -36,6 +36,7 @@ export {
 
 export type {
   FieldPresentation,
+  StatusDisplay,
   VisibilityBinding,
   VisibilityAction,
   WidgetDefinition,
@@ -139,6 +140,7 @@ export const defaultWidgets = {
   booleanBadge: booleanBadgeWidget,
   booleanToggle: booleanToggleWidget,
   color: colorWidget,
+  /** @deprecated Use `statusBadge` with `statusDisplay: "dot"`. */
   colorDot: colorDotWidget,
   date: dateWidget,
   json: jsonWidget,

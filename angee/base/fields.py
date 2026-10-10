@@ -5,7 +5,8 @@ of each concern. Angee adds only the naming and the framework default; the
 library owns the behavior.
 
 Fields may also declare projection facts for data-resource metadata:
-``angee_widget``, ``angee_scalar_hint``, and ``angee_currency_field``. The
+``angee_widget``, ``angee_scalar_hint``, ``angee_currency_field``, and
+``angee_status_display``. The
 GraphQL classifier reads those inert attributes before falling back to stock
 Django field types, so a field's owner states its own wire vocabulary.
 
@@ -31,7 +32,7 @@ from __future__ import annotations
 import base64
 import math
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -281,18 +282,25 @@ class StateField(TextChoicesField):
     GraphQL enum straight from ``choices_enum`` and the column ``max_length``
     is derived from it, so a state column never restates its choices. Declared
     natively, e.g. ``StateField(choices_enum=Note.Status, default=...)``.
+    ``status_display`` declares its migration-inert ``pill``, ``dot``, or ``text`` presentation.
     """
 
     angee_widget = "select"
     angee_scalar_hint = "String"
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        status_display: Literal["pill", "dot", "text"] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Index state columns and accept legacy blank-string migration state.
 
         New optional state declarations use NULL; the blank-string spelling is
         retained only so historical migration fields can still be reconstructed.
         """
 
+        self.angee_status_display = status_display
         self._angee_blank_string = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
         if self._angee_blank_string:
             kwargs["blank"] = False

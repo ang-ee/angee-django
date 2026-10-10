@@ -4,8 +4,8 @@ import { optionToken } from "./types";
 /**
  * The shared status vocabulary: which status-string values render in which tone. One
  * owner for "what color is this status", consumed by every status display — the
- * `statusBadge` pill, the `colorDot` dot, and the operator console's `StateTag` — so
- * they cannot drift (each previously kept its own divergent private map).
+ * `statusBadge` shapes and the operator console's `StateTag` — so they cannot drift
+ * (each previously kept its own divergent private map).
  *
  * These defaults are domain-neutral. Addons contribute product vocabulary through
  * their manifest's `statusTones`, composed into AppRuntime. Composition rejects

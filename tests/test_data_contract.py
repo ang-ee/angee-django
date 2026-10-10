@@ -33,6 +33,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         name="status",
         kind="enum",
         required_on_create=True,
+        status_display="dot",
     )
 
     final = DataResourceMetadata(
@@ -75,6 +76,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         "changes": None,
     }
     assert wire["fields"][1]["requiredOnCreate"] is True
+    assert wire["fields"][1]["statusDisplay"] == "dot"
     assert "modelFieldName" not in wire["fields"][0]
     assert wire["subtitle"] == {"created": "created_at", "updated": None, "wordCount": "body.word_count"}
     assert wire["linesResource"]["modelLabel"] == "catalog.line"

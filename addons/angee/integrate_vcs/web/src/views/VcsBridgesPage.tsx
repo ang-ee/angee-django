@@ -19,7 +19,7 @@ export function VcsBridgesPage(): React.ReactElement {
         <Column field="display_name" />
         <Column field="backend_class" header={t("vcs.backendClass")} />
         <Column field="lifecycle" header={t("col.lifecycle")} widget="statusBadge" />
-        <Column field="runtime_status" header={t("col.runtimeStatus")} widget="colorDot" />
+        <Column field="runtime_status" header={t("col.runtimeStatus")} />
         {IntegrationSyncColumns({ fields: ["sync_stage", "last_sync_completed_at"] })}
       </List>
     </ResourceList>

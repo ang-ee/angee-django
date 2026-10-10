@@ -30,7 +30,7 @@ vi.mock("@angee/ui", () => ({
   Page: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   PageBody: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   PageHeader: ({ actions }: { actions?: React.ReactNode }) => <>{actions}</>,
-  TextLink: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href}>{children}</a>,
+  NavLink: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href}>{children}</a>,
   useBreadcrumbLeafLabel: (label?: string) => {
     mocks.leafLabel = label;
   },

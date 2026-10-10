@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from django.db import models
 from pydantic import Field, TypeAdapter, with_config
@@ -37,8 +37,12 @@ __all__ = [
     "DataResourceRoots",
     "DataResourceSubtitleMetadata",
     "DataResourceTypeNames",
+    "StatusDisplay",
     "serialize_data_resources",
 ]
+
+StatusDisplay = Literal["pill", "dot", "text"]
+"""Supported field-owned status shapes in resource metadata."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,7 @@ class DataResourceFieldMetadata:
     trashable: bool = False
     """Whether the field is the ``TrashMixin`` flag, marking the resource trashable."""
     currency_field: str | None = None
+    status_display: StatusDisplay | None = None
     relation_model_label: str | None = None
     relation_object: bool = False
     """Whether a ``relation`` field is projected as a nested selectable object.

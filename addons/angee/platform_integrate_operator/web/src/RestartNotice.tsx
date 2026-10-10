@@ -4,7 +4,7 @@ import {
   useJobRunOperation,
   useOperatorConnection,
 } from "@angee/operator/runtime";
-import { Banner, Button, TextLink, useRouteHref } from "@angee/ui";
+import { Banner, Button, NavLink, useRouteHref } from "@angee/ui";
 import { useChromePlace } from "@angee/ui/chrome/refine-menu";
 import { useEffect, type ReactNode } from "react";
 import { usePlatformIntegrateOperatorT } from "./i18n";
@@ -42,7 +42,7 @@ export function RestartNotice(): ReactNode {
       <Banner
         tone="info"
         title={t("restart.running.title")}
-        actions={<TextLink href={operationsHref}>{t("restart.logs")}</TextLink>}
+        actions={<NavLink href={operationsHref} variant="inline">{t("restart.logs")}</NavLink>}
       >
         {applicationRestart?.currentStep ?? t("restart.running.waiting")}
       </Banner>
@@ -64,7 +64,7 @@ export function RestartNotice(): ReactNode {
       <Banner
         tone="danger"
         title={t("restart.failed.title")}
-        actions={<><TextLink href={operationsHref}>{t("restart.logs")}</TextLink>{restart ? <Button disabled={run.active || run.starting} size="sm" variant="secondary" onClick={restart}>{t("restart.retry")}</Button> : null}</>}
+        actions={<><NavLink href={operationsHref} variant="inline">{t("restart.logs")}</NavLink>{restart ? <Button disabled={run.active || run.starting} size="sm" variant="secondary" onClick={restart}>{t("restart.retry")}</Button> : null}</>}
       >
         {applicationRestart?.error
           ?? applicationRestart?.nodes.find((node) => node.status === "FAILED")?.message

@@ -2,15 +2,18 @@ import * as React from "react";
 
 import { tv } from "../lib/variants";
 import { SectionEyebrow } from "../ui/section-eyebrow";
+import {
+  DefinitionPair,
+  definitionFromTuple,
+  type DefinitionPairTuple,
+  type DefinitionPairValue,
+} from "./DefinitionPair";
 
-export interface MetaGridItem {
-  action?: React.ReactNode;
+export interface MetaGridItem extends DefinitionPairValue {
   id?: string;
-  label: React.ReactNode;
-  value?: React.ReactNode;
 }
 
-export type MetaGridRow = MetaGridItem | readonly [React.ReactNode, React.ReactNode];
+export type MetaGridRow = MetaGridItem | DefinitionPairTuple;
 
 export type MetaGridProps = Omit<
   React.HTMLAttributes<HTMLDListElement>,
@@ -35,10 +38,6 @@ export const metaGridVariants = tv({
   slots: {
     grid:
       "grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-13",
-    row: "contents",
-    label: "max-w-[12rem] normal-case tracking-normal [overflow-wrap:anywhere]",
-    value: "m-0 min-w-0 text-fg [overflow-wrap:anywhere]",
-    action: "ml-2 inline-flex align-middle",
     section: "space-y-2",
   },
 });
@@ -50,24 +49,19 @@ export const MetaGrid = React.forwardRef<HTMLDListElement, MetaGridProps>(
     return (
       <dl ref={ref} className={styles.grid({ className })} {...props}>
         {rows.map((row, index) => {
-          const item = normalizeMetaGridRow(row);
+          const item: DefinitionPairValue = definitionFromTuple(row);
+          const key = "id" in row && row.id != null ? row.id : index;
           return (
-            <div key={item.id ?? index} className={styles.row()}>
-              <SectionEyebrow
-                as="dt"
-                className={styles.label()}
-                tracking="normal"
-                weight="medium"
-              >
-                {item.label}
-              </SectionEyebrow>
-              <dd className={styles.value()}>
-                <span>{item.value ?? emptyValue}</span>
-                {item.action ? (
-                  <span className={styles.action()}>{item.action}</span>
-                ) : null}
-              </dd>
-            </div>
+            <DefinitionPair
+              key={key}
+              action={item.action}
+              density="compact"
+              emptyValue={emptyValue}
+              label={item.label}
+              layout="contents"
+              orientation="inline"
+              value={item.value}
+            />
           );
         })}
       </dl>
@@ -89,16 +83,3 @@ export const MetaSection = React.forwardRef<HTMLElement, MetaSectionProps>(
   },
 );
 MetaSection.displayName = "MetaSection";
-
-function normalizeMetaGridRow(row: MetaGridRow): MetaGridItem {
-  if (isMetaGridTuple(row)) {
-    return { label: row[0], value: row[1] };
-  }
-  return row;
-}
-
-function isMetaGridTuple(
-  row: MetaGridRow,
-): row is readonly [React.ReactNode, React.ReactNode] {
-  return Array.isArray(row);
-}

@@ -1,8 +1,10 @@
 import * as React from "react";
 
+import { Glyph } from "../chrome/Glyph";
 import { useInAppLink } from "../lib/in-app-link";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
+import { cardVariants } from "./card";
 
 export const navLinkVariants = tv({
   base: "outline-none transition-colors focus-visible:focus-ring",
@@ -11,7 +13,14 @@ export const navLinkVariants = tv({
       unstyled: "",
       inline:
         "font-medium text-link underline-offset-4 hover:text-brand hover:underline",
+      muted: "text-fg-muted underline-offset-4 hover:text-fg hover:no-underline",
       block: "block",
+      "block-card": [
+        cardVariants.base,
+        cardVariants.variants.variant.default,
+        cardVariants.variants.interactive.true,
+        "block p-3 text-fg hover:no-underline",
+      ],
     },
     active: {
       true: "",
@@ -21,42 +30,66 @@ export const navLinkVariants = tv({
       true: "pointer-events-none cursor-not-allowed opacity-60",
       false: "",
     },
+    affordance: {
+      none: "",
+      forward: "inline-flex items-center gap-1",
+      outward: "inline-flex items-center gap-1",
+    },
   },
   defaultVariants: {
     variant: "unstyled",
     active: false,
     disabled: false,
+    affordance: "none",
   },
 });
 
 export type NavLinkRecipeProps = VariantProps<typeof navLinkVariants>;
 
+export type NavLinkAffordance = NonNullable<NavLinkRecipeProps["affordance"]>;
+
 export type NavLinkVariant = NonNullable<NavLinkRecipeProps["variant"]>;
 
-type NavLinkState = {
+export type NavLinkState = {
   active: boolean;
   disabled: boolean;
+  external: boolean;
 };
+
+type NavLinkTarget =
+  | {
+      asChild: true;
+      href?: string;
+      render?: UseRenderRenderProp<NavLinkState>;
+    }
+  | {
+      asChild?: boolean;
+      href: string;
+      render?: UseRenderRenderProp<NavLinkState>;
+    }
+  | {
+      asChild?: boolean;
+      href?: string;
+      render: UseRenderRenderProp<NavLinkState>;
+    };
 
 export type NavLinkProps = Omit<
   React.AnchorHTMLAttributes<HTMLAnchorElement>,
-  "className" | "color"
+  "className" | "color" | "href"
 > &
   NavLinkRecipeProps & {
     active?: boolean;
-    asChild?: boolean;
+    affordance?: NavLinkAffordance;
     className?: string;
     disabled?: boolean;
-    render?: UseRenderRenderProp<NavLinkState>;
     to?: string;
-  } & {
-    href: string;
-  };
+  } & NavLinkTarget;
 
 export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
   function NavLink(
     {
       active = false,
+      affordance = "none",
       asChild = false,
       children,
       className,
@@ -76,6 +109,14 @@ export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
       ? (React.Children.only(children) as React.ReactElement<Record<string, unknown>>)
       : undefined;
     const external = target === "_blank";
+    const affordanceGlyph = affordance === "forward" ? (
+      <Glyph decorative name="arrow-right" size="1em" />
+    ) : affordance === "outward" ? (
+      <Glyph decorative name="arrow-up-right" size="1em" />
+    ) : null;
+    const renderedChild = child && affordanceGlyph
+      ? React.cloneElement(child, undefined, child.props.children as React.ReactNode, affordanceGlyph)
+      : child;
 
     const link = useInAppLink(href, { ...props, onClick });
 
@@ -92,8 +133,13 @@ export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
       ...link,
       "aria-current": props["aria-current"] ?? (active ? "page" : undefined),
       "aria-disabled": disabled ? true : props["aria-disabled"],
-      children: asChild ? undefined : children,
-      className: navLinkVariants({ active, className, disabled, variant }),
+      children: asChild ? undefined : (
+        <>
+          {children}
+          {affordanceGlyph}
+        </>
+      ),
+      className: navLinkVariants({ active, affordance, className, disabled, variant }),
       href,
       onClick: handleClick,
       rel: external ? (rel ?? "noopener noreferrer") : rel,
@@ -108,10 +154,11 @@ export const NavLink = React.forwardRef<HTMLElement, NavLinkProps>(
     return useRender<NavLinkState, HTMLElement>({
       defaultTagName: "a",
       ref,
-      render: asChild ? child : render,
+      render: asChild ? renderedChild : render,
       state: {
         active,
         disabled,
+        external,
       },
       props: renderProps,
     });
