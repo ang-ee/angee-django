@@ -33,6 +33,7 @@ from angee.workflows.testing.models import (
     TriggerEvent,
     WorkflowRun,
 )
+from angee.workflows.watches import RecordWatch
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.mtidemo.models import MtiParent
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
@@ -91,8 +92,8 @@ def test_record_changed_system_check_requires_grant_targets(monkeypatch):
 
 
 def test_record_changed_requires_the_mixin_for_watch_eligibility():
-    with pytest.raises(ValidationError, match="no registered workflow event source"):
-        triggers.RecordChanged.check_watch_model(MtiParent)
+    with pytest.raises(ValidationError, match="no registered workflow observation"):
+        RecordWatch.check_model(MtiParent)
 
 
 def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):

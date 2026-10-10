@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -14,6 +15,9 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.fields import ModelLabelField
+from angee.base.identity import public_id_of
+from angee.base.jsonschema import relation_positions
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
@@ -65,6 +69,28 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         """Resolve a ledger handle under the current actor, optionally checking its type."""
 
         return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
+
+    def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
+        """Resolve dotted xrefs only at schema-declared relation positions.
+
+        Public ids and ordinary strings remain literal. The ledger resolution
+        owner enforces target types, as it does for resource imports.
+        """
+
+        resolved = copy.deepcopy(value)
+        for path, relation, item in relation_positions(schema, value):
+            if "." not in item:
+                continue
+            target = self.resolve(item, model=ModelLabelField.get_model(relation["resource"]))
+            public_id = str(public_id_of(target))
+            if not path:
+                resolved = public_id
+                continue
+            parent = resolved
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[path[-1]] = public_id
+        return resolved
 
     def bind_instance(
         self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,

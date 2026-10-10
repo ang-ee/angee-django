@@ -11,7 +11,8 @@ schema, response projection, and operation document, then registers a FastMCP to
 :meth:`_CompiledTool.run` executes the operation through :func:`execute_under_actor`.
 
 Boundary conventions (the agent surface differs from the GraphQL wire):
-- ids are the public ``sqid``; a GraphQL ``id`` arg/field is exposed as ``sqid``.
+- ids are public ``sqid`` values; GraphQL ``id`` inputs and outputs use ``sqid``.
+  Domain-named identity arguments compose the native ``args`` declaration.
 - field names are ``snake_case`` for the agent; the compiler uses the schema's
   actual wire name, whether camelCase or Hasura snake_case.
 - a single input object (``createNote(data:)`` / ``insert_notes_one(object:)``)
@@ -43,6 +44,8 @@ from graphql import (
     GraphQLNonNull,
     GraphQLScalarType,
     Undefined,
+    ast_from_value,
+    print_ast,
 )
 from pydantic import BaseModel
 from rebac import current_actor, system_context
@@ -321,7 +324,7 @@ class _CompiledTool(Tool):
         return ToolResult(structured_content=self._project(payload))
 
     def _variables(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Map agent args to GraphQL variables: limit→pagination, sqid→ID, passthrough, flatten."""
+        """Map tool inputs to native limits, identity, named arguments and input objects."""
 
         args = dict(arguments)
         sqid = args.pop("sqid", None)
@@ -628,7 +631,25 @@ def _document(
     used += [_arg_wire(field, name) for name in spec.args]
     used += list(spec.fixed)
     used = list(dict.fromkeys(used))
-    var_defs = ", ".join(f"${arg}: {field.args[arg].type}" for arg in used)
+    definitions = []
+    for name in used:
+        argument = field.args[name]
+        variable_type = argument.type
+        default = None
+        if isinstance(argument.type, GraphQLNonNull) and argument.default_value is not Undefined:
+            try:
+                default = ast_from_value(argument.default_value, argument.type)
+            except Exception:  # noqa: BLE001 - scalar literal conversion must not disable other tools.
+                # An omitted nullable variable lets the field apply its native
+                # default, including custom scalar values with no literal form.
+                variable_type = argument.type.of_type
+            if default is None:
+                variable_type = argument.type.of_type
+        definition = f"${name}: {variable_type}"
+        if default is not None:
+            definition += f" = {print_ast(default)}"
+        definitions.append(definition)
+    var_defs = ", ".join(definitions)
     call_args = ", ".join(f"{arg}: ${arg}" for arg in used)
     selection = " ".join(projection.selection() for projection in leaves)
     body = f"{list_result_field} {{ {selection} }}" if list_result_field else selection

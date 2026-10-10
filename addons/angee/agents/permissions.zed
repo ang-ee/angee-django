@@ -1,13 +1,14 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 11
+// @rebac_schema_revision: 12
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
     relation actor: auth/user // rebac:field=user
     relation reader: auth/user | auth/group#member
     relation editor: auth/user | auth/group#member
+    relation caller: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
@@ -16,7 +17,7 @@ definition agents/agent {
     permission write = owner + editor + admin->member
     permission share = owner + editor + admin->member
     permission delete = owner + admin->member
-    permission call = owner + admin->member
+    permission call = owner + caller + admin->member
 }
 
 // Role namespace for tool bundles. A ToolRole is a table-less anchor object;

@@ -22,6 +22,7 @@ from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, generic_target, system_context, to_subject_ref
+from rebac.errors import MissingActorError, NoActorResolvedError
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
@@ -47,7 +48,8 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import StepMode, Superseded
 from angee.workflows.subjects import RunSubject
-from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
+from angee.workflows.triggers import TriggerGrantTarget
+from angee.workflows.watches import RecordWatch
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -127,12 +129,25 @@ class WorkflowManager(AngeeManager):
     """Own the editable document and the immutable publication sequence."""
 
     def _resolved_document(self, draft: Any, actor: Any) -> tuple[Any, list[Issue]]:
-        """Snapshot each awaited contract through the author's workflow read scope."""
+        """Snapshot awaited contracts and config references through the publishing actor."""
         try:
             definition = Definition.model_validate(draft)
         except PydanticValidationError:
             return draft, []
         issues = self._resolve_awaits(list(definition.declarations()), actor)
+        for key, node, path in definition.declarations():
+            try:
+                step = definition.step(key)
+                if step.config_model is not None:
+                    with actor_context(actor) if actor is not None else nullcontext():
+                        node.config = apps.get_model("resources", "Resource").objects.resolve_config_references(
+                            node.config, schema=step.config_model.model_json_schema(by_alias=True),
+                        )
+            except (
+                ValueError, LookupError, ValidationError, ImproperlyConfigured,
+                PermissionDenied, MissingActorError, NoActorResolvedError,
+            ) as error:
+                issues.append(Issue(node=key, path=[*path, "config"], code="config_reference", message=str(error)))
         return definition.model_dump(mode="json", by_alias=True), issues
 
     def _resolve_awaits(self, declarations: list[tuple[str, Body, list[str | int]]], actor: Any) -> list[Issue]:
@@ -741,7 +756,7 @@ class StepWatchManager(AngeeManager):
         """
         targets = {}
         for record in records:
-            TriggerSource.check_watch_model(type(record))
+            RecordWatch.check_model(type(record))
             if record.pk is None:
                 raise PermissionDenied("Read access to a saved watched record is required.")
             target = generic_target(record)
@@ -767,12 +782,18 @@ class StepWatchManager(AngeeManager):
         return cast(WaitingKind, WaitingKind.TIME)
 
     def record_change(self, record: Any) -> None:
-        """Mark committed observation obligations while shared dispatch holds the record lock."""
-        target = generic_target(record)
-        with system_context(reason="workflows.watch_capture"):
-            if self.filter(**target.lookups(self.model, "record")).update(pending=True):
-                payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
-                enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
+        """Capture under the record lock, isolating failure from the source write."""
+        try:
+            with transaction.atomic(), system_context(reason="workflows.watch_capture"):
+                target = generic_target(record)
+                rows = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
+                if lock_if_supported(rows, no_key=True).first() is None:
+                    return
+                if self.filter(**target.lookups(self.model, "record")).update(pending=True):
+                    payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
+                    enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
+        except Exception:
+            logger.exception("Workflow watch capture failed.")
 
 
 class StepRunQuerySet(AngeeQuerySet):

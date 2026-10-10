@@ -417,10 +417,6 @@ _PAGE_RESOURCE = hasura_model_resource(
 )
 
 
-MAX_SEARCH_PAGE_SIZE = 100
-"""Upper bound on :meth:`KnowledgeQuery.search_pages` ``first`` — every backend inherits it."""
-
-
 def _record_for_binding(
     model_label: str,
     record_id: PublicID,
@@ -460,24 +456,13 @@ class KnowledgeQuery:
     """Knowledge content queries that span the page/body join."""
 
     @strawberry.field
-    def search_pages(self, vault: PublicID, query: str, first: int = 20) -> list[PageType]:
-        """Return actor-visible pages in ``vault`` matching ``query``.
-
-        The vault is both the search namespace and the selection point: this
-        resolves it (gating the actor's read), then delegates to its bound
-        :class:`~angee.knowledge.retrieval.RetrievalBackend` (default lexical),
-        so a semantic plugin can swap the strategy without editing this resolver.
-        Row scope is the backend's responsibility (``scoped``).
-
-        ``first`` is clamped here so every backend inherits the bound. The result is
-        a materialized list, so a nested ``markdown``/``backlinks``/``vault_label``
-        selection runs a per-page resolver — a bounded N+1 accepted now that ``first``
-        is capped (a dataloader is the future optimization, not v1's concern).
-        """
-
-        first = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
-        target = require_instance_for_id(Vault, vault)
-        return cast("list[PageType]", list(target.retrieval.search(query, first=first)))
+    def search_pages(self, query: str, vault: PublicID | None = None, first: int = 20) -> list[PageType]:
+        """Search a selected readable vault, or bounded readable backend groups."""
+        rows = Vault.objects.all()
+        if vault is not None:
+            target = require_instance_for_id(Vault, vault)
+            rows = rows.filter(pk=target.pk)
+        return cast("list[PageType]", rows.search_pages(query, first=first))
 
     @strawberry.field(name="record_knowledge_bindings")
     def record_knowledge_bindings(

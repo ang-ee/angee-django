@@ -230,6 +230,22 @@ contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
 ## Workflows
 
+**Held reply** — an outbound draft awaiting operator approval or its scheduled
+release. Discarded and failed replies do not exclude another answer. See
+[posts reply policy](../addons/angee/posts/README.md).
+
+**Reply hold** — a feed's operator-controlled release policy: approval-only,
+release after a duration, or queue immediately. See the
+[posts owner](../addons/angee/posts/models.py).
+
+**Feed stream** — an independently ordered public-feed partition driven by
+integrate's shared stream engine; activity and history classify each record
+against the feed's live horizon. See [public feeds](../addons/angee/posts/README.md).
+
+**Delivery settlement** — messaging's reflection of provider acceptance or refusal
+into the outbound message's status, provider identity and retry schedule. See
+[the delivery owner](../addons/angee/messaging/delivery.py).
+
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
 

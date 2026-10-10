@@ -212,17 +212,6 @@ class TriggerSource(ImplBase):
             raise ValidationError("This model does not belong to the fixed workflow source.")
 
     @classmethod
-    def check_watch_model(cls, model: Any) -> None:
-        """Require a registered native source capable of observing this model."""
-        for source in TriggerSource.registered():
-            try:
-                source.validate_model(model)
-            except ValidationError:
-                continue
-            return
-        raise ValidationError("This model has no registered workflow event source.")
-
-    @classmethod
     def dispatch(cls, model: Any, record: Any) -> None:
         """Capture once under the record lock, never taking a waiting run's lock.
 

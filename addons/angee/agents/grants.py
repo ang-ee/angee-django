@@ -12,8 +12,10 @@ from django.db import transaction
 from rebac import ObjectRef, RelationshipTuple, SubjectRef, system_context
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships, write_relationships
+from rebac.roles import grant, revoke
 from rebac.types import RelationshipFilter
 
+from angee.agents.constants import BUILTIN_MCP_ANGEE
 from angee.iam.service_users import sync_service_user
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from angee.mcp.server import mcp_server
@@ -63,13 +65,22 @@ def tool_grant_ids(server_sqid: str, tool_names: Iterable[str]) -> dict[str, str
     }
 
 
-def builtin_mcp_server() -> Any:
-    """Return the single catalogue row for the process-native Angee MCP server."""
+def builtin_mcp_server(*, create: bool = False) -> Any:
+    """Adopt the built-in row, or provision its catalogue during synchronization.
 
-    from angee.agents.models import BUILTIN_MCP_ANGEE
+    A predeclared row retains its name and credential. A canonical unique name
+    makes concurrent first syncs converge without replacing an external server.
+    """
 
     server_model = apps.get_model("agents", "MCPServer")
     servers = [server for server in server_model._base_manager.order_by("pk") if server.builtin == BUILTIN_MCP_ANGEE]
+    if not servers and create:
+        server, _ = server_model._base_manager.get_or_create(
+            name="angee", defaults={"placement": "internal", "config": {"builtin": BUILTIN_MCP_ANGEE}},
+        )
+        if server.builtin != BUILTIN_MCP_ANGEE:
+            raise ImproperlyConfigured("MCP server 'angee' is already assigned to an external server.")
+        servers = [server]
     if len(servers) != 1:
         raise ImproperlyConfigured(
             f"Exactly one agents.MCPServer row must declare config.builtin='angee' (found {len(servers)})."
@@ -82,17 +93,22 @@ def sync_builtin_tool_catalogue() -> int:
 
     The FastMCP registry remains execution truth. ``MCPTool`` rows are deliberately
     only the grant/pinning catalogue used by agent selections and REBAC ids; this
-    sync updates that projection, prunes tools no longer registered in code, and
-    owns the ``resource_reader`` bundle's generated-reader grants.
+    sync updates that projection, prunes tools no longer registered in code,
+    binds its resource identities, and replaces the ``resource_reader`` bundle's
+    generated-reader grants. Agent writes own bundle membership.
     """
 
     registered = sorted(async_to_sync(mcp_server().list_tools)(), key=lambda tool: tool.name)
     names = [tool.name for tool in registered]
     tool_model = apps.get_model("agents", "MCPTool")
     with system_context(reason="agents.builtin_tools.sync"), transaction.atomic():
-        server = builtin_mcp_server()
+        server = builtin_mcp_server(create=True)
+        ledger = apps.get_model("resources", "Resource").objects
+        addon = apps.get_app_config("agents")
+        source = "builtin_tool_catalogue"
+        ledger.bind_instance(addon=addon, xref="mcp_angee", instance=server, source=source)
         for tool in registered:
-            tool_model._base_manager.update_or_create(
+            row, _ = tool_model._base_manager.update_or_create(
                 server_id=server.pk,
                 name=tool.name,
                 defaults={
@@ -100,17 +116,21 @@ def sync_builtin_tool_catalogue() -> int:
                     "input_schema": dict(tool.parameters or {}),
                 },
             )
+            ledger.bind_instance(addon=addon, xref=f"tool_{tool.name}", instance=row, source=source, replace=True)
         tool_model._base_manager.filter(server=server).exclude(name__in=names).delete()
         _sync_resource_reader_grants(server, registered)
     return len(registered)
 
 
-def grant_resource_reader_role(agent: Any) -> None:
-    """Idempotently grant one provisioned in-process agent the reader bundle."""
+def sync_resource_reader_role(agent: Any) -> None:
+    """Reconcile the default bundle with the agent's persistent tool policy."""
 
-    from rebac.roles import grant
-
-    grant(actor=agent.principal_subject(), role=RESOURCE_READER_ROLE)
+    if agent.user_id is None:
+        return
+    if agent.resource_reader and agent.lifecycle == "ready" and agent.runs_in_process:
+        grant(actor=agent.principal_subject(), role=RESOURCE_READER_ROLE)
+    else:
+        revoke(actor=agent.principal_subject(), role=RESOURCE_READER_ROLE)
 
 
 def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:

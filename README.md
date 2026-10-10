@@ -16,6 +16,11 @@ on the [Angee platform](https://angee.ai).**
 > teams building Angee applications and addons. If you want a product to use,
 > start with a product-specific distribution built on Angee.
 
+Public [feed streams and held replies](addons/angee/posts/README.md) compose
+[integration discovery](addons/angee/integrate/README.md),
+[delivery settlement](addons/angee/messaging/README.md) and
+[workflow conversations](addons/angee/workflows_posts/README.md).
+
 > **Public alpha / active refactor.** Angee is being opened while major addon,
 > API, and UI surfaces are still moving. Use it for exploration and feedback,
 > not production. Roadmap and compatibility guarantees are still in progress.

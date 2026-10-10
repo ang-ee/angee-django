@@ -816,6 +816,11 @@ and current contracts before applying a historical example to a new deployment.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **Temporary app registries can wire shared signals.** Django's `isolate_apps`
+  runs app ready hooks. Tests including auth restore the sign-in stamp through
+  [IAM's signal owner](../../addons/angee/iam/signals.py), as the
+  [deletion tests](../../tests/test_deletion.py) do, so later tests retain the
+  configured lifecycle.
 - **Django owns static test-table lifecycle.** Register concrete models before
   database setup in installed, unmigrated apps, and use pytest-django's native
   setup and transactional flush. Share source compositions through the owning
@@ -1542,6 +1547,15 @@ validated at the driver boundary.
   owners; integrate must not import workflows.
 
 ### Integrations and workers
+
+Public-feed responding composes [held replies, reply hold, feed streams and
+delivery settlement](../glossary.md#workflows) through the
+[posts](../../addons/angee/posts/README.md),
+[messaging](../../addons/angee/messaging/README.md) and
+[thin workflow](../../addons/angee/workflows_posts/README.md) owners.
+Eligibility and the locked pre-create recheck belong to the message owner;
+steps call that predicate and factory. Verified webhook landing uses the same
+bridge advisory lock as polling and delivery settlement.
 
 - **Bridge scheduling follows the final MTI kind.** A child capability may
   extend another bridge (a public Feed extends Channel). The

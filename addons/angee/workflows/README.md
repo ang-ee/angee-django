@@ -51,12 +51,20 @@ Run operators inherit decision read through the step link, without answer grants
 Pruning releases the step link and retains the question and verdict.
 
 `ctx.record(record, operation="read", label="")` stages one `StepRecord` for a
-read, created, changed, deleted or called record. `ctx.load` also records reads.
+read, created, changed, deleted or called record. `ctx.load` authorizes and loads;
+call `ctx.record` explicitly to retain evidence.
 Admission inputs use the same relation with no step. `step.records` and
 `WorkflowRun.objects.about(record_or_records)` provide both directions, including
 readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
+
+[`RecordWatch`](watches.py) declares watch-only model observations through
+`ANGEE_WORKFLOW_WATCH_CLASSES`. Its `model_label` and optional `fields` select
+saves that notify the transactional `StepWatch` owner. It confers no trigger
+scope or permissions. A step locks and tests its actor-readable predicate, calls
+`ctx.watch(record)`, then returns `ctx.wait(until=deadline, state=...)`.
+Models supported by native trigger sources remain watchable through those sources.
 
 `record_timeline(records: [{model, id}])` is the single authorized GraphQL read.
 It returns per-record graphs, open readable decisions and all-open attention

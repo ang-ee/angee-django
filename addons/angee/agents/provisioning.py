@@ -25,7 +25,7 @@ from django.apps import apps
 from django.db import IntegrityError, transaction
 from rebac import system_context
 
-from angee.agents.grants import grant_resource_reader_role
+from angee.agents.grants import sync_builtin_tool_catalogue
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.ids import PublicID
@@ -190,8 +190,8 @@ def _provision(agent: Any, daemon: OperatorDaemon) -> ActionResult:
         try:
             agent.mark_provisioning()
             if in_process:
+                sync_builtin_tool_catalogue()
                 agent.mark_provisioned(workspace="", service="")
-                grant_resource_reader_role(agent)
         except TransitionNotAllowed as error:
             return ActionResult(ok=False, message=f"Provisioning failed: {error}")
     if in_process:

@@ -43,7 +43,9 @@ from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
+from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
+from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
@@ -59,6 +61,7 @@ from angee.integrate.models import IntegrationCreateMode
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
+from angee.resources.mixins import ResourceLoadMixin
 
 
 class InferenceModelUse(models.TextChoices, StrEnum):
@@ -106,9 +109,6 @@ class MCPTransport(models.TextChoices):
     HTTP = "http", "HTTP"
     SSE = "sse", "SSE"
 
-
-BUILTIN_MCP_ANGEE = "angee"
-"""``MCPServer.config["builtin"]`` value for this process's built-in Angee MCP server."""
 
 INFERENCE_OUTPUT_TOOL = "inference_output"
 """Native output-tool name used when a provider implements JSON output through tools."""
@@ -219,6 +219,10 @@ def normalize_inference_usage(usage: RequestUsage | RunUsage) -> dict[str, int]:
 
 ToolRole = role_anchor("agents/toolrole", name="ToolRole")
 """Table-less REBAC type anchor for hierarchical tool bundles."""
+
+
+_READER_POLICY_FIELDS = ("resource_reader", "lifecycle", "runtime_class", "user_id")
+"""Persisted Agent columns that decide generated resource-reader membership."""
 
 
 def _update_field_names(update_fields: Any) -> set[str]:
@@ -845,7 +849,7 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Agent(AuditMixin, AngeeDataModel):
+class Agent(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -859,7 +863,8 @@ class Agent(AuditMixin, AngeeDataModel):
     """
 
     runtime = True
-    rebac_grantable = {"reader": "share", "editor": "share"}
+    rebac_grantable = {"reader": "share", "editor": "share", "caller": "share"}
+    resource_class = AgentResource
 
     sqid_prefix = "agt_"
     name = models.CharField(max_length=200)
@@ -896,6 +901,8 @@ class Agent(AuditMixin, AngeeDataModel):
     skills = models.ManyToManyField("agents.Skill", blank=True, related_name="agents")
     mcp_servers = models.ManyToManyField("agents.MCPServer", blank=True, related_name="agents")
     mcp_tools = models.ManyToManyField("agents.MCPTool", blank=True, related_name="agents")
+    resource_reader = models.BooleanField(default=True)
+    """Enable the provisioned in-process reader bundle; false revokes membership on write."""
     runtime_class = ImplClassField(
         AgentRuntime,
         default="none",
@@ -1001,7 +1008,7 @@ class Agent(AuditMixin, AngeeDataModel):
         return self.name
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the agent and sync its service-user label.
+        """Persist the agent, service-user label and resource-reader membership.
 
         Mirrors ``iam.User.save()``: the row save owns a small derived sync, and
         the manager performs the system-owned dependent write. A rename also clears
@@ -1011,11 +1018,12 @@ class Agent(AuditMixin, AngeeDataModel):
 
         creating = self._state.adding
         update_fields = kwargs.get("update_fields")
-        should_check_name = creating or update_fields is None or "name" in _update_field_names(update_fields)
-        persisted_name = None
+        names = None if update_fields is None else _update_field_names(update_fields)
+        should_check_name = creating or names is None or "name" in names
+        persisted = None
         if not creating and should_check_name:
-            persisted_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
-        renamed = not creating and should_check_name and persisted_name != self.name
+            persisted = type(self)._base_manager.filter(pk=self.pk).values("name", *_READER_POLICY_FIELDS).first()
+        renamed = not creating and should_check_name and (persisted or {}).get("name") != self.name
         if renamed and self.conflict_kind == OperatorInstanceKind.WORKSPACE:
             self.conflict_kind = None
             self.conflict_name = ""
@@ -1025,6 +1033,17 @@ class Agent(AuditMixin, AngeeDataModel):
             super().save(*args, **kwargs)
             if creating or renamed:
                 sync_service_user(self, prefix="agent")
+            # Explicit policy writes always reconcile; a full save only when it changed the policy.
+            explicit = names is not None and bool({*_READER_POLICY_FIELDS, "user"} & names)
+            if not (creating or explicit) and names is None and persisted is not None:
+                after = type(self)._base_manager.filter(pk=self.pk).values(*_READER_POLICY_FIELDS).first()
+                explicit = after != {field: persisted[field] for field in _READER_POLICY_FIELDS}
+            if creating or explicit:
+                # Source discovery precedes concrete auth models required by MCP.
+                from angee.agents.grants import sync_resource_reader_role
+
+                # Read the persisted policy: a partial save can omit edited fields.
+                sync_resource_reader_role(type(self)._base_manager.get(pk=self.pk))
 
     def principal_subject(self) -> SubjectRef:
         """Return the service user's REBAC subject for actions this agent performs.
@@ -1782,11 +1801,17 @@ class AgentSessionManager(AngeeManager):
     """Create conversations under the caller's native REBAC create gate."""
 
     def start(self, agent: Any, *, owner: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
-        """Start an idle conversation with a callable, running in-process agent."""
+        """Start an idle conversation with a callable, running in-process agent.
+
+        The admission lock orders starts with teardown's session scan. Native
+        ``no_key`` keeps this lifecycle barrier while allowing unrelated inserts
+        referencing the agent, including tool/server selections.
+        """
 
         actor = actor or instance_actor(agent)
         with transaction.atomic():
-            locked = type(agent).system_queryset(lock=("self",)).get(pk=agent.pk)
+            # Serialize lifecycle updates while permitting unrelated FK inserts.
+            locked = type(agent).system_queryset().lock_if_supported(no_key=True).get(pk=agent.pk)
             blocker = locked.chat_blocker()
             if blocker:
                 raise ValidationError({"agent": blocker})
