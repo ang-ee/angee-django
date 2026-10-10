@@ -116,6 +116,19 @@ describe("MetricStrip", () => {
     });
   });
 
+  test("passes a decimal string through to Intl and NumberFlow without Number coercion", () => {
+    setHumanDateLocale("en-US");
+    const format = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    const precise = "12345678901234567890.10";
+    const { rerender } = render(
+      <MetricTile format={format} label="Payable" numericValue={precise} value="Fallback" />,
+    );
+    expect(screen.getByText("12,345,678,901,234,567,890.10")).toBeTruthy();
+
+    rerender(<MetricTile animate format={format} label="Payable" numericValue={precise} value="Fallback" />);
+    expect(numberFlow.props).toMatchObject({ format, value: precise });
+  });
+
   test("keeps an animated tile mounted when its value changes", () => {
     const { rerender } = render(
       <MetricStrip metrics={[{

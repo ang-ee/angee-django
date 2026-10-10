@@ -27,11 +27,15 @@ export interface MetricTileValue {
   id?: string;
   icon?: React.ReactNode | string;
   label: React.ReactNode;
-  /** Typed numeric path; when set, it takes precedence over the value slot. */
-  numericValue?: number | bigint;
+  /**
+   * Typed numeric path; when set, it takes precedence over the value slot.
+   * A decimal string formats and animates without a lossy Number conversion.
+   */
+  numericValue?: number | bigint | string;
   /** Native NumberFlow suffix for the typed numeric value. */
   suffix?: string;
-  value: React.ReactNode;
+  /** Rendered value slot; unused when `numericValue` is set. */
+  value?: React.ReactNode;
   /** Semantic tone for the prominent-density label. */
   tone?: Tone;
   /** When set, the tile is a link to this href (rendered as an `<a>`). */
@@ -177,11 +181,13 @@ function AnimatedMetricTileNumber({
 }: {
   format?: Format;
   suffix?: string;
-  value: number | bigint;
+  value: number | bigint | string;
 }): React.ReactElement {
   const timing = useMotionTokens();
-  // NumberFlow accepts precise numeric strings but excludes bigint from its
-  // animation value type because transition direction is computed as a number.
+  // NumberFlow formats through Intl, which accepts precise decimal strings;
+  // its value type mirrors TypeScript's Intl declaration, which has not caught
+  // up with that ES2023 contract, and excludes bigint because transition
+  // direction is computed as a number.
   const numberFlowValue = (
     typeof value === "bigint" ? value.toString() : value
   ) as NumberFlowProps["value"];

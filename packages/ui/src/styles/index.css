@@ -310,6 +310,14 @@
   --shadow-md:      var(--elevation-md);
   --shadow-lg:      var(--elevation-lg);
   --shadow-popover: var(--elevation-popover);
+
+  /* ----------------------------------------------------------------
+   *  MOTION — every `transition-*` utility reads the theme's timing
+   *  tokens by default. Components name only the transitioned
+   *  property; `duration-(--dur-fast)` opts a quick surface down.
+   * ---------------------------------------------------------------- */
+  --default-transition-duration:        var(--dur-base);
+  --default-transition-timing-function: var(--ease);
 }
 
 /* Theme-authored typography must be referenced directly by the generated

@@ -2773,7 +2773,7 @@ function GanttView({
             <span
               aria-hidden
               data-slot="gantt-splitter-grip"
-              className="bg-brand/60 group-data-resizing/gantt-splitter:bg-brand absolute top-1/2 left-1/2 h-6 w-0.75 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 transition-opacity duration-150 group-hover/gantt-splitter:opacity-100 group-focus-visible/gantt-splitter:opacity-100 group-data-resizing/gantt-splitter:opacity-100"
+              className="bg-brand/60 group-data-resizing/gantt-splitter:bg-brand absolute top-1/2 left-1/2 h-6 w-0.75 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 transition-opacity duration-(--dur-fast) group-hover/gantt-splitter:opacity-100 group-focus-visible/gantt-splitter:opacity-100 group-data-resizing/gantt-splitter:opacity-100"
             />
           </div>
         ) : (
