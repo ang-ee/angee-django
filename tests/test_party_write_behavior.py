@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.test import override_settings
 from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -59,15 +60,19 @@ def test_display_name_suggestions_need_a_personal_full_name_the_party_bears(comp
         handle("email", "grace@example.test", "Grace Hopper")
         notifications = handle("email", "notifications@example.test", "Ada Lovelace")
 
-        created = PartyHandle.objects.suggest_from_display_names(shared_handle_ids=[notifications.pk])
-        repeated = PartyHandle.objects.suggest_from_display_names(shared_handle_ids=[notifications.pk])
+        shared = frozenset({notifications.pk})
+        created = PartyHandle.objects._reconcile_display_names(shared)
+        repeated = PartyHandle.objects._reconcile_display_names(shared)
         suggested = set(PartyHandle._base_manager.filter(source=LinkSource.RULE).values_list("party_id", "handle_id"))
         candidate.refresh_from_db()
         ada.refresh_from_db()
+        # The handle gains an owner: the names still support the guess, so it stays.
+        PartyHandle.objects.link(grab_bag, candidate, source=LinkSource.CARDDAV, created_by_id=owner.pk)
+        kept = PartyHandle.objects._reconcile_display_names(shared)
         # The name changes: the pass withdraws the guess it no longer supports.
         Handle._base_manager.filter(pk=candidate.pk).update(display_name="Someone Else")
-        withdrawn = PartyHandle.objects.suggest_from_display_names(shared_handle_ids=[notifications.pk])
-    assert (created, repeated, withdrawn) == (1, 0, 1)
+        withdrawn = PartyHandle.objects._reconcile_display_names(shared)
+    assert (created, repeated, kept, withdrawn) == (1, 0, 0, 1)
     assert suggested == {(ada.pk, candidate.pk)}
     assert candidate.party_id is None
     assert ada.handle_count == 1
@@ -140,7 +145,7 @@ def test_a_signature_pass_withdraws_only_undecided_suggestions_it_no_longer_supp
     owner = get_user_model().objects.create_user(username="signature-withdrawal-owner")
     with system_context(reason="signature withdrawal fixture"):
         party = Party._base_manager.create(display_name="Ada", created_by=owner)
-        PartyHandle.objects.suggest_from_signatures(
+        PartyHandle.objects._reconcile_signatures(
             [Signing("ada-signature", "+1 415 555 2671\n+1 415 555 2672\n+1 415 555 2673", "ada", party.pk, owner.pk)]
         )
         confirmed, dismissed, unreviewed = PartyHandle._base_manager.filter(party=party).order_by(
@@ -149,7 +154,7 @@ def test_a_signature_pass_withdraws_only_undecided_suggestions_it_no_longer_supp
         with actor_context(owner):
             confirmed.confirm()
             dismissed.dismiss()
-        withdrawn = PartyHandle.objects.suggest_from_signatures([])
+        withdrawn = PartyHandle.objects._reconcile_signatures([])
         remaining = set(PartyHandle._base_manager.filter(party=party).values_list("pk", flat=True))
         handle = Handle._base_manager.get(pk=unreviewed.handle_id)
         party.refresh_from_db()
@@ -172,10 +177,25 @@ def test_a_number_is_one_persons_until_another_person_signs_with_it(composed_tab
             Signing("ada-work", mobile, "ada-work", ada.pk, owner.pk),
             Signing("ada-home", mobile, "ada-home", ada.pk, owner.pk),
         ]
-        assert PartyHandle.objects.suggest_from_signatures(from_two_addresses) == 1
+        assert PartyHandle.objects._reconcile_signatures(from_two_addresses) == 1
         shared = [*from_two_addresses, Signing("carol", "Carol\n+1 415 555 2671", "carol", carol.pk, owner.pk)]
-        assert PartyHandle.objects.suggest_from_signatures(shared) == 1
+        assert PartyHandle.objects._reconcile_signatures(shared) == 1
         assert not PartyHandle._base_manager.filter(source=LinkSource.RULE).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_without_a_signing_provider_signature_suggestions_stay(composed_tables: None) -> None:
+    """No registered provider is no evidence to judge, not evidence that every number is gone."""
+    del composed_tables
+    owner = get_user_model().objects.create_user(username="signature-provider-owner")
+    with system_context(reason="signature provider fixture"):
+        party = Party._base_manager.create(display_name="Ada", created_by=owner)
+        PartyHandle.objects._reconcile_signatures(
+            [Signing("ada-signature", "Ada Lovelace\n+1 415 555 2671", "ada", party.pk, owner.pk)]
+        )
+        with override_settings(ANGEE_PARTIES_SIGNING_PROVIDERS=[]):
+            assert PartyHandle.objects.reconcile_suggestions() == 0
+        assert PartyHandle._base_manager.filter(party=party, source=LinkSource.RULE).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)

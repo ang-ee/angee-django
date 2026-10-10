@@ -1,7 +1,10 @@
 """Mail evidence messaging contributes to parties' handle suggestions.
 
-Parties declares the ``ANGEE_PARTIES_SHARED_SENDERS`` and ``ANGEE_PARTIES_SIGNINGS``
-hooks and reads no messaging model; messaging's autoconfig appends these.
+Parties declares the ``ANGEE_PARTIES_SHARED_SENDER_PROVIDERS`` and
+``ANGEE_PARTIES_SIGNING_PROVIDERS`` hooks and reads no messaging model; messaging's
+autoconfig appends these. ``PartyHandleManager.reconcile_suggestions`` owns the
+contract: a signing provider yields every signing, since a suggestion it no longer
+supports is withdrawn.
 """
 
 from __future__ import annotations
