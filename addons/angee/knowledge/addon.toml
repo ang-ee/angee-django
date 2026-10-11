@@ -26,3 +26,8 @@ module = "runtime_migrations.markdown_page_child"
 name = "markdown_page_history"
 app_label = "knowledge"
 module = "runtime_migrations.markdown_page_history"
+
+[[migrations]]
+name = "history_changeset"
+app_label = "knowledge"
+module = "runtime_migrations.history_changeset"

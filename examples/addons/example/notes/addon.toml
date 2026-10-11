@@ -29,3 +29,8 @@ demo = [
 name = "owner_column"
 app_label = "notes"
 module = "runtime_migrations.owner_column"
+
+[[migrations]]
+name = "history_changeset"
+app_label = "notes"
+module = "runtime_migrations.history_changeset"
