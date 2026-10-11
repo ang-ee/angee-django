@@ -55,11 +55,10 @@ from angee.parties.managers import (
     CircleManager,
     HandleManager,
     MergeVetoManager,
-    PartyHandleClaimManager,
     PartyHandleManager,
     PartyManager,
 )
-from angee.parties.mixins import LinkSource, ScoredLinkMixin, ScoredMixin
+from angee.parties.mixins import LinkSource, ScoredLinkMixin
 from angee.tags.models import TaggedModel
 
 
@@ -660,11 +659,6 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     recorded at ``0.3`` confidence) instead of silently reassigning. The resolved
     owner is the highest-confidence, non-dismissed link — the value the manager
     materialises onto :attr:`Handle.party`.
-
-    One row per pair holds the human decision (``is_confirmed``, ``is_dismissed``).
-    Each source that links the pair owns a :class:`PartyHandleClaim` beneath it, and
-    the row's ``source`` and ``confidence`` are derived from those claims
-    (:meth:`PartyHandleManager.link`), so no source writes another's claim.
     """
 
     runtime = True
@@ -680,6 +674,7 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
         on_delete=models.CASCADE,
         related_name="party_links",
     )
+    metadata = models.JSONField(blank=True, default=dict)
 
     objects = PartyHandleManager()
 
@@ -702,12 +697,7 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
         return f"{self.party_id}↔{self.handle_id} ({self.confidence})"
 
     def evidence_page(self, actor: Any, *, limit: int = 20) -> PartyHandleEvidencePage:
-        """Return a hard-bounded actor-readable projection of retained evidence.
-
-        The references come from the claims ``actor`` can read, in source order. A
-        page of links batches those claims with
-        :meth:`PartyHandleClaimManager.prefetch_for`; otherwise this link reads its own.
-        """
+        """Return a hard-bounded actor-readable projection of retained evidence."""
 
         if actor is None:
             return PartyHandleEvidencePage((), False)
@@ -715,9 +705,7 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
         from angee.base.identity import instance_from_public_id
         from angee.base.scoping import read_scoped_queryset
 
-        prefetched = "claims" in getattr(self, "_prefetched_objects_cache", {})
-        claims = self.claims.all() if prefetched else self.claims.with_actor(actor).order_by("source")
-        refs = [ref for claim in claims for ref in (claim.metadata or {}).get("evidence_refs", ())]
+        refs = list((self.metadata or {}).get("evidence_refs", ()))
         visible: list[PartyHandleEvidence] = []
         for ref in refs[: bounded + 1]:
             if not isinstance(ref, Mapping):
@@ -763,49 +751,6 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
 
         handle = self.handle
         type(self).objects.resolve(handle)
-
-
-class PartyHandleClaim(ScoredMixin, AuditMixin, AngeeDataModel):
-    """One source's claim on a party-handle link: its confidence and its evidence.
-
-    Each source owns exactly one claim per link and writes only that claim
-    (:meth:`PartyHandleClaimManager.claim`), so a directory card, an import and a
-    person's own entry coexist on one pair with their own provenance. A downstream
-    addon may ``extend`` the claim with its source identity. The link's ``source``
-    and ``confidence`` are derived from its claims; the human decision stays on the
-    link.
-    """
-
-    runtime = True
-
-    sqid_prefix = "phc_"
-    link = models.ForeignKey(
-        "parties.PartyHandle",
-        on_delete=models.CASCADE,
-        related_name="claims",
-    )
-    metadata = models.JSONField(blank=True, default=dict)
-    """The source's evidence for its claim (rule evidence, record references)."""
-
-    objects = PartyHandleClaimManager()
-
-    class Meta:
-        """Django model options for the party-handle claim source model."""
-
-        abstract = True
-        ordering = ("link", "source")
-        rebac_resource_type = "parties/party_handle_claim"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("link", "source"),
-                name="uq_party_handle_claim",
-            ),
-        )
-
-    def __str__(self) -> str:
-        """Return a readable claim description for Django displays."""
-
-        return f"{self.link_id} {self.source} ({self.confidence})"
 
 
 class AddressManager(AngeeManager):
