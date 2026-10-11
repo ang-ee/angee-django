@@ -18,9 +18,9 @@ export const SetTaskVisibilityDocument = graphql(`
   }
 `);
 
-// Tasks about a record: the record's own gate reads, schedules, logs, completes and
-// cancels them. A completion or a logged exchange posts on the record's chatter, so
-// the chatter's reads refresh with the task's.
+// Record tasks: the task schema derives their access from the record. The generic
+// task verbs complete and drop them; a completion or a logged exchange posts on the
+// record's chatter, so the chatter's reads refresh with the task's.
 export const RECORD_TASK_MODELS = ["projects.Task", "projects.ActivityType", "messaging.Message"] as const;
 
 export const RecordTaskFields = graphql(`
@@ -33,6 +33,7 @@ export const RecordTaskFields = graphql(`
     done_at
     activity_type
     assignee { id username display_name }
+    task_actions
   }
 `);
 
@@ -46,7 +47,7 @@ export const RecordTasksDocument = graphql(`
 export const ScheduleRecordTaskDocument = graphql(`
   mutation ProjectsScheduleRecordTask(
     $modelLabel: String!, $recordId: ID!, $title: String!, $note: String = "", $dueDate: Date,
-    $activityType: String = "todo"
+    $activityType: String
   ) {
     schedule_record_task(input: {
       model_label: $modelLabel, record_id: $recordId, title: $title, note: $note, due_date: $dueDate,
@@ -68,13 +69,13 @@ export const LogRecordTaskDocument = graphql(`
 
 export const CompleteRecordTaskDocument = graphql(`
   mutation ProjectsCompleteRecordTask($id: ID!, $feedback: String = "") {
-    complete_record_task(id: $id, feedback: $feedback) { ok message validation_errors id }
+    complete_task(id: $id, feedback: $feedback) { ok message validation_errors id }
   }
 `);
 
 export const CancelRecordTaskDocument = graphql(`
   mutation ProjectsCancelRecordTask($id: ID!) {
-    cancel_record_task(id: $id) { ok message validation_errors id }
+    drop_task(id: $id, reason: OBSOLETE) { ok message validation_errors id }
   }
 `);
 

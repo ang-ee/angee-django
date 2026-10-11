@@ -85,7 +85,7 @@ os.environ.pop("SENTRY_DSN", None)
 
 @pytest.fixture
 def activity_catalog(composed_tables: None) -> None:
-    """Declare the activity types tasks about a record use in these scenarios."""
+    """Declare the activity types record tasks use in these scenarios."""
 
     del composed_tables
     with system_context(reason="tests.projects.activity_catalog"):

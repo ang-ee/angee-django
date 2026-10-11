@@ -887,9 +887,9 @@ framework's placeholder chatter tabs this way:
 ```tsx
 "record#aside": {
   "chatter.comments": { remove: true },
-  "chatter.activity": { remove: true },
+  "chatter.history": { remove: true },
   "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-  // messaging.activity, messaging.sources …
+  // messaging.history, messaging.sources …
 },
 ```
 
@@ -928,7 +928,7 @@ containers: {
   "form#chrome": { only: ["iam.share-record"] },
   "shell#drawers-bottom": { only: [] },
   "record#aside": [
-    { only: ["messaging.comments", "messaging.activity", "storage.files"] },
+    { only: ["messaging.comments", "messaging.history", "storage.files"] },
     { only: [], when: { route: "projects.my-work" } },
   ],
 },
@@ -1017,7 +1017,7 @@ The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
 model's pages and may narrow itself further with its content's `when`. A
 `ChatterTabContent` carries `label`, `icon` and `render`, and optionally
 `when`, `count`/`useCount`, `panelClassName` and `aliases`. The framework
-declares placeholder `chatter.comments` and `chatter.activity` tabs until an
+declares placeholder `chatter.comments` and `chatter.history` tabs until an
 addon that supplies the real ones removes them, as messaging does. Tab ids are
 namespaced like every child; `aliases` keeps a tab's former id working in
 `?chatterTab=` links for one release.

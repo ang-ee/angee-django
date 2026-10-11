@@ -202,9 +202,9 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             assert resource_type is not None
             for action in ("read", "read_private") if model != Tie else ("read",):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                # Read prepares 13 arrow sources; Tie prepares one Party source.
-                # Private reads need only the final row SELECT.
-                expected_queries = 2 if model == Tie else 14 if action == "read" else 1
+                # Read prepares 14 arrow sources (a filed task's subject adds one);
+                # Tie prepares one Party source. Private reads need only the final row SELECT.
+                expected_queries = 2 if model == Tie else 15 if action == "read" else 1
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]

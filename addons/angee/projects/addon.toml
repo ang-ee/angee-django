@@ -25,6 +25,6 @@ demo = [
 ]
 
 [[migrations]]
-name = "card_tasks"
+name = "record_tasks"
 app_label = "projects"
-module = "runtime_migrations.card_tasks"
+module = "runtime_migrations.record_tasks"

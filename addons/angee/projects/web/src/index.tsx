@@ -94,7 +94,8 @@ const projects = defineBaseAddon({
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   containers: {
-    // Every record with chatter carries the tasks about it beside its comments and history.
+    // Every record with chatter offers its record tasks beside its comments and history; the task
+    // schema takes them only on record types whose owner declares them.
     "record#aside": {
       "projects.tasks": {
         sequence: 15,

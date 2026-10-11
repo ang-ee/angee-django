@@ -26,7 +26,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredQuery: mocks.useAuthoredQuery,
 }));
 
-import { RecordActivityPane } from "./RecordActivityPane";
+import { RecordHistoryPane } from "./RecordHistoryPane";
 
 function context(sqid?: string): ChatterViewContext {
   return {
@@ -56,12 +56,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("RecordActivityPane", () => {
+describe("RecordHistoryPane", () => {
   test("renders the record's retained changes", () => {
     mocks.threadData = {
       record_thread: { error: null, error_code: null, message_result_count: 1, messages: [update("m1", "Closed it")] },
     };
-    render(<RecordActivityPane context={context("rec_1")} />);
+    render(<RecordHistoryPane context={context("rec_1")} />);
     expect(screen.getByText("Record history")).toBeTruthy();
     expect(screen.getByText("Closed it")).toBeTruthy();
     expect(screen.getByText("Status")).toBeTruthy();
@@ -72,24 +72,24 @@ describe("RecordActivityPane", () => {
     mocks.threadData = {
       record_thread: { error: null, error_code: null, message_result_count: 3, messages: [update("m1", "Closed it")] },
     };
-    render(<RecordActivityPane context={context("rec_1")} />);
+    render(<RecordHistoryPane context={context("rec_1")} />);
     expect(screen.getByText("Showing the latest 1 updates.")).toBeTruthy();
   });
 
   test("shows the empty state when nothing changed yet", () => {
     mocks.threadData = { record_thread: { error: null, error_code: null, message_result_count: 0, messages: [] } };
-    render(<RecordActivityPane context={context("rec_1")} />);
+    render(<RecordHistoryPane context={context("rec_1")} />);
     expect(screen.getByText("No changes yet")).toBeTruthy();
   });
 
   test("shows the not-enabled state for a record without a thread", () => {
     mocks.threadData = { record_thread: { error: "no chatter", error_code: "BAD_RECORD", messages: [] } };
-    render(<RecordActivityPane context={context("rec_1")} />);
-    expect(screen.getByText("Activity is not enabled")).toBeTruthy();
+    render(<RecordHistoryPane context={context("rec_1")} />);
+    expect(screen.getByText("History is not enabled")).toBeTruthy();
   });
 
   test("asks for a record outside a record view", () => {
-    render(<RecordActivityPane context={context()} />);
+    render(<RecordHistoryPane context={context()} />);
     expect(screen.getByText("No record selected")).toBeTruthy();
   });
 });

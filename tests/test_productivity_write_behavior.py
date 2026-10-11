@@ -108,10 +108,15 @@ class CreateTaskHost(models.Model):
     """The projects Task hand-verb contract the work donor extends through ``super()``."""
 
     hand_actions = AbstractTask.__dict__["hand_actions"]
-    action_blockers = AbstractTask.__dict__["action_blockers"]
     validate_action = AbstractTask.validate_action
 
-    def _post_completion(self, feedback: str = "", card_message: str | None = None) -> None:
+    @classmethod
+    def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
+        """A stand-in task is about no record, so no record-task blocker applies."""
+
+        return ()
+
+    def post_completion(self, feedback: str = "") -> None:
         """A stand-in task is about no record, so its completion posts nothing."""
 
     class Meta:

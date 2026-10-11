@@ -18,7 +18,7 @@ export type ChatterPaneController = Pick<CollapsiblePane, "collapsed" | "collaps
   ready?: boolean;
 };
 
-export type ChatterTabId = "agents.chat" | "messaging.comments" | "messaging.activity" | (string & {});
+export type ChatterTabId = "agents.chat" | "messaging.comments" | "messaging.history" | (string & {});
 export const CHATTER_TAB_SEARCH_KEY = "chatterTab";
 
 export interface ChatterTab {

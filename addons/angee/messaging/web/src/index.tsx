@@ -10,7 +10,7 @@ import { enMessagingMessages } from "./i18n";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
-import { RecordActivityPane } from "./RecordActivityPane";
+import { RecordHistoryPane } from "./RecordHistoryPane";
 import { RecordChatterPane } from "./RecordChatterPane";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
@@ -130,14 +130,18 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    // Messaging supplies the real comments and activity in place of the framework's placeholders.
+    // Messaging supplies the real comments and history in place of the framework's placeholders.
     "record#aside": {
       "chatter.comments": { remove: true },
-      "chatter.activity": { remove: true },
+      "chatter.history": { remove: true },
       "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-      "messaging.activity": {
+      "messaging.history": {
         sequence: 20,
-        content: { label: "Activity", icon: "activity", aliases: ["activity"], render: (context) => <RecordActivityPane context={context} /> },
+        // "activity" and "messaging.activity" are the former ids, kept in `?chatterTab=` links for one release.
+        content: {
+          label: "History", icon: "activity", aliases: ["history", "activity", "messaging.activity"],
+          render: (context) => <RecordHistoryPane context={context} />,
+        },
       },
       "messaging.sources": {
         sequence: 30,

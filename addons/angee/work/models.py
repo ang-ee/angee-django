@@ -1164,17 +1164,20 @@ class TaskWork(StagedModelMixin):
         return self
 
     @transaction.atomic
-    def complete(self, *, feedback: str = "", card_message: str | None = None) -> Any:
+    def complete(self, *, feedback: str = "") -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
         if self.queue_id is None:
-            return self._base_verb("complete", feedback=feedback, card_message=card_message)
+            return self._base_verb("complete", feedback=feedback)
+        previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
+        if previous is not None and previous.category == "completed":
+            return self
         self.validate_action("complete")
         stage = self._stage_for_category("completed")
         self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
         self.stage = stage
         self.save(update_fields=("stage", "updated_at"))
-        self._post_completion(feedback, card_message)
+        self.post_completion(feedback)
         return self
 
     @transaction.atomic

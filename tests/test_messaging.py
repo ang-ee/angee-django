@@ -649,7 +649,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
     The record's chatter thread is private to it, so deleting the record must remove its
-    thread, attachment, messages, followers, notifications, and tasks about it rather than
+    thread, attachment, messages, followers, notifications, and record tasks rather than
     orphaning them (a leftover attachment on a reused primary key would mis-resolve). A
     sibling record's chatter is untouched.
     """
@@ -779,7 +779,7 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     delete collector can never cascade from a deleted record up to its private ``Thread``
     or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
     row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message, follower, or task about it behind.
+    chattered record leaves no orphaned thread, message, follower, or record task behind.
     """
 
     del composed_tables
@@ -1346,22 +1346,32 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
     assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_card_task_completion_notifies_the_records_activity_followers(composed_tables: None) -> None:
-    """Completing a task about a record delivers to the record's followers of that subtype."""
+def _record_holders(doc: Any, **holders: Any) -> None:
+    """Grant ``doc``'s relations to users, keyed by relation name."""
 
-    del composed_tables
+    write_relationships([
+        RelationshipTuple(resource=to_object_ref(doc), relation=relation, subject=to_subject_ref(user))
+        for relation, user in holders.items()
+    ])
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_record_task_completion_notifies_the_records_activity_followers() -> None:
+    """Completing a record task delivers to the record's followers of that subtype."""
+
     user_model = get_user_model()
     with system_context(reason="test threaded model activity notification setup"):
         author = user_model.objects.create_user(username="activity-author", email="activity-author@example.com")
         watcher = user_model.objects.create_user(username="activity-watcher", email="activity-watcher@example.com")
-        ticket = ThreadedTicket.objects.create(title="Activity notification")
-        ticket.message_subscribe(user=watcher, notification_policy="email", subtype_keys=("activity_done",))
+        doc = ChatterDoc.objects.create(title="Activity notification")
+        _record_holders(doc, writer=author, reader=watcher)
+        doc.message_subscribe(user=watcher, notification_policy="email", subtype_keys=("activity_done",))
 
     with actor_context(author):
-        task = ProjectTask.objects.schedule(ticket, title="Call customer", due_date=_AT.date())
-        ProjectTask.objects.card_complete(task, feedback="Done.")
+        record = ChatterDoc.objects.get(pk=doc.pk)
+        task = ProjectTask.objects.schedule(record, title="Call customer", due_date=_AT.date())
+        task.complete(feedback="Done.")
 
     notification = ThreadNotification._base_manager.select_related("message", "message__subtype").get(user=watcher)
     assert notification.notification_type == "email"
@@ -1371,14 +1381,10 @@ def test_card_task_completion_notifies_the_records_activity_followers(composed_t
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_agent_card_task_completion_posts_system_message_with_service_user(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An agent completing a task about a record posts the record's log as its service user."""
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_agent_record_task_completion_posts_system_message_with_service_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An agent completing a record task posts the record's log as its service user."""
 
-    del composed_tables
     user_model = get_user_model()
     with system_context(reason="test.messaging.agent_activity.setup"):
         owner = user_model.objects.create_user(
@@ -1387,8 +1393,9 @@ def test_agent_card_task_completion_posts_system_message_with_service_user(
         )
         agent = Agent.objects.create(name="Activity Agent", owner=owner)
         service_user_id = agent.user_id
-        ticket = ThreadedTicket.objects.create(title="Agent activity")
-        task = ProjectTask.objects.schedule(ticket, title="Close the loop", assignee=owner, due_date=_AT.date())
+        doc = ChatterDoc.objects.create(title="Agent activity")
+        _record_holders(doc, reader=owner, writer=agent.user)
+        task = ProjectTask.objects.schedule(doc, title="Close the loop", assignee=owner, due_date=_AT.date())
 
     post_context: dict[str, Any] = {}
     manager_type = type(Message.objects)
@@ -1402,10 +1409,10 @@ def test_agent_card_task_completion_posts_system_message_with_service_user(
     monkeypatch.setattr(manager_type, "post_to_thread", spy_post_to_thread)
 
     with actor_context(agent.principal_subject()):
-        ProjectTask.objects.card_complete(task, feedback="Handled by agent.")
+        ProjectTask.objects.get(pk=task.pk).complete(feedback="Handled by agent.")
 
     message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
-    assert post_context == {"is_sudo": True, "reason": "projects.task.card_post"}
+    assert post_context == {"is_sudo": True, "reason": "messaging.system_post"}
     assert message.created_by_id == service_user_id
     assert message.message_type == Message.MessageKind.AUTO_COMMENT
     assert message.subtype is not None
@@ -1677,17 +1684,18 @@ def test_threaded_model_autotracking_respects_update_fields(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_threaded_model_schedules_and_completes_a_card_task(composed_tables: None) -> None:
-    """A threaded record carries tasks about it; completing one logs it on the record."""
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_threaded_model_schedules_and_completes_a_record_task() -> None:
+    """A threaded record carries record tasks; completing one logs it on the record."""
 
-    del composed_tables
     user_model = get_user_model()
-    with system_context(reason="test threaded model card task setup"):
+    with system_context(reason="test threaded model record task setup"):
         user = user_model.objects.create_user(username="assignee", email="assignee@example.com")
-        ticket = ThreadedTicket.objects.create(title="Card task case")
+        ticket = ChatterDoc.objects.create(title="Record task case")
+        _record_holders(ticket, writer=user)
 
     with actor_context(user):
+        ticket = ChatterDoc.objects.get(pk=ticket.pk)
         task = ProjectTask.objects.schedule(
             ticket,
             title="Call customer",
@@ -1704,7 +1712,7 @@ def test_threaded_model_schedules_and_completes_a_card_task(composed_tables: Non
     assert task.status == "open"
     with actor_context(user):
         assert list(ProjectTask.objects.for_record(ticket)) == [task]
-        completed = ProjectTask.objects.card_complete(task, feedback="Customer confirmed.")
+        completed = task.complete(feedback="Customer confirmed.")
 
     completed.refresh_from_db()
     assert completed.status == "done"

@@ -1,10 +1,6 @@
 {
   "criticalExports": [
     {
-      "name": "ActivityAgendaPane",
-      "ownerFile": "src/ActivityAgendaPane.tsx"
-    },
-    {
       "name": "PairingDialog",
       "ownerFile": "src/PairingDialog.tsx"
     },

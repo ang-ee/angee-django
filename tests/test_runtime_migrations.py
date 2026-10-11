@@ -398,6 +398,38 @@ def test_autodetected_column_drop_requires_every_row_empty(field, value, storage
     assert "[[migrations]]" in message
 
 
+@pytest.mark.parametrize("rows", [0, 1])
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_autodetected_table_drop_requires_an_empty_table(rows: int) -> None:
+    """A model removed from code drops its table automatically only while the table holds no row."""
+
+    history, current = ProjectState(), ProjectState()
+    for state in (history, current):
+        state.add_model(ModelState("probe", "Kept", [("id", models.AutoField(primary_key=True))]))
+    history.add_model(ModelState("probe", "Retired", [("id", models.AutoField(primary_key=True))]))
+    graph = MigrationGraph()
+    graph.add_node(("probe", "0001_initial"), migrations.Migration("0001_initial", "probe"))
+    retired = history.apps.get_model("probe", "Retired")
+    with connection.schema_editor() as editor:
+        editor.create_model(retired)
+    retired._base_manager.bulk_create([retired() for _ in range(rows)])
+
+    guard = DropGuardAutodetector(history, current)
+    if not rows:
+        (migration,) = guard.changes(graph=graph)["probe"]
+        assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
+        return
+    with pytest.raises(CommandError) as refused:
+        guard.changes(graph=graph)
+    message = str(refused.value)
+    assert message.startswith(
+        "unsafe autodetected table drop: probe.retired: table probe_retired holds data in 1 row(s) on database "
+        "'default'. "
+    )
+    assert "[[migrations]]" in message
+
+
 @pytest.mark.parametrize(("name", "wrapper"), [
     ("missing/db.sqlite3", DatabaseWrapper),
     ("", DummyDatabaseWrapper),

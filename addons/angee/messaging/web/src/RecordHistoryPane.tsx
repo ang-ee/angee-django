@@ -4,17 +4,16 @@ import { EmptyState, LoadingPanel, cn, formatDateTime, textRoleVariants } from "
 import type { ChatterViewContext } from "@angee/ui/runtime";
 
 import { useMessagingT } from "./i18n";
-import { READ_MODELS, RecordActivityThreadDocument, type RecordActivityMessageRow } from "./documents";
+import { READ_MODELS, RecordHistoryThreadDocument, type RecordHistoryMessageRow } from "./documents";
 
-export interface RecordActivityPaneProps {
+export interface RecordHistoryPaneProps {
   context: ChatterViewContext;
 }
 
-/** The Activity chatter tab: the record's retained system changes. It reads a
+/** The History chatter tab: the record's retained system changes. It reads a
  * kind-filtered record-thread window, leaving ordinary conversation to Comments
- * while reusing the same stored thread; tasks about the record live in their
- * owner's own tab. */
-export function RecordActivityPane({ context }: RecordActivityPaneProps): React.ReactElement {
+ * while reusing the same stored thread. */
+export function RecordHistoryPane({ context }: RecordHistoryPaneProps): React.ReactElement {
   const t = useMessagingT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
@@ -23,7 +22,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     () => ({ modelLabel: modelLabel ?? "", recordId: recordId ?? "" }),
     [modelLabel, recordId],
   );
-  const threadQuery = useAuthoredQuery(RecordActivityThreadDocument, variables, {
+  const threadQuery = useAuthoredQuery(RecordHistoryThreadDocument, variables, {
     enabled,
     models: READ_MODELS,
   });
@@ -34,21 +33,21 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     return (
       <EmptyState
         icon="activity"
-        title={t("activity.noRecord")}
-        description={t("activity.noRecordHint")}
+        title={t("history.noRecord")}
+        description={t("history.noRecordHint")}
         className="min-h-48 p-4"
       />
     );
   }
   if (threadQuery.isFetching && threadQuery.data === undefined) {
-    return <LoadingPanel message={t("activity.loading")} />;
+    return <LoadingPanel message={t("history.loading")} />;
   }
   if (threadQuery.error || threadPayload?.error_code === "BAD_RECORD") {
     return (
       <EmptyState
         icon="activity"
-        title={t("activity.disabled")}
-        description={t("activity.disabledHint")}
+        title={t("history.disabled")}
+        description={t("history.disabledHint")}
         className="min-h-48 p-4"
       />
     );
@@ -57,22 +56,22 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     return (
       <EmptyState
         icon="activity"
-        title={t("activity.emptyTitle")}
-        description={t("activity.emptyHint")}
+        title={t("history.emptyTitle")}
+        description={t("history.emptyHint")}
         className="min-h-40 p-4"
       />
     );
   }
 
   return (
-    <section className="space-y-2" aria-label={t("activity.history")}>
-      <h3 className={cn(textRoleVariants({ role: "meta" }), "text-fg-muted")}>{t("activity.history")}</h3>
+    <section className="space-y-2" aria-label={t("history.title")}>
+      <h3 className={cn(textRoleVariants({ role: "meta" }), "text-fg-muted")}>{t("history.title")}</h3>
       {updates.map((message) => (
         <RecordUpdateItem key={message.id} message={message} />
       ))}
       {(threadPayload?.message_result_count ?? 0) > updates.length ? (
         <p className={cn(textRoleVariants({ role: "caption" }), "text-fg-muted")}>
-          {t("activity.historyLimited", { count: updates.length })}
+          {t("history.historyLimited", { count: updates.length })}
         </p>
       ) : null}
     </section>
@@ -82,7 +81,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
 function RecordUpdateItem({
   message,
 }: {
-  message: RecordActivityMessageRow;
+  message: RecordHistoryMessageRow;
 }): React.ReactElement {
   const t = useMessagingT();
   const author = message.sender?.display_name || message.sender?.value || t("message.author");

@@ -8,7 +8,7 @@
 // not post comments (`post`): `writer` grants read+write yet not `post`, and `post`
 // is owner/admin only. `reader` grants read without write. The record read (`read`)
 // is the one gate every record-chatter surface rides (F-v parts 2/3), so an actor
-// without it cannot reach the record's threads, messages, or activities.
+// without it cannot reach the record's threads, messages, or tasks.
 definition chatterdemo/doc {
     relation owner: auth/user
     relation writer: auth/user

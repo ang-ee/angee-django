@@ -1,6 +1,6 @@
 // Project-owned container access contributed to upstream resource definitions.
 // @rebac_package: projects
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 definition storage/drive {
     relation project: projects/project // rebac:field=project_bindings__project
@@ -66,6 +66,10 @@ definition messaging/thread_attachment {
     relation project: projects/project // rebac:field=target
 
     permission target_write = task->write + project->write
+    // Tasks and projects take record tasks; a task lends its access without its
+    // own subject, so record task access never recurses.
+    permission record_read = task->read_as_subject + project->read
+    permission record_write = task->write_as_subject + project->write
 }
 
 definition knowledge/record_binding {

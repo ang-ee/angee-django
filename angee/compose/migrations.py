@@ -606,7 +606,7 @@ class RetiredTableOperation(SeparateDatabaseAndState):
 
 
 class DropGuardAutodetector(MigrationAutodetector):
-    """Django's autodetector, refusing to drop a column that still holds data.
+    """Django's autodetector, refusing to drop a column or table that still holds data.
 
     ``makemigrations`` detects changes before writing, so a refusal leaves no
     migration file behind; ``migrate`` shares the autodetector, so its pending
@@ -619,10 +619,12 @@ class DropGuardAutodetector(MigrationAutodetector):
     through model and a generated column store nothing of their own. Every
     database that may receive the migration, selected like Django's history
     consistency check, must prove the column empty; an unreachable or
-    unconfigured database cannot, so the drop is refused.
+    unconfigured database cannot, so the drop is refused. A deleted model's table
+    holds data when it has any row, under the same proof.
 
     A reviewed drop is an addon runtime migration: ``angee build`` materializes it
-    into the history first, so its removal is never autodetected here.
+    into the history first, so its removal is never autodetected here. A table
+    drop on a migration-only historical label is that label's retirement.
 
     For migration-only historical labels, generated table operations retain
     Django's state transitions but skip database work when the table is absent.
@@ -636,7 +638,7 @@ class DropGuardAutodetector(MigrationAutodetector):
         convert_apps: set[str] | None = None,
         migration_name: str | None = None,
     ) -> dict[str, list[Migration]]:
-        """Return Django's changes, or refuse when a removed column holds data."""
+        """Return Django's changes, or refuse when a removed column or table holds data."""
 
         changes = super().changes(graph, trim_to_apps, convert_apps, migration_name)
         refusals = [
@@ -659,6 +661,23 @@ class DropGuardAutodetector(MigrationAutodetector):
             config.label for config in apps.get_app_configs()
             if isinstance(config, HistoricalRuntimeConfig)
         }
+        refusals = [
+            refusal
+            for app_label, app_migrations in sorted(changes.items())
+            if app_label not in retired_labels
+            for migration in app_migrations
+            for operation in migration.operations
+            if isinstance(operation, DeleteModel)
+            for refusal in self._populated_table(app_label, operation)
+        ]
+        if refusals:
+            raise CommandError(
+                "unsafe autodetected table drop: " + "; ".join(refusals)
+                + ". A deleted model's table is dropped automatically only when every database that may "
+                "receive the migration proves it empty. Declare a cutover migration that preserves or retires "
+                "its rows and deletes the model in an installed addon's addon.toml [[migrations]], then run "
+                "`angee build` before makemigrations."
+            )
         for app_label in sorted(retired_labels & changes.keys()):
             for migration in changes[app_label]:
                 for index, operation in enumerate(migration.operations):
@@ -697,8 +716,23 @@ class DropGuardAutodetector(MigrationAutodetector):
             table, column = model._meta.db_table, field.column
         else:
             return
+        yield from self._holding(model, rows, f"{model._meta.label_lower}.{field.name}", table, column)
+
+    def _populated_table(self, app_label: str, operation: DeleteModel) -> Iterator[str]:
+        """Describe each target database where the deleted model's table holds rows."""
+
+        model = self.from_state.apps.get_model(app_label, operation.name)
+        if model._meta.proxy or not model._meta.managed or model._meta.swapped:
+            return
+        yield from self._holding(model, model._base_manager.all(), model._meta.label_lower, model._meta.db_table, None)
+
+    @staticmethod
+    def _holding(
+        model: type[Any], rows: Any, name: str, table: str, column: str | None,
+    ) -> Iterator[str]:
+        """Describe each database that may receive ``model``'s migration where ``rows`` exist."""
+
         storage = f"table {table}" if column is None else f"column {table}.{column}"
-        name = f"{model._meta.label_lower}.{field.name}"
         aliases = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
         for alias in sorted(aliases):
             if not router.allow_migrate_model(alias, model):

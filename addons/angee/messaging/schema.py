@@ -826,7 +826,7 @@ class NotificationMessagePointerType:
 
     @strawberry.field
     def attachment(self) -> RecordPointerType:
-        """Return the same attachment-owned pointer used by the task agenda."""
+        """Return the attachment-owned pointer of the record this notification is about."""
 
         return RecordPointerType.from_attachment(cast(Any, self)._inbox_attachment)
 
@@ -1293,7 +1293,7 @@ class MessagingQuery:
         """Return the existing chatter thread attached to a model record."""
 
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1317,7 +1317,7 @@ class MessagingQuery:
         if _request_user(info) is None:
             return RecordRemovedMessagesPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
         except ValueError as error:
             return RecordRemovedMessagesPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1352,7 +1352,7 @@ class MessagingQuery:
         if user is None:
             return 0
         try:
-            record = _threaded_record(
+            record = threaded_record(
                 RecordReferenceInput(
                     model_label=model_label,
                     record_id=record_id,
@@ -1402,7 +1402,7 @@ class MessagingMutation:
         """Post an internal comment to the record's chatter thread."""
 
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
         except ValueError as error:
             return RecordMessagePostPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1446,7 +1446,7 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageUpdatePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageUpdatePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1474,7 +1474,7 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageDeletePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDeletePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1522,7 +1522,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageReactionPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageReactionPayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1551,7 +1551,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageStarPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageStarPayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1575,7 +1575,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageDonePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDonePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1605,7 +1605,7 @@ class MessagingMutation:
         if user is None:
             return RecordFollowPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
         except ValueError as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1639,7 +1639,7 @@ class MessagingMutation:
         if user is None:
             return RecordThreadPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = threaded_record(input)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -2037,7 +2037,7 @@ schemas = {
 }
 
 
-def _threaded_record(input: RecordReferenceInput) -> Any | None:
+def threaded_record(input: RecordReferenceInput) -> Any | None:
     """Return the record addressed by ``input`` when its model opts into chatter."""
 
     try:
@@ -2177,7 +2177,7 @@ def _moderate_record_message(
     if not input.confirm:
         return RecordMessageTrashPayload(error="Confirm the change to apply it.", error_code="CONFIRMATION_REQUIRED")
     try:
-        record = _threaded_record(input)
+        record = threaded_record(input)
     except ValueError as error:
         return RecordMessageTrashPayload(error=str(error), error_code="BAD_MESSAGE")
     if record is None:
@@ -2378,7 +2378,7 @@ def _readable_record(record: Any) -> Any | None:
     The ``record_thread`` gate: record chatter — its thread and messages — is
     reachable only when the actor can read the parent record, so a row reached
     elevated is authorized *through* the record's read. Re-resolving on the actor-scoped default manager (the exact
-    scope :func:`_threaded_record` uses) yields ``None`` when the record is unreadable,
+    scope :func:`threaded_record` uses) yields ``None`` when the record is unreadable,
     which the caller surfaces as ``NOT_FOUND``.
     """
 

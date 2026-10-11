@@ -895,7 +895,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         channel row alone would leave its conversation rows behind pointing at nothing.
         This deletes messages first (including messages without a thread), then threads,
         so their ``CASCADE`` subtrees (parts, reactions, participants, followers,
-        activities, notifications, attachments) go with them. Only *this*
+        notifications, attachments) go with them. Only *this*
         channel's ``(channel, external_id)`` message rows are touched, so the same
         logical message reached through another channel — a separate row in that
         channel — survives, and a body ``Fragment`` shared with it is spared (parts FK it
@@ -1940,7 +1940,7 @@ def _record_attachment(record: Any, *, role: str = "chatter") -> Any | None:
 
     The resolution logic (content-type lookup, ``select_related`` on the thread,
     unscoped read) lives once on :meth:`ThreadAttachmentManager.for_record`; the
-    follower/notification/activity managers resolve their bookkeeping edge through
+    follower and notification managers resolve their bookkeeping edge through
     that owner rather than each re-deriving it.
     """
 
@@ -2979,7 +2979,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread row: a poster holds the record's *post* access, not the thread's
         ``write``, so the save runs under ``system_context`` — the same elevation the
         queryset ``.update()`` bypassed the write gate to get, and the pattern the
-        activity verbs already use for bookkeeping writes. ``updated_at`` rides the
+        follower verbs already use for bookkeeping writes. ``updated_at`` rides the
         ``auto_now`` save hook. The ``F()``/``Greatest`` advances are resolved back onto
         the instance by Django 6's ``UPDATE ... RETURNING`` before ``post_save`` fires,
         so the row carries its DB-true counters into the publisher with no manual restore

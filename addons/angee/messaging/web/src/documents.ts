@@ -744,10 +744,10 @@ export const SetRecordFollowingDocument = graphql(`
   }
 `);
 
-// Activity reads only retained system updates. Ordinary conversation, follower,
+// History reads only retained system updates. Ordinary conversation, follower,
 // and recipient payloads remain owned by Comments; tasks about the record by projects.
-export const RecordActivityThreadDocument = graphql(`
-  query MessagingRecordActivityThread($modelLabel: String!, $recordId: ID!) {
+export const RecordHistoryThreadDocument = graphql(`
+  query MessagingRecordHistoryThread($modelLabel: String!, $recordId: ID!) {
     record_thread(
       input: {
         model_label: $modelLabel
@@ -772,10 +772,10 @@ export type PartListRow = DocumentType<typeof MessagingPartListRow>;
 export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
-export type RecordActivityThreadPayload =
-  DocumentType<typeof RecordActivityThreadDocument>["record_thread"];
+export type RecordHistoryThreadPayload =
+  DocumentType<typeof RecordHistoryThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
-export type RecordActivityMessageRow = NonNullable<RecordActivityThreadPayload["messages"]>[number];
+export type RecordHistoryMessageRow = NonNullable<RecordHistoryThreadPayload["messages"]>[number];
 export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];

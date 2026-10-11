@@ -249,9 +249,6 @@ class ThreadedModelMixin(models.Model):
     thread_creation_subtype_key: ClassVar[str] = "record_created"
     """Subtype key used for automatic record creation messages."""
 
-    thread_activity_access: ClassVar[str] = "write"
-    """Record permission required to schedule, log, complete or cancel tasks about the record."""
-
     thread_tracking_fields: ClassVar[tuple[str, ...]] = ()
     """Model field names automatically tracked into the chatter on save."""
 
@@ -444,14 +441,14 @@ class ThreadedModelMixin(models.Model):
 
         Field tracking is an automatic system write: the log belongs to the record,
         not to the actor whose save triggered it, so it goes through
-        :meth:`_message_system_post` — the system-write owner that never consults
+        :meth:`message_system_post` — the system-write owner that never consults
         :meth:`can_post`. An actor authorized to change a tracked field but not to
         post comments must still get its change logged instead of having the whole
         save rolled back by a post-access denial.
         """
 
         message_model = apps.get_model("messaging", "Message")
-        return self._message_system_post(
+        return self.message_system_post(
             body=body,
             subtype_key=subtype_key,
             message_type=message_model.MessageKind.AUTO_COMMENT,
@@ -615,14 +612,14 @@ class ThreadedModelMixin(models.Model):
         """Post one user-authored chatter message after enforcing this row's post policy.
 
         User posts ride the actor's :attr:`thread_post_access`; the message itself is
-        written by the shared system-write owner (:meth:`_message_system_post`), so the
+        written by the shared system-write owner (:meth:`message_system_post`), so the
         post gate lives in exactly one place and the automatic-log path can reuse that
         write without it.
         """
 
         if not self.can_post():
             raise PermissionDenied(f"Posting on {self._meta.label} requires {self.thread_post_access!r} access.")
-        return self._message_system_post(
+        return self.message_system_post(
             body=body,
             attachments=attachments,
             message_type=message_type,
@@ -637,7 +634,7 @@ class ThreadedModelMixin(models.Model):
         )
 
     @transaction.atomic
-    def _message_system_post(
+    def message_system_post(
         self,
         *,
         body: str = "",
@@ -897,14 +894,14 @@ class ThreadedModelMixin(models.Model):
                     )
         message_model = apps.get_model("messaging", "Message")
         if self.thread_create_log:
-            self._message_system_post(
+            self.message_system_post(
                 body=self.message_creation_message(),
                 message_type=message_model.MessageKind.NOTIFICATION,
                 subtype_key=self.thread_creation_subtype_key,
             )
         create_changes = self._field_tracker().create_changes() if created_by_id is not None else ()
         if create_changes:
-            self._message_system_post(
+            self.message_system_post(
                 body="",
                 message_type=message_model.MessageKind.AUTO_COMMENT,
                 subtype_key=self.thread_tracking_subtype_key,
@@ -941,14 +938,6 @@ class ThreadedModelMixin(models.Model):
         if not callable(has_access):
             return True
         return bool(has_access(self.thread_read_access))
-
-    def _message_activity_allowed(self) -> bool:
-        """Return whether the ambient actor can manage tasks about this record."""
-
-        has_access = getattr(self, "has_access", None)
-        if not callable(has_access):
-            return True
-        return bool(has_access(self.thread_activity_access))
 
     def thread_reader_allowed(self, user: Any) -> bool:
         """Check one recipient through the same explicit-account audience gate."""

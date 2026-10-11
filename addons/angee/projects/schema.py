@@ -10,16 +10,16 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist
 from graphql import GraphQLError
 from graphql.execution.values import get_argument_values
-from rebac import current_actor, system_context
+from rebac import current_actor
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.identity import instance_from_public_id
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
@@ -39,10 +39,8 @@ from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
-from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
-from angee.messaging.models import ThreadedModelMixin
-from angee.messaging.schema import RecordPointerType
+from angee.messaging.schema import RecordPointerType, RecordReferenceInput, threaded_record
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
@@ -57,7 +55,6 @@ Participant = apps.get_model("projects", "Participant")
 Link = apps.get_model("projects", "Link")
 ProjectBinding = apps.get_model("projects", "ProjectBinding")
 ActivityType = apps.get_model("projects", "ActivityType")
-ThreadAttachment = apps.get_model("messaging", "ThreadAttachment")
 Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
@@ -332,15 +329,18 @@ class TaskProjectionMixin:
 
         return cast(Any, self).activity_type_id
 
-    @strawberry_django.field(only=["subject_id"])
+    @strawberry_django.field(
+        only=["subject__label", "subject__content_type_id", "subject__object_id"], select_related=["subject"],
+    )
     def subject(self) -> RecordPointerType | None:
         """Return the record this task is about as a minimal pointer.
 
         The label, model label and public id come from the record's chatter
-        attachment alone; following the link re-gates through the record's read.
+        attachment; the task schema admits only the record's readers to
+        a record task, and following the link re-gates through the record's read.
         """
 
-        attachment = _subject_attachment(cast(Any, self))
+        attachment = cast(Any, self).subject
         return None if attachment is None else RecordPointerType.from_attachment(attachment)
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
@@ -421,7 +421,6 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
         return optional_public_id(user_public_id(cast(Any, self).delegate_id))
 
 
-
 @strawberry_django.type(Task)
 class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNode):
     """Console task projection with label-bearing user relations."""
@@ -454,7 +453,6 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
     parent: "ConsoleTaskType | None" = actor_scoped_to_one("parent")
     assignee: UserType | None = actor_scoped_to_one("assignee")
     delegate: UserType | None = actor_scoped_to_one("delegate")
-
 
 
 @strawberry_django.type(TaskRelation)
@@ -532,22 +530,9 @@ class ProjectBindingType(AuthoredRefMixin, AngeeNode):
         return cast(strawberry.ID, cast(Any, self).record_public_id)
 
 
-def _subject_attachment(task: Any) -> Any:
-    """Load a task's subject attachment once per row, elevated: a pointer, not the record."""
-
-    if task.subject_id is None:
-        return None
-    cached = getattr(task, "_subject_attachment", None)
-    if cached is None or cached.pk != task.subject_id:
-        with system_context(reason="projects.task.subject_pointer"):
-            cached = ThreadAttachment._base_manager.filter(pk=task.subject_id).first()
-        task._subject_attachment = cached
-    return cached
-
-
 @strawberry_django.type(ActivityType)
 class ActivityTypeType(AngeeNode):
-    """The installed, resource-declared kinds of task about a record."""
+    """The installed, resource-declared kinds of record task."""
 
     key: auto
     name: auto
@@ -556,7 +541,7 @@ class ActivityTypeType(AngeeNode):
 
 @strawberry.input
 class RecordTaskScheduleInput:
-    """A task to schedule on a record."""
+    """A record task to schedule."""
 
     model_label: str = strawberry.field(name="model_label")
     record_id: strawberry.ID = strawberry.field(name="record_id")
@@ -564,12 +549,12 @@ class RecordTaskScheduleInput:
     assignee: PublicID | None = None
     due_date: date | None = strawberry.field(name="due_date", default=None)
     note: str = ""
-    activity_type: str = strawberry.field(name="activity_type", default="todo")
+    activity_type: str | None = strawberry.field(name="activity_type", default=None)
 
 
 @strawberry.input
 class RecordTaskLogInput:
-    """A completed exchange to log on a record."""
+    """An exchange that already happened, logged on its record."""
 
     model_label: str = strawberry.field(name="model_label")
     record_id: strawberry.ID = strawberry.field(name="record_id")
@@ -578,100 +563,60 @@ class RecordTaskLogInput:
     note: str
 
 
-def _card_record(model_label: str, record_id: strawberry.ID) -> Any:
-    """Resolve a record with chatter under the actor's read scope, or refuse."""
+def _record(model_label: str, record_id: strawberry.ID) -> Any:
+    """Resolve a record with chatter under the actor's read scope, or refuse like a missing row."""
 
-    try:
-        model = apps.get_model(model_label)
-    except (LookupError, ValueError) as error:
-        raise ValidationError({"model_label": f"Unknown model {model_label!r}."}) from error
-    if not issubclass(model, ThreadedModelMixin):
-        raise ValidationError({"model_label": f"{model._meta.label} has no record chatter."})
-    record = instance_from_public_id(model, str(record_id), queryset=model._default_manager.all())
+    record = threaded_record(RecordReferenceInput(model_label=model_label, record_id=record_id))
     if record is None:
-        raise model.DoesNotExist("Record not found.")
+        raise ObjectDoesNotExist("Record not found.")
     return record
 
 
-def _card_task(task_id: strawberry.ID) -> Any:
-    """Load a task about a record by public id; the card's gate authorizes the verb."""
+def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool) -> Any:
+    """Return the record's tasks the actor reads, optimized for the selected task fields."""
 
-    with system_context(reason="projects.task.card_task_lookup"):
-        task = instance_from_public_id(Task, str(task_id), queryset=Task._base_manager.all())
-    if task is None or task.subject_id is None:
-        raise Task.DoesNotExist("Task about a record not found.")
-    return task
-
-
-def _record_tasks(model_label: str, record_id: strawberry.ID, include_done: bool) -> list[Any]:
-    """Return a record's tasks, read through the record's own gate."""
-
-    record = _card_record(model_label, record_id)
-    return list(Task.objects.for_record(record, include_done=include_done).order_by("status", "due_date", "sqid"))
-
-
-def _task_agenda(info: strawberry.Info, window_start: date, window_end: date, include_done: bool) -> list[Any]:
-    """Return the actor's assigned tasks due within ``[window_start, window_end)``."""
-
-    actor = current_actor()
-    user = getattr(request_from_info(info), "user", None)
-    if actor is None or user is None or not user.is_authenticated:
-        return []
-    return list(Task.objects.with_actor(actor).agenda(user, window_start, window_end, include_done=include_done))
+    record = threaded_record(RecordReferenceInput(model_label=model_label, record_id=record_id))
+    if record is None:
+        return Task.objects.none()
+    return optimize(Task.objects.for_record(record, include_done=include_done), info)
 
 
 @strawberry.type
 class PublicRecordTaskQuery:
-    """Tasks about a record and an assignee's dated agenda, as public task nodes."""
+    """A record's tasks as public task nodes."""
 
     @strawberry.field(name="record_tasks")
     def record_tasks(
-        self, model_label: str, record_id: strawberry.ID, include_done: bool = True,
+        self, info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool = True,
     ) -> list[TaskType]:
-        """Return the record's tasks, read through the record's own gate."""
+        """Return the record's tasks: open first, then by due date and title."""
 
-        return _record_tasks(model_label, record_id, include_done)
-
-    @strawberry.field(name="task_agenda")
-    def task_agenda(
-        self, info: strawberry.Info, window_start: date, window_end: date, include_done: bool = False,
-    ) -> list[TaskType]:
-        """Return the actor's assigned tasks due within ``[window_start, window_end)``."""
-
-        return _task_agenda(info, window_start, window_end, include_done)
+        return _record_tasks(info, model_label, record_id, include_done)
 
 
 @strawberry.type
 class ConsoleRecordTaskQuery:
-    """Tasks about a record and an assignee's dated agenda, as console task nodes."""
+    """A record's tasks as console task nodes."""
 
     @strawberry.field(name="record_tasks")
     def record_tasks(
-        self, model_label: str, record_id: strawberry.ID, include_done: bool = True,
+        self, info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool = True,
     ) -> list[ConsoleTaskType]:
-        """Return the record's tasks, read through the record's own gate."""
+        """Return the record's tasks: open first, then by due date and title."""
 
-        return _record_tasks(model_label, record_id, include_done)
-
-    @strawberry.field(name="task_agenda")
-    def task_agenda(
-        self, info: strawberry.Info, window_start: date, window_end: date, include_done: bool = False,
-    ) -> list[ConsoleTaskType]:
-        """Return the actor's assigned tasks due within ``[window_start, window_end)``."""
-
-        return _task_agenda(info, window_start, window_end, include_done)
+        return _record_tasks(info, model_label, record_id, include_done)
 
 
 @strawberry.type
 class ProjectRecordTaskMutation:
-    """Schedule, log, complete and cancel tasks about a record under the record's gate."""
+    """Schedule and log record tasks; the generic task verbs complete and drop them."""
 
     @strawberry.mutation(name="schedule_record_task")
     @action_guard("Schedule task failed.")
     def schedule_record_task(self, info: strawberry.Info, input: RecordTaskScheduleInput) -> ActionResult:
-        """Schedule an open task about a record."""
+        """Schedule an open record task."""
 
-        record = _card_record(input.model_label, input.record_id)
+        record = _record(input.model_label, input.record_id)
         assignee = authorized_permission_target(info, User, input.assignee, "read") if input.assignee else None
         task = Task.objects.schedule(
             record, title=input.title, assignee=assignee, due_date=input.due_date, note=input.note,
@@ -682,29 +627,13 @@ class ProjectRecordTaskMutation:
     @strawberry.mutation(name="log_record_task")
     @action_guard("Log exchange failed.")
     def log_record_task(self, info: strawberry.Info, input: RecordTaskLogInput) -> ActionResult:
-        """Log a completed exchange about a record."""
+        """Log an exchange that already happened as a done record task."""
 
-        record = _card_record(input.model_label, input.record_id)
+        record = _record(input.model_label, input.record_id)
         task = Task.objects.log(
             record, activity_type=input.activity_type, occurred_on=input.occurred_on, note=input.note,
         )
         return ActionResult(ok=True, message="Exchange logged.", id=task.sqid)
-
-    @strawberry.mutation(name="complete_record_task")
-    @action_guard("Complete task failed.")
-    def complete_record_task(self, info: strawberry.Info, id: PublicID, feedback: str = "") -> ActionResult:
-        """Complete a task about a record, posting it with ``feedback`` on the record."""
-
-        task = Task.objects.card_complete(_card_task(id), feedback=feedback)
-        return ActionResult(ok=True, message="Task completed.", id=task.sqid)
-
-    @strawberry.mutation(name="cancel_record_task")
-    @action_guard("Cancel task failed.")
-    def cancel_record_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Cancel a task about a record."""
-
-        task = Task.objects.card_cancel(_card_task(id))
-        return ActionResult(ok=True, message="Task canceled.", id=task.sqid)
 
 
 @strawberry.type
@@ -766,11 +695,11 @@ class ProjectTaskActionMutation:
 
     @strawberry.mutation
     @action_guard("Complete task failed.")
-    def complete_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Complete one writable task."""
+    def complete_task(self, info: strawberry.Info, id: PublicID, feedback: str = "") -> ActionResult:
+        """Complete one writable task; a record task posts ``feedback`` on its record."""
 
         target = authorized_action_target(info, Task, id, "write")
-        target.complete()
+        target.complete(feedback=feedback)
         return ActionResult(ok=True, message="Task completed.", id=target.sqid)
 
     @strawberry.mutation

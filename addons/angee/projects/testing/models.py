@@ -94,7 +94,7 @@ class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
 
 
 class ActivityType(AbstractActivityType):
-    """Concrete activity-type catalog for tasks about a record."""
+    """Concrete activity-type catalog for record tasks."""
 
     class Meta(AbstractActivityType.Meta):
         abstract = False
