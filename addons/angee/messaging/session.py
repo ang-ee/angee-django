@@ -48,17 +48,18 @@ class LiveChannelSession(LiveSession):
     """Live worker session that owns queued message media resolution and landing."""
 
     def _handle(self, kind: str, payload: Any) -> bool:
-        """Land messaging batches, conversation names and handle pictures; ignore other events.
+        """Land messaging batches, conversation names and handle avatars; ignore other events.
 
         ``chat_titles`` carries ``{conversation id: name}`` for conversations the
         source lists (joined groups), naming their untitled threads even when no
         new message arrives in them. ``handle_avatars`` carries
-        :class:`~angee.messaging.backends.ParsedHandle` rows whose ``photo`` holds the picture the network
-        shows for them, or ``None`` when it shows none; parties sets each on its handle.
+        :class:`~angee.parties.backends.AvatarReport` rows (:meth:`_fill_avatars`).
         """
 
         if kind == "messages":
             return self._ingest(payload)
+        if kind == "handle_avatars":
+            return self._fill_avatars(payload)
         if kind == "chat_titles":
             try:
                 apps.get_model("messaging", "Thread").objects.fill_chat_titles(
@@ -67,12 +68,24 @@ class LiveChannelSession(LiveSession):
             except Exception:
                 # Best-effort naming must never end the live session.
                 logger.exception("Naming chats failed for channel %s.", self.bridge.pk)
-        if kind == "handle_avatars":
-            try:
-                apps.get_model("parties", "Handle").objects.fill_avatars(payload, created_by_id=self.bridge.owner_id)
-            except Exception:
-                # Best-effort pictures must never end the live session.
-                logger.exception("Storing handle pictures failed for channel %s.", self.bridge.pk)
+        return self._still_wanted()
+
+    def _fill_avatars(self, reports: list[Any]) -> bool:
+        """Set each reported avatar on its handle in bounded chunks, checking liveness between them.
+
+        Best-effort per report: one that fails is logged and the rest still land,
+        and none of them ends the live session.
+        """
+
+        handles = apps.get_model("parties", "Handle").objects
+        for start in range(0, len(reports), INGEST_CHUNK):
+            for report in reports[start : start + INGEST_CHUNK]:
+                try:
+                    handles.fill_avatar(report)
+                except Exception:
+                    logger.exception("Setting a %s avatar failed for channel %s.", report.platform, self.bridge.pk)
+            if start + INGEST_CHUNK < len(reports) and not self._still_wanted():
+                return False
         return self._still_wanted()
 
     def _ingest(self, batch: list[tuple[Any, Any]]) -> bool:

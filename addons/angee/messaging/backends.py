@@ -27,7 +27,6 @@ from django.apps import apps
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
-from angee.parties.backends import ParsedPhoto
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
@@ -50,13 +49,6 @@ class ParsedHandle:
     external_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Source-owned identity evidence used to refresh the resolved Handle."""
-    photo: ParsedPhoto | None = None
-    """The picture the handle's network shows, with its bytes in hand.
-
-    Message ingest ignores it; a live session reports pictures off the ingest
-    path in a ``handle_avatars`` event, where ``None`` states the network shows
-    none, and parties stores them (``HandleManager.fill_avatars``).
-    """
 
 
 @dataclass(frozen=True)

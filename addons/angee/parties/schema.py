@@ -18,8 +18,12 @@ from django.apps import apps
 from django.db import transaction
 from django.db.models import Prefetch
 from rebac import system_context
+from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
+from strawberry_django.fields.field import StrawberryDjangoField
+from strawberry_django.queryset import run_type_get_queryset
 
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -35,6 +39,7 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.integrate.schema import BridgeTypeMixin
+from angee.parties.managers import DisplayAvatarPrefetches
 from angee.parties.mixins import LinkSource
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -78,10 +83,21 @@ _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 )
 
 
-def _display_avatar_prefetch(index: int) -> Callable[[strawberry.Info], Prefetch]:
-    """Select one of the prefetches :meth:`PartyManager.display_avatar` reads for a page of parties."""
+def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]:
+    """Select the named read :meth:`PartyManager.display_avatar_prefetches` batches for a page.
 
-    return lambda info: Party.objects.display_avatar_prefetches(session_user(info))[index]
+    Avatars load through the actor's readable files, optimized for the selected
+    ``FileType`` fields.
+    """
+
+    def prefetch(info: strawberry.Info) -> Prefetch:
+        actor = session_user(info)
+        field = cast(StrawberryDjangoField, info._field)
+        files = read_scoped_queryset(apps.get_model("storage", "File"), actor)
+        avatars = optimize(run_type_get_queryset(files, field.django_type, info), info)
+        return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
+
+    return prefetch
 
 
 @strawberry_django.type(Party)
@@ -99,10 +115,10 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 
     @strawberry_django.field(
         only=["avatar_id"],
-        prefetch_related=[_display_avatar_prefetch(index) for index in range(3)],
+        prefetch_related=[_display_avatar_prefetch(name) for name in DisplayAvatarPrefetches._fields],
     )
     def display_avatar(self, info: strawberry.Info) -> FileType | None:
-        """Return the picture the party shows: its own photo, else its strongest handle's picture."""
+        """Return the avatar the party shows: its own, else its strongest handle's."""
 
         return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
 

@@ -13,7 +13,8 @@ sources converge on that one ``finalize``: a client upload (``File.objects.draft
 reserves the row, :meth:`File.issue_upload_token` hands the client a one-shot URL,
 :meth:`File.receive_bytes` lands the bytes) and a server-side ingest of bytes
 already in hand (:meth:`FileManager.ingest_bytes` — what a sync fetching message
-attachments or contact photos uses). A presigned backend or adopting bytes
+attachments uses — and :meth:`FileManager.ingest_image` for avatars, which
+keeps them on their own drive). A presigned backend or adopting bytes
 already on the backend are further siblings on the same path. Renditions, virus
 scanning,
 extraction, and search belong to downstream addons that subscribe to
@@ -100,7 +101,9 @@ from angee.storage.uploads import (
     UPLOAD_TOKEN_SALT,
     BodyTooLarge,
     CappedReader,
+    attachment_extension,
     detect_mime,
+    require_image,
     sha256_stream,
     truncate_filename,
 )
@@ -644,6 +647,14 @@ class FileQuerySet(TrashQuerySet["File"], OwnerQuerySet["File"], AngeeQuerySet["
 
         return cast(FileQuerySet, self.trashed().filter(trashed_at__lt=cutoff))
 
+    def images(self) -> FileQuerySet:
+        """Return the live images on the image drive (:meth:`FileManager.ingest_image`)."""
+
+        return cast(
+            FileQuerySet,
+            self.untrashed().filter(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, upload_state=UploadState.READY),
+        )
+
     def delete(self) -> tuple[int, dict[str, int]]:
         """Refuse bulk delete: it bypasses soft-trash and orphans backend bytes.
 
@@ -803,22 +814,21 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             folder_id=folder_id,
         )
 
-    def ingest_image(self, content: bytes, *, filename: str, owner_id: Any = None) -> Any:
-        """Ingest an image a server renders inline (a contact photo, an avatar) as :meth:`ingest_bytes`.
+    def ingest_image(self, content: bytes) -> Any:
+        """Ingest an image the server renders inline (an avatar) and return its READY File.
 
-        The bytes must be a raster type in ``ANGEE_STORAGE_IMAGE_TYPES`` (an SVG can
-        carry script) within ``ANGEE_STORAGE_IMAGE_MAX_BYTES``. The type is sniffed
-        from the bytes alone, as :func:`detect_mime` sniffs them at finalize, never
-        taken from the caller's filename. Raises :class:`exceptions.UploadTooLarge`
-        or :class:`exceptions.UploadTypeRefused` before anything is stored.
+        The bytes must pass :func:`require_image`. The stored filename takes the
+        sniffed type's extension. Images land ownerless on
+        ``ANGEE_STORAGE_IMAGE_DRIVE``, so deduplication only ever returns another
+        such image, never a user's file, and read access comes from the records
+        that show the image. Raises :class:`exceptions.UploadTooLarge` or
+        :class:`exceptions.UploadTypeRefused` before anything is stored.
         """
 
-        if len(content) > int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES):
-            raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
-        mime = detect_mime(content[:MIME_SNIFF_BYTES])
-        if mime not in settings.ANGEE_STORAGE_IMAGE_TYPES:
-            raise exceptions.UploadTypeRefused(f"{mime} is not an accepted image type.")
-        return self.ingest_bytes(content, filename=filename, owner_id=owner_id)
+        mime = require_image(content)
+        return self.ingest_bytes(
+            content, filename=f"image{attachment_extension(mime)}", drive_slug=settings.ANGEE_STORAGE_IMAGE_DRIVE
+        )
 
     def ingest_stream(
         self,
@@ -1450,6 +1460,22 @@ class File(TaggedModel, TrashMixin, OwnerMixin, AngeeDataModel):
             raise ValidationError("The file exceeds the byte limit.") from error
         if size != self.size_bytes or digest != self.content_hash:
             raise ValidationError("The stored bytes do not match the file identity.")
+        return content
+
+    def read_image(self, *, expected_digest: str = "") -> bytes:
+        """Read this file's verified bytes to render elsewhere, as an image :func:`require_image` admits.
+
+        A file stored before the image rule existed may be a type it refuses or
+        larger than its cap; that raises :class:`exceptions.UploadTypeRefused` or
+        :class:`exceptions.UploadTooLarge` instead of passing the bytes on.
+        ``expected_digest`` is as in :meth:`read_verified`.
+        """
+
+        cap = int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES)
+        if self.size_bytes > cap:
+            raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
+        content = self.read_verified(max_bytes=cap, expected_digest=expected_digest)
+        require_image(content)
         return content
 
     def issue_upload_token(self) -> str:

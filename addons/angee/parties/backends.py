@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
-from typing import Any, Protocol
+from typing import Any
 
 from django.apps import apps
 from django.db.models import CharField, Exists, OuterRef, Q, Subquery, Value
@@ -41,27 +41,20 @@ class ParsedPhoto:
     content_hash: str = ""
 
 
-class ReportedHandle(Protocol):
-    """A handle as a source reports it, with the picture its network shows.
+@dataclass(frozen=True)
+class AvatarReport:
+    """The avatar a handle's own network shows, as a live source reports it.
 
-    Read-only properties, so a frozen adapter DTO (``messaging``'s
-    ``ParsedHandle``) satisfies the protocol without parties importing it.
+    The handle is named by the identity ingest gave it (``external_id`` first,
+    else ``value``); a report never creates or renames one. ``avatar`` holds the
+    image bytes, or ``None`` when the network states that it shows none, which
+    clears the handle's avatar (:meth:`HandleManager.fill_avatar`).
     """
 
-    @property
-    def platform(self) -> str: ...
-
-    @property
-    def value(self) -> str: ...
-
-    @property
-    def external_id(self) -> str: ...
-
-    @property
-    def display_name(self) -> str: ...
-
-    @property
-    def photo(self) -> ParsedPhoto | None: ...
+    platform: str
+    value: str
+    external_id: str
+    avatar: bytes | None
 
 
 @dataclass(frozen=True)
@@ -259,7 +252,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched media and take the stored form before the driver's page transaction begins."""
 
-        return apps.get_model("parties", "Party").objects.prepare_contact(parsed, created_by_id=self.bridge.owner_id)
+        return apps.get_model("parties", "Party").objects.prepare_contact(parsed)
 
     def _links(self, stream: Any) -> tuple[Any, ...]:
         """Read locators in one query, including locally pushed revision evidence."""

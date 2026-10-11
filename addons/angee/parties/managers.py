@@ -14,7 +14,6 @@ converges instead of duplicating. The sync runs under ``system_context``, so
 from __future__ import annotations
 
 import logging
-import mimetypes
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -27,7 +26,20 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
-from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    Exists,
+    F,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    TextField,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce, NullIf
 from django.utils.crypto import salted_hmac
 from phonenumbers import (
@@ -46,16 +58,17 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
-from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto, ReportedHandle
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import ASSERTING_SOURCES, LinkSource, ScoredLinkMixin
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
-from angee.storage.models import UploadState
 
 logger = logging.getLogger(__name__)
 
-_DISPLAY_AVATAR_HANDLES = "_display_avatar_handles"
-"""Where a page's prefetch parks each party's ranked handles with a picture."""
+_DISPLAY_OWN_AVATAR = "_display_own_avatar"
+"""Where a page's prefetch parks each party's own avatar the actor can read."""
+_DISPLAY_AVATAR_LINKS = "_display_avatar_links"
+"""Where a page's prefetch parks each party's ranked links to handles with an avatar."""
 
 # An undecided link below this confidence is a suggestion awaiting review.
 _REVIEW_CONFIDENCE = 0.5
@@ -76,6 +89,15 @@ class Signing(NamedTuple):
     """The sender's resolved party, or ``None``."""
     owner_id: Any
     """The audit owner of the mail the fragment came from."""
+
+
+class DisplayAvatarPrefetches(NamedTuple):
+    """The reads :meth:`PartyManager.display_avatar` batches for a page of parties."""
+
+    own: Prefetch
+    """Each party's own avatar, when the actor can read it."""
+    links: Prefetch
+    """Each party's ranked links to handles with an avatar, with the handle and avatar loaded."""
 
 
 class HandleAssociationStatus(StrEnum):
@@ -503,11 +525,11 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         return handle
 
     def set_avatar(self, handle: Any, avatar: Any | None) -> bool:
-        """Set the picture ``handle``'s own network shows for it; return whether it changed.
+        """Set the avatar ``handle``'s own network shows for it; return whether it changed.
 
-        The one write path of :attr:`Handle.avatar`: a source reports the picture,
-        never writes the column itself. ``avatar`` is a stored image
-        (``File.objects.ingest_image``), or ``None`` when the network shows none.
+        The one write path of :attr:`Handle.avatar`: a source reports the avatar
+        (:meth:`fill_avatar`), never writes the column itself. ``avatar`` is a stored
+        image (``File.objects.ingest_image``), or ``None`` when the network shows none.
         """
 
         avatar_id = getattr(avatar, "pk", None)
@@ -520,40 +542,32 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         handle.avatar_id = avatar_id
         return True
 
-    def fill_avatars(self, reported: Iterable[ReportedHandle], *, created_by_id: Any) -> int:
-        """Set the picture a source reports on each handle; return how many changed.
+    def fill_avatar(self, report: AvatarReport) -> bool:
+        """Set the avatar a source reports on its handle; return whether it changed.
 
-        Each report states the picture the handle's network shows now: a photo, or
-        none when the network shows none, which clears the handle's picture. Each
-        handle resolves on the identity it has (:meth:`upsert`). Its picture is
-        stored as an image outside any lock, and a picture storage refuses (not an
-        image, too large) is skipped: the handle keeps the picture it had.
+        The handle is the one :meth:`upsert` lands the reported identity on: the
+        ``external_id`` match, else the row owning ``(platform, value)``. A report
+        for a handle that does not exist changes nothing, so a report never creates
+        a handle or rewrites its identity. ``avatar=None`` clears the handle's
+        avatar; bytes storage refuses as an image (empty, not a raster image, too
+        large) change nothing.
         """
 
-        files = apps.get_model("storage", "File").objects
-        changed = 0
-        for handle_report in reported:
-            photo = handle_report.photo
-            avatar = None
-            if photo is not None and photo.data:
-                extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
-                try:
-                    avatar = files.ingest_image(
-                        photo.data, filename=f"avatar{extension or '.bin'}", owner_id=created_by_id
-                    )
-                except UploadTooLarge, UploadTypeRefused:
-                    logger.info("A reported %s handle picture was not an accepted image.", handle_report.platform)
-                    continue
-            with system_context(reason="parties.handle.fill_avatars"):
-                handle = self.upsert(
-                    platform=handle_report.platform,
-                    value=handle_report.value,
-                    external_id=handle_report.external_id,
-                    display_name=handle_report.display_name,
-                    created_by_id=created_by_id,
-                )
-            changed += self.set_avatar(handle, avatar)
-        return changed
+        with system_context(reason="parties.handle.fill_avatar"):
+            handles = self.filter(platform=report.platform)
+            handle = handles.filter(external_id=report.external_id).first() if report.external_id else None
+            if handle is None:
+                handle = handles.filter(value=report.value).first()
+        if handle is None:
+            return False
+        avatar = None
+        if report.avatar is not None:
+            try:
+                avatar = apps.get_model("storage", "File").objects.ingest_image(report.avatar)
+            except UploadTooLarge, UploadTypeRefused:
+                logger.info("A reported %s handle avatar was not an accepted image.", report.platform)
+                return False
+        return self.set_avatar(handle, avatar)
 
 
 class PartyHandleQuerySet(AngeeQuerySet):
@@ -1760,57 +1774,59 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     """
 
     def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
-        """Return the picture a party shows: its own photo, else its strongest handle's picture.
+        """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.
 
-        The handle is the one whose link to the party ranks highest in the resolution
-        order (``PartyHandle``'s ordering, which :meth:`PartyHandleQuerySet.winner`
-        ranks by), among the handles resolved to the party that ``actor`` can read
-        and that carry a picture. Derived for display only: never stored, and never
-        part of the directory projection, so no address book receives it. A page of
-        parties batches it with :meth:`display_avatar_prefetches`.
+        Its own avatar counts when ``actor`` can read it. Otherwise it is the avatar of
+        the handle resolved to the party whose link ranks first in ``PartyHandle``'s
+        own ordering (the order :meth:`PartyHandleQuerySet.winner` decides by), among
+        the links, handles and avatars ``actor`` can read. Derived for display only:
+        never stored, and never part of the directory projection, so no address book
+        receives it. A page of parties batches the same reads with
+        :meth:`display_avatar_prefetches`.
         """
 
-        if party.avatar_id is not None:
-            return party.avatar
-        handles = getattr(party, _DISPLAY_AVATAR_HANDLES, None)
-        if handles is None:
-            handles = self._display_avatar_handles(actor).filter(party_id=party.pk)[:1]
-        handle = next(iter(handles), None)
-        return handle.avatar if handle is not None else None
+        if hasattr(party, _DISPLAY_OWN_AVATAR):
+            own, links = getattr(party, _DISPLAY_OWN_AVATAR), getattr(party, _DISPLAY_AVATAR_LINKS)
+        else:
+            avatars = read_scoped_queryset(apps.get_model("storage", "File"), actor)
+            own = avatars.filter(pk=party.avatar_id).first() if party.avatar_id is not None else None
+            links = self._display_avatar_links(actor, avatars).filter(party_id=party.pk)[:1]
+        if own is not None:
+            return own
+        link = next(iter(links), None)
+        return link.handle.avatar if link is not None else None
 
-    def display_avatar_prefetches(self, actor: Any) -> list[Prefetch]:
-        """Return the three prefetches :meth:`display_avatar` reads for a page of parties.
+    def display_avatar_prefetches(self, actor: Any, *, avatars: Any) -> DisplayAvatarPrefetches:
+        """Return the prefetches :meth:`display_avatar` reads for a page of parties.
 
-        Its own photo, its ranked handles with a picture, and their pictures. Every
-        level is a top-level lookup through ``actor``'s read scope (nested
-        prefetches inside a lookup's queryset are not kept), so the actor-stamped
-        rows are reused rather than read again for each party.
+        ``avatars`` is ``actor``'s readable File queryset every avatar loads through;
+        a GraphQL page passes it optimized for its selection.
         """
 
-        files = read_scoped_queryset(apps.get_model("storage", "File"), actor)
-        return [
-            Prefetch("avatar", queryset=files),
-            Prefetch("handles", queryset=self._display_avatar_handles(actor), to_attr=_DISPLAY_AVATAR_HANDLES),
-            Prefetch(f"{_DISPLAY_AVATAR_HANDLES}__avatar", queryset=files),
-        ]
+        return DisplayAvatarPrefetches(
+            own=Prefetch("avatar", queryset=avatars, to_attr=_DISPLAY_OWN_AVATAR),
+            links=Prefetch(
+                "party_handles", queryset=self._display_avatar_links(actor, avatars), to_attr=_DISPLAY_AVATAR_LINKS
+            ),
+        )
 
     @staticmethod
-    def _display_avatar_handles(actor: Any) -> Any:
-        """Handles resolved to their party that ``actor`` can read and that carry a picture, best first.
+    def _display_avatar_links(actor: Any, avatars: Any) -> Any:
+        """Links ``actor`` reads to handles resolved to their party, carrying an avatar in ``avatars``.
 
-        Ranked by the resolving link, key by key in ``PartyHandle``'s own ordering.
+        In ``PartyHandle``'s own ordering, with each link's handle and its avatar loaded.
         """
 
-        link_model = apps.get_model("parties", "PartyHandle")
-        resolving = link_model._base_manager.filter(party_id=OuterRef("party_id"), handle_id=OuterRef("pk"))
-        ranks: dict[str, Any] = {}
-        order: list[str] = []
-        for key in link_model._meta.ordering:
-            name = key.lstrip("-")
-            ranks[f"_display_rank_{name}"] = Subquery(resolving.values(name)[:1])
-            order.append(f"{'-' if key.startswith('-') else ''}_display_rank_{name}")
-        handles = read_scoped_queryset(apps.get_model("parties", "Handle"), actor).filter(avatar__isnull=False)
-        return handles.annotate(**ranks).order_by(*order)
+        handles = read_scoped_queryset(apps.get_model("parties", "Handle"), actor)
+        return (
+            read_scoped_queryset(apps.get_model("parties", "PartyHandle"), actor)
+            .filter(
+                handle__in=handles.values("pk"),
+                handle__party_id=F("party_id"),
+                handle__avatar__in=avatars.values("pk"),
+            )
+            .prefetch_related(Prefetch("handle", queryset=handles), Prefetch("handle__avatar", queryset=avatars))
+        )
 
     def identity_basis(self, party_id: str, *, actor: Any, lock: bool = False) -> IdentityBasis:
         """Read one Party's identity under ``actor``'s read authorization.
@@ -2281,11 +2297,11 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             )
         return result
 
-    def prepare_contact(self, parsed: ParsedContact, *, created_by_id: Any) -> ParsedContact:
+    def prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched photo bytes before contact locks and name countries as stored.
 
-        The photo is stored as an image (``File.objects.ingest_image``, which
-        refuses a non-image or oversized photo) and keeps its content address.
+        The photo is stored as the person's avatar (``File.objects.ingest_image``,
+        which refuses a non-image or oversized photo) and keeps its content address.
         Addresses take their stored form
         (:meth:`AddressManager.as_stored`), so the projection both sync sides compare
         reads a card's "USA" as the stored "US".
@@ -2300,34 +2316,32 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             raise ValidationError("Contact photo URIs must be resolved before preparation.")
         if not photo.data:
             return replace(parsed, photo=None)
-        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
-        avatar = apps.get_model("storage", "File").objects.ingest_image(
-            photo.data,
-            filename=f"avatar{extension or '.bin'}",
-            owner_id=created_by_id,
-        )
+        avatar = apps.get_model("storage", "File").objects.ingest_image(photo.data)
         mime: Any = avatar.mime_type
         return replace(
             parsed,
             photo=ParsedPhoto(content_hash=avatar.content_hash, mime=mime.mime_type if mime is not None else ""),
         )
 
-    def resolve_contact_photo(self, photo: ParsedPhoto | None, *, lock: bool = False) -> Any:
-        """Resolve a prepared avatar, optionally validating it under its row lock."""
+    def resolve_contact_photo(self, photo: ParsedPhoto | None) -> Any:
+        """Resolve a prepared photo to its stored avatar image, validated under its row lock.
+
+        Only the image drive holds avatars (``File.objects.images``), so a photo's
+        content address never resolves to a user's file with the same bytes.
+        """
 
         if photo is None:
             return None
         if not photo.content_hash or photo.data is not None or photo.uri:
             raise ValidationError("Contact photos must have a prepared content address.")
-        rows = apps.get_model("storage", "File").objects.filter(
-            content_hash=photo.content_hash,
-            mime_type__mime_type=photo.mime,
-            upload_state=UploadState.READY,
-            is_trashed=False,
+        avatar = (
+            apps.get_model("storage", "File")
+            .objects.images()
+            .filter(content_hash=photo.content_hash, mime_type__mime_type=photo.mime)
+            .lock_if_supported()
+            .order_by("pk")
+            .first()
         )
-        if lock:
-            rows = rows.lock_if_supported()
-        avatar = rows.order_by("pk").first()
         if avatar is None:
             raise ValidationError("The prepared contact photo is no longer available.")
         return avatar
@@ -2355,7 +2369,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         if not parsed.uid:
             return None
-        parsed = self.prepare_contact(parsed, created_by_id=created_by_id)
+        parsed = self.prepare_contact(parsed)
 
         person_model = apps.get_model("parties", "Person")
         handle_model = apps.get_model("parties", "Handle")
@@ -2416,7 +2430,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                             "birthday": parsed.birthday,
                             "anniversary": parsed.anniversary,
                             # Preparation stored the bytes before this transaction.
-                            "avatar": self.resolve_contact_photo(parsed.photo, lock=True),
+                            "avatar": self.resolve_contact_photo(parsed.photo),
                             "raw_vcard": parsed.raw_vcard,
                             "source_etag": parsed.etag,
                             "created_by_id": created_by_id,

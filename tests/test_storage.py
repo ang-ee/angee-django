@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -59,6 +60,7 @@ PNG_BYTES = bytes.fromhex(
     "0049454e44ae426082"
 )
 PNG_SHA256 = hashlib.sha256(PNG_BYTES).hexdigest()
+SVG_BYTES = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
 storage_schema = importlib.import_module("angee.storage.schema")
 
 
@@ -289,6 +291,23 @@ def drive(tmp_path: Path, transactional_db: None) -> Any:
             created_by=alice,
         )
     row.alice = alice
+    return row
+
+
+@pytest.fixture
+def image_drive(drive: Any) -> Any:
+    """Add storage's image drive beside the ``assets`` drive, on the same backend."""
+
+    with system_context(reason="test storage image drive"):
+        row = Drive._base_manager.create(
+            backend=drive.backend,
+            slug=settings.ANGEE_STORAGE_IMAGE_DRIVE,
+            name="Images",
+            prefix="images",
+            created_by=drive.alice,
+        )
+    row.alice = drive.alice
+    row.assets = drive
     return row
 
 
@@ -956,19 +975,50 @@ def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content(drive: Any, settings: Any) -> None:
-    """An image a server renders inline is typed by its bytes, never by the filename it arrives under."""
+def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content(
+    image_drive: Any, settings: Any
+) -> None:
+    """An image a server renders inline is typed and named by its bytes, and lands ownerless on its own drive."""
 
     with system_context(reason="test storage ingest image"):
-        image = File.objects.ingest_image(PNG_BYTES, filename="avatar.png", owner_id=drive.alice.pk)
+        image = File.objects.ingest_image(PNG_BYTES)
         assert (image.upload_state, image.mime_type.mime_type) == (UploadState.READY, "image/png")
-        script = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
-        for refused in (script, b"%PDF-1.4 not a picture"):
+        assert (image.drive_id, image.owner_id, image.filename) == (image_drive.pk, None, "image.png")
+        assert File.objects.images().filter(pk=image.pk).exists()
+        for refused in (SVG_BYTES, b"%PDF-1.4 not a picture"):
             with pytest.raises(exceptions.UploadTypeRefused):
-                File.objects.ingest_image(refused, filename="avatar.png", owner_id=drive.alice.pk)
+                File.objects.ingest_image(refused)
         settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
         with pytest.raises(exceptions.UploadTooLarge):
-            File.objects.ingest_image(PNG_BYTES, filename="avatar.png", owner_id=drive.alice.pk)
+            File.objects.ingest_image(PNG_BYTES)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image_drive: Any) -> None:
+    """Deduplication stays within the image drive, so an avatar never shares a row with a private upload."""
+
+    with system_context(reason="test storage image isolation"):
+        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+        image = File.objects.ingest_image(PNG_BYTES)
+        again = File.objects.ingest_image(PNG_BYTES)
+    assert image.pk != private.pk
+    assert again.pk == image.pk
+    assert (private.drive_id, private.owner_id) == (image_drive.assets.pk, image_drive.alice.pk)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_read_image_passes_on_only_an_image_the_image_rule_admits(image_drive: Any, settings: Any) -> None:
+    """A file stored before the rule may be a script or oversized; reading it as an image refuses it."""
+
+    with system_context(reason="test storage read image"):
+        image = File.objects.ingest_image(PNG_BYTES)
+        script = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=image_drive.alice.pk)
+        assert image.read_image(expected_digest=image.content_hash) == PNG_BYTES
+        with pytest.raises(exceptions.UploadTypeRefused):
+            script.read_image()
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+        with pytest.raises(exceptions.UploadTooLarge):
+            image.read_image()
 
 
 @pytest.mark.django_db(transaction=True)
