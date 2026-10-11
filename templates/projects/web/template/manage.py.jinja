@@ -18,7 +18,10 @@ def main() -> None:
     from angee.base.changesets import changeset
 
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
-    with changeset(activity="system", change_reason=f"manage.{command}"):
+    if command in {"runserver", "runserver_plus", "runworker", "daphne", "gunicorn", "uvicorn", "test"}:
+        execute_from_command_line(sys.argv)
+        return
+    with changeset(fresh=True, activity="system", change_reason=f"manage.{command}"):
         execute_from_command_line(sys.argv)
 
 

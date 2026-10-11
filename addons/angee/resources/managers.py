@@ -13,7 +13,7 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.changesets import changeset
+from angee.base.changesets import changeset, current_changeset
 from angee.base.identity import public_id_of
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
@@ -160,9 +160,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                 selected = ResourceGroup(
                     group.entry, group.model_label, group.dataset.subset(rows=[index]), [group.source_rows[index]],
                 )
-                with transaction.atomic():
+                with changeset(activity="seed"), transaction.atomic():
                     resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
                     with system_context(reason="resources.load_xref resolve existing target"):
+                        current_changeset(record=True)
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
                     if resolution is not None and resolution.instance is not None:
@@ -220,9 +221,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             reason = "resources.validate" if dry_run else "resources.load"
             with (
                 system_context(reason=reason),
+                changeset(activity="seed"),
                 transaction.atomic(),
-                changeset(activity="seed", change_reason=reason),
             ):
+                current_changeset(record=True)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups

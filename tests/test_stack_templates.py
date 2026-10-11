@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import subprocess
+import sys
+import textwrap
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -22,6 +26,7 @@ from typing import Any
 import pytest
 import yaml
 from django.apps import AppConfig
+from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPRequestEvent, HTTPScope, Scope
 
 from angee.addons import addon_manifest
 
@@ -805,7 +810,9 @@ def test_docker_operator_reads_the_stack_owner_ssh_at_its_home(render: str) -> N
     """An operator home gives the daemon that literal HOME and its .ssh, read-only, at the same path."""
 
     home = "/home/deploy"
-    stack = _render_local_stack(operator_home=home) if render == "local" else _render_dev_docker_stack(operator_home=home)
+    stack = (
+        _render_local_stack(operator_home=home) if render == "local" else _render_dev_docker_stack(operator_home=home)
+    )
     operator = stack["services"]["operator"]
 
     assert operator["env"] == {"HOME": home}
@@ -959,10 +966,64 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert "{BASE_DIR}/workspaces/src/angee-arp/addons" in arp["ANGEE_ADDON_DIRS"]
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
 
-    manage = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text()
-    assert 'with changeset(activity="system", change_reason=f"manage.{command}"):' in manage
-    assert "        execute_from_command_line(sys.argv)" in manage
-    assert "system_context" not in manage
+
+def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> None:
+    """A real one-shot command attributes its captured write through rendered manage.py."""
+
+    manage = tmp_path / "manage.py"
+    manage.write_text(
+        (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
+    )
+    addon_dir = tmp_path / "addons"
+    commands = addon_dir / "captureprobe" / "management" / "commands"
+    commands.mkdir(parents=True)
+    for package in (commands, commands.parent, commands.parent.parent):
+        (package / "__init__.py").touch()
+    (commands / "captureprobe.py").write_text(textwrap.dedent('''\
+        from django.apps import apps
+        from django.core.management.base import BaseCommand
+        from rebac import system_context
+
+        class Command(BaseCommand):
+            requires_system_checks = []
+
+            def handle(self, *args, **options):
+                with system_context(reason="captureprobe.write"):
+                    apps.get_model("notes", "Note").objects.create(title="Command write")
+        '''))
+    script = textwrap.dedent('''\
+        import runpy
+        import sys
+        from pathlib import Path
+        from django.apps import apps
+        from django.conf import settings
+        from django.core.management import call_command
+        from tests.composed_host import boot
+
+        root, target = map(Path, sys.argv[1:])
+        boot(root, target / "runtime", [target / "addons"], root_apps=["example.notes", "captureprobe"])
+        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
+        call_command("migrate", run_syncdb=True, interactive=False, verbosity=0, skip_checks=True)
+        call_command("rebac", "sync", verbosity=0)
+        sys.argv = [str(target / "manage.py"), "captureprobe"]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+        Changeset = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
+        context = Changeset._base_manager.get()
+        history = apps.get_model("notes", "Note").history.get()
+        assert history.changeset_id == context.pk
+        assert history.history_change_reason == context.change_reason == "manage.captureprobe"
+        assert context.actor == ""
+        assert context.activity == "system"
+        assert context.state == "closed"
+        assert context.outcome == "success"
+        ''')
+    env = dict(os.environ)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(ROOT), str(tmp_path)],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert result.returncode == 0, f"rendered management command failed:\n{result.stdout}\n{result.stderr}"
 
 
 # --- dev (process) contracts ---------------------------------------------------
@@ -1829,15 +1890,16 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
     assert "trusted_proxies_strict" in caddyfile
     assert "header_up X-Forwarded-For {client_ip}" in caddyfile
 
-    seen: list[tuple[tuple[str, int], str]] = []
+    seen: list[tuple[tuple[str, int] | None, str]] = []
 
-    async def app(scope: dict[str, Any], _receive: Any, _send: Any) -> None:
-        seen.append((scope["client"], scope["scheme"]))
+    async def app(scope: Scope, _receive: ASGIReceiveCallable, _send: ASGISendCallable) -> None:
+        if scope["type"] != "lifespan":
+            seen.append((scope["client"], scope["scheme"]))
 
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request"}
+    async def receive() -> HTTPRequestEvent:
+        return {"type": "http.request", "body": b"", "more_body": False}
 
-    async def send(_message: dict[str, Any]) -> None:
+    async def send(_message: ASGISendEvent) -> None:
         pass
 
     middleware = ProxyHeadersMiddleware(app, trusted_hosts=trusted)
@@ -1846,8 +1908,16 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
         ("192.0.2.21", "198.51.100.9, 203.0.113.8", "https"),
         ("198.51.100.9", "198.51.100.9", "https"),
     ):
-        scope: dict[str, Any] = {
+        scope: HTTPScope = {
             "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "root_path": "",
+            "server": None,
             "client": (peer, 4123),
             "scheme": "http",
             "headers": [

@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.utils import timezone
-from rebac import RebacMixin, RelationshipTuple, SubjectRef, to_object_ref, write_relationships
+from rebac import (
+    RebacMixin,
+    RelationshipTuple,
+    SubjectRef,
+    backend,
+    is_anonymous_actor,
+    to_object_ref,
+    write_relationships,
+)
+from rebac.resources import model_resource_type
+from rebac.schema.walker import subject_allowed_by_relation
 
+from angee.base.fields import StateField
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeManager
 from angee.base.refs import MergePolicy, RecordRefMixin
@@ -29,9 +40,32 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
     objects = AngeeManager()
 
+    class Action(models.TextChoices):
+        CREATE = "C", "Create"
+        UPDATE = "U", "Update"
+        DELETE = "D", "Delete"
+
+    class Activity(models.TextChoices):
+        MANUAL = "manual", "Manual"
+        PULL = "pull", "Pull"
+        PUSH = "push", "Push"
+        IMPORT = "import", "Import"
+        MERGE = "merge", "Merge"
+        REVERT = "revert", "Revert"
+        SEED = "seed", "Seed"
+        SYSTEM = "system", "System"
+
+    class State(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    class Outcome(models.TextChoices):
+        SUCCESS = "success", "Success"
+        FAILURE = "failure", "Failure"
+
     actor = models.TextField(blank=True, editable=False)
-    action = models.CharField(max_length=1, choices=(("C", "Create"), ("U", "Update"), ("D", "Delete")), default="U")
-    activity = models.CharField(max_length=64, default="manual")
+    action = StateField(choices_enum=Action, default=Action.UPDATE)
+    activity = StateField(choices_enum=Activity, default=Activity.MANUAL)
     change_reason = models.TextField(blank=True)
     correlation_id = models.CharField(max_length=255, blank=True, db_index=True)
     idempotency_key = models.CharField(max_length=255, blank=True, db_index=True)
@@ -42,12 +76,8 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     origin = GenericForeignKey("origin_content_type", "origin_object_id")
     occurred_at = models.DateTimeField(default=timezone.now)
     recorded_at = models.DateTimeField(default=timezone.now, editable=False)
-    state = models.CharField(max_length=16, choices=(("open", "Open"), ("closed", "Closed")), default="open")
-    outcome = models.CharField(
-        max_length=16,
-        choices=(("success", "Success"), ("failure", "Failure")),
-        blank=True,
-    )
+    state = StateField(choices_enum=State, default=State.OPEN)
+    outcome = StateField(choices_enum=Outcome, null=True, blank=True)
     hash = models.CharField(max_length=64, blank=True, editable=False)
     counts = models.JSONField(default=dict, blank=True, editable=False)
     touched = models.JSONField(default=list, blank=True, editable=False)
@@ -57,27 +87,53 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         swappable = "ANGEE_CHANGESET_MODEL"
         rebac_resource_type = "provenance/changeset"
         ordering = ("-recorded_at", "-pk")
+        indexes = (
+            models.Index(fields=("-recorded_at", "-id")),
+            models.Index(fields=("origin_content_type", "origin_object_id")),
+        )
 
-    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
+    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert."""
 
-        return {"actor": (SubjectRef.parse(self.actor),)} if self.actor else {}
+        if not self.actor:
+            return {}
+        actor = SubjectRef.parse(self.actor)
+        if is_anonymous_actor(actor):
+            return {}
+        definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
+        if definition is None:
+            return {}
+        return {
+            relation.name: (actor,)
+            for relation in sorted(definition.relations, key=lambda relation: relation.name)
+            if relation.backing is None and subject_allowed_by_relation(relation, actor, caveat_name="")
+        }
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the native actor permission fact in the insert transaction."""
 
         inserting = self._state.adding
-        if self.actor:
-            SubjectRef.parse(self.actor)
-        with transaction.atomic():
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=using):
             super().save(*args, **kwargs)
-            if inserting and self.actor:
+            if inserting:
                 write_relationships(
                     [
                         RelationshipTuple(
                             resource=to_object_ref(self),
-                            relation="actor",
-                            subject=SubjectRef.parse(self.actor),
-                        ),
+                            relation=relation,
+                            subject=subject,
+                        )
+                        for relation, subjects in self.proposed_relationships(using=using).items()
+                        for subject in subjects
                     ]
                 )
+
+    def close(self, outcome: str) -> None:
+        """Close persisted attribution as model bookkeeping, outside actor gates."""
+
+        type(self)._base_manager.filter(pk=self.pk).update(
+            state=self.State.CLOSED,
+            outcome=self.Outcome(outcome),
+            touched=sorted(set(self.touched)),
+        )

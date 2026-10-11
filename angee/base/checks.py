@@ -18,6 +18,7 @@ from rebac.resources import model_resource_type
 from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
 from simple_history.models import registered_models
 
+from angee.base.autoconfig import SETTINGS
 from angee.base.impl import (
     _hook_paths,
     _resolve_hook_path,
@@ -36,13 +37,13 @@ def check_changeset_middleware(
     """Require strict HTTP attribution to follow REBAC's actor resolution."""
 
     del app_configs, kwargs
-    if not app_settings.REBAC_STRICT_MODE or not getattr(settings, "ANGEE_CHANGESET_MODEL", None):
+    if not app_settings.REBAC_STRICT_MODE or not getattr(
+        settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]
+    ):
         return []
     if not registered_models:
         return []
     middleware = settings.MIDDLEWARE
-    if not middleware:
-        return []
     actor = "rebac.middleware.ActorMiddleware"
     boundary = "angee.base.middleware.ChangesetMiddleware"
     if (

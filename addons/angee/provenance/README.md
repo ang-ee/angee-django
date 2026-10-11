@@ -1,26 +1,16 @@
 # Provenance
 
-This addon stores the swappable Changeset metadata used by
-[`angee.base.changesets`](../../../angee/base/changesets.py). Source declarations
-are abstract; the composer emits the concrete model. An addon composing history
-declares provenance in its own manifest.
+The addon stores attribution for logical writes. Addons composing history declare
+provenance as a dependency; the composer emits its concrete
+[`Changeset`](models.py). The [core boundary](../../../angee/base/changesets.py)
+owns context and commit-aware persistence, without granting an authorization bypass.
 
-`changeset()` reads REBAC's current actor and sudo reason. It grants no bypass,
-and records its metadata only when a captured write occurs. Empty request and
-command boundaries require no database table. Nested boundaries join the outer
-changeset. Request middleware runs after REBAC's actor middleware; tasks and the
-host's management entrypoint open system activities without granting a bypass.
-The model is not history-tracked.
+The [permission schema](permissions.zed) owns direct access. Other actor types
+contribute additive permission fragments from their own addons. Attribution never
+grants access to touched records; history reads follow those records' permissions.
 
-The serialized actor is attribution data. A native actor relationship tuple
-grants that actor read access; platform admins may also read. Integration actors
-use their canonical `integrate/integration` reference. Rule and seed sources use
-the registered `provenance/rule` and `provenance/seed` subject types. The owning
-source chooses its stable subject ID; these types require no Source table.
-History surfaces will authorize reads through the touched record's own read
-permission. The changeset index itself does not grant access to touched records.
-
-`ANGEE_CHANGESET_MODEL` follows Django's swappable-model convention. Its model
-must supply the metadata fields declared by Changeset. The `cst_` sqid prefix
-names the default implementation. Export hashing, revert, archives and tree heads
-are subsequent capabilities; the reserved hash column is currently empty.
+Storage follows Django's swappable-model convention, with the default owned by
+[base autoconfig](../../../angee/base/autoconfig.py). Consumer history-FK migrations
+must depend on `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)`.
+Django's `makemigrations` owns the initial schema; see the
+[runtime migration policy](../../../docs/composer.md#addon-owned-runtime-migrations).

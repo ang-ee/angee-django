@@ -109,17 +109,17 @@ def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -
 
     A tool call carries a synthetic request whose only meaningful attribute is ``user``:
     the ambient actor's user, or anonymous for a non-user or ineligible user. No HTTP
-    middleware runs, so open a changeset under the ambient REBAC actor. The synthetic
+    middleware runs, so own a fresh changeset under the ambient REBAC actor. The synthetic
     user remains the session identity; history attribution comes from the changeset.
     Reads persist no changeset. GraphQL reports handled errors on the result;
     translate them before leaving the boundary so the changeset closes as failed.
-    Preserve reversion's transaction: successful statements commit before the
-    result's handled errors are translated to a tool error.
+    Successful statements commit before handled GraphQL errors are translated
+    to a tool error; that error marks the attribution boundary as failed.
     """
 
     close_old_connections()
     try:
-        with changeset():
+        with changeset(fresh=True):
             with transaction.atomic():
                 user = _actor_user()
                 request = HttpRequest()

@@ -3,7 +3,7 @@
 // @rebac_schema_revision: 1
 
 definition provenance/changeset {
-    relation actor: auth/user | integrate/integration | provenance/rule | provenance/seed
+    relation actor: auth/user | provenance/rule | provenance/seed
     relation admin: angee/role // rebac:const=admin
     permission create = actor + admin->member
     permission read = actor + admin->member

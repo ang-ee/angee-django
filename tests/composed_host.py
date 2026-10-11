@@ -15,8 +15,10 @@ import os
 import runpy
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
+from unittest import TestSuite
 
 import environ
 
@@ -203,6 +205,7 @@ def model_snapshot() -> dict[str, Any]:
         for model in addon.get_models():
             state = ModelState.from_model(model)
             manager = type(model._default_manager)
+            history_model = getattr(getattr(model, "history", None), "model", None)
             snapshot[model._meta.label_lower] = {
                 "fields": {name: MigrationWriter.serialize(field)[0] for name, field in state.fields.items()},
                 "options": {name: MigrationWriter.serialize(value)[0] for name, value in state.options.items()},
@@ -216,9 +219,7 @@ def model_snapshot() -> dict[str, Any]:
                     parent._meta.label_lower: field.name if field else None
                     for parent, field in model._meta.parents.items()
                 },
-                "history": getattr(getattr(model, "history", None), "model", None)._meta.label_lower
-                if hasattr(getattr(model, "history", None), "model")
-                else None,
+                "history": history_model._meta.label_lower if history_model is not None else None,
                 "revision": reversion.is_registered(model),
                 "checks": [{"id": issue.id, "message": str(issue)} for issue in model.check()],
             }
@@ -250,13 +251,23 @@ def main() -> None:
     args = parser.parse_args()
     if args.test_postgresql and args.action != "tests":
         parser.error("--test-postgresql is available only for native test runs")
+    from angee.base.changesets import changeset
+
+    boundary = (
+        nullcontext() if args.action == "tests"
+        else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
+    )
+    with boundary:
+        run(args)
+
+
+def run(args: argparse.Namespace) -> None:
+    """Dispatch one composed-host action without a process-wide test boundary."""
+
     boot(
-        args.source_root.resolve(),
-        args.runtime_dir.resolve(),
-        [path.resolve() for path in args.addon_dir],
-        include_examples=not args.no_examples,
-        root_apps=args.app,
-        test_postgresql=args.test_postgresql,
+        args.source_root.resolve(), args.runtime_dir.resolve(),
+        [path.resolve() for path in args.addon_dir], include_examples=not args.no_examples,
+        root_apps=args.app, test_postgresql=args.test_postgresql,
     )
     if args.action == "tests":
         from django.apps import apps
@@ -265,6 +276,8 @@ def main() -> None:
         from django.db import connection
         from django.test.runner import DiscoverRunner
 
+        from angee.base.changesets import changeset
+
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
 
@@ -272,6 +285,24 @@ def main() -> None:
                 databases = super().setup_databases(**kwargs)
                 call_command("rebac", "sync", verbosity=0)
                 return databases
+
+            def build_suite(self, *test_labels: Any, **kwargs: Any) -> TestSuite:
+                suite = super().build_suite(*test_labels, **kwargs)
+
+                def fixture_boundaries(tests: TestSuite) -> None:
+                    for test in tests:
+                        if isinstance(test, TestSuite):
+                            fixture_boundaries(test)
+                        else:
+                            # Setup fixtures need attribution; the test body owns
+                            # the request/task/command boundaries it exercises.
+                            setattr(test, "setUp", changeset(
+                                fresh=True, activity="system",
+                                change_reason=f"manage.{args.action}.{test.id()}.fixtures",
+                            )(test.setUp))
+
+                fixture_boundaries(suite)
+                return suite
 
         assert args.test_label, "Native tests require explicit test labels"
         if not args.test_postgresql:
@@ -315,7 +346,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    from angee.base.changesets import changeset
-
-    with changeset(activity="system", change_reason="manage.test"):
-        main()
+    main()

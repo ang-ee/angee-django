@@ -66,7 +66,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ("contenttypes", "0002_remove_content_type_name"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        (settings.ANGEE_CHANGESET_MODEL.split(".", 1)[0], "__latest__"),
+        migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL),
     ]
     operations = [
         migrations.AddField("recordlink", "applied_at", models.DateTimeField(blank=True, null=True)),

@@ -130,17 +130,14 @@ also accepts non-user REBAC subjects.
 `auth/user` subject its ID is the user's database primary key; `actor_user_id`
 converts it to the FK's Python type and returns no user for other subject types.
 
-**Changeset** — one logical write boundary's actor, action, activity, reason,
-origin and touched-model index. [`changeset()`](../angee/base/changesets.py) owns
-the context; the [provenance addon](../addons/angee/provenance/README.md) stores
-the swappable metadata. It is never historized.
+**Changeset** — attribution for one logical write, owned by
+[`changeset()`](../angee/base/changesets.py) and stored by the
+[provenance addon](../addons/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
-classifies the logical work (manual, import, merge, revert, seed or system).
-`change_reason` uses simple-history's vocabulary. `correlation_id` connects
-boundaries; `idempotency_key` records an ingress key without enforcing global
-uniqueness. `occurred_at` names application time and `recorded_at` storage time.
-State is open/closed; outcome is success/failure.
+classifies the logical work, including `pull`/`push` for sync, `import` for a
+one-shot import and `seed` for seed loads. The
+[`Changeset` enums](../addons/angee/provenance/models.py) own that vocabulary.
 
 **Write group** — an internal ephemeral identity for nested ORM dispatch. Its
 deduplication ends with the dispatch; successive writes in one changeset remain
