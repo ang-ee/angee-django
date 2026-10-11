@@ -4,3 +4,8 @@ description = "Changesets attributing canonical record history to its actor and 
 keywords = ["provenance", "history"]
 category = "Data"
 depends_on = ["angee.graphql"]
+
+[[migrations]]
+name = "retire_reversion"
+app_label = "provenance"
+module = "runtime_migrations.retire_reversion"

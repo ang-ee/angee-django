@@ -17,7 +17,6 @@ from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from typing import Any, ClassVar, cast
 
-import reversion
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -43,7 +42,6 @@ from angee.base.mixins import (
     CreationKeyQuerySet,
     HistoryMixin,
     OwnerMixin,
-    RevisionMixin,
     TrashMixin,
     TrashQuerySet,
 )
@@ -900,7 +898,7 @@ class SectionOp(StrEnum):
     PREPEND = "prepend"
 
 
-class MarkdownPage(RevisionMixin, HistoryMixin, models.Model, metaclass=RebacModelBase):
+class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
     """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
@@ -910,8 +908,6 @@ class MarkdownPage(RevisionMixin, HistoryMixin, models.Model, metaclass=RebacMod
 
     runtime = True
     extends = "knowledge.Page"
-
-    revisioned_fields = ("body",)
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
@@ -1162,9 +1158,6 @@ class MarkdownPage(RevisionMixin, HistoryMixin, models.Model, metaclass=RebacMod
                 field_names |= {"body_hash", "word_count", "updated_at"}
                 kwargs["update_fields"] = field_names
         super().save(*args, **kwargs)
-        if reversion.is_active():
-            # django-reversion follows MTI parent links when reading field_dict.
-            reversion.add_to_revision(self.page_ptr)
 
 
 # ---------------------------------------------------------------------------

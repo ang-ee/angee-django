@@ -32,7 +32,6 @@ from angee.graphql.ids import PublicID, optional_public_id, require_public_id
 from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
@@ -1144,7 +1143,6 @@ def _projects_schema_bucket(
             _PARTICIPANT_RESOURCE.query,
             _LINK_RESOURCE.query,
             _BINDING_RESOURCE.query,
-            revisions(project_type),
         ],
         "mutation": [
             ProjectTaskActionMutation,

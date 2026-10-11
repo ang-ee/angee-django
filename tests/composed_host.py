@@ -191,7 +191,6 @@ def resource_values() -> dict[str, Any]:
 def model_snapshot() -> dict[str, Any]:
     """Expose final Django state, manager selection and tracking for comparisons."""
 
-    import reversion
     from django.apps import apps
     from django.db.migrations.state import ModelState
     from django.db.migrations.writer import MigrationWriter
@@ -220,7 +219,6 @@ def model_snapshot() -> dict[str, Any]:
                     for parent, field in model._meta.parents.items()
                 },
                 "history": history_model._meta.label_lower if history_model is not None else None,
-                "revision": reversion.is_registered(model),
                 "checks": [{"id": issue.id, "message": str(issue)} for issue in model.check()],
             }
     return snapshot

@@ -70,7 +70,6 @@ It has no task or scheduler dependency.
 | deepdiff >= 9.1.0 | Native `DeepDiff` comparisons of nested remote/local and base/side projections | `angee.integrate` owns three-way sync classification; canonical JSON hashing stays with [`canonical_json_sha256`](../angee/base/serialization.py) |
 | jsonpatch >= 1.34 | RFC 6902 JSON Patch, including `test` preconditions | `angee.integrate` composes write-back preconditions alongside the transport's remote-version fence |
 | django.contrib.postgres | Postgres full-text search (`SearchVectorField`, `GinIndex`, `SearchQuery`) | `messaging.Fragment.search` — stamped once at fragment creation (content-addressed rows are immutable, so no trigger/queue); dedup indexes each unique text exactly once. Postgres-only: the SQLite test backend leaves the vector NULL |
-| django-reversion | Versioned field snapshots and revert | `RevisionMixin` convenience API, composer-emitted model registration |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
 | django-import-export >= 4.4 + tablib | Native Dataset parsing, model field coercion, instance loading, import lifecycle, row results and transactions | Source grouping/diagnostic indexes, tier/xref/adoption policy and canonical ledger/grant hooks; models select native resource subclasses for domain manager persistence. `WorkflowDefinitionResource` delegates each row to `WorkflowManager.install_definition`; the default-only resource transaction surrounds the complete load. The bounded declaration-constraint evaluator remains because Django Q.check fails open on database errors |
 | pyyaml | YAML parsing substrate | Resource loader reads `.yaml`/`.yml` resource files; django-yamlconf consumes project settings YAML |
@@ -144,7 +143,7 @@ and checks that its default manager composes `AppendOnlyQuerySet`.
 Audit-history exclusions: `django-easy-audit` was evaluated and rejected because
 GPL code is incompatible with a framework composed into commercial consumers.
 `django-reversion-compare` was evaluated and rejected for the same GPL reason;
-`django-reversion` itself remains the locked owner for snapshots and revert.
+`django-simple-history` owns snapshots and revert.
 
 ### Stack serve mode
 

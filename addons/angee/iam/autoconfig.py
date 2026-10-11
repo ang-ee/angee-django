@@ -18,7 +18,6 @@ SETTINGS = {
         "angee.base.middleware.ChangesetMiddleware",
         "angee.iam.middleware.BearerTokenCsrfExemptMiddleware",
         "simple_history.middleware.HistoryRequestMiddleware",
-        "reversion.middleware.RevisionMiddleware",
         "axes.middleware.AxesMiddleware",
     ],
     "AUTHENTICATION_BACKENDS:append": [

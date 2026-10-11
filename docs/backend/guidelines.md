@@ -1787,9 +1787,6 @@ Their docstrings own the exact behavior.
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.
-  Where `revision` is taken (django-reversion's reverse query name on the user
-  model), the model renames the counter through `REVISION_FIELD` and its
-  GraphQL type still exposes it as `revision`.
 - **Creation keys:** `CreationKeyMixin` stores a scoped client creation key and
   content fingerprint. Replays go through `CreationKeyQuerySet.for_creation_key`;
   `angee.E023` requires the declared uniqueness constraint.

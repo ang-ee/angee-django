@@ -8,7 +8,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
-import reversion
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
@@ -982,45 +981,6 @@ class HistoryMixin(models.Model):
             current_changeset(required=True, record=True)
         with write_group():
             return super().delete(*args, **kwargs)
-
-
-class RevisionMixin(models.Model):
-    """Track declared field snapshots through django-reversion."""
-
-    revisioned_fields: ClassVar[tuple[str, ...]] = ()
-    """Model field names registered with django-reversion."""
-
-    class Meta:
-        """Django model options for revision-only abstract inheritance."""
-
-        abstract = True
-
-    @property
-    def revisions(self) -> Any:
-        """Return this row's django-reversion versions newest-first."""
-
-        versions = reversion.models.Version.objects.get_for_object(self)
-        return versions.select_related("revision")
-
-    def revert_to(self, version: Any) -> None:
-        """Restore declared revisioned fields from ``version`` and save.
-
-        Saves with ``update_fields`` so unrelated in-memory columns are not
-        flushed. The method records its own revert revision so integrity does
-        not depend on the caller's transport opening a reversion block.
-        """
-
-        data = version.field_dict
-        reverted: list[str] = []
-        for name in self.revisioned_fields:
-            if name in data:
-                setattr(self, name, data[name])
-                reverted.append(name)
-        if not reverted:
-            return
-        with transaction.atomic(), reversion.create_revision():
-            self.save(update_fields=update_fields_with_auto_now(self, reverted))
-            reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 
 
 class ImmutableFieldsMixin(models.Model):

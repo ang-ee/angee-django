@@ -10,8 +10,7 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
   blocks, and a ``DO_NOTHING`` key (history), which keeps pointing at the record;
 - a polymorphic edge (:class:`~angee.base.refs.RecordRefMixin`) follows its
   model's ``merge_policy``, which blocks unless the edge declares another;
-- any other generic foreign key has no declared policy and blocks, except a
-  reversion snapshot, which is history and keeps pointing at the record.
+- any other generic foreign key has no declared policy and blocks.
 
 A row that names a record in a form no reference reads (a resource ledger's
 public id), or work that retiring the record would cancel (an unfinished workflow
@@ -53,7 +52,6 @@ from rebac.actors import model_can_resolve_subject, to_subject_ref
 from rebac.errors import NoActorResolvedError
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
-from reversion.models import Version
 
 from angee.base.actors import instance_actor
 from angee.base.identity import instances_from_public_ids
@@ -292,10 +290,8 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
             yield EdgeReference(edge, edge.merge_policy, declared)
         for pointer in edge._meta.private_fields:
             if isinstance(pointer, GenericForeignKey) and pointer is not declared:
-                # A pointer no edge declares has no policy: a revision snapshot is
-                # history, and any other one refuses rather than dangling.
-                policy = MergePolicy.KEEP if issubclass(edge, Version) else MergePolicy.BLOCK
-                yield EdgeReference(edge, policy, pointer)
+                # A pointer no edge declares has no policy and refuses the merge.
+                yield EdgeReference(edge, MergePolicy.BLOCK, pointer)
 
 
 class MergeableMixin(models.Model):

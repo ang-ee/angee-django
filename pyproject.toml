@@ -41,7 +41,6 @@ dependencies = [
   "django-celery-beat>=2.9",
   "channels>=4.0",
   "cryptography>=44",
-  "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
   "django-zed-rebac>=0.26.0",

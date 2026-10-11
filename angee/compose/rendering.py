@@ -10,7 +10,6 @@ from __future__ import annotations
 from django.db import models
 from rebac.mixins import REBAC_META_OPTIONS
 
-from angee.base.mixins import RevisionMixin
 from angee.base.tiers import ResourceTier
 from angee.compose.model_composition import ModelComposition
 
@@ -100,21 +99,6 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             f"    class Meta({meta_name}):",
             *meta_lines,
         ]
-        # Registration is the dependency's native API on the completed Django
-        # class. A concrete parent's revision registration does not opt its child in.
-        if any(issubclass(base, RevisionMixin) for base in (*donors, source)):
-            imports.add("import reversion")
-            lines.extend(
-                [
-                    "",
-                    f"if {name}.revisioned_fields:",
-                    f"    for parent_model in {name}._meta.parents:",
-                    "        if not reversion.is_registered(parent_model):",
-                    "            reversion.register(parent_model, fields=())",
-                    f"    reversion.register({name}, fields=(*{name}.revisioned_fields,",
-                    f"        *(field.name for field in {name}._meta.parents.values())))",
-                ]
-            )
         bodies.append("\n".join(lines))
     return "\n".join(
         [
