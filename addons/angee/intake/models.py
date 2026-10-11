@@ -26,7 +26,6 @@ from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
-from angee.parties.mixins import LinkSource
 from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
@@ -659,10 +658,12 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
         with system_context(reason="intake.need.link_requester"):
             party = apps.get_model("parties", "Party").objects.for_user(user)
             handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
-            # A claimed address is unverified: the link waits for review rather than
-            # deciding who sends from it.
-            apps.get_model("parties", "PartyHandle").objects.link(
-                party, handle, confidence=0.4, source=LinkSource.EMAIL_MATCH, is_confirmed=False
+            # A claimed address is unverified: parties' claim owner records it for
+            # review, with this request as its readable evidence, and it decides
+            # nothing. Its checks run under this named system context, the
+            # authority both callers already hold.
+            apps.get_model("parties", "PartyHandle").objects.propose_claimed_handle(
+                party, handle, evidence=self, actor=None
             )
             self.party = party
         return user
