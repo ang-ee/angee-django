@@ -261,6 +261,9 @@ class AngeeModel(TimestampMixin, RebacMixin):
     objects = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
 
+    _angee_base = AngeeUnscopedManager()
+    """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
     extends: str | None = None
     """Optional ``app_label.ModelName`` target this source model extends."""
 
@@ -298,6 +301,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+        base_manager_name = "_angee_base"
 
     def delete_blocker(self) -> str | None:
         """Return a public-safe deletion refusal, or ``None`` when allowed.
