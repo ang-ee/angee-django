@@ -14,12 +14,14 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
   reversion snapshot, which is history and keeps pointing at the record.
 
 A row that names a record in a form no reference reads (a resource ledger's
-public id) is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``.
+public id), or work that retiring the record would cancel (an unfinished workflow
+run), is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``.
 
 A move re-keys the pointing column. Where the survivor already holds an equal
 row under the reference's identity (an edge's ``merge_identity``, an
 auto-created many-to-many link's pair), the merged record's copy is dropped; any
-other unique collision refuses the merge. The merged record's own many-to-many
+other unique collision refuses the merge, including one under a rule no field set
+describes (an expression constraint). The merged record's own many-to-many
 rows are its data, not references: they leave with it unless
 :meth:`MergeableMixin.merge_fields` carries them over. Stored REBAC
 relationships naming a merged record (a share, a membership) refuse the merge:
@@ -41,7 +43,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import DO_NOTHING, Exists, OuterRef, ProtectedError, Q, RestrictedError
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
@@ -57,17 +59,23 @@ from angee.base.actors import instance_actor
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
 from angee.base.mixins import AppendOnlyModel, AuditMixin, auto_now_stamps
-from angee.base.refs import MergePolicy, RecordRefMixin, concrete_child_models, generic_pointer_model
-from angee.base.scoping import lock_if_supported
+from angee.base.refs import (
+    MergePolicy,
+    RecordRefMixin,
+    concrete_child_models,
+    generic_pointer_model,
+    unique_field_sets,
+)
+from angee.base.scoping import lock_if_supported, read_scoped_queryset
 
 MERGE_REASON = "merge"
 """The system-context reason a merge's moves record."""
 
 MERGE_LIMIT = 100
+"""The most records one merge folds into its survivor."""
 
 _AUDIT_FIELDS = frozenset(field.name for field in AuditMixin._meta.local_fields)
 """Columns recording who wrote a row, which an identity duplicate may differ in."""
-"""The most records one merge folds into its survivor."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +140,7 @@ class Reference:
         target = self.lookup(survivor)
         held = self.model._base_manager.filter(**target)
         identity = _merge_identity(self.model)
-        for fields, condition in _unique_sets(self.model):
+        for fields, condition in unique_field_sets(self.model):
             if not set(self.columns) <= set(fields):
                 continue
             others = [name for name in fields if name not in self.columns]
@@ -153,7 +161,16 @@ class Reference:
                     f"Both records already have {self.label} with the same {', '.join(fields)}; "
                     "resolve that before merging."
                 )
-        rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
+        try:
+            with transaction.atomic():
+                rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
+        except IntegrityError as error:
+            # A rule the field sets above cannot express (an expression constraint)
+            # still refuses the merge instead of failing it.
+            raise ValidationError(
+                f"Moving {self.label} to the record that is kept breaks one of their rules; "
+                "resolve that before merging."
+            ) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,21 +252,31 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
 
     Foreign keys are the ones Django's delete collects (hidden ones included)
     across the model's multi-table parents and children, which share its key;
-    parent links are the row itself. Link rows of the model's own forward
-    many-to-many fields are its data and are left out. Polymorphic edges are
+    parent links are the row itself. A link row's key to the record on the
+    model's own many-to-many is the record's data and is left out. The other key
+    of a many-to-many to the model itself is another record pointing at it,
+    unless the relation is symmetrical, whose rows mirror the record's own.
+    Polymorphic edges are
     every installed :class:`RecordRefMixin` model: some accept targets their
     schema does not declare, so declarations cannot narrow the scan.
     """
 
     tree = [model, *model._meta.get_parent_list(), *_descendants(model)]
-    own_links = {field.remote_field.through for owner in tree for field in owner._meta.local_many_to_many}
+    own_links = {
+        (field.remote_field.through._meta.label, name)
+        for owner in tree
+        for field in owner._meta.local_many_to_many
+        for name in (
+            (field.m2m_field_name(), field.m2m_reverse_field_name())
+            if field.remote_field.symmetrical
+            else (field.m2m_field_name(),)
+        )
+    }
     seen: set[tuple[str, str]] = set()
     for owner in tree:
         for relation in get_candidate_relations_to_delete(owner._meta):
-            if relation.parent_link or relation.related_model in own_links:
-                continue
             key = (relation.related_model._meta.label, relation.field.name)
-            if key in seen:
+            if relation.parent_link or key in own_links or key in seen:
                 continue
             seen.add(key)
             if relation.on_delete == DO_NOTHING:
@@ -321,13 +348,16 @@ class MergeableMixin(models.Model):
         if len(records) > MERGE_LIMIT:
             raise ValidationError(f"Merge at most {MERGE_LIMIT} records at once.")
         with transaction.atomic(), actor_context(actor):
-            found = instances_from_public_ids(model, records, queryset=model._default_manager.all())
+            found = instances_from_public_ids(model, records, queryset=read_scoped_queryset(model, actor))
             gone = sorted(set(records) - set(found))
             merged_ids = sorted({row.pk for row in found.values()})
             if self.pk in merged_ids:
                 raise ValidationError("A record cannot be merged into itself.")
-            rows = lock_if_supported(model._base_manager.filter(pk__in=(self.pk, *merged_ids)).order_by("pk"))
-            locked = {row.pk: row.with_actor(actor) for row in rows}
+            rows = model._base_manager.filter(pk__in=(self.pk, *merged_ids)).order_by("pk")
+            # The kept record only changes, so new rows may still refer to it; a
+            # merged record goes, so nothing new may refer to it before the moves.
+            locked = {row.pk: row.with_actor(actor) for row in lock_if_supported(rows, no_key=True)}
+            list(lock_if_supported(rows.exclude(pk=self.pk)))
             gone += [public for public, row in found.items() if row.pk not in locked]
             if gone or self.pk not in locked:
                 raise ValidationError(f"These records no longer exist: {', '.join(sorted(gone)) or 'the kept one'}.")
@@ -480,16 +510,3 @@ def _descendants(model: type[models.Model]) -> Iterator[type[models.Model]]:
     for child in concrete_child_models(model):
         yield child
         yield from _descendants(child)
-
-
-def _unique_sets(model: type[models.Model]) -> Iterator[tuple[tuple[str, ...], Q]]:
-    """Yield each unique field set of ``model`` with the condition it applies under."""
-
-    for field in model._meta.concrete_fields:
-        if field.unique and not field.primary_key:
-            yield (field.name,), Q()
-    for together in model._meta.unique_together:
-        yield tuple(together), Q()
-    for constraint in model._meta.constraints:
-        if isinstance(constraint, models.UniqueConstraint) and constraint.fields:
-            yield tuple(constraint.fields), constraint.condition or Q()

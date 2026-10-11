@@ -694,7 +694,9 @@ data through REBAC, never a queryset bypass.
 - **Merge re-points references as named system work.** This is a deliberate
   exception to the actor-scope rule above.
   - [`MergeableMixin.merge`](../../angee/base/merge.py) first authorizes the actor:
-    `write` on the survivor and `delete` on each merged record.
+    it finds the merged records through the actor's read scope, even inside an
+    outer system context, and needs `write` on the survivor and `delete` on each
+    merged record.
   - Only then does it move references under `system_context(reason="merge")`,
     including deleting a merged record's copy of an identity row the survivor
     already holds. Under an actor, REBAC only deletes and recreates an edge,
