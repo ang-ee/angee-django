@@ -74,7 +74,7 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
     _xml,
 )
-from angee.storage.exceptions import UploadTooLarge
+from angee.storage.exceptions import UploadTargetNotFound, UploadTooLarge
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, make_integration
 from tests.test_storage import PNG_BYTES
@@ -1991,23 +1991,13 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
     assert replica.stream.cursor == {"sync_token": replica.server.token}
 
 
-@pytest.mark.parametrize(
-    ("photo", "code"),
-    [
-        ("inline_script", "unsupported_photo"),
-        ("fetched_oversized", "unsupported_photo"),
-        ("no_drive", "photo_not_stored"),
-    ],
-)
+@pytest.mark.parametrize("photo", ["inline_script", "fetched_oversized"])
 def test_a_card_whose_photo_storage_refuses_waits_in_quarantine_and_the_rest_land(
-    replica: Replica, settings: Any, photo: str, code: str
+    replica: Replica, settings: Any, photo: str
 ) -> None:
-    """Inline, fetched or with no image drive yet, syncing it photo-less would let a write-back strip the photo."""
+    """Inline or fetched, syncing it without the photo would let a later write-back strip the photo from the card."""
 
-    if photo == "no_drive":
-        # A real image, but no default drive exists to provision the image drive beside.
-        line = f"PHOTO;ENCODING=b;TYPE=PNG:{base64.b64encode(PNG_BYTES).decode()}"
-    elif photo == "inline_script":
+    if photo == "inline_script":
         script = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>').decode()
         line = f"PHOTO;ENCODING=b;TYPE=SVG:{script}"
     else:
@@ -2022,8 +2012,20 @@ def test_a_card_whose_photo_storage_refuses_waits_in_quarantine_and_the_rest_lan
 
     assert set(Person.objects.values_list("source_uid", flat=True)) == {"grace"}
     discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
-    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, code)
+    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, "unsupported_photo")
     assert not File.objects.exists()
+
+
+def test_a_photo_storage_cannot_take_yet_fails_the_page_so_it_retries(replica: Replica) -> None:
+    """No default drive to provision the image drive beside is a transient state, not a card to set aside."""
+
+    photo = base64.b64encode(PNG_BYTES).decode()
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{photo}\r\nEND:VCARD"))
+    with pytest.raises(UploadTargetNotFound):
+        replica.pull()
+    assert not Person.objects.exists()
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == {}
 
 
 @pytest.mark.parametrize(("refusal", "code"), [("oversized", "unsupported_photo"), ("unverified", "photo_unavailable")])

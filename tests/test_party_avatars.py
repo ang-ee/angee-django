@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -103,7 +104,7 @@ def test_a_report_lands_where_upsert_lands_when_its_external_id_and_value_name_d
 
 
 def test_avatars_stored_before_the_image_drive_move_onto_it_once_and_leave_the_old_rows(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One deduplicated onto a user's own file moves off it; a refused one keeps its pointer and never fails migrate."""
 
@@ -129,6 +130,27 @@ def test_avatars_stored_before_the_image_drive_move_onto_it_once_and_leave_the_o
     # The post-migrate receiver runs it for the parties app only, and a refused row never fails it.
     parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
     parties_signals._rehome_avatars(app_config=SimpleNamespace(label="storage"), using="default")
+
+    # Any failure in a row, a storage outage included, leaves that party for the next run.
+    with system_context(reason="test legacy avatars again"):
+        Party._base_manager.filter(pk=shared.pk).update(avatar=private)
+
+    def outage(*_args: Any, **_kwargs: Any) -> bytes:
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(File, "read_image", outage)
+    assert Party.objects.rehome_avatars() == 0
+    with system_context(reason="test legacy avatars kept"):
+        assert Party._base_manager.get(pk=shared.pk).avatar_id == private.pk
+
+    # The receiver never fails a migrate, and waits until storage's tables exist.
+    rehome = Mock(side_effect=RuntimeError("database unavailable"))
+    monkeypatch.setattr(type(Party.objects), "rehome_avatars", rehome)
+    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
+    assert rehome.call_count == 1
+    monkeypatch.setattr(parties_signals, "has_table", lambda _using, model: model._meta.model_name != "file")
+    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
+    assert rehome.call_count == 1
 
 
 def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> None:

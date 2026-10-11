@@ -29,7 +29,7 @@ from django.db import transaction
 from django.db.models.signals import post_delete, post_migrate, post_save
 from rebac import system_context
 
-from angee.base.signals import connect_for_models, migrated_model
+from angee.base.signals import connect_for_models, has_table, migrated_model
 from angee.iam.events import person_created
 from angee.parties.models import Handle, PartyHandle
 
@@ -52,11 +52,21 @@ def connect() -> None:
 
 
 def _rehome_avatars(*, app_config: object, using: str, **kwargs: object) -> None:
-    """Move avatars stored before storage's image drive onto it, once per migrate."""
+    """Move avatars stored before storage's image drive onto it, once per migrate.
+
+    Best-effort: it needs storage's tables as well as the party table, and no
+    failure, a storage outage included, ever fails the migrate; the next one retries.
+    """
 
     party_model = migrated_model(app_config=app_config, using=using, app_label="parties", model_name="Party")
-    if party_model is not None:
+    if party_model is None:
+        return
+    if not all(has_table(using, apps.get_model("storage", name)) for name in ("File", "Drive")):
+        return
+    try:
         party_model._default_manager.rehome_avatars()
+    except Exception:
+        logger.exception("Moving party avatars onto the image drive failed; the next migrate retries.")
 
 
 def _link_person(sender: Any, instance: Any, **kwargs: Any) -> None:

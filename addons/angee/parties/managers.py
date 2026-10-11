@@ -48,7 +48,7 @@ from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import ASSERTING_SOURCES, LinkSource, ScoredLinkMixin
-from angee.storage.exceptions import UploadError, UploadTooLarge, UploadTypeRefused
+from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 logger = logging.getLogger(__name__)
 
@@ -1801,7 +1801,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         of a handle resolution gave to this party (``Handle.party``, so only the
         party that won a handle shows its avatar), ranked by what that resolution
         materialised on the handle: a human-confirmed winner
-        (``party_link_confirmed``) first, then the oldest handle. Only the handles
+        (``party_link_confirmed``) first, then the oldest handle. Link confidence
+        does not rank, so among unconfirmed handles an older inferred one shows
+        before a newer one a card asserts. Only the handles
         and avatars ``actor`` can read count, which is what a party shared with its
         handles grants. Derived for display only: never stored, and never part of
         the directory projection, so no address book receives it. A page of
@@ -1840,11 +1842,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         it could land on a user's own file, which the avatar read rule would share
         with the party's readers. Each such avatar's bytes are re-ingested as an
         image and its party re-pointed; the old row stays untouched, since it may be
-        someone's own file. Idempotent and isolated per party: an avatar storage now
-        refuses as an image, or whose bytes cannot be read, keeps its pointer
-        (clearing a synced person's avatar would strip the photo from their card on
-        the next push) and is counted in a warning. With nothing to move, or no image
-        drive yet (a fresh database before resources load), it returns at once.
+        someone's own file. Idempotent and isolated per party: an avatar that cannot
+        move (storage refuses it as an image, its bytes cannot be read, storage is
+        down) keeps its pointer (clearing a synced person's avatar would strip the
+        photo from their card on the next push) and is counted in a warning. With
+        nothing to move, or no image drive (a fresh database before resources load,
+        or a refused drive of that name), it returns at once.
         """
 
         files = apps.get_model("storage", "File").objects
@@ -1856,8 +1859,11 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             for party in legacy.select_related("avatar").iterator():
                 try:
                     image = files.ingest_image(party.avatar.read_image())
-                except (UploadError, ValidationError, OSError):
-                    logger.warning("Party %s keeps an avatar that cannot move onto the image drive.", party.pk)
+                except Exception:
+                    # Any failure, a storage outage included, leaves this party for the next run.
+                    logger.warning(
+                        "Party %s keeps an avatar that cannot move onto the image drive.", party.pk, exc_info=True
+                    )
                     continue
                 moved += self.model._base_manager.filter(pk=party.pk, avatar_id=party.avatar_id).update(avatar=image)
             remaining = legacy.count()

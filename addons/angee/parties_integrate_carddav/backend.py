@@ -45,7 +45,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.storage.exceptions import UploadError, UploadTooLarge, UploadTypeRefused
+from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 _NS = {
     "d": "DAV:",
@@ -568,19 +568,14 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 continue
             try:
                 contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
-            except UploadError as error:
-                # A photo storage refuses to render (an SVG, an oversized image), or
-                # cannot store yet (no image drive), quarantines its card rather than
-                # syncing it without the photo, which a later write-back would then
-                # strip from the card.
-                refused = isinstance(error, (UploadTooLarge, UploadTypeRefused))
+            except (UploadTooLarge, UploadTypeRefused):
+                # A photo storage refuses to render (an SVG, an oversized image)
+                # quarantines its card rather than syncing it without the photo,
+                # which a later write-back would then strip from the card. Storage
+                # that cannot take it yet (no image drive) fails the page, which retries.
                 contacts[href] = _quarantined(
                     href,
-                    {
-                        "href": href,
-                        "source_digest": canonical_json_sha256(data),
-                        "error": "unsupported_photo" if refused else "photo_not_stored",
-                    },
+                    {"href": href, "source_digest": canonical_json_sha256(data), "error": "unsupported_photo"},
                     remote_version=etag,
                 )
         if set(contacts) != set(hrefs):

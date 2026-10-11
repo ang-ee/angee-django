@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import posixpath
 import re
@@ -110,6 +111,8 @@ from angee.storage.uploads import (
     truncate_filename,
 )
 from angee.tags.models import TaggedModel
+
+logger = logging.getLogger(__name__)
 
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
 _STORAGE_CACHE_MAX_SIZE = 128
@@ -260,20 +263,28 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
 
         An ownerless volume on the default backend (:meth:`create_on_default_backend`),
         so images land wherever the deployment keeps its files, apart from any user
-        file. ``None`` while there is no default drive to provision it beside (a
-        fresh database before resources load).
+        file. A drive already holding the slug serves only while it keeps that
+        shape, with no grant and no file anyone owns: an operator's drive of the
+        name is refused and logged, so images never deduplicate onto its files nor
+        become readable to its grantees. ``None`` then, and while there is no
+        default drive to provision it beside (a fresh database before resources load).
         """
 
         slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
         with system_context(reason="storage.drive.image_drive"):
             drive = system_queryset(self.model).filter(slug=slug).first()
-            if drive is not None:
-                return drive
-            try:
-                return self.create_on_default_backend(slug=slug, name="Images")
-            except ValidationError:
-                # A concurrent first use created it, or no default drive exists yet.
-                return system_queryset(self.model).filter(slug=slug).first()
+            if drive is None:
+                try:
+                    return self.create_on_default_backend(slug=slug, name="Images")
+                except ValidationError:
+                    # A concurrent first use created it, or no default drive exists yet.
+                    drive = system_queryset(self.model).filter(slug=slug).first()
+            if drive is None:
+                return None
+            if drive.direct_record_access() or drive.files.exclude(owner=None).exists():
+                logger.error("Drive %r holds grants or owned files, so it cannot serve as the image drive.", slug)
+                return None
+            return drive
 
 
 class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):

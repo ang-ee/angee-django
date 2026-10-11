@@ -28,11 +28,15 @@ def migrated_model(*, app_config: object, using: str, app_label: str, model_name
         return None
     if using != router.db_for_write(model) or not router.allow_migrate_model(using, model):
         return None
+    return model if has_table(using, model) else None
+
+
+def has_table(using: str, model: type[Model]) -> bool:
+    """Return whether migrations have created ``model``'s table on the ``using`` connection."""
+
     connection = connections[using]
     with connection.cursor() as cursor:
-        if model._meta.db_table not in connection.introspection.table_names(cursor):
-            return None
-    return model
+        return model._meta.db_table in connection.introspection.table_names(cursor)
 
 
 def connect_for_models(

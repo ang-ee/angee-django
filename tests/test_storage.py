@@ -1009,6 +1009,22 @@ def test_the_image_drive_is_provisioned_on_the_default_backend_at_first_use(driv
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("squatter", ["granted", "owned_file"])
+def test_a_drive_that_only_shares_the_image_drives_name_is_refused(drive: Any, squatter: str) -> None:
+    """An operator's drive with the slug must not take avatars onto its files or its grantees' reach."""
+
+    with system_context(reason="test storage image drive squatter"):
+        squat = Drive.objects.create_on_default_backend(slug="images", name="Team images")
+        if squatter == "granted":
+            squat.system_grant_record_access("viewer", drive.alice)
+        else:
+            File.objects.ingest_bytes(PNG_BYTES, filename="team.png", owner_id=drive.alice.pk, drive_slug="images")
+        assert Drive.objects.image_drive() is None
+        with pytest.raises(exceptions.UploadTargetNotFound):
+            File.objects.ingest_image(PNG_BYTES + b"\x00")
+
+
+@pytest.mark.django_db(transaction=True)
 def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image_drive: Any) -> None:
     """Deduplication stays within the image drive, so an avatar never shares a row with a private upload."""
 
