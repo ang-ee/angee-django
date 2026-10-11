@@ -15,6 +15,9 @@ import mimetypes
 from typing import BinaryIO
 
 import magic
+from django.conf import settings
+
+from angee.storage import exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +136,37 @@ def detect_mime(payload: bytes, filename: str = "") -> str:
         return detected
     guessed = mimetypes.guess_type(filename)[0] if filename else None
     return (guessed or FALLBACK_MIME).split(";", 1)[0].strip().lower()
+
+
+def require_image(content: bytes) -> str:
+    """Return the type of an image the server may render inline, or refuse it.
+
+    The bytes must be a raster type in ``ANGEE_STORAGE_IMAGE_TYPES`` (an SVG can
+    carry script) within ``ANGEE_STORAGE_IMAGE_MAX_BYTES``. Unlike
+    :func:`detect_mime` at finalize, the type comes from libmagic alone with no
+    filename fallback, so a type the host's libmagic cannot name (HEIC on an older
+    magic database) is refused. Raises :class:`~angee.storage.exceptions.UploadTooLarge`
+    or :class:`~angee.storage.exceptions.UploadTypeRefused`.
+    """
+
+    require_image_size(len(content))
+    return require_image_type(content)
+
+
+def require_image_size(size: int) -> None:
+    """Refuse an image larger than ``ANGEE_STORAGE_IMAGE_MAX_BYTES`` (the size half of :func:`require_image`)."""
+
+    if size > int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES):
+        raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
+
+
+def require_image_type(content: bytes) -> str:
+    """Return the sniffed type of an admitted image (the type half of :func:`require_image`)."""
+
+    mime = detect_mime(content[:MIME_SNIFF_BYTES])
+    if mime not in settings.ANGEE_STORAGE_IMAGE_TYPES:
+        raise exceptions.UploadTypeRefused(f"{mime} is not an accepted image type.")
+    return mime
 
 
 class BodyTooLarge(Exception):

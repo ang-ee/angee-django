@@ -13,7 +13,7 @@ converges instead of duplicating. The sync runs under ``system_context``, so
 
 from __future__ import annotations
 
-import mimetypes
+import logging
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -45,10 +45,17 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
-from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
+from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import ASSERTING_SOURCES, LinkSource, ScoredLinkMixin
-from angee.storage.models import UploadState
+from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
+
+logger = logging.getLogger(__name__)
+
+_DISPLAY_OWN_AVATAR = "_display_own_avatar"
+"""Where a page's prefetch parks each party's own avatar the actor can read."""
+_DISPLAY_AVATAR_HANDLES = "_display_avatar_handles"
+"""Where a page's prefetch parks each party's ranked handles with an avatar the actor can read."""
 
 # An undecided link below this confidence is a suggestion awaiting review.
 _REVIEW_CONFIDENCE = 0.5
@@ -69,6 +76,15 @@ class Signing(NamedTuple):
     """The sender's resolved party, or ``None``."""
     owner_id: Any
     """The audit owner of the mail the fragment came from."""
+
+
+class DisplayAvatarPrefetches(NamedTuple):
+    """The reads :meth:`PartyManager.display_avatar` batches for a page of parties."""
+
+    own: Prefetch
+    """Each party's own avatar, when the actor can read it."""
+    handles: Prefetch
+    """Each party's ranked handles with an avatar the actor can read, avatar loaded."""
 
 
 class HandleAssociationStatus(StrEnum):
@@ -297,18 +313,16 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         """Get-or-create a handle on the identity it actually has, refreshing display fields.
 
         A source-stable ``external_id`` (in ``fields``, when the source has one)
-        is the stronger identity — the model's conditional unique key — so the
-        write serializes on whichever identity is present: ``get_or_create`` on
-        ``(platform, external_id)`` when given, else ``(platform, value)``. That
-        means an address whose human-readable ``value`` drifts (a chat account
-        behind a changed number) refreshes the existing row instead of forking a
-        duplicate or crashing a concurrent insert on the external-id constraint.
-        When that refreshed ``value`` would instead collide with a different row
-        that already owns ``(platform, value)``, the write converges on that owner
-        rather than rewriting this row — the same rule the create path applies to
-        the mirror collision, so a ``@lid`` and its phone JID settle on one handle.
-        The value-keyed path never rewrites ``external_id`` (it is not the key it
-        matched on).
+        is the stronger identity — the model's conditional unique key — so an
+        address whose human-readable ``value`` drifts (a chat account behind a
+        changed number) refreshes the existing row instead of forking a duplicate.
+        :meth:`find_identity` owns which existing row the identity lands on,
+        including the convergence of a ``@lid`` and its phone JID on the row that
+        owns the value; only when it finds none does this create one, and a
+        concurrent insert of the same identity lands where it did. A pre-check,
+        never a failed save, keeps a value collision out of the caller's
+        transaction. The value-keyed path never rewrites ``external_id`` (it is
+        not the key it matched on).
 
         ``created_by_id`` stamps the audit owner. Control ownership is deliberately
         excluded from the generic refresh loop; :meth:`claim_own` is its only write
@@ -337,71 +351,51 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         for name in ("display_name", "label"):
             if fields.get(name):
                 fields[name] = fields[name][: self.model._meta.get_field(name).max_length]
-        if external_id:
+        handle = self.find_identity(platform=platform, value=value, external_id=external_id)
+        if handle is None:
             try:
-                handle, created = self.get_or_create(
-                    platform=platform,
-                    external_id=external_id,
-                    defaults={
-                        "created_by_id": created_by_id,
-                        "value": value,
-                        "normalized_value": normalized_value,
+                # A savepoint isolates the insert, so the caller's transaction stays usable.
+                with transaction.atomic():
+                    return self.create(
+                        platform=platform,
+                        value=value,
+                        normalized_value=normalized_value,
+                        created_by_id=created_by_id,
                         **fields,
-                    },
-                )
+                    )
             except IntegrityError:
-                # The external-id create can still collide on ``(platform, value)``
-                # when a second source identity already holds this contact point —
-                # e.g. a WhatsApp contact reached both by phone JID and by a hidden
-                # ``@lid`` that resolves to the same E.164. The value *is* the
-                # contact point, so converge on the row that owns it instead of
-                # forking or crashing; it keeps its own ``external_id`` (the other
-                # source's idempotency key). ``get_or_create`` isolates its insert
-                # in a savepoint, so the surrounding transaction stays usable.
-                existing = self.filter(platform=platform, value=value).first()
-                if existing is None:
+                # A concurrent writer created this identity first: land where it did.
+                handle = self.find_identity(platform=platform, value=value, external_id=external_id)
+                if handle is None:
                     raise
-                self._refresh(
-                    existing,
-                    {name: val for name, val in fields.items() if name != "external_id"},
-                )
-                return existing
-            if not created:
-                # The external id resolved an existing row, but refreshing its
-                # ``value`` can land on a contact point a *different* row already
-                # owns — a WhatsApp ``@lid`` handle whose sender resolved to an
-                # ``+E164`` that a phone-JID handle already holds. ``_refresh``
-                # saves outside ``get_or_create``'s savepoint, so that collision
-                # would raise ``uq_handle_platform_value`` straight into the
-                # caller's ``atomic()`` and abort its whole message batch. A
-                # pre-check (never a failed save inside the caller's transaction)
-                # converges on the row that owns the value, exactly as the create
-                # path does above; this row keeps its old value for the offline
-                # backfill to merge.
-                if value != handle.value:
-                    owner_of_value = self.filter(platform=platform, value=value).exclude(pk=handle.pk).first()
-                    if owner_of_value is not None:
-                        self._refresh(
-                            owner_of_value,
-                            {name: val for name, val in fields.items() if name != "external_id"},
-                        )
-                        return owner_of_value
-                self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
-            return handle
-        handle, created = self.get_or_create(
-            platform=platform,
-            value=value,
-            defaults={
-                "created_by_id": created_by_id,
-                "normalized_value": normalized_value,
-                **fields,
-            },
-        )
-        if not created:
-            # The value matched, not the external id — never rewrite it here.
+        if external_id and handle.external_id == external_id:
+            self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
+        else:
+            # The value matched, not the external id: never rewrite it here.
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
             self._refresh(handle, {"normalized_value": normalized_value, **refresh})
         return handle
+
+    def find_identity(self, *, platform: str, value: str, external_id: str = "") -> Any | None:
+        """Return the existing handle :meth:`upsert` lands an identity on, or ``None`` when it would create one.
+
+        The ``external_id`` match wins, unless its ``value`` would move onto a
+        contact point a different row already owns: a WhatsApp ``@lid`` handle
+        whose sender resolved to an ``+E164`` a phone-JID handle holds. The value
+        *is* the contact point, so that owner wins, as it does when no row has the
+        external id; it keeps its own ``external_id`` (the other source's
+        idempotency key), and the moved row keeps its old value for the offline
+        backfill to merge. Without an external id, the row owning
+        ``(platform, value)``. Read-only, so a verb that must never create a
+        handle shares this rule.
+        """
+
+        handles = self.filter(platform=platform)
+        handle = handles.filter(external_id=external_id).first() if external_id else None
+        if handle is not None and handle.value == value:
+            return handle
+        owner = handles.filter(value=value).exclude(pk=getattr(handle, "pk", None)).first()
+        return owner or handle
 
     @staticmethod
     def _refresh(handle: Any, fields: dict[str, Any]) -> None:
@@ -494,6 +488,50 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 created_by_id=user.pk,
             )
         return handle
+
+    def set_avatar(self, handle: Any, avatar: Any | None) -> bool:
+        """Set the avatar ``handle``'s own network shows for it; return whether it changed.
+
+        The one write path of :attr:`Handle.avatar`: a source reports the avatar
+        (:meth:`fill_avatar`), never writes the column itself. ``avatar`` is a stored
+        image (``File.objects.ingest_image``), or ``None`` when the network shows none.
+        """
+
+        avatar_id = getattr(avatar, "pk", None)
+        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
+            locked = self.filter(pk=handle.pk).lock_if_supported().first()
+            if locked is None or locked.avatar_id == avatar_id:
+                return False
+            locked.avatar_id = avatar_id
+            locked.save(update_fields=["avatar", "updated_at"])
+        handle.avatar_id = avatar_id
+        return True
+
+    def fill_avatar(self, report: AvatarReport) -> bool:
+        """Set the avatar a source reports on its handle; return whether it changed.
+
+        The handle is the one :meth:`upsert` lands the reported identity on
+        (:meth:`find_identity`), so an avatar lands where the source's messages
+        did. A report for a handle that does not exist changes nothing, so a report
+        never creates a handle or rewrites its identity. ``avatar=None`` clears the
+        handle's avatar; bytes storage refuses as an image (empty, not a raster
+        image, too large) change nothing.
+        """
+
+        with system_context(reason="parties.handle.fill_avatar"):
+            handle = self.find_identity(
+                platform=report.platform, value=report.value, external_id=report.external_id
+            )
+        if handle is None:
+            return False
+        avatar = None
+        if report.avatar is not None:
+            try:
+                avatar = apps.get_model("storage", "File").objects.ingest_image(report.avatar)
+            except UploadTooLarge, UploadTypeRefused:
+                logger.info("A reported %s handle avatar was not an accepted image.", report.platform)
+                return False
+        return self.set_avatar(handle, avatar)
 
 
 class PartyHandleQuerySet(AngeeQuerySet):
@@ -1780,6 +1818,96 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     :meth:`for_user` lives here.
     """
 
+    def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
+        """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.
+
+        Its own avatar counts when ``actor`` can read it. Otherwise it is the avatar
+        of a handle resolution gave to this party (``Handle.party``, so only the
+        party that won a handle shows its avatar), ranked by what that resolution
+        materialised on the handle: a human-confirmed winner
+        (``party_link_confirmed``) first, then the oldest handle. Link confidence
+        does not rank, so among unconfirmed handles an older inferred one shows
+        before a newer one a card asserts. Only the handles
+        and avatars ``actor`` can read count, which is what a party shared with its
+        handles grants. Derived for display only: never stored, and never part of
+        the directory projection, so no address book receives it. A page of
+        parties batches the same reads with :meth:`display_avatar_prefetches`.
+        """
+
+        if hasattr(party, _DISPLAY_OWN_AVATAR):
+            own, handles = getattr(party, _DISPLAY_OWN_AVATAR), getattr(party, _DISPLAY_AVATAR_HANDLES)
+        else:
+            avatars = read_scoped_queryset(apps.get_model("storage", "File"), actor)
+            own = avatars.filter(pk=party.avatar_id).first() if party.avatar_id is not None else None
+            handles = self._display_avatar_handles(actor, avatars).filter(party_id=party.pk)[:1]
+        if own is not None:
+            return own
+        handle = next(iter(handles), None)
+        return handle.avatar if handle is not None else None
+
+    def display_avatar_prefetches(self, actor: Any, *, avatars: Any) -> DisplayAvatarPrefetches:
+        """Return the prefetches :meth:`display_avatar` reads for a page of parties.
+
+        ``avatars`` is ``actor``'s readable File queryset every avatar loads through;
+        a GraphQL page passes it optimized for its selection.
+        """
+
+        return DisplayAvatarPrefetches(
+            own=Prefetch("avatar", queryset=avatars, to_attr=_DISPLAY_OWN_AVATAR),
+            handles=Prefetch(
+                "handles", queryset=self._display_avatar_handles(actor, avatars), to_attr=_DISPLAY_AVATAR_HANDLES
+            ),
+        )
+
+    def rehome_avatars(self) -> int:
+        """Move party avatars stored before storage's image drive onto it; return how many moved.
+
+        A contact photo used to be stored with a file's ordinary deduplication, so
+        it could land on a user's own file, which the avatar read rule would share
+        with the party's readers. Each such avatar's bytes are re-ingested as an
+        image and its party re-pointed; the old row stays untouched, since it may be
+        someone's own file. Idempotent and isolated per party: an avatar that cannot
+        move (storage refuses it as an image, its bytes cannot be read, storage is
+        down) keeps its pointer (clearing a synced person's avatar would strip the
+        photo from their card on the next push) and is counted in a warning. With
+        nothing to move, or no image drive (a fresh database before resources load,
+        or a refused drive of that name), it returns at once.
+        """
+
+        files = apps.get_model("storage", "File").objects
+        with system_context(reason="parties.rehome_avatars"):
+            legacy = self.model._base_manager.exclude(avatar=None).exclude(avatar__in=files.images().values("pk"))
+            if not legacy.exists() or apps.get_model("storage", "Drive").objects.image_drive() is None:
+                return 0
+            moved = 0
+            for party in legacy.select_related("avatar").iterator():
+                try:
+                    image = files.ingest_image(party.avatar.read_image())
+                except Exception:
+                    # Any failure, a storage outage included, leaves this party for the next run.
+                    logger.warning(
+                        "Party %s keeps an avatar that cannot move onto the image drive.", party.pk, exc_info=True
+                    )
+                    continue
+                moved += self.model._base_manager.filter(pk=party.pk, avatar_id=party.avatar_id).update(avatar=image)
+            remaining = legacy.count()
+        if remaining:
+            logger.warning(
+                "%s party avatars remain off the image drive, readable by their parties' readers.", remaining
+            )
+        return moved
+
+    @staticmethod
+    def _display_avatar_handles(actor: Any, avatars: Any) -> Any:
+        """Handles ``actor`` reads that carry an avatar in ``avatars``, strongest first, avatar loaded."""
+
+        return (
+            read_scoped_queryset(apps.get_model("parties", "Handle"), actor)
+            .filter(avatar__in=avatars.values("pk"))
+            .order_by("-party_link_confirmed", "pk")
+            .prefetch_related(Prefetch("avatar", queryset=avatars))
+        )
+
     def identity_basis(self, party_id: str, *, actor: Any, lock: bool = False) -> IdentityBasis:
         """Read one Party's identity under ``actor``'s read authorization.
 
@@ -2249,10 +2377,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             )
         return result
 
-    def prepare_contact(self, parsed: ParsedContact, *, created_by_id: Any) -> ParsedContact:
+    def prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched photo bytes before contact locks and name countries as stored.
 
-        The photo keeps its content address. Addresses take their stored form
+        The photo is stored as the person's avatar (``File.objects.ingest_image``,
+        which refuses a non-image or oversized photo) and keeps its content address.
+        Addresses take their stored form
         (:meth:`AddressManager.as_stored`), so the projection both sync sides compare
         reads a card's "USA" as the stored "US".
         """
@@ -2266,34 +2396,32 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             raise ValidationError("Contact photo URIs must be resolved before preparation.")
         if not photo.data:
             return replace(parsed, photo=None)
-        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
-        avatar = apps.get_model("storage", "File").objects.ingest_bytes(
-            photo.data,
-            filename=f"avatar{extension or '.bin'}",
-            owner_id=created_by_id,
-        )
+        avatar = apps.get_model("storage", "File").objects.ingest_image(photo.data)
         mime: Any = avatar.mime_type
         return replace(
             parsed,
             photo=ParsedPhoto(content_hash=avatar.content_hash, mime=mime.mime_type if mime is not None else ""),
         )
 
-    def resolve_contact_photo(self, photo: ParsedPhoto | None, *, lock: bool = False) -> Any:
-        """Resolve a prepared avatar, optionally validating it under its row lock."""
+    def resolve_contact_photo(self, photo: ParsedPhoto | None) -> Any:
+        """Resolve a prepared photo to its stored avatar image, validated under its row lock.
+
+        Only the image drive holds avatars (``File.objects.images``), so a photo's
+        content address never resolves to a user's file with the same bytes.
+        """
 
         if photo is None:
             return None
         if not photo.content_hash or photo.data is not None or photo.uri:
             raise ValidationError("Contact photos must have a prepared content address.")
-        rows = apps.get_model("storage", "File").objects.filter(
-            content_hash=photo.content_hash,
-            mime_type__mime_type=photo.mime,
-            upload_state=UploadState.READY,
-            is_trashed=False,
+        avatar = (
+            apps.get_model("storage", "File")
+            .objects.images()
+            .filter(content_hash=photo.content_hash, mime_type__mime_type=photo.mime)
+            .lock_if_supported()
+            .order_by("pk")
+            .first()
         )
-        if lock:
-            rows = rows.lock_if_supported()
-        avatar = rows.order_by("pk").first()
         if avatar is None:
             raise ValidationError("The prepared contact photo is no longer available.")
         return avatar
@@ -2321,7 +2449,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         if not parsed.uid:
             return None
-        parsed = self.prepare_contact(parsed, created_by_id=created_by_id)
+        parsed = self.prepare_contact(parsed)
 
         person_model = apps.get_model("parties", "Person")
         handle_model = apps.get_model("parties", "Handle")
@@ -2382,7 +2510,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                             "birthday": parsed.birthday,
                             "anniversary": parsed.anniversary,
                             # Preparation stored the bytes before this transaction.
-                            "avatar": self.resolve_contact_photo(parsed.photo, lock=True),
+                            "avatar": self.resolve_contact_photo(parsed.photo),
                             "raw_vcard": parsed.raw_vcard,
                             "source_etag": parsed.etag,
                             "created_by_id": created_by_id,

@@ -13,7 +13,8 @@ sources converge on that one ``finalize``: a client upload (``File.objects.draft
 reserves the row, :meth:`File.issue_upload_token` hands the client a one-shot URL,
 :meth:`File.receive_bytes` lands the bytes) and a server-side ingest of bytes
 already in hand (:meth:`FileManager.ingest_bytes` — what a sync fetching message
-attachments or contact photos uses). A presigned backend or adopting bytes
+attachments uses — and :meth:`FileManager.ingest_image` for avatars, which
+keeps them on their own drive). A presigned backend or adopting bytes
 already on the backend are further siblings on the same path. Renditions, virus
 scanning,
 extraction, and search belong to downstream addons that subscribe to
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import posixpath
 import re
@@ -100,11 +102,17 @@ from angee.storage.uploads import (
     UPLOAD_TOKEN_SALT,
     BodyTooLarge,
     CappedReader,
+    attachment_extension,
     detect_mime,
+    require_image,
+    require_image_size,
+    require_image_type,
     sha256_stream,
     truncate_filename,
 )
 from angee.tags.models import TaggedModel
+
+logger = logging.getLogger(__name__)
 
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
 _STORAGE_CACHE_MAX_SIZE = 128
@@ -249,6 +257,34 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
         except IntegrityError as error:
             raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
         return drive
+
+    def image_drive(self) -> Any | None:
+        """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.
+
+        An ownerless volume on the default backend (:meth:`create_on_default_backend`),
+        so images land wherever the deployment keeps its files, apart from any user
+        file. A drive already holding the slug serves only while it keeps that
+        shape, with no grant and no file anyone owns: an operator's drive of the
+        name is refused and logged, so images never deduplicate onto its files nor
+        become readable to its grantees. ``None`` then, and while there is no
+        default drive to provision it beside (a fresh database before resources load).
+        """
+
+        slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
+        with system_context(reason="storage.drive.image_drive"):
+            drive = system_queryset(self.model).filter(slug=slug).first()
+            if drive is None:
+                try:
+                    return self.create_on_default_backend(slug=slug, name="Images")
+                except ValidationError:
+                    # A concurrent first use created it, or no default drive exists yet.
+                    drive = system_queryset(self.model).filter(slug=slug).first()
+            if drive is None:
+                return None
+            if drive.direct_record_access() or drive.files.exclude(owner=None).exists():
+                logger.error("Drive %r holds grants or owned files, so it cannot serve as the image drive.", slug)
+                return None
+            return drive
 
 
 class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
@@ -644,6 +680,14 @@ class FileQuerySet(TrashQuerySet["File"], OwnerQuerySet["File"], AngeeQuerySet["
 
         return cast(FileQuerySet, self.trashed().filter(trashed_at__lt=cutoff))
 
+    def images(self) -> FileQuerySet:
+        """Return the live images on the image drive (:meth:`FileManager.ingest_image`)."""
+
+        return cast(
+            FileQuerySet,
+            self.untrashed().filter(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, upload_state=UploadState.READY),
+        )
+
     def delete(self) -> tuple[int, dict[str, int]]:
         """Refuse bulk delete: it bypasses soft-trash and orphans backend bytes.
 
@@ -802,6 +846,24 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             drive_slug=drive_slug,
             folder_id=folder_id,
         )
+
+    def ingest_image(self, content: bytes) -> Any:
+        """Ingest an image the server renders inline (an avatar) and return its READY File.
+
+        The bytes must pass :func:`require_image`. The stored filename takes the
+        sniffed type's extension. Images land ownerless on the image drive
+        (:meth:`DriveManager.image_drive`), so deduplication only ever returns
+        another such image, never a user's file, and read access comes from the
+        records that show the image. Raises :class:`exceptions.UploadTooLarge` or
+        :class:`exceptions.UploadTypeRefused` before anything is stored, and
+        :class:`exceptions.UploadTargetNotFound` while no image drive can exist.
+        """
+
+        mime = require_image(content)
+        drive = self.model._meta.get_field("drive").related_model.objects.image_drive()
+        if drive is None:
+            raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
+        return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
 
     def ingest_stream(
         self,
@@ -1433,6 +1495,21 @@ class File(TaggedModel, TrashMixin, OwnerMixin, AngeeDataModel):
             raise ValidationError("The file exceeds the byte limit.") from error
         if size != self.size_bytes or digest != self.content_hash:
             raise ValidationError("The stored bytes do not match the file identity.")
+        return content
+
+    def read_image(self, *, expected_digest: str = "") -> bytes:
+        """Read this file's verified bytes to render elsewhere, as an image :func:`require_image` admits.
+
+        A file stored before the image rule existed may be a type it refuses or
+        larger than its cap; that raises :class:`exceptions.UploadTypeRefused` or
+        :class:`exceptions.UploadTooLarge` instead of passing the bytes on.
+        ``expected_digest`` is as in :meth:`read_verified`.
+        """
+
+        require_image_size(self.size_bytes)
+        # The read is bounded by the row's own verified size, which the cap already admitted.
+        content = self.read_verified(max_bytes=self.size_bytes, expected_digest=expected_digest)
+        require_image_type(content)
         return content
 
     def issue_upload_token(self) -> str:

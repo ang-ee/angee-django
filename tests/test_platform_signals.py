@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from angee.base import signals as base_signals
 from angee.platform import signals
 
 
@@ -31,14 +33,13 @@ def test_post_migrate_reconciles_only_the_matching_routed_database(
 
     addon_model = Mock()
     addon_model._meta.db_table = "platform_addon"
-    connection = object()
+    table_probe = Mock(return_value=["platform_addon"] if table_exists else [])
+    connection = SimpleNamespace(cursor=nullcontext, introspection=SimpleNamespace(table_names=table_probe))
     migration_router = Mock(return_value=allow_migrate)
-    table_probe = Mock(return_value=table_exists)
-    monkeypatch.setattr(signals.apps, "get_model", Mock(return_value=addon_model))
-    monkeypatch.setattr(signals.router, "db_for_write", Mock(return_value="default"))
-    monkeypatch.setattr(signals.router, "allow_migrate_model", migration_router)
-    monkeypatch.setattr(signals, "connections", {"default": connection})
-    monkeypatch.setattr(signals, "_table_exists", table_probe)
+    monkeypatch.setattr(base_signals.apps, "get_model", Mock(return_value=addon_model))
+    monkeypatch.setattr(base_signals.router, "db_for_write", Mock(return_value="default"))
+    monkeypatch.setattr(base_signals.router, "allow_migrate_model", migration_router)
+    monkeypatch.setattr(base_signals, "connections", {"default": connection})
 
     signals._reconcile_addons(app_config=SimpleNamespace(label="platform"), using=using)
 
@@ -49,6 +50,6 @@ def test_post_migrate_reconciles_only_the_matching_routed_database(
     else:
         migration_router.assert_called_once_with(using, addon_model)
         if allow_migrate:
-            table_probe.assert_called_once_with(connection, "platform_addon")
+            table_probe.assert_called_once()
         else:
             table_probe.assert_not_called()
