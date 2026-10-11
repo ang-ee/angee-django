@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import DO_NOTHING
@@ -27,9 +28,11 @@ from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
-from angee.workflows.testing.models import StepWatch
+from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
+from tests.recordrefdemo.models import CustomColumnEdge, SelfLinkedNode, TagSlot
+from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
 
@@ -338,6 +341,73 @@ def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: p
     monkeypatch.setattr(merge_module, "_named_in_relationships", lambda record: record.pk == mobil.pk)
     with actor_context(_curator("merge-shared")), pytest.raises(ValidationError, match="shared"):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+
+
+def test_a_many_to_many_to_its_own_model_moves_the_links_other_records_hold() -> None:
+    """A one-way link from another record follows the merge, collapsing onto one the survivor holds.
+
+    A two-way link mirrors the record's own links, so like them it is the record's data.
+    """
+
+    follows, peers = SelfLinkedNode.follows.through, SelfLinkedNode.peers.through
+    links = [(ref.model, ref.name, ref.policy) for ref in references(SelfLinkedNode) if ref.model in (follows, peers)]
+    assert links == [(follows, "to_selflinkednode", MergePolicy.MOVE)]
+
+    follower, other, merged, kept = (SelfLinkedNode.objects.create() for _ in range(4))
+    follower.follows.add(merged, kept)
+    other.follows.add(merged)
+    merged.follows.add(other)
+    reference = next(ref for ref in references(SelfLinkedNode) if ref.model is follows)
+    reference.move(reference.rows(merged), survivor=kept)
+
+    assert set(follows.objects.values_list("from_selflinkednode_id", "to_selflinkednode_id")) == {
+        (follower.pk, kept.pk),
+        (other.pk, kept.pk),
+        (merged.pk, other.pk),
+    }
+
+
+def test_a_collision_no_field_set_describes_refuses_the_merge() -> None:
+    """A key under an expression constraint moves onto a clash the field sets cannot foresee."""
+
+    mobile, mobil, _ada, _bob = _vocabulary()
+    with system_context(reason="merge test tag slots"):
+        TagSlot.objects.create(tag=mobile, label="Phone")
+        TagSlot.objects.create(tag=mobil, label="phone")
+    with actor_context(_curator("merge-expression")), pytest.raises(ValidationError, match="breaks one of their"):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+
+    with system_context(reason="merge test read"):
+        assert Tag._base_manager.filter(pk=mobil.pk).exists()
+    assert _tagged_parties(mobil) != []
+
+
+def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    edges = [model for model in apps.get_models() if issubclass(model, RecordRefMixin)]
+    assert not [error for model in edges for error in model.check() if error.id == "angee.E037"]
+
+    monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
+    assert [error.id for error in CustomColumnEdge.check() if error.id == "angee.E037"] == ["angee.E037"]
+
+
+@pytest.mark.usefixtures("workflow_step_classes")
+def test_a_record_an_unfinished_run_works_on_refuses_its_merge(execution: Any) -> None:
+    """Retiring it would cancel the run while the run's watches moved to the record that is kept."""
+
+    actor, _ = execution
+    mobile, mobil, ada, bob = _vocabulary()
+    workflow = Workflow.objects.install_definition(
+        key="merge_guard", name="Merge guard", draft=document("entry"), actor=actor,
+    )
+    run = WorkflowRun.objects.start(workflow, actor=actor, subject=mobil)
+    curator = _curator("merge-run-guard")
+    with actor_context(curator), pytest.raises(ValidationError, match="Workflow runs still working on"):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+
+    WorkflowRun.objects.cancel(run, actor=actor)
+    with actor_context(curator):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+    assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
 
 def test_the_shared_verb_merges_a_mergeable_type_and_refuses_another() -> None:

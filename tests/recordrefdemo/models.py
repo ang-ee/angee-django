@@ -1,10 +1,11 @@
-"""Concrete probes for :class:`~angee.base.refs.RecordRefMixin` targets and edges."""
+"""Concrete probes for :class:`~angee.base.refs.RecordRefMixin` targets and edges, and for merge moves."""
 
 from __future__ import annotations
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from django.db.models.functions import Lower
 
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel
@@ -99,3 +100,28 @@ class CustomColumnEdge(RecordRefMixin, models.Model):
         """Django model options for the string-keyed edge."""
 
         db_table = "test_record_ref_custom_columns"
+
+
+class SelfLinkedNode(models.Model):
+    """A record linked to records of its own model one way (``follows``) and both ways (``peers``)."""
+
+    follows = models.ManyToManyField("self", symmetrical=False, related_name="followers")
+    peers = models.ManyToManyField("self")
+
+    class Meta:
+        """Django model options for the self-linked merge probe."""
+
+        db_table = "test_merge_self_linked_node"
+
+
+class TagSlot(models.Model):
+    """A row unique on an expression over its tag key, which no field set describes."""
+
+    tag = models.ForeignKey("tags.Tag", on_delete=models.CASCADE, related_name="+")
+    label = models.CharField(max_length=32)
+
+    class Meta:
+        """Django model options for the expression-constrained merge probe."""
+
+        db_table = "test_merge_tag_slot"
+        constraints = (models.UniqueConstraint(Lower("label"), "tag", name="uq_test_merge_tag_slot_label"),)
