@@ -1,11 +1,11 @@
 import * as React from "react";
-import { type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { stableKey } from "@angee/refine";
 import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
 import { filterForResourceTextSearch, queryForColumns } from "../resource-query";
 import { errorFromUnknown } from "../../../data/errors";
 import type { ResourceViewContextValue } from "../resource-view-context";
-import { Filter, type ResourceListOrder, type ResourceViewFilter, type ResourceViewGroup } from "../resource-view-model";
+import { Filter, type ResourceListOrder, type ResourceViewGroup } from "../resource-view-model";
 import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
@@ -13,6 +13,7 @@ import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
+
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
   options: UseResourceRowsSnapshotOptions<TRow> = {},
@@ -143,7 +144,7 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   includeDeclaredOrder = true,
 }: UseResourceViewQueryFactsProps<TRow>): {
   requestedFields: readonly string[];
-  mergedFilter: ResourceViewFilter | undefined;
+  mergedFilter: QueryFilter;
   sortOrder: ResourceListOrder | undefined;
 } {
   const requestedFields = React.useMemo(
@@ -201,7 +202,7 @@ export function useResourceViewTableState<TRow extends Row>({
   rowSelection: RowSelectionState;
   handlePaginationChange: OnChangeFn<PaginationState>;
   handleSortingChange: OnChangeFn<SortingState>;
-  handleRowSelectionChange: OnChangeFn<RowSelectionState>;
+  handleRowSelectionChange: (updater: Parameters<OnChangeFn<RowSelectionState>>[0], table: Table<TRow>) => void;
 } {
   const tableColumns = React.useMemo(
     () =>
@@ -250,7 +251,11 @@ export function useResourceViewTableState<TRow extends Row>({
     },
     [maxPageSize, pagination, resourceView.setPagination],
   );
-  const handleRowSelectionChange = resourceView.setRowSelection;
+  const handleRowSelectionChange = React.useCallback(
+    (updater: Parameters<OnChangeFn<RowSelectionState>>[0], table: Table<TRow>) =>
+      resourceView.setRowSelection(updater, (id) => table.getCoreRowModel().rowsById[id]?.original),
+    [resourceView.setRowSelection],
+  );
   const handleSortingChange = React.useCallback<OnChangeFn<SortingState>>(
     (updater) => resourceView.setSorting(functionalUpdate(updater, sorting)),
     [resourceView.setSorting, sorting],

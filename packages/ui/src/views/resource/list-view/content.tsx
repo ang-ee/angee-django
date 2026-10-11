@@ -27,6 +27,7 @@ import { useResourceSearch } from "../search/use-resource-search";
 import { useSearchCatalog } from "../search/catalog";
 import type { ResourceToolbarProps } from "../../../toolbars";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
+import { EMPTY_SELECTED_IDS } from "../resource-view-codecs";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
@@ -35,7 +36,7 @@ interface ListViewContentProps<TRow extends Row> {
   toolbarWrap?: boolean;
   tableLayout: ListViewProps<TRow>["tableLayout"];
   headerVisibility: ListViewProps<TRow>["headerVisibility"];
-  selectable: ListViewProps<TRow>["selectable"];
+  selectable: boolean;
   renderGroupLabel?: ListViewProps<TRow>["renderGroupLabel"];
   renderItem?: ListViewProps<TRow>["renderItem"];
   surface: ResourceViewSurface<TRow> | GroupedResourceViewSurface<TRow>;
@@ -83,7 +84,7 @@ export function ListViewContent<TRow extends Row = Row>({
   toolbarWrap,
   tableLayout = "auto",
   headerVisibility = "visible",
-  selectable: declaredSelectable,
+  selectable,
   renderGroupLabel,
   renderItem,
   surface,
@@ -147,9 +148,11 @@ export function ListViewContent<TRow extends Row = Row>({
     textFilterField: declaredTextField,
   });
   const interactive = Boolean(onRowClick || rowHref);
+  const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: resourceView.queryDirty });
+  const selectedIds = selectable ? surface.selectedIds : EMPTY_SELECTED_IDS;
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
-    surface.selectedIds,
+    selectedIds,
     resourceView.clearSelectedIds,
   );
   const cardActionContext = React.useMemo(
@@ -184,8 +187,6 @@ export function ListViewContent<TRow extends Row = Row>({
   const resolvedRenderCard = renderCard ?? (boardCard ? boardCardBody : undefined);
   const search = useResourceSearch({ resourceView, catalog, groupStack: effectiveGroupStack,
     groupingEnabled: !renderItem && !boardGroupingPinned, maxGroupDepth });
-  const resolvedChrome = listChromeState(presentation, chrome, { ...surface.list, queryDirty: search.queryDirty });
-  const selectable = declaredSelectable ?? !resolvedChrome.compact;
   const heading = chrome?.heading ?? (resolvedChrome.compact
     ? { label: modelMetadata?.pluralLabel ?? modelMetadata?.label ?? titleCase(modelLabelSegment(resource)) }
     : undefined);
@@ -196,7 +197,7 @@ export function ListViewContent<TRow extends Row = Row>({
       value={{
         resource: modelMetadata?.resource.modelLabel ?? resource,
         filter: effectiveFilter,
-        selectedIds: surface.selectedIds,
+        selectedIds,
         selectable,
         fields: resolvedColumns.flatMap((column) => column.field ? [column.field] : []),
         refresh: () => void surface.list.refetch(),
@@ -216,6 +217,14 @@ export function ListViewContent<TRow extends Row = Row>({
     pagerMaxPageSize: clientRowModel ? undefined : MAX_PAGE_SIZE,
   };
 
+  const domainBulkActions = selectable && selectedIds.size > 0
+    ? bulkActions?.(selectedIds, resourceView.clearSelectedIds, {
+      filter: surface.mergedFilter,
+      // Scope snapshots are shared Rows; narrow to the declared row type (see bulkActions).
+      selectedRows: resourceView.selectedRows as readonly TRow[],
+    }) : null;
+  const replacesDelete = domainBulkActions != null && domainBulkActions !== false;
+
   return (
     <ResourceListFrame
       heading={heading}
@@ -224,17 +233,14 @@ export function ListViewContent<TRow extends Row = Row>({
       compact={resolvedChrome.compact}
       toolbar={toolbar}
       selection={selectable ? {
-        count: surface.selectedIds.size,
+        count: selectedIds.size,
         onClear: resourceView.clearSelectedIds,
         onDelete:
-          !source && !bulkActions && bulkDelete.canDelete
+          !source && !replacesDelete && bulkDelete.canDelete
             ? bulkDelete.deleteInitiate
             : undefined,
-        deletePending: !bulkActions && bulkDelete.isPending,
-        actions:
-          bulkActions && surface.selectedIds.size > 0
-            ? bulkActions(surface.selectedIds, resourceView.clearSelectedIds)
-            : undefined,
+        deletePending: !replacesDelete && bulkDelete.isPending,
+        actions: replacesDelete ? domainBulkActions : undefined,
       } : undefined}
       error={surface.list.error}
       onRetry={() => void surface.list.refetch()}
@@ -311,7 +317,7 @@ export function ListViewContent<TRow extends Row = Row>({
           setGroupsExpanded={surface.setGroupsExpanded}
           setScopePage={surface.setScopePage}
           setScopePageSize={surface.setScopePageSize}
-          selectedIds={surface.selectedIds}
+          selectedIds={selectedIds}
           interactive={interactive}
           rowHref={rowHref}
           renderRowActions={renderRowActions}
@@ -328,7 +334,7 @@ export function ListViewContent<TRow extends Row = Row>({
           groups={surface.groupedRows}
           resourceView={resourceView}
           modelMetadata={modelMetadata}
-          selectedIds={surface.selectedIds}
+          selectedIds={selectedIds}
           interactive={interactive}
           fetching={surface.list.fetching}
           emptyContent={emptyContent}

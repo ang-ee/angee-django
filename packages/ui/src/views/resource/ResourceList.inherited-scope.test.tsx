@@ -44,8 +44,8 @@ test("an explicitly local nested resource owns sorting and reset without changin
   act(() => {
     child().setSorting([{ id: "min_qty", desc: true }]);
     child().setFilter({ compute: { exact: "fixed" } });
-    child().toggleSelectedId("entry-1", true);
   });
+  act(() => child().toggleSelectedId("entry-1", true));
   expect(child().state.sorting).toEqual([{ id: "min_qty", desc: true }]);
   expect(child().state.filter).toEqual({ compute: { exact: "fixed" } });
   expect(child().state.rowSelection).toEqual({ "entry-1": true });

@@ -32,7 +32,7 @@ interface RowReorder {
 
 function RecordRowInner<TRow extends Row>({
   row,
-  selected,
+  selected: storedSelected,
   onToggleSelected,
   interactive,
   selectable = true,
@@ -47,7 +47,7 @@ function RecordRowInner<TRow extends Row>({
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
-  onToggleSelected: (id: string, selected?: boolean) => void;
+  onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   interactive: boolean;
   selectable?: boolean;
   /**
@@ -66,6 +66,7 @@ function RecordRowInner<TRow extends Row>({
   renderRowActions?: (row: TRow) => React.ReactNode;
   reorder?: RowReorder;
 }): React.ReactElement {
+  const selected = selectable && storedSelected;
   const t = useUiT();
   const preview = useRuntimeViewAs();
   const blocked = Boolean(preview.viewAs || preview.pending);
@@ -163,7 +164,7 @@ function LinkedRecordRow<TRow extends Row>({
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
-  onToggleSelected: (id: string, selected?: boolean) => void;
+  onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   selectable: boolean;
   /** See {@link RecordRow}: reserve the grouped chevron column with a spacer when not selectable. */
   reserveLeadingColumn: boolean;
@@ -216,7 +217,7 @@ function LinkedRecordRow<TRow extends Row>({
           grouped={reserveLeadingColumn}
           label={t("list.selectRow")}
           checked={selected}
-          onCheckedChange={(checked) => onToggleSelected(id, checked)}
+          onCheckedChange={(checked) => onToggleSelected(id, checked, row.original)}
         />
       ) : reserveLeadingColumn ? (
         <TableCell className="w-8" />
@@ -275,7 +276,7 @@ function PlainRecordRow<TRow extends Row>({
 }: {
   row: TableRowModel<TRow>;
   selected: boolean;
-  onToggleSelected: (id: string, selected?: boolean) => void;
+  onToggleSelected: (id: string, selected?: boolean, row?: TRow) => void;
   interactive: boolean;
   selectable: boolean;
   /** See {@link RecordRow}: reserve the grouped chevron column with a spacer when not selectable. */
@@ -330,7 +331,7 @@ function PlainRecordRow<TRow extends Row>({
           grouped={reserveLeadingColumn}
           label={t("list.selectRow")}
           checked={selected}
-          onCheckedChange={(checked) => onToggleSelected(id, checked)}
+          onCheckedChange={(checked) => onToggleSelected(id, checked, row.original)}
         />
       ) : reserveLeadingColumn ? (
         <TableCell className="w-8" />
