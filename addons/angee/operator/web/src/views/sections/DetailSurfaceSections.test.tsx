@@ -48,13 +48,9 @@ vi.mock("./source-actions", () => ({
 }));
 
 vi.mock("./logs", () => ({
-  LogPanel: ({ title }: { title: string }) => (
-    <section data-testid="workspace-logs">{title}</section>
-  ),
   ServiceLogs: ({ name }: { name: string }) => (
     <section data-testid="service-logs">{name}</section>
   ),
-  useDaemonLogStream: () => ({ entries: [], fetching: false }),
 }));
 
 vi.mock("./service-actions", () => ({
@@ -171,7 +167,7 @@ describe("operator detail surfaces", () => {
     expect(screen.getByTestId("service-logs").textContent).toBe("web");
   });
 
-  test("WorkspaceDetail keeps actions and logs inside the shared detail frame", () => {
+  test("WorkspaceDetail keeps actions inside the shared detail frame", () => {
     const workspace = {
       name: "notes-dev",
       path: "/work/notes-dev",
@@ -194,9 +190,6 @@ describe("operator detail surfaces", () => {
     expect(screen.getByText("workspaces.detail.overview")).toBeTruthy();
     expect(screen.getAllByText("dev")).toHaveLength(2);
     expect(screen.getByText("/work/notes-dev")).toBeTruthy();
-    expect(screen.getByTestId("workspace-logs").textContent).toBe(
-      "workspaces.detail.logs",
-    );
 
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(operatorMocks.workspaceAction).toHaveBeenCalledWith(workspace);

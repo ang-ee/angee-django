@@ -166,8 +166,9 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         """Whether ``display_name`` is a human-given name.
 
         The import placeholder and letterless names (a phone number or other
-        handle spelling promoted into the name slot) do not count; ranking
-        surfaces such as merge-survivor proposals prefer parties that pass.
+        handle spelling promoted into the name slot) do not count. When links tie,
+        a handle resolves to a party that passes
+        (:meth:`~angee.parties.managers.PartyHandleQuerySet.winner`).
         """
 
         name = (self.display_name or "").strip()
@@ -657,8 +658,9 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     A handle may carry several scored candidate parties (:class:`ScoredLinkMixin`),
     so a sync can surface an uncertain match as a weak link (a conflicting claim is
     recorded at ``0.3`` confidence) instead of silently reassigning. The resolved
-    owner is the highest-confidence, non-dismissed link — the value the manager
-    materialises onto :attr:`Handle.party`.
+    owner is the winning decisive link (:meth:`~angee.parties.managers.PartyHandleQuerySet.winner`:
+    confirmed, then highest confidence, then a party with a real name) — the value
+    the manager materialises onto :attr:`Handle.party`.
     """
 
     runtime = True

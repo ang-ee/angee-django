@@ -517,6 +517,24 @@ class PartyHandleQuerySet(AngeeQuerySet):
 
         return self.filter(is_dismissed=False).exclude(_AWAITING_REVIEW)
 
+    def winner(self) -> Any | None:
+        """Return the :meth:`decisive` link that decides its handle's owner, or ``None``.
+
+        The model's ordering ranks them: a human-confirmed link first, then the
+        strongest score. Among the links tied on both, a party with a real name
+        (:attr:`~angee.parties.models.Party.has_real_name`) wins over the import
+        placeholder or a bare number, so a nameless duplicate card never names the
+        sender; otherwise the first in order wins.
+        """
+
+        links = list(self.decisive().select_related("party").order_by(*self.model._meta.ordering))
+        if not links:
+            return None
+        first = links[0]
+        rank = (first.is_confirmed, first.confidence)
+        tied = (link for link in links if (link.is_confirmed, link.confidence) == rank)
+        return next((link for link in tied if link.party.has_real_name), first)
+
     def asserted(self) -> Self:
         """Keep links a directory card or a person asserted, never an unreviewed inference.
 
@@ -955,12 +973,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
     def resolve(self, handle: Any) -> None:
         """Materialise ``handle.party`` and its confirmed state from the winning link.
 
-        The resolution ordering (``-is_confirmed, -confidence``) is the contacts
-        rule: a human-confirmed link wins, then the strongest score. Only a
-        :meth:`~PartyHandleQuerySet.decisive` link competes, so a suggestion awaiting
-        review never decides who sent a message. A handle with no decisive link is
-        left unowned. A demotion (a dismissed winner) recounts the previous owner
-        too, so its ``handle_count`` never goes stale.
+        :meth:`PartyHandleQuerySet.winner` applies the contacts rule: a
+        human-confirmed link wins, then the strongest score, then a party with a
+        real name. Only a :meth:`~PartyHandleQuerySet.decisive` link competes, so a
+        suggestion awaiting review never decides who sent a message. A handle with
+        no decisive link is left unowned. A demotion (a dismissed winner) recounts
+        the previous owner too, so its ``handle_count`` never goes stale.
         """
 
         with transaction.atomic():
@@ -970,7 +988,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
             handle = handles[handle.pk]
             previous_pk = handle.party_id
-            winner = self.filter(handle=handle).decisive().order_by("-is_confirmed", "-confidence", "sqid").first()
+            winner = self.filter(handle=handle).winner()
             resolved = winner.party if winner else None
             resolved_pk = resolved.pk if resolved else None
             is_confirmed = bool(winner and winner.is_confirmed)
@@ -2310,11 +2328,14 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     source=LinkSource.CARDDAV,
                     created_by_id=created_by_id,
                 )
-            # Retire only this source's vanished associations. Shared Handle rows
-            # and links established by another source retain their own lifecycle.
+            # Retire only this source's vanished, undecided associations. Shared
+            # Handle rows and links established by another source retain their own
+            # lifecycle, and a person's confirmation or dismissal outlives the card.
             party_handle_model.objects.filter(
                 party_id=person.pk,
                 source=LinkSource.CARDDAV,
+                is_confirmed=False,
+                is_dismissed=False,
             ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
 
             # Addresses carry no stable id, so each card address matches a stored
