@@ -660,10 +660,10 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
             handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
             # A claimed address is unverified: parties' claim owner records it for
             # review, with this request as its readable evidence, and it decides
-            # nothing. Its checks run under this named system context, the
-            # authority both callers already hold.
-            apps.get_model("parties", "PartyHandle").objects.propose_claimed_handle(
-                party, handle, evidence=self, actor=None
+            # nothing. Both callers' gates already authorized it, so it runs as their
+            # system work, never as a decider's write on the requester's party.
+            apps.get_model("parties", "PartyHandle").objects.propose_claimed_handle_as_system(
+                party, handle, evidence=self, reason="intake.need.link_requester"
             )
             self.party = party
         return user
