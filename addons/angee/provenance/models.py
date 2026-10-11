@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import nullcontext
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -25,9 +25,54 @@ from rebac.schema.walker import subject_allowed_by_relation
 
 from angee.base.changesets import current_changeset
 from angee.base.fields import StateField
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeUnscopedManager
+from angee.base.mixins import SourceKind, SqidMixin, StatementSourceMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeUnscopedManager
 from angee.base.refs import MergePolicy, RecordRefMixin
+
+
+class StatementPrincipalManager(AngeeManager):
+    """Resolve a producer's durable identity without creating duplicate principals."""
+
+    def for_key(self, key: str) -> Any:
+        """Return or create the principal named by the owning producer's key."""
+
+        if not key:
+            raise ValueError("A statement principal requires a nonempty key.")
+        return self.get_or_create(key=key)[0]
+
+
+class Rule(StatementSourceMixin, AngeeDataModel):
+    """Persisted principal for one registered rule or matcher, keyed by its name."""
+
+    runtime = True
+    sqid_prefix = "rul_"
+    key = models.CharField(max_length=255, unique=True)
+    objects = StatementPrincipalManager()
+
+    @property
+    def source_kind(self) -> SourceKind:
+        return cast(SourceKind, SourceKind.RULE)
+
+    class Meta:
+        abstract = True
+        rebac_resource_type = "provenance/rule"
+
+
+class Seed(StatementSourceMixin, AngeeDataModel):
+    """Persisted principal for one seed load, keyed by that load's identity."""
+
+    runtime = True
+    sqid_prefix = "sed_"
+    key = models.CharField(max_length=255, unique=True)
+    objects = StatementPrincipalManager()
+
+    @property
+    def source_kind(self) -> SourceKind:
+        return cast(SourceKind, SourceKind.SEED)
+
+    class Meta:
+        abstract = True
+        rebac_resource_type = "provenance/seed"
 
 
 class Changeset(RecordRefMixin, SqidMixin, RebacMixin):

@@ -1,0 +1,12 @@
+# Persist each built-in matcher once at resource bootstrap. Producers use the
+# same key with Rule.objects.for_key(); users remain person principals.
+- xref: normalized_twin
+  key: parties.normalized_twin
+- xref: email_domain
+  key: parties.email_domain
+- xref: display_name
+  key: parties.display_name
+- xref: signature_phone
+  key: parties.signature_phone
+- xref: source_sender
+  key: parties.source_sender

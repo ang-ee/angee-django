@@ -25,7 +25,7 @@ from typing import Any, NamedTuple, Self, cast
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
 from django.utils.crypto import salted_hmac
@@ -41,7 +41,7 @@ from rebac import PermissionDenied, actor_context, current_actor, system_context
 from angee.base.identity import public_id_for
 from angee.base.impl import resolve_hooks
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
@@ -496,7 +496,43 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         return handle
 
 
-class PartyHandleQuerySet(AngeeQuerySet):
+class _PartyHandleWriteFreeze(models.QuerySet[Any]):
+    """Cover native instance, bulk and collector writes at the carrier cutover."""
+
+    def _insert(self, *args: Any, **kwargs: Any) -> Any:
+        self.model.require_legacy_write(self.db)
+        return super()._insert(*args, **kwargs)
+
+    def _update(self, *args: Any, **kwargs: Any) -> Any:
+        self.model.require_legacy_write(self.db)
+        return super()._update(*args, **kwargs)
+
+    def update(self, **kwargs: Any) -> int:
+        self.model.require_legacy_write(self.db)
+        return super().update(**kwargs)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> Any:
+        self.model.require_legacy_write(self.db)
+        return super().bulk_create(*args, **kwargs)
+
+    def delete(self) -> Any:
+        self.model.require_legacy_write(self.db)
+        return super().delete()
+
+    def _raw_delete(self, using: str) -> int:
+        self.model.require_legacy_write(using)
+        return super()._raw_delete(using)
+
+
+class FrozenPartyHandleQuerySet(_PartyHandleWriteFreeze, AngeeUnscopedQuerySet):
+    """Unfiltered native base-manager reads with the same cutover write guard."""
+
+
+class FrozenPartyHandleManager(AngeeUnscopedManager.from_queryset(FrozenPartyHandleQuerySet)):  # type: ignore[misc]
+    """Keep native relation/collector reads unfiltered while freezing their writes."""
+
+
+class PartyHandleQuerySet(_PartyHandleWriteFreeze, AngeeQuerySet):
     """Require association mutations to pass through the resolution owner."""
 
     def to_review(self) -> Self:
@@ -1651,11 +1687,19 @@ class PartyQuerySet(AngeeQuerySet):
             shared_filter |= Q(platform=platform, normalized_value=normalized_value)
 
         parties_by_handle: dict[tuple[str, str], dict[Any, list[Any]]] = {}
-        for handle in handles.filter(shared_filter).only("platform", "normalized_value", "party_id").order_by(
-            "normalized_value", "platform", "party_id", "pk",
+        for handle in (
+            handles.filter(shared_filter)
+            .only("platform", "normalized_value", "party_id")
+            .order_by(
+                "normalized_value",
+                "platform",
+                "party_id",
+                "pk",
+            )
         ):
             parties_by_handle.setdefault((handle.platform, handle.normalized_value), {}).setdefault(
-                handle.party_id, [],
+                handle.party_id,
+                [],
             ).append(handle)
 
         candidate_party_ids = {party_id for party_ids in parties_by_handle.values() for party_id in party_ids}
@@ -1675,7 +1719,8 @@ class PartyQuerySet(AngeeQuerySet):
                 break
 
         paired_party_ids = {
-            party_id for _normalized_value, party_a_id, party_b_id, _handles in pairs
+            party_id
+            for _normalized_value, party_a_id, party_b_id, _handles in pairs
             for party_id in (party_a_id, party_b_id)
         }
         parties = {party.pk: party for party in self.canonical().filter(pk__in=paired_party_ids)}

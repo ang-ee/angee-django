@@ -6,6 +6,11 @@ category = "Data"
 depends_on = ["angee.graphql"]
 
 [[migrations]]
+name = "statement_principal_schema"
+app_label = "provenance"
+module = "runtime_migrations.statement_principal_schema"
+
+[[migrations]]
 name = "retire_reversion"
 app_label = "provenance"
 module = "runtime_migrations.retire_reversion"

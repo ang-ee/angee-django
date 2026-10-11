@@ -29,7 +29,8 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import connections, models, transaction
+from django.db.migrations.recorder import MigrationRecorder
 from phonenumbers import (
     NumberParseException,
     PhoneNumberFormat,
@@ -45,7 +46,16 @@ from angee.base.actors import instance_actor
 from angee.base.fields import ColorField, StateField
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HierarchyMixin
+from angee.base.mixins import (
+    Aspect,
+    AuditMixin,
+    HierarchyMixin,
+    HistoryMixin,
+    SourceKind,
+    StatementRecords,
+    StatementsMixin,
+    Survivorship,
+)
 from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.refs import concrete_child, concrete_child_models
 from angee.integrate.models import Bridge, IntegrationCreateMode
@@ -53,6 +63,7 @@ from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     CircleManager,
+    FrozenPartyHandleManager,
     HandleManager,
     MergeVetoManager,
     PartyHandleManager,
@@ -62,7 +73,7 @@ from angee.parties.mixins import LinkSource, ScoredLinkMixin
 from angee.tags.models import TaggedModel
 
 
-class Party(TaggedModel, AuditMixin, AngeeDataModel):
+class Party(StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
@@ -75,6 +86,15 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
     rebac_grantable = {"reader": "write"}
 
     sqid_prefix = "pty_"
+    statements = StatementRecords(
+        aspects={
+            "handle": Aspect(
+                member={"handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT)},
+                survivorship=Survivorship.HIGHEST_TRUST,
+            ),
+        },
+        sqid_prefix="pst_",
+    )
     display_name = models.TextField()
     notes = models.TextField(blank=True, default="")
     avatar = models.ForeignKey(
@@ -266,15 +286,21 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
     decision_methods = ("apply_identity",)
 
     def apply_identity(
-        self, *, expected_facts_hash: str = "", proposed: Mapping[str, Any] | None = None,
+        self,
+        *,
+        expected_facts_hash: str = "",
+        proposed: Mapping[str, Any] | None = None,
         choices: Mapping[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Apply a proposed identity through the directory's conflict-checking owner."""
         if proposed is None or choices is None or not expected_facts_hash:
             raise ValidationError("An identity application needs its proposed values, choices and facts hash.")
         return type(self).objects.apply_identity(
-            party_id=public_id_of(self), expected_facts_hash=expected_facts_hash,
-            proposed=proposed, choices=choices, actor=instance_actor(self),
+            party_id=public_id_of(self),
+            expected_facts_hash=expected_facts_hash,
+            proposed=proposed,
+            choices=choices,
+            actor=instance_actor(self),
         )
 
     def identity_differs(self, current: Mapping[str, Any], proposed: Mapping[str, Any]) -> bool:
@@ -679,11 +705,29 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = PartyHandleManager()
+    _angee_base = FrozenPartyHandleManager()
+
+    @classmethod
+    def require_legacy_write(cls, using: str) -> None:
+        """The completed native migration is the carrier's write-cutover fact.
+
+        Old producers may write before the fold. Once it is recorded, instance,
+        queryset and collector writes fail, including elevated bookkeeping. The
+        retained rows serve the readers until their statement cutover.
+        """
+
+        recorder = MigrationRecorder(connections[using])
+        if (
+            recorder.has_table()
+            and recorder.migration_qs.filter(app="parties", name__endswith="_fold_party_handle_statements").exists()
+        ):
+            raise ValidationError("PartyHandle is frozen after its statement fold; write Party statements instead.")
 
     class Meta:
         """Django model options for the party-handle link source model."""
 
         abstract = True
+        base_manager_name = "_angee_base"
         ordering = ("-is_confirmed", "-confidence", "sqid")
         rebac_resource_type = "parties/party_handle"
         constraints = (
@@ -718,10 +762,7 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
                 continue
             public_id = str(ref.get("id") or "")
             queryset = read_scoped_queryset(model, actor)
-            if (
-                public_id
-                and instance_from_public_id(model, public_id, queryset=queryset) is not None
-            ):
+            if public_id and instance_from_public_id(model, public_id, queryset=queryset) is not None:
                 visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
         return PartyHandleEvidencePage(tuple(visible[:bounded]), len(refs) > bounded)
 
@@ -1407,7 +1448,14 @@ class Directory(Bridge):
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.CONNECT
 
-    backend_class = ImplClassField(DirectoryBackend,
+    @property
+    def source_kind(self) -> SourceKind:
+        """Contacts asserted by this integration are directory statements."""
+
+        return cast(SourceKind, SourceKind.DIRECTORY)
+
+    backend_class = ImplClassField(
+        DirectoryBackend,
         default="manual",
         create_only=True,
     )

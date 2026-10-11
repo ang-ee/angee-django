@@ -55,7 +55,7 @@ from strawberry_django.descriptors import model_property
 from angee.base.changesets import current_changeset
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, HistoryMixin
+from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, StatementSourceMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -1464,7 +1464,7 @@ class IntegrationManager(AngeeManager.from_queryset(IntegrationQuerySet)):  # ty
     """Manager for integration and bridge collection scopes."""
 
 
-class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
+class Integration(StatementSourceMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a
@@ -1495,6 +1495,15 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         if self.concrete_type_id is None:
             return None
         return cast(type[Integration] | None, ContentType.objects.get_for_id(self.concrete_type_id).model_class())
+
+    @property
+    def source_kind(self) -> SourceKind:
+        """The capability child owns classification of this persisted principal."""
+
+        model = self.declared_concrete_model()
+        if model is None or model is type(self):
+            return super().source_kind
+        return model._base_manager.db_manager(self._state.db).get(pk=self.pk).source_kind
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
