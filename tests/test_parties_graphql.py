@@ -416,6 +416,26 @@ def test_circle_console_insert_establishes_private_creator_access(
     assert updated == {"id": created["id"], "description": "Creator write"}
 
 
+def test_a_confirmed_link_reads_as_confirmed_with_its_producer(composed_tables: None) -> None:
+    """The Identity tab's shape: confirming keeps the producer's source beside the confirmed flag."""
+
+    admin = _platform_admin("party-handle-confirmed-admin")
+    with system_context(reason="test.parties.confirmed_link.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        handle = Handle.objects.create(
+            platform="email", value="ada@example.com", normalized_value="ada@example.com", created_by_id=admin.pk,
+        )
+        link = PartyHandle.objects.link(party, handle, confidence=0.4, source="carddav", created_by_id=admin.pk)
+    link.with_actor(admin).confirm()
+
+    query = "query Links { party_handles { id source confidence is_confirmed is_dismissed } }"
+    rows = _data(execute_schema(_schema("public"), query, user=admin))["party_handles"]
+
+    assert rows == [
+        {"id": link.sqid, "source": "CARDDAV", "confidence": 0.4, "is_confirmed": True, "is_dismissed": False}
+    ]
+
+
 def test_party_handle_display_name_projects_only_readable_components(composed_tables: None) -> None:
     """Association labels stay human-readable without leaking protected Handle values."""
 

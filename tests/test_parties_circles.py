@@ -490,6 +490,42 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_confirmation_writes_only_the_decision_and_stays_asserted(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A confirmed inference keeps its producer's source and score, is asserted, and leaves review.
+
+    A source that owns the link's score (an Odoo import) can therefore be confirmed.
+    """
+
+    del composed_tables
+    with system_context(reason="test confirm keeps producer"):
+        owner = _user("confirm-producer")
+        party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="ada@example.com", created_by=owner)
+        link = PartyHandle.objects.link(party, handle, confidence=0.4, source=LinkSource.RULE, created_by_id=owner.pk)
+        assert not PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+    saved: list[Any] = []
+    original = PartyHandle.save
+
+    def save(self: Any, *args: Any, **kwargs: Any) -> None:
+        saved.append(kwargs.get("update_fields"))
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(PartyHandle, "save", save)
+    with actor_context(owner):
+        link.confirm()
+    with system_context(reason="test confirm keeps producer read"):
+        link.refresh_from_db()
+        handle.refresh_from_db()
+        assert (link.source, link.confidence, link.is_confirmed) == (LinkSource.RULE, 0.4, True)
+        assert PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+        assert not PartyHandle.objects.to_review().filter(pk=link.pk).exists()
+        assert handle.party_id == party.pk
+    assert saved == [["is_confirmed", "is_dismissed", "updated_at"]]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 
@@ -543,7 +579,8 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         handle.refresh_from_db()
         assert handle.party_id is None
 
-        # A human confirm outranks any score and clears the dismissal.
+        # A human confirm outranks any score and clears the dismissal; the link keeps
+        # its producer's source and score.
         strong.refresh_from_db()
         strong.with_actor(owner).confirm()
         handle.refresh_from_db()
@@ -551,8 +588,7 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         assert handle.party_id == alice.pk
         assert handle.party_link_confirmed is True
         assert strong.is_confirmed and not strong.is_dismissed
-        assert strong.confidence == 1.0
-        assert strong.source == LinkSource.MANUAL
+        assert (strong.source, strong.confidence) == (LinkSource.IMPORT, 0.9)
 
         # Low-confidence, undecided links are exactly the review queue.
         assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [weak.pk]
