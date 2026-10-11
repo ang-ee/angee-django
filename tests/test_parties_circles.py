@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -993,6 +994,43 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert refreshed.title == "Principal Mathematician"
     assert refreshed.notes == "Research lead"
     assert Relationship._base_manager.filter(pk=manual.pk, source=LinkSource.MANUAL).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_card_dropping_a_value_keeps_a_persons_decision_on_it(composed_tables: None) -> None:
+    """Only an undecided card link goes with its value; a dismissal or a confirmation stays."""
+
+    del composed_tables
+    emails = tuple((value, "", False) for value in ("kept@example.com", "dismissed@example.com",
+                                                    "confirmed@example.com", "dropped@example.com"))
+    with system_context(reason="test carddav decisions"):
+        owner = _user("carddav-decisions")
+        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
+        card = ParsedContact(uid="contact-3", display_name="Ada Lovelace", emails=emails)
+        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk)
+        rows = PartyHandle._base_manager.filter(party=person).select_related("handle")
+        links = {link.handle.value: link for link in rows}
+        PartyHandle.objects.link(
+            person, links["confirmed@example.com"].handle, source=LinkSource.CARDDAV, is_confirmed=True,
+            created_by_id=owner.pk,
+        )
+    with actor_context(owner):
+        links["dismissed@example.com"].dismiss()
+    with system_context(reason="test carddav drops values"):
+        Party.objects.ingest_contact(replace(card, emails=emails[:1]), folder=folder, created_by_id=owner.pk)
+        remaining = {
+            value: (source, is_confirmed, is_dismissed)
+            for value, source, is_confirmed, is_dismissed in PartyHandle._base_manager.filter(party=person).values_list(
+                "handle__value", "source", "is_confirmed", "is_dismissed"
+            )
+        }
+
+    assert remaining == {
+        "kept@example.com": (LinkSource.CARDDAV, False, False),
+        "dismissed@example.com": (LinkSource.CARDDAV, False, True),
+        "confirmed@example.com": (LinkSource.CARDDAV, True, False),
+    }
 
 
 @pytest.mark.django_db(transaction=True)

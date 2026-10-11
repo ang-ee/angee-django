@@ -2310,11 +2310,14 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     source=LinkSource.CARDDAV,
                     created_by_id=created_by_id,
                 )
-            # Retire only this source's vanished associations. Shared Handle rows
-            # and links established by another source retain their own lifecycle.
+            # Retire only this source's vanished, undecided associations. Shared
+            # Handle rows and links established by another source retain their own
+            # lifecycle, and a person's confirmation or dismissal outlives the card.
             party_handle_model.objects.filter(
                 party_id=person.pk,
                 source=LinkSource.CARDDAV,
+                is_confirmed=False,
+                is_dismissed=False,
             ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
 
             # Addresses carry no stable id, so mirror the parsed set wholesale —
