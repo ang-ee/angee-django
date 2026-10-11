@@ -34,6 +34,7 @@ from rebac import (
 from rebac.mixins import RebacModelBase
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import write_group
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import (
@@ -214,13 +215,14 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         if owned:
             vault.sudo(reason="knowledge.vault.create").save()
         else:
-            # Native bulk insertion bypasses OwnerMixin's insert default. As for
-            # the cloned pages, explicit audit stamps and the save notification
-            # retain history without assigning a temporary owner.
-            self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
-            post_save.send(
-                sender=self.model, instance=vault, created=True, raw=False, using=self.db, update_fields=None,
-            )
+            # Native bulk insertion bypasses OwnerMixin's insert default.
+            # Notify lifecycle subscribers within the captured write's group.
+            # Create/update dedupe is owed by the write group.
+            with write_group():
+                self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
+                post_save.send(
+                    sender=self.model, instance=vault, created=True, raw=False, using=self.db, update_fields=None,
+                )
         return vault.with_actor(actor)
 
 
@@ -362,19 +364,20 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         }
         batch = list(copies.values())
         elevated = self.sudo(reason="knowledge.page.clone")
-        elevated.bulk_create(batch)
-        children = []
-        for pk, page in copies.items():
-            page.with_actor(actor)
-            if pages[pk].parent_id is not None:
-                page.parent = copies[pages[pk].parent_id]
-                children.append(page)
-        if children:
-            elevated.bulk_update(children, ["parent"])
-        for page in batch:
-            post_save.send(
-                sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
-            )
+        with write_group():
+            elevated.bulk_create(batch)
+            children = []
+            for pk, page in copies.items():
+                page.with_actor(actor)
+                if pages[pk].parent_id is not None:
+                    page.parent = copies[pages[pk].parent_id]
+                    children.append(page)
+            if children:
+                elevated.bulk_update(children, ["parent"])
+            for page in batch:
+                post_save.send(
+                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
+                )
         return copies
 
 
@@ -783,25 +786,26 @@ class MarkdownPageManager(AngeeManager):
         """
 
         copies = []
-        with system_context(reason="knowledge.vault.clone.markdown"):
-            for source in bodies:
-                page = pages[source.pk]
-                body = self.model(
-                    **{field.attname: getattr(page, field.attname) for field in page._meta.concrete_fields},
-                    page_ptr=page,
-                    kind=source.kind,
-                    body=source.body,
-                    body_hash=source.body_hash,
-                    word_count=source.word_count,
+        with write_group():
+            with system_context(reason="knowledge.vault.clone.markdown"):
+                for source in bodies:
+                    page = pages[source.pk]
+                    body = self.model(
+                        **{field.attname: getattr(page, field.attname) for field in page._meta.concrete_fields},
+                        page_ptr=page,
+                        kind=source.kind,
+                        body=source.body,
+                        body_hash=source.body_hash,
+                        word_count=source.word_count,
+                    )
+                    body.save_base(raw=True, force_insert=True, using=self.db)
+                    copies.append(body.with_actor(actor))
+            apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
+            for body in copies:
+                post_save.send(
+                    sender=self.model, instance=body, created=True,
+                    raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
                 )
-                body.save_base(raw=True, force_insert=True, using=self.db)
-                copies.append(body.with_actor(actor))
-        apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
-        for body in copies:
-            post_save.send(
-                sender=self.model, instance=body, created=True,
-                raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
-            )
 
     def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:
         """Update ``page``'s markdown body, last-write-wins.

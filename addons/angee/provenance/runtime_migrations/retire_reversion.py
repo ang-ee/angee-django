@@ -2,6 +2,8 @@
 
 All Version and Revision data is gone by ruling; it is not converted to native
 history. Reverse is a no-op and cannot restore that data or migration records.
+Run ``manage.py remove_stale_contenttypes`` to remove stale ``reversion.*``
+content types and their permissions through Django's cleanup owner.
 """
 
 from django.apps.registry import Apps
@@ -12,7 +14,9 @@ from django.db.migrations.state import ProjectState
 
 
 def applies(state: ProjectState) -> bool:
-    return not any(label == "reversion" for label, _ in state.models)
+    return ("provenance", "changeset") in state.models and not any(
+        label == "reversion" for label, _ in state.models
+    )
 
 
 def forwards(apps: Apps, schema_editor: BaseDatabaseSchemaEditor) -> None:
@@ -27,5 +31,5 @@ def forwards(apps: Apps, schema_editor: BaseDatabaseSchemaEditor) -> None:
 
 
 class Migration(migrations.Migration):
-    dependencies = []
+    dependencies: list[tuple[str, str]] = []
     operations = [migrations.RunPython(forwards, migrations.RunPython.noop)]

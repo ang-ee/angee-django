@@ -49,7 +49,6 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "groups": "notes_groups",
                 "groupsCount": "notes_groups_count",
                 "list": "notes",
-                "revisions": None,
                 "save": None,
                 "update": "update_notes_by_pk",
             },
@@ -169,14 +168,13 @@ class NotesSchemaMetadataTests(SimpleTestCase):
         )
         self.assertEqual(
             note["createFields"],
-            ["title", "body", "status", "tags", "is_starred", "reminder_at"],
+            ["title", "body", "status", "tags", "is_starred", "reminder_at", "reviewer"],
         )
         self.assertEqual(note["requiredCreateFields"], ["title"])
         self.assertEqual(
             note["updateFields"],
-            ["title", "body", "status", "tags", "is_starred", "reminder_at"],
+            ["title", "body", "status", "tags", "is_starred", "reminder_at", "reviewer"],
         )
-        self.assertEqual(note["revisionFields"], ["created_at", "comment", "body"])
         self.assertEqual(
             {
                 key: fields["title"][key]

@@ -17,9 +17,12 @@ def applies(state: ProjectState) -> bool:
     if all(model is None for model in histories):
         return False
     required = {"history_id", "history_date", "history_type", "history_user", "history_change_reason"}
+    markdown = state.models.get(("knowledge", "markdownpage"))
     if (
         histories[0] is None
-        and ("knowledge", "markdownpage") in state.models
+        and markdown is not None
+        and "page" in markdown.fields
+        and "page_ptr" not in markdown.fields
         and all(
             model is not None and required.issubset(model.fields) and "changeset" not in model.fields
             for model in histories[1:]

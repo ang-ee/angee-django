@@ -288,7 +288,6 @@ class DataResourceRoots:
     save_name: Annotated[str | None, Field(serialization_alias="save")] = None
     delete_name: Annotated[str | None, Field(serialization_alias="delete")] = None
     delete_preview_name: Annotated[str | None, Field(serialization_alias="deletePreview")] = None
-    revisions_name: Annotated[str | None, Field(serialization_alias="revisions")] = None
     changes_name: Annotated[str | None, Field(serialization_alias="changes")] = None
 
 
@@ -309,7 +308,6 @@ class DataResourceTypeNames:
     create_input: str | None = None
     update_input: str | None = None
     delete_payload: str | None = None
-    revision: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

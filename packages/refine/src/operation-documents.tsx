@@ -8,7 +8,6 @@ export type ActionDocumentMap = Readonly<Record<string, unknown>>;
 export type AggregateDocumentMap = Readonly<Record<string, unknown>>;
 export type DeletePreviewDocumentMap = Readonly<Record<string, unknown>>;
 export type GroupDocumentMap = Readonly<Record<string, unknown>>;
-export type RevisionDocumentMap = Readonly<Record<string, unknown>>;
 export type SaveDocumentMap = Readonly<Record<string, unknown>>;
 
 export interface SchemaOperationDocuments {
@@ -16,7 +15,6 @@ export interface SchemaOperationDocuments {
   aggregates?: AggregateDocumentMap;
   deletePreviews?: DeletePreviewDocumentMap;
   groups?: GroupDocumentMap;
-  revisions?: RevisionDocumentMap;
   /** Authored `<resource>_save(pk, patch, lines)` diff-apply documents (F6). */
   saves?: SaveDocumentMap;
 }
@@ -30,7 +28,6 @@ const OPERATION_DOCUMENT_LABELS = {
   aggregates: "aggregate",
   deletePreviews: "delete-preview",
   groups: "group",
-  revisions: "revision",
   saves: "save",
 } as const satisfies Record<OperationDocumentKind, string>;
 
@@ -116,12 +113,4 @@ export function groupDocumentForResource(
   resource: string,
 ): unknown {
   return operationDocument(documents, schema, "groups", resource);
-}
-
-export function revisionDocumentForResource(
-  documents: OperationDocumentsBySchema,
-  schema: string,
-  resource: string,
-): unknown {
-  return operationDocument(documents, schema, "revisions", resource);
 }

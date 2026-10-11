@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, useRouteHref, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
+import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, useRouteHref, type ResourceViewDefaultGroups } from "@angee/ui";
 import { useParams } from "@tanstack/react-router";
 
 import { useNotesT, type NotesT } from "./i18n";
@@ -78,42 +78,11 @@ export function NotePage(): React.ReactElement {
   const recordId = creating ? null : routeId;
   const activeRecordId =
     !creating && typeof recordId === "string" ? recordId : null;
-  const revisions = useResourceRevisions(MODEL, activeRecordId, {
-    enabled: activeRecordId !== null,
-  });
-  const tabs = React.useMemo(
-    () => [
-      {
-        id: "activity",
-        label: t("record.activity"),
-        icon: "activity",
-        count: revisions.count,
-        children: <RevisionsTab resource={MODEL} recordId={activeRecordId} />,
-      },
-    ] satisfies readonly ChatterTab[],
-    [activeRecordId, revisions.count, t],
-  );
-  const chatter = React.useMemo(() => ({ tabs }), [tabs]);
-  useChatterContent(chatter);
-  const recordSmartButtons = React.useMemo(
-    () =>
-      [
-        {
-          id: "versions",
-          icon: "versions",
-          count: revisions.count,
-          label: t("record.versions"),
-        },
-      ] satisfies readonly RecordSmartButtonDescriptor[],
-    [revisions.count, t],
-  );
-
   return (
     <div className="flex flex-col gap-4">
       {/* Open as a month-grouped list; board view switches to status lanes. */}
       <ResourceList
         resource={MODEL}
-        recordSmartButtons={recordSmartButtons}
         placement="inline"
         routed
       >
@@ -131,11 +100,6 @@ export function NotePage(): React.ReactElement {
               ? t("status.editing")
               : t("status.all")}
         </StatusSegment>
-        {activeRecordId ? (
-          <StatusSegment icon="versions">
-            {t("status.revision", { count: revisions.count })}
-          </StatusSegment>
-        ) : null}
         <StatuslineSpacer />
         <StatusSegment>notes.Note</StatusSegment>
         <StatusSegment icon="grid">console</StatusSegment>

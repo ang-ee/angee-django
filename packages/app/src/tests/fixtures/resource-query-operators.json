@@ -523,7 +523,6 @@
         "save": null,
         "delete": null,
         "deletePreview": null,
-        "revisions": null,
         "changes": null
       },
       "typeNames": {
@@ -539,8 +538,7 @@
         "having": null,
         "createInput": null,
         "updateInput": null,
-        "deletePayload": null,
-        "revision": null
+        "deletePayload": null
       },
       "canonicalLabel": null,
       "concreteKinds": [],
@@ -1052,7 +1050,6 @@
         "save": null,
         "delete": null,
         "deletePreview": null,
-        "revisions": null,
         "changes": null
       },
       "typeNames": {
@@ -1068,8 +1065,7 @@
         "having": null,
         "createInput": null,
         "updateInput": null,
-        "deletePayload": null,
-        "revision": null
+        "deletePayload": null
       },
       "canonicalLabel": null,
       "concreteKinds": [],

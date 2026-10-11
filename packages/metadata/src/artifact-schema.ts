@@ -69,7 +69,6 @@ const RootsSchema = v.objectWithRest({
   save: OptionalString,
   delete: OptionalString,
   deletePreview: OptionalString,
-  revisions: OptionalString,
   changes: OptionalString,
 }, OptionalString);
 const TypeNamesSchema = v.objectWithRest({
@@ -86,7 +85,6 @@ const TypeNamesSchema = v.objectWithRest({
   createInput: OptionalString,
   updateInput: OptionalString,
   deletePayload: OptionalString,
-  revision: OptionalString,
 }, OptionalString);
 const SubjectTypeSchema = v.looseObject({
   type: v.string(),
