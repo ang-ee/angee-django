@@ -33,8 +33,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
-from django.db.models import F, OuterRef, Prefetch, Q, Subquery, Value
-from django.db.models.functions import Coalesce
+from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 from rebac import (
     RelationshipTuple,
@@ -52,7 +51,7 @@ from strawberry_django.descriptors import model_property
 
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -72,7 +71,6 @@ from angee.integrate.errors import (
     _safe_integration_failure,
 )
 from angee.integrate.events import EventKind
-from angee.integrate.fields import DiscrepancyOpenField
 from angee.integrate.impl import IntegrationImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_is_locked
@@ -86,12 +84,12 @@ from angee.integrate.states import (
     UNSET,
     ConflictKeep,
     DiscrepancyKind,
-    DiscrepancyStatus,
     LinkStatus,
     OutboxState,
     StreamDirection,
     StreamKind,
     StreamPhase,
+    StreamState,
 )
 from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
@@ -1497,10 +1495,7 @@ class Integration(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         """Require one unambiguous primary-key path for each capability child."""
 
         errors = super().check(**kwargs)
-        for child in (
-            model for model in cls._meta.apps.get_models()
-            if model is not cls and issubclass(model, cls)
-        ):
+        for child in (model for model in cls._meta.apps.get_models() if model is not cls and issubclass(model, cls)):
             if len(child._meta.parents) > 1:
                 errors.append(
                     checks.Error(
@@ -2880,6 +2875,7 @@ class SyncStreamManager(AngeeManager):
         *,
         kind: StreamKind = StreamKind.EVENT_FEED,
         direction: StreamDirection = StreamDirection.PULL,
+        snapshot: bool = False,
         cursor: Any = None,
         reconcile_interval: timedelta | None = None,
         absence_threshold: int = 2,
@@ -2889,8 +2885,8 @@ class SyncStreamManager(AngeeManager):
         """Return the latest epoch, creating its baseline once per partition.
 
         Cursor and policy arguments seed only the first epoch; subsequent calls
-        preserve persisted progress and policy. Kind and direction cannot change
-        for an existing identity. Change persisted policy explicitly on the row.
+        preserve persisted progress and policy. Kind is immutable; direction or
+        snapshot changes start a new baseline generation with the persisted policy.
         """
 
         if absence_threshold < 1:
@@ -2907,17 +2903,27 @@ class SyncStreamManager(AngeeManager):
                     **identity,
                     kind=kind,
                     direction=direction,
+                    snapshot=snapshot,
                     cursor={} if cursor is None else cursor,
                     reconcile_interval=reconcile_interval,
                     absence_threshold=absence_threshold,
                     tombstone_retention=tombstone_retention,
                     config=dict(config or {}),
                 )
-            if (stream.kind, stream.direction) != (kind, direction):
-                raise ValidationError("A stream's kind and direction cannot change between declarations.")
+            if stream.kind != kind:
+                raise ValidationError("A stream's kind cannot change between declarations.")
+            if stream.direction != direction or stream.snapshot != snapshot:
+                return self.bump_generation(stream, direction=direction, snapshot=snapshot)
             return stream
 
-    def bump_generation(self, stream: Any, *, cursor: dict[str, Any] | None = None) -> Any:
+    def bump_generation(
+        self,
+        stream: Any,
+        *,
+        cursor: dict[str, Any] | None = None,
+        direction: StreamDirection | None = None,
+        snapshot: bool | None = None,
+    ) -> Any:
         """Create one new baseline while retaining identities and history.
 
         Concurrent requests against a retired epoch return its successor. Links
@@ -2933,7 +2939,8 @@ class SyncStreamManager(AngeeManager):
                 key=latest.key,
                 partition=latest.partition,
                 kind=latest.kind,
-                direction=latest.direction,
+                direction=latest.direction if direction is None else direction,
+                snapshot=latest.snapshot if snapshot is None else snapshot,
                 generation=latest.generation + 1,
                 cursor={} if cursor is None else cursor,
                 last_advanced_at=timezone.now() if cursor else None,
@@ -2944,9 +2951,9 @@ class SyncStreamManager(AngeeManager):
                 inbound=deepcopy(latest.inbound),
             )
             apps.get_model("integrate", "RecordLink").objects.filter(stream=latest).update(stream=successor)
-            if latest.inbound:
-                latest.inbound = []
-                latest.save(update_fields=["inbound", "updated_at"])
+            latest.state = StreamState.CLOSED
+            latest.inbound = []
+            latest.save(update_fields=["state", "inbound", "updated_at"])
             return successor
 
     def request_resync(self, stream: Any) -> Any:
@@ -2991,12 +2998,16 @@ class SyncStreamManager(AngeeManager):
 
         with system_context(reason="integrate.stream.advance"), transaction.atomic():
             locked = self.lock_current(stream)
+            if locked.state == StreamState.CLOSED:
+                raise ValidationError("A closed stream requires a new generation before advancement.")
             locked.cursor = cursor
             locked.cursor_expires_at = cursor_expires_at
             locked.last_advanced_at = timezone.now()
             if exhausted:
                 locked.phase = StreamPhase.DELTA
-            fields = ["cursor", "cursor_expires_at", "last_advanced_at", "phase"]
+                if locked.snapshot and locked.reconcile_interval is None:
+                    locked.state = StreamState.CLOSED
+            fields = ["cursor", "cursor_expires_at", "last_advanced_at", "phase", "state"]
             locked.save(update_fields=[*fields, "updated_at"])
             for field in fields:
                 setattr(stream, field, getattr(locked, field))
@@ -3013,8 +3024,10 @@ class SyncStream(SyncStateMixin):
     partition = models.CharField(max_length=255, blank=True)
     kind = StateField(choices_enum=StreamKind)
     direction = StateField(choices_enum=StreamDirection)
+    snapshot = models.BooleanField(default=False)
     generation = models.PositiveIntegerField(default=1)
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
+    state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
     cursor = models.JSONField(default=dict, blank=True)
     reconcile_state = models.JSONField(default=dict, blank=True)
     config = models.JSONField(default=dict, blank=True)
@@ -3037,26 +3050,16 @@ class SyncStream(SyncStateMixin):
     def writes_back(self) -> bool:
         """Whether this stream writes local changes to its remote: a replica that is not pull-only."""
 
-        return self.kind == StreamKind.RECORD_REPLICA and self.direction != StreamDirection.PULL
+        return (
+            self.state == StreamState.OPEN
+            and self.kind == StreamKind.RECORD_REPLICA
+            and self.direction != StreamDirection.PULL
+        )
 
     def has_completed_baseline(self) -> bool:
-        """Read completion across retained epochs, including this persisted row.
+        """Read this generation's persisted completion; earlier baselines do not count."""
 
-        Cursor seeds and interrupted baselines are not completion. A later epoch
-        retains an earlier completion even while its own baseline is unfinished.
-        """
-
-        return (
-            type(self)
-            .unscoped_objects.filter(
-                integration_id=self.integration_id,
-                key=self.key,
-                partition=self.partition,
-                generation__lte=self.generation,
-                phase=StreamPhase.DELTA,
-            )
-            .exists()
-        )
+        return type(self).unscoped_objects.filter(pk=self.pk, phase=StreamPhase.DELTA).exists()
 
     def sync_failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
         """Read stream and linked failures through their owning row permissions."""
@@ -3428,6 +3431,8 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
             if not row.is_open:
                 return row
             stream = link.stream
+            if stream.state == StreamState.CLOSED:
+                raise ValidationError("Resync the closed stream before resolving its conflict.")
             owner = link.parent if link.parent is not None else link
             adapter = stream.integration.concrete_capability().backend
             keys = frozenset((owner.external_key,))
@@ -3504,93 +3509,3 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
         rebac_id_attr = "pk"
         constraints = (models.UniqueConstraint(fields=("stream", "external_key"), name="uniq_stream_record_key"),)
         indexes = (models.Index(fields=("target_content_type", "target_object_id")),)
-
-
-class RecordRevisionQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):
-    """Reject every bulk mutation of retained applied evidence."""
-
-    def latest_for(self, link: Any) -> Any:
-        """Select the latest revision for a link, usable as a row read or subquery."""
-        return self.filter(link=link).order_by("-number")[:1]
-
-
-class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):  # type: ignore[misc]
-    """Legacy revision rows retained solely as fold inputs until retirement."""
-
-
-class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
-    """Immutable observed and mapped payload history for one replica identity.
-
-    Retention is unbounded by design. Full payload evidence grows with every
-    substantive application; deployments must budget storage for that history.
-    """
-
-    runtime = True
-    sqid_prefix = "rrv_"
-    link = models.ForeignKey("integrate.RecordLink", on_delete=models.PROTECT, related_name="revisions")
-    number = models.PositiveIntegerField()
-    source_payload = models.JSONField()
-    source_hash = models.CharField(max_length=64)
-    mapping_version = models.PositiveIntegerField()
-    mapped_payload = models.JSONField(default=dict, blank=True)
-    dependency_digest = models.CharField(max_length=64, blank=True)
-    prior = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="successors")
-    applied_at = models.DateTimeField(null=True, blank=True)
-    objects = RecordRevisionManager()
-
-    class Meta:
-        abstract = True
-        rebac_resource_type = "integrate/record_revision"
-        rebac_id_attr = "pk"
-        constraints = (models.UniqueConstraint(fields=("link", "number"), name="uniq_record_revision_number"),)
-
-
-class SyncDiscrepancyQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):
-    """Read-only legacy quarantine, retained for the declared fold."""
-
-
-class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)):  # type: ignore[misc]
-    """Legacy discrepancy rows retained solely as fold inputs until retirement."""
-
-
-class SyncDiscrepancy(AuditMixin, AngeeDataModel):
-    """Legacy per-source-version failures retained only until store retirement."""
-
-    runtime = True
-    sqid_prefix = "sdc_"
-    stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="discrepancies")
-    link = models.ForeignKey(
-        "integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="discrepancies"
-    )
-    kind = StateField(choices_enum=DiscrepancyKind)
-    code = models.CharField(max_length=160)
-    source_hash = models.CharField(max_length=64, blank=True)
-    mapping_version = models.PositiveIntegerField(default=1)
-    details = models.JSONField(default=dict, blank=True)
-    status = StateField(choices_enum=DiscrepancyStatus, default=DiscrepancyStatus.OPEN)
-    is_open = DiscrepancyOpenField()
-    attempts = models.PositiveIntegerField(default=0)
-    retry_at = models.DateTimeField(null=True, blank=True)
-    resolved_at = models.DateTimeField(null=True, blank=True)
-    objects = SyncDiscrepancyManager()
-    unscoped_objects = AngeeUnscopedManager()
-
-    class Meta:
-        abstract = True
-        base_manager_name = "unscoped_objects"
-        verbose_name_plural = "sync discrepancies"
-        rebac_resource_type = "integrate/sync_discrepancy"
-        rebac_id_attr = "pk"
-        constraints = (
-            # One open row per failing version of each link; unlinked failures share link 0.
-            models.UniqueConstraint(
-                F("stream"),
-                Coalesce("link", Value(0)),
-                F("kind"),
-                F("code"),
-                F("source_hash"),
-                F("mapping_version"),
-                condition=Q(is_open=True),
-                name="uniq_open_sync_discrepancy",
-            ),
-        )

@@ -8,7 +8,7 @@ existing capability overrides remain valid.
 | Concern | Owner |
 |---|---|
 | Connection, cadence, queue admission and run telemetry | [Integration and Bridge](models.py) |
-| Stream identity, opaque cursor, baseline generation and reconciliation policy | [SyncStream and its manager](models.py) |
+| Stream identity, snapshot intent, opaque cursor, baseline generation, closure and reconciliation policy | [SyncStream and its manager](models.py) |
 | External identity, observed source, protected applied base and retained tombstones | [RecordLink and its manager](models.py) |
 | Observed and applied snapshots | Native `RecordLink.history`, attributed by changeset |
 | Inbound quarantine, outbox refusal and due retry policy | Link/stream state in [the shared state owner](mixins.py) |
@@ -17,8 +17,8 @@ existing capability overrides remain valid.
 | Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed); `manage.py preview_push <integration>` lists what a push would write ([`preview_push`](streams.py)) |
 | Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
 
-Event feeds compose their domain's idempotent ingest verb and never create links
-or revisions. Messaging uses conversation partitions for Slack and mailbox
+Event feeds compose their domain's idempotent ingest verb and never create replica
+links or link history. Messaging uses conversation partitions for Slack and mailbox
 partitions for IMAP. Their legacy bridge cursor slices seed the first stream row
 only, through the pure `BridgeImpl.seed_cursor` hook. Legacy delivery policy
 translates through `seed_config`, which returns config defaults and the retained
@@ -49,17 +49,32 @@ conditional deletion returns `WriteBackResult(tombstone=True)` so the driver
 retains the link's deletion and local origin. [Directory](../parties/README.md)
 composes this protocol for bidirectional CardDAV contacts.
 
-Before a two-way replica completes its first baseline, an adapter's identity
+Before a two-way replica completes its generation's baseline, an adapter's identity
 match between a live remote record and an existing local row with no applied link history
 is adopted with remote wins.
 The driver applies the remote projection and records its version and pins the applied
 projection without a conflict or write-back. Each identity can be adopted across
 baseline pages and cursor resets; retained application bases still use ordinary
-three-way comparison. `push_stream` suppresses local pushes only until that first
+three-way comparison. `push_stream` suppresses local pushes only until that generation's
 baseline completes. Local-only rows can then be created remotely, including
 during the same sync call that completes the baseline. Before upgrading pull-only
 sync to two-way sync, remove any local-only rows that must not reach the remote
 from the synchronized scope.
+
+A declaration's direction or snapshot change creates a new open baseline
+generation with the requested declaration and retained policy, links, history and failures. Earlier
+generations do not complete that baseline. Pull streams read remote records;
+push streams execute only the outbox; bidirectional streams compose both.
+Deletion strategies remain adapter-owned `config` and apply on the next page.
+
+A snapshot source declares `StreamDefinition(snapshot=True)`, mirrored on
+`SyncStream.snapshot`. With no `reconcile_interval`, its generation closes when
+its baseline is exhausted. Closed streams retain failure evidence; conflict
+resolution requires resync before transport can resume. They do not extract,
+push or reconcile. Explicit resync opens a new generation; repeated
+discovery does not reopen the completed snapshot. Recurring event feeds remain
+open when their reconciliation interval is absent. Closed generations ignore
+cursor expiry. Backend-private `config` does not declare snapshot intent.
 
 Changes to mapping version or dependency digest also require application. The
 adapter returns applied evidence in `ApplyResult`; only the driver promotes the
@@ -167,6 +182,9 @@ The declared `integrate/fold_record_sync_history` migration converts the legacy
 revision log in link/number order, preserves all failure identities and original
 legacy audit stamps, and pins the last applied historical row. It does not invent
 historical remote versions. Its reverse rebuilds the legacy tables and documents
-the state distinctions their schema cannot express. The legacy models/tables
-remain conversion inputs until their separate retirement; runtime readers and
-writers use link/stream history and state.
+the state distinctions their schema cannot express. The following
+`integrate/retire_record_sync_stores` declaration verifies converted evidence
+parity before deleting the conversion tables. Its reverse recreates them from
+retained history, with the same documented loss of native state distinctions.
+Manifest order and the composer's current-leaf dependency keep the fold before
+retirement. Runtime readers and writers use link/stream history and state.

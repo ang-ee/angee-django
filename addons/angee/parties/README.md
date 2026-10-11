@@ -11,7 +11,7 @@ uses [RFC 6578 sync-collection](https://www.rfc-editor.org/rfc/rfc6578.html) del
 It captures the collection token before listing so edits during a baseline replay
 on the next delta. Pending hrefs and the next token live only in the stream cursor.
 An unchanged token produces an empty page. `DAV:valid-sync-token` failure creates
-a new baseline generation, retaining links and revisions. Explicit removed-member
+a new baseline generation, retaining links and their history. Explicit removed-member
 404 responses become tombstones; a failed transport never advances the cursor.
 Per-identity discrepancy rescans use CardDAV multiget without advancing that
 cursor. A daily depth-one PROPFIND sweep seeks in href order and reads bounded
@@ -27,7 +27,7 @@ in link metadata. A resource keeps that first identity on later reads and when
 a delta relocates its UID. Duplicate UIDs quarantine the colliding card while
 other cards proceed. Observed link metadata retains the href even when the first
 card is malformed, allowing a
-corrected card to resolve the same quarantine. Applied revisions retain the
+corrected card to resolve the same quarantine. Applied link history retains the
 resource href separately with the vCard version used for conditional writes.
 Its target is the Person produced by `Party.objects.ingest_contact`; shared
 contact points still use `Handle.objects.upsert`. A local person added to a synced
@@ -51,7 +51,7 @@ written to a card. Extraction fetches and pre-stores avatars through storage's
 idempotent `File.objects.ingest_bytes` before the page transaction. Apply only
 validates and links the prepared File under the row lock; it performs database
 work only.
-Local comparisons use the stored hash without reading avatar bytes, and revisions
+Local comparisons use the stored hash without reading avatar bytes, and link history
 retain the content address instead of base64 photo bytes. Collection order
 does not affect hashes. The remote and local bases are separate because domain
 fields may normalize values. Transport metadata, unmapped ORG department units,

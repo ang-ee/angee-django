@@ -250,6 +250,13 @@ released history when code moves. See the [backend migration
 rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
 database or changing historical source compatibility.
 
+For a conversion followed by retirement, declare the fold first and guard the
+retirement against its completed schema. Integrate's manifest orders
+`fold_record_sync_history` before `retire_record_sync_stores`; the composer
+attaches retirement to the fold's concrete leaf, so its parity check runs before
+either native `DeleteModel`. Keep data verification in the copied migration body,
+since schema guards alone cannot prove that the conversion preserved every row.
+
 A destructive retirement owned by an addon that has left the composition can
 declare `uninstalled_only = true`. The migration owner reads these declarations
 from available addon manifests only when the addon is uninstalled and the target

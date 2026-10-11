@@ -35,7 +35,15 @@ from angee.base.changesets import changeset, current_changeset
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError, _safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
-from angee.integrate.states import UNSET, DiscrepancyKind, LinkStatus, StreamDirection, StreamKind, StreamPhase
+from angee.integrate.states import (
+    UNSET,
+    DiscrepancyKind,
+    LinkStatus,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+    StreamState,
+)
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 
 logger = logging.getLogger(__name__)
@@ -62,7 +70,10 @@ def _public_partition(partition: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class StreamDefinition:
-    """One independently ordered partition; cursor seeds only its first epoch."""
+    """One independently ordered partition; a snapshot's baseline is its whole feed.
+
+    Cursor and policy seed its first epoch. Declaration facts mirror to the stream.
+    """
 
     key: str
     partition: str = ""
@@ -73,6 +84,7 @@ class StreamDefinition:
     absence_threshold: int = 2
     tombstone_retention: timedelta | None = None
     config: dict[str, Any] = field(default_factory=dict)
+    snapshot: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,7 +352,7 @@ def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
 
 
 def _baseline_adoption(stream: Any) -> bool:
-    """Two-way replicas adopt existing identities until their first baseline completes."""
+    """Two-way replicas adopt unbased identities until this generation completes its baseline."""
     return (
         stream.kind == StreamKind.RECORD_REPLICA
         and stream.direction == StreamDirection.BIDIRECTIONAL
@@ -440,7 +452,11 @@ def advance_stream(
         raise ValueError("page_bound must be positive.")
     with system_context(reason="integrate.stream.advance"):
         stream.refresh_from_db()
-        if stream.resync_required or (stream.cursor_expires_at and stream.cursor_expires_at <= timezone.now()):
+        if stream.resync_required:
+            return reset_stream(stream, cursor={})
+        if stream.state == StreamState.CLOSED:
+            return PageResult(stream, exhausted=True)
+        if stream.cursor_expires_at and stream.cursor_expires_at <= timezone.now():
             return reset_stream(stream, cursor={})
         original_cursor = _validated_cursor(stream.cursor)
         try:
@@ -515,7 +531,8 @@ def _apply_page(
         current_changeset(record=True)
         locked = _manager("SyncStream").lock_current(stream)
         if (
-            locked.cursor != original_cursor
+            locked.state == StreamState.CLOSED
+            or locked.cursor != original_cursor
             or locked.phase != stream.phase
             or locked.reconcile_state != stream.reconcile_state
             or locked.resync_required
@@ -681,12 +698,11 @@ def push_stream(
 
     if connection.in_atomic_block:
         raise RuntimeError("Remote writes must run outside a database transaction.")
-    if not stream.writes_back:
-        return PageResult(stream, exhausted=True)
     count = 0
     discrepancies: list[str] = []
     with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
-        if _baseline_adoption(stream):
+        stream.refresh_from_db()
+        if not stream.writes_back or _baseline_adoption(stream):
             return PageResult(stream, exhausted=True)
         links = _manager("RecordLink")
         candidates: set[str] = set()
@@ -845,13 +861,20 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
         raise RuntimeError("Remote enumeration must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    if stream.kind != StreamKind.RECORD_REPLICA or stream.reconcile_interval is None:
+    if (
+        stream.state == StreamState.CLOSED
+        or stream.direction == StreamDirection.PUSH
+        or stream.kind != StreamKind.RECORD_REPLICA
+        or stream.reconcile_interval is None
+    ):
         return 0
     with changeset(fresh=True, activity="pull", origin=stream), system_context(reason="integrate.stream.reconcile"):
         manager = _manager("SyncStream")
         identity_reads = adapter.supports_identity_reads
         with transaction.atomic():
             locked = manager.lock_current(stream)
+            if locked.state == StreamState.CLOSED or locked.direction == StreamDirection.PUSH:
+                return 0
             state = _validated_cursor(locked.reconcile_state) or None
             if state is None:
                 now = timezone.now()
@@ -979,9 +1002,17 @@ def begin_stream_cycle(
         manager = _manager("SyncStream")
         links_manager = _manager("RecordLink")
         identity_reads = adapter is not None and adapter.supports_identity_reads
+        stream.refresh_from_db()
+        if stream.resync_required:
+            stream = manager.bump_generation(stream)
         with transaction.atomic():
             stream = manager.lock_current(stream)
-            if stream.kind == StreamKind.EVENT_FEED:
+            if (
+                stream.resync_required
+                or stream.state == StreamState.CLOSED
+                or stream.direction == StreamDirection.PUSH
+                or stream.kind == StreamKind.EVENT_FEED
+            ):
                 return stream
             due = links_manager.filter(stream=stream).rescan(limit=page_bound)
             retention = stream.tombstone_retention
@@ -1073,6 +1104,7 @@ def open_stream(
                 partition,
                 kind=definition.kind,
                 direction=definition.direction,
+                snapshot=definition.snapshot,
                 cursor=_validated_cursor(definition.cursor),
                 reconcile_interval=definition.reconcile_interval,
                 absence_threshold=definition.absence_threshold,
@@ -1110,7 +1142,12 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
     stage = "open"
     try:
         stream = open_stream(
-            bridge, definition.key, definition.partition, adapter, definition=definition, deadline=deadline,
+            bridge,
+            definition.key,
+            definition.partition,
+            adapter,
+            definition=definition,
+            deadline=deadline,
         )
         stage = "rescan"
         stream = begin_stream_cycle(stream, adapter)
@@ -1222,9 +1259,12 @@ def sync_bridge(bridge: Any) -> int:
                 # All workers have stopped: a later healthy page cannot overwrite
                 # the failed partition with its own progress before settlement.
                 _report(
-                    bridge, sync_error.public_message,
-                    stream=details[0]["stream"], partition=details[0]["partition"],
-                    stage=details[0]["stage"], failures=details,
+                    bridge,
+                    sync_error.public_message,
+                    stream=details[0]["stream"],
+                    partition=details[0]["partition"],
+                    stage=details[0]["stage"],
+                    failures=details,
                 )
                 raise sync_error from sync_error.failures[0].error
             return landed

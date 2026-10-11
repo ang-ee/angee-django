@@ -33,7 +33,7 @@ class ParsedPhoto:
     The pure parse step decodes inline (base64 / data-URI) photos to ``data`` and
     records a ``uri`` for remote ones; the backend's transport step resolves any
     ``uri`` to ``data`` before preparation stores the bytes and replaces them
-    with ``content_hash``. Only that immutable content address enters revisions.
+    with ``content_hash``. Only that immutable content address enters link history.
     """
 
     data: bytes | None = None
@@ -168,6 +168,7 @@ def contact_from_projection(projection: Mapping[str, Any]) -> ParsedContact:
 
 class DirectoryBackend(BridgeImpl, HttpClientMixin):
     """One replica stream per address book, mapped through Party.ingest_contact."""
+
     registry_setting = "ANGEE_DIRECTORY_BACKEND_CLASSES"
 
     category = "directory"

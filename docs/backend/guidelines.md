@@ -1527,10 +1527,20 @@ validated at the driver boundary.
   transaction as the corresponding link status. Absence hooks run only for actual
   status transitions, never repeated observations of an already-unavailable row.
 - **A cursor belongs to an epoch.** An invalid/expired cursor or explicit resync
-  request creates the next baseline generation. Retain links and native link
+  request creates the next baseline generation. A direction or snapshot change
+  also opens a new generation with the requested declaration; baseline completion belongs
+  only to that generation. Retain links and native link
   history; reverify links through their generation marker. A stale peer beyond
   tombstone retention requires a baseline. Complete inventory sweeps count
   absences before confirming tombstones and preserve existing quarantine.
+- **Read-once requires a snapshot source and closure.** A declared snapshot with
+  no reconciliation interval closes after its baseline. A closed stream retains
+  evidence but does no transport work and ignores cursor expiry; an explicit
+  resync creates a new generation.
+  Recurring event feeds without reconciliation remain open. Declare the source
+  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/streams.py),
+  mirrored on `SyncStream.snapshot`; backend-private `config` does not own cadence.
+  Do not interpret a missing interval alone as read-once.
 - **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
   iterator page per pulse, reading and applying enumerated keys before absence.
   The driver retains its checkpoint in `SyncStream.reconcile_state`; adapters
@@ -1555,6 +1565,11 @@ validated at the driver boundary.
   concurrency.
   Workflow execution and durable scheduling stay with their existing
   owners; integrate must not import workflows.
+- **Retire conversion inputs only after proving history parity.** Integrate's
+  manifest orders its history fold before its store retirement declaration.
+  The retirement verifies all converted observations and failures before native
+  `DeleteModel` operations; reverse rebuilds from retained link/stream history
+  with the loss of native-only distinctions documented in the migration.
 
 ### Integrations and workers
 

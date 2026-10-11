@@ -105,11 +105,11 @@ export function IntegrationStreamsPane(): ReactElement {
     dataProviderName,
     invalidateModels: [SYNC_STREAM_MODEL],
   });
-  const [resolve] = useActionResultMutation<ActionFieldName>("resolveSyncDiscrepancy", {
+  const [resolve] = useActionResultMutation<ActionFieldName>("resolveSyncFailure", {
     dataProviderName,
     invalidateModels: [SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
-  const [retry] = useActionResultMutation<ActionFieldName>("retrySyncDiscrepancy", {
+  const [retry] = useActionResultMutation<ActionFieldName>("retrySyncFailure", {
     dataProviderName,
     invalidateModels: [SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
@@ -120,6 +120,7 @@ export function IntegrationStreamsPane(): ReactElement {
     { field: "direction" },
     { field: "generation" },
     { field: "phase" },
+    { field: "state" },
     { field: "cursor", sortable: false },
     { field: "last_advanced_at" },
     { field: "last_reconciled_at" },

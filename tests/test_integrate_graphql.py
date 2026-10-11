@@ -32,8 +32,9 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
+from angee.integrate.mixins import SyncFailure
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
-from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
 from angee.messaging.testing.models import Channel
 from tests import (
@@ -55,6 +56,7 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
+from tests.stream_adapters import failure_state
 from tests.test_agents import InferenceProvider
 
 User = get_user_model()
@@ -135,7 +137,8 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     with CaptureQueriesContext(connection) as many:
         rows = _data(_execute(schema, query, user=admin))
     assert {row["display_name"] for row in rows["sync_streams"]} == {
-        "contacts (book)", *(f"contacts-{index}" for index in range(4)),
+        "contacts (book)",
+        *(f"contacts-{index}" for index in range(4)),
     }
     assert {row["display_name"] for row in rows["record_links"]} == {f"person:{index}" for index in range(1, 6)}
     assert len(many) <= len(one) + 1
@@ -180,7 +183,6 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
     [
         ("sync_streams", "integration", "KEY"),
         ("record_links", "stream__integration", "STATUS"),
-        ("sync_discrepancies", "stream__integration", "STATUS"),
     ],
 )
 def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
@@ -199,7 +201,7 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
         for item in (bridge, other):
             stream = SyncStream.objects.current(item, "contacts", kind=StreamKind.RECORD_REPLICA)
             link = RecordLink.objects.observe(stream, "person:1")
-            SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+            link.record_failure(kind=DiscrepancyKind.SEMANTIC, code="invalid")
     schema = _schema()
     query = (
         """
@@ -225,9 +227,16 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     unknown = _execute(
         schema, query, {"bridge": public_id_for(Integration, bridge.pk + other.pk + 1_000_000)}, user=outsider
     )
-    assert _data(hidden) == _data(unknown) == {
-        "rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0,
-    }
+    assert (
+        _data(hidden)
+        == _data(unknown)
+        == {
+            "rows": [],
+            "total": {"aggregate": {"count": 0}},
+            "groups": [],
+            "group_count": 0,
+        }
+    )
 
 
 def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:
@@ -241,11 +250,11 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
         for index in range(3):
             RecordLink.objects.observe(stream, f"person:{index}")
         for index in range(3):
-            discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code=f"invalid-{index}")
+            discrepancy = stream.record_failure(kind=DiscrepancyKind.SEMANTIC, code=f"invalid-{index}")
             if index == 1:
-                SyncDiscrepancy.objects.retry(discrepancy)
+                discrepancy.retry()
             elif index == 2:
-                SyncDiscrepancy.objects.resolve(discrepancy)
+                discrepancy.resolve()
     schema = _schema()
     query = """
         query Counts($bridge: String!) {
@@ -305,8 +314,8 @@ def test_record_link_target_uses_shared_public_reference(composed_tables: None) 
 @pytest.mark.parametrize(
     ("mutation", "model", "verb"),
     [
-        ("resolveSyncDiscrepancy", SyncDiscrepancy, "resolve"),
-        ("retrySyncDiscrepancy", SyncDiscrepancy, "retry"),
+        ("resolveSyncFailure", SyncFailure, "resolve"),
+        ("retrySyncFailure", SyncFailure, "retry"),
         ("resyncSyncStream", SyncStream, "request_resync"),
     ],
 )
@@ -326,27 +335,33 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
     with system_context(reason="test sync action fixtures"):
         owner = bridge.owner
         stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-        discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+        discrepancy = stream.record_failure(kind=DiscrepancyKind.SEMANTIC, code="invalid")
     target = stream if model is SyncStream else discrepancy
-    original = getattr(type(model.objects), verb)
-    calls: list[int] = []
+    method_owner = type(model.objects) if model is SyncStream else SyncFailure
+    original = getattr(method_owner, verb)
+    calls: list[int | str] = []
 
-    def tracked(manager: Any, row: Any, **kwargs: Any) -> Any:
+    def tracked(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        row = args[0] if model is SyncStream else instance
         calls.append(row.pk)
-        return original(manager, row, **kwargs)
+        return original(instance, *args, **kwargs)
 
-    monkeypatch.setattr(type(model.objects), verb, tracked)
+    monkeypatch.setattr(method_owner, verb, tracked)
+    identifier = _public_id(target) if model is SyncStream else target.id
     schema = _schema()
     query = "mutation Action($id: ID!) { ACTION(id: $id) { ok message } }".replace("ACTION", mutation)
     for denied in (owner, outsider, AnonymousUser()):
-        result = _execute(schema, query, {"id": _public_id(target)}, user=denied)
+        result = _execute(schema, query, {"id": identifier}, user=denied)
         assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
     assert calls == []
     before = timezone.now()
-    assert _data(_execute(schema, query, {"id": _public_id(target)}, user=admin))[mutation]["ok"]
+    assert _data(_execute(schema, query, {"id": identifier}, user=admin))[mutation]["ok"]
     assert calls == [target.pk]
     with system_context(reason="test sync action outcome"):
-        target.refresh_from_db()
+        if model is SyncStream:
+            target.refresh_from_db()
+        else:
+            target = failure_state(target)
         if verb == "request_resync":
             assert target.resync_required and target.generation == 1
         elif verb == "retry":
@@ -361,9 +376,12 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
     schema = _schema()
     resources = {item.model_label: item for item in schema.angee_resources}
     for label, root, axes in (
-        ("SyncStream", "sync_streams", {"key", "partition", "kind", "direction", "phase", "resync_required"}),
+        (
+            "SyncStream",
+            "sync_streams",
+            {"key", "partition", "kind", "direction", "snapshot", "phase", "state", "resync_required"},
+        ),
         ("RecordLink", "record_links", {"status", "origin"}),
-        ("SyncDiscrepancy", "sync_discrepancies", {"kind", "code", "status"}),
     ):
         metadata = resources[f"integrate.{label}"]
         assert metadata.roots.list_name == root
@@ -372,11 +390,11 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
         assert metadata.roots.create_name is metadata.roots.update_name is metadata.roots.delete_name is None
         assert set(metadata.query.axes) == axes
     sdl = schema.as_str()
-    assert "resolveSyncDiscrepancy(id: ID!, keep: ConflictKeep = null): ActionResult!" in sdl
+    assert "resolveSyncFailure(id: ID!, keep: ConflictKeep = null): ActionResult!" in sdl
     assert "sync_run_id:" not in sdl
     assert "enum DiscrepancyKind {" in sdl
     assert "enum StreamKind {" in sdl
-    for action in ("retrySyncDiscrepancy", "resyncSyncStream"):
+    for action in ("retrySyncFailure", "resyncSyncStream"):
         assert f"{action}(id: ID!): ActionResult!" in sdl
 
 
@@ -1752,26 +1770,6 @@ def _sdl_block(sdl: str, header: str) -> str:
     return sdl[start:end]
 
 
-def test_discrepancy_open_filter_tracks_bulk_status_changes(composed_tables: None) -> None:
-    """The same stored expression serves reads, filters and bulk status updates."""
-    bridge = make_integration("open-discrepancy-filter", model=Channel)
-    with system_context(reason="test discrepancy boolean filter"):
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-        first = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="first")
-        second = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="second")
-        SyncDiscrepancy.objects.filter(pk=second.pk).update(status=DiscrepancyStatus.RESOLVED)
-        owner = bridge.owner
-    query = """query {
-      sync_discrepancies(where: {is_open: {_eq: true}}) { id is_open }
-      sync_discrepancies_aggregate(where: {is_open: {_eq: true}}) { aggregate { count } }
-    }"""
-    result = _data(_execute(_schema(), query, user=owner))
-    assert result == {
-        "sync_discrepancies": [{"id": _public_id(first), "is_open": True}],
-        "sync_discrepancies_aggregate": {"aggregate": {"count": 1}},
-    }
-
-
 @pytest.mark.parametrize("keep", ["remote", "local"])
 def test_conflict_action_forwards_explicit_choice_to_owner(
     composed_tables: None,
@@ -1783,25 +1781,23 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     with system_context(reason="test explicit conflict action"):
         stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "one")
-        discrepancy = SyncDiscrepancy.objects.record(
-            stream, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed"
-        )
-    calls: list[tuple[int, str]] = []
+        discrepancy = link.record_failure(kind=DiscrepancyKind.CONFLICT, code="both_changed")
+    calls: list[tuple[str, str]] = []
 
-    def resolve(manager: Any, row: Any, *, keep: str) -> Any:
+    def resolve(row: Any, *, keep: str) -> Any:
         calls.append((row.pk, keep))
         return row
 
-    monkeypatch.setattr(type(SyncDiscrepancy.objects), "resolve_conflict", resolve)
+    monkeypatch.setattr(SyncFailure, "resolve_conflict", resolve)
     query = """mutation Resolve($id: ID!, $keep: ConflictKeep) {
-      resolveSyncDiscrepancy(id: $id, keep: $keep) { ok }
+      resolveSyncFailure(id: $id, keep: $keep) { ok }
     }"""
-    result = _data(_execute(_schema(), query, {"id": _public_id(discrepancy), "keep": keep.upper()}, user=admin))
-    assert result["resolveSyncDiscrepancy"]["ok"]
+    result = _data(_execute(_schema(), query, {"id": discrepancy.id, "keep": keep.upper()}, user=admin))
+    assert result["resolveSyncFailure"]["ok"]
     assert calls == [(discrepancy.pk, keep)]
-    invalid = _execute(_schema(), query, {"id": _public_id(discrepancy), "keep": "TYPO"}, user=admin)
+    invalid = _execute(_schema(), query, {"id": discrepancy.id, "keep": "TYPO"}, user=admin)
     assert invalid.errors and "ConflictKeep" in invalid.errors[0].message
     assert len(calls) == 1
-    missing = _data(_execute(_schema(), query, {"id": _public_id(discrepancy)}, user=admin))
-    assert not missing["resolveSyncDiscrepancy"]["ok"]
+    missing = _data(_execute(_schema(), query, {"id": discrepancy.id}, user=admin))
+    assert not missing["resolveSyncFailure"]["ok"]
     assert len(calls) == 1

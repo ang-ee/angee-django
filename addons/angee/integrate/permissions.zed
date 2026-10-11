@@ -96,21 +96,3 @@ definition integrate/record_link {
     permission write = stream->write
     permission delete = stream->delete
 }
-
-definition integrate/record_revision {
-    relation link: integrate/record_link // rebac:field=link
-
-    permission create = link->write
-    permission read = link->read
-    permission write = link->write
-    permission delete = link->delete
-}
-
-definition integrate/sync_discrepancy {
-    relation stream: integrate/sync_stream // rebac:field=stream
-
-    permission create = stream->write
-    permission read = stream->read
-    permission write = stream->write
-    permission delete = stream->delete
-}

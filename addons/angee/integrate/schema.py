@@ -1390,8 +1390,10 @@ class SyncStreamType(AngeeNode):
     partition: auto
     kind: auto
     direction: auto
+    snapshot: auto
     generation: auto
     phase: auto
+    state: auto
     cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.integrationSyncCursor"})
     cursor_expires_at: auto
     resync_required: auto
@@ -1475,7 +1477,9 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "partition",
         "kind",
         "direction",
+        "snapshot",
         "phase",
+        "state",
         "generation",
         "resync_required",
         "last_advanced_at",
@@ -1486,13 +1490,15 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "partition",
         "kind",
         "direction",
+        "snapshot",
         "phase",
+        "state",
         "generation",
         "last_advanced_at",
         "last_reconciled_at",
     ],
     aggregatable=["id"],
-    groupable=["key", "partition", "kind", "direction", "phase", "resync_required"],
+    groupable=["key", "partition", "kind", "direction", "snapshot", "phase", "state", "resync_required"],
     insert=False,
     update=False,
     delete=False,
@@ -1540,9 +1546,9 @@ def _authorized_failure(info: strawberry.Info, identifier: str) -> SyncFailure:
 class SyncRecordActionMutation:
     """Admin-gated operational transitions on the bridge-owned record protocol."""
 
-    @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation(name="resolveSyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
     @action_guard("Could not resolve the discrepancy.")
-    def resolve_sync_discrepancy(
+    def resolve_sync_failure(
         self, info: strawberry.Info, id: PublicID, keep: ConflictKeep | None = None
     ) -> ActionResult:
         """Dispatch resolution through retained state after owner authorization."""
@@ -1554,9 +1560,9 @@ class SyncRecordActionMutation:
             discrepancy.resolve_conflict(keep=keep)
         return ActionResult(ok=True, message=_("Discrepancy resolved."))
 
-    @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation(name="retrySyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
     @action_guard("Could not retry the discrepancy.")
-    def retry_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def retry_sync_failure(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Make quarantine due now through its retained-history owner."""
 
         _authorized_failure(info, str(id)).retry()

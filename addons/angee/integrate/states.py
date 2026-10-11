@@ -34,6 +34,13 @@ class StreamPhase(models.TextChoices, StrEnum):
     DELTA = "delta", "Delta"
 
 
+class StreamState(models.TextChoices, StrEnum):
+    """Reopening a closed generation starts a fresh baseline."""
+
+    OPEN = "open", "Open"
+    CLOSED = "closed", "Closed"
+
+
 class LinkStatus(models.TextChoices, StrEnum):
     """Observed identity and reconciliation state."""
 

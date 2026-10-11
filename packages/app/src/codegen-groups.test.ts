@@ -43,12 +43,12 @@ describe("group operation codegen", () => {
     const generated = generateActions(METADATA);
     const schema = buildSchema(SDL);
     expect(print(generatedAction(generated, "defaulted_action"))).toContain('$note: String! = ""');
-    expect(print(generatedAction(generated, "resolveSyncDiscrepancy"))).toContain("$keep: ConflictKeep = null");
+    expect(print(generatedAction(generated, "resolveSyncFailure"))).toContain("$keep: ConflictKeep = null");
     for (const [field, variables, expected] of [
       ["optional_action", { id: "record_1" }, { id: "record_1" }],
-      ["resolveSyncDiscrepancy", { id: "record_1" }, { id: "record_1", keep: null }],
-      ["resolveSyncDiscrepancy", { id: "record_1", keep: "REMOTE" }, { id: "record_1", keep: "REMOTE" }],
-      ["resolveSyncDiscrepancy", { id: "record_1", keep: null }, { id: "record_1", keep: null }],
+      ["resolveSyncFailure", { id: "record_1" }, { id: "record_1", keep: null }],
+      ["resolveSyncFailure", { id: "record_1", keep: "REMOTE" }, { id: "record_1", keep: "REMOTE" }],
+      ["resolveSyncFailure", { id: "record_1", keep: null }, { id: "record_1", keep: null }],
       ["defaulted_action", { id: "record_1" }, { id: "record_1", note: "" }],
       ["defaulted_action", { id: "record_1", note: "value" }, { id: "record_1", note: "value" }],
     ] as const) {
@@ -62,9 +62,9 @@ describe("group operation codegen", () => {
       expect(result.data?.[field]).toMatchObject({ ok: true, message: JSON.stringify(expected) });
     }
     for (const [field, variables] of [
-      ["resolveSyncDiscrepancy", { id: "record_1", keep: "typo" }],
+      ["resolveSyncFailure", { id: "record_1", keep: "typo" }],
       ["defaulted_action", { id: "record_1", note: null }],
-      ["resolveSyncDiscrepancy", {}],
+      ["resolveSyncFailure", {}],
     ] as const) {
       expect(executeSync({
         schema, document: generatedAction(generated, field), variableValues: variables,
@@ -76,7 +76,7 @@ describe("group operation codegen", () => {
     const generated = generateActions(METADATA);
 
     expect(generated).toContain(
-      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncDiscrepancy" | "submit_channel_password";',
+      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncFailure" | "submit_channel_password";',
     );
     for (const field of [
       "install", "disable", "start_workflow_run", "start_workflow_recovery",
@@ -199,7 +199,7 @@ const SDL = `
   type Mutation {
     submit_channel_password(id: ID!, password: String!): ActionResult!
     close_round(round: ID!, outcome: RoundOutcome!, accepted: [ID!]!): ActionResult!
-    resolveSyncDiscrepancy(id: ID!, keep: ConflictKeep = null): ActionResult!
+    resolveSyncFailure(id: ID!, keep: ConflictKeep = null): ActionResult!
     optional_action(id: ID!, keep: ConflictKeep): ActionResult!
     defaulted_action(id: ID!, note: String! = ""): ActionResult!
     install(addon: String!, revision: String = null): ActionResult!

@@ -40,6 +40,11 @@ name = "fold_record_sync_history"
 app_label = "integrate"
 module = "runtime_migrations.fold_record_sync_history"
 
+[[migrations]]
+name = "retire_record_sync_stores"
+app_label = "integrate"
+module = "runtime_migrations.retire_record_sync_stores"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },
