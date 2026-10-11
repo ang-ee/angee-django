@@ -67,3 +67,7 @@ See the [Record sync guideline](../../../docs/backend/guidelines.md#record-sync)
 for invariants, the owners above for exact contracts, and
 [`preview_push`](streams.py) for read-only push inspection. The
 [Directory addon](../parties/README.md) composes this protocol for CardDAV.
+
+RecordLink declares `merge_policy = MOVE`: merging a target moves its links to
+the survivor. Both remote cards receive the survivor's projection, subject to
+each stream's write-back policy and remote preconditions.

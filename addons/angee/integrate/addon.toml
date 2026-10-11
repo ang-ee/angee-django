@@ -55,6 +55,11 @@ name = "retire_record_sync_hash_bases"
 app_label = "integrate"
 module = "runtime_migrations.retire_record_sync_hash_bases"
 
+[[migrations]]
+name = "record_link_failure_status"
+app_label = "integrate"
+module = "runtime_migrations.record_link_failure_status"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

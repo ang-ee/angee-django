@@ -46,9 +46,9 @@ def blocked(row, reason):
 
 def person_source(apps, db, row):
     actor_id = row.updated_by_id or row.created_by_id
-    user = rows(apps, db, settings.AUTH_USER_MODEL).filter(pk=actor_id, kind="person", is_active=True).first()
+    user = rows(apps, db, settings.AUTH_USER_MODEL).filter(pk=actor_id, kind="person").first()
     if user is None:
-        blocked(row, "manual assertion has no proven person principal")
+        return None
     identity = live_apps.get_model(settings.AUTH_USER_MODEL)
     return str(SubjectRef.of(app_settings.REBAC_USER_TYPE, str(getattr(user, subject_id_attr(identity)))))
 
@@ -60,6 +60,8 @@ def directory_link(apps, db, row, party):
     integration = rows(apps, db, "integrate.Integration").filter(pk=folder.directory_id).first()
     if integration is None:
         blocked(row, "directory principal is missing")
+    if not rows(apps, db, "parties.Directory").filter(pk=integration.pk).exists():
+        blocked(row, "directory classification has no historical Directory child row")
     links = rows(apps, db, "integrate.RecordLink").filter(
         stream__integration_id=integration.pk, stream__key="contacts", stream__partition=folder.source_href,
         external_key=party.source_uid, target_object_id=str(party.pk),
@@ -149,11 +151,9 @@ def forwards(apps, schema_editor):
                     source, link = directory_link(apps, db, row, party)
                     kind = "directory"
                 else:
-                    if name in ("Party", "Person", "Organization") and rows(apps, db, "parties.PartyStatement").filter(
-                        subject_id=party.pk, aspect="handle", superseded_id=None,
-                    ).exclude(source_kind="person").exists():
-                        blocked(row, "non-person origins have no retained per-aspect attribution")
                     source, link, kind = person_source(apps, db, row), None, "person"
+                    if source is None:
+                        continue
                 for aspect, fields in aspects.items():
                     if directory:
                         prove_values(apps, db, row, name, fields, link)
@@ -197,6 +197,8 @@ def forwards(apps, schema_editor):
                 blocked(veto, "anti-link endpoints are missing or equal")
             pair, _ = rows(apps, db, "parties.PartySameAsPair").get_or_create(left_id=left, right_id=right)
             source = person_source(apps, db, veto)
+            if source is None:
+                blocked(veto, "anti-link decision has no proven person principal")
             write(apps, db, cs, "PartySameAsPair", pair.pk, "same_as", source, "person", {}, preferred=True, snak="no_value")
             snapshot = {field.attname: getattr(pair, field.attname) for field in pair._meta.concrete_fields}
             rows(apps, db, "parties.HistoricalPartySameAsPair").create(

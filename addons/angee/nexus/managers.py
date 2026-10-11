@@ -428,15 +428,16 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 )
 
         if "identity" in selected_lenses:
+            statement_model = party_model.statements.model
             statements = list(
                 party_model.objects.handle_statements(actor=current_actor())
                 .members()
                 .filter(
                     subject_id__in=party_ids,
-                    status="asserted",
-                    snak="value",
+                    status=statement_model.StatementStatus.ASSERTED,
+                    snak=statement_model.StatementSnak.VALUE,
                 )
-                .order_by(*apps.get_model("parties", "PartyStatement").trust_ordering)[: edge_limit + 1]
+                .order_by(*statement_model.trust_ordering)[: edge_limit + 1]
             )
             if len(statements) > edge_limit:
                 statements = statements[:edge_limit]

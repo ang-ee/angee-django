@@ -1,9 +1,9 @@
 """Retire folded handle carriers after checking retained source/decision rows.
 
 The fold precedes this declaration and refuses unresolved attribution. Each old
-pair must retain its normal source assertion in native history; proven decisions
-must have the corresponding preferred person stance. Confirmed imports without
-a person actor retain the fold's explicit normal-rank exception.
+pair must retain its normal source assertion in native history; recorded decisions
+must have the corresponding preferred person stance. Every resolved Handle
+pointer must have an applied value statement.
 
 Legacy carrier metadata beyond typed origin references, audit timestamps and
 the collapsed source label leave with the carrier; statement/history evidence
@@ -50,12 +50,16 @@ def forwards(apps, schema_editor):
         decision = rows.filter(rank="preferred", source_kind="person",
                                snak="no_value" if row.is_dismissed else "value")
         if (row.is_dismissed or row.is_confirmed) and not decision.exists():
-            if not (row.source == "import" and row.is_confirmed and not row.is_dismissed):
-                raise ValueError(f"PartyHandle {row.pk}: missing folded person decision")
+            raise ValueError(f"PartyHandle {row.pk}: missing folded person decision")
         kept = rows.order_by("-rank", "-confidence", "-updated_at", "-pk").first()
         value = (public_id_for(statement_identity, kept.pk), public_id_for(party_identity, row.party_id))
         mapping[old_identity.public_id_from_pk(row.pk)] = value
         by_pk[row.pk] = row.party_id
+    handles = apps.get_model("parties", "Handle")._base_manager.using(db).order_by()
+    for handle in handles.filter(party_id__isnull=False).iterator():
+        if not statements.filter(subject_id=handle.party_id, handle_id=handle.pk, aspect="handle",
+                                 superseded_id=None, status="asserted", applied=True, snak="value").exists():
+            raise ValueError(f"Handle {handle.pk} (party={handle.party_id}): no applied folded statement")
 
     def rewrite(value):
         if isinstance(value, list):

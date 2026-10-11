@@ -38,14 +38,11 @@ from phonenumbers import (
 )
 from rebac import (
     PermissionDenied,
-    RelationshipTuple,
     actor_context,
     current_actor,
     system_context,
-    to_object_ref,
-    write_relationships,
 )
-from rebac.actors import is_sudo, to_subject_ref
+from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
 from angee.base.identity import EvidenceReference, public_id_for
@@ -55,7 +52,7 @@ from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, Tr
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
 from angee.base.refs import generic_pointer_model
-from angee.base.scoping import read_scoped_queryset
+from angee.base.scoping import by_key, read_scoped_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
@@ -577,7 +574,7 @@ class PartyStatementQuerySet(StatementQuerySet):
             .filter(
                 subject_id=OuterRef("subject_id"),
                 handle_id=OuterRef("handle_id"),
-                status=self.model.Status.ASSERTED,
+                status=self.model.StatementStatus.ASSERTED,
             )
             .order_by("-applied", *self.model.trust_ordering)
             .values("pk")[:1]
@@ -588,16 +585,16 @@ class PartyStatementQuerySet(StatementQuerySet):
         decision = self.model._base_manager.handles().filter(
             subject_id=OuterRef("subject_id"),
             handle_id=OuterRef("handle_id"),
-            status=self.model.Status.ASSERTED,
-            rank=self.model.Rank.PREFERRED,
+            status=self.model.StatementStatus.ASSERTED,
+            rank=self.model.StatementRank.PREFERRED,
         )
         return (
             self.handles()
             .members()
             .filter(
-                status=self.model.Status.ASSERTED,
-                rank=self.model.Rank.NORMAL,
-                snak=self.model.Snak.VALUE,
+                status=self.model.StatementStatus.ASSERTED,
+                rank=self.model.StatementRank.NORMAL,
+                snak=self.model.StatementSnak.VALUE,
                 confidence__lt=_REVIEW_CONFIDENCE,
             )
             .exclude(Exists(decision))
@@ -609,7 +606,8 @@ class PartyStatementQuerySet(StatementQuerySet):
             self.canonical()
             .filter(aspect="handle")
             .filter(
-                Q(rank=self.model.Rank.PREFERRED) | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
+                Q(rank=self.model.StatementRank.PREFERRED)
+                | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
 
@@ -624,61 +622,13 @@ class PartyStatementQuerySet(StatementQuerySet):
 class PartyStatementManager(StatementManager.from_queryset(PartyStatementQuerySet)):  # type: ignore[misc]
     """Compose statement writes with the shared Handle, Party lock order."""
 
-    def set(self, **kwargs: Any) -> Any:
-        party = self.instance or self.model.statement_subject_model._base_manager.get(
-            **{
-                name: value
-                for name, value in kwargs.items()
-                if name
-                not in {
-                    "aspect",
-                    "values",
-                    "asserted_by",
-                    "link",
-                    "evidence",
-                    "confidence",
-                    "rank",
-                    "snak",
-                    "basis_hash",
-                    *self.model.statement_aspects[kwargs["aspect"]].members,
-                }
-            }
-        )
-        handle = kwargs.get("handle")
-        with transaction.atomic():
-            owner = apps.get_model("parties", "Party").objects
-            handle_ids = set(owner.handle_statements().filter(subject=party).values_list("handle_id", flat=True))
-            if handle is not None:
-                handle_ids.add(handle.pk if isinstance(handle, models.Model) else handle)
-            owner.lock_identity_rows(party_ids=(party.pk,), handle_ids=handle_ids)
-            return super().set(**kwargs)
-
-    def _transition(self, status: str, **kwargs: Any) -> int:
-        rows = self.get_queryset().filter(asserted_by=str(to_subject_ref(kwargs["asserted_by"])))
-        if kwargs.get("subjects") is not None:
-            rows = rows.filter(subject__in=kwargs["subjects"])
-        with transaction.atomic():
-            owner = apps.get_model("parties", "Party").objects
-            party_ids = set(rows.values_list("subject_id", flat=True))
-            owner.lock_identity_rows(
-                party_ids=party_ids,
-                handle_ids=owner.handle_statements()
-                .filter(subject_id__in=party_ids)
-                .values_list("handle_id", flat=True),
-            )
-            return super()._transition(status, **kwargs)
-
-    def resolve(self, *, subject: Any = None) -> None:
-        subject = subject if subject is not None else self.instance
-        if subject is None:
-            raise ValidationError("Survivorship requires one subject.")
-        with transaction.atomic():
-            owner = apps.get_model("parties", "Party").objects
-            owner.lock_identity_rows(
-                party_ids=(subject.pk,),
-                handle_ids=owner.handle_statements().filter(subject=subject).values_list("handle_id", flat=True),
-            )
-            super().resolve(subject=subject)
+    def lock_subject(self, subject: Any, members: Mapping[str, Any]) -> Any:
+        owner = apps.get_model("parties", "Party").objects.db_manager(self.db)
+        handle_ids = set(owner.handle_statements().filter(subject_id=subject.pk).values_list("handle_id", flat=True))
+        if (handle := members.get("handle")) is not None:
+            handle_ids.add(handle.pk if isinstance(handle, models.Model) else handle)
+        owner.lock_identity_rows(party_ids=(subject.pk,), handle_ids=handle_ids)
+        return super().lock_subject(subject, members)
 
 
 @dataclass(frozen=True, slots=True)
@@ -911,7 +861,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         source = to_subject_ref(asserted_by)
         subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
         origins = list(evidence)
-        self._admit_statement_source(source, (subject, handle, *origins))
         refs = [
             {
                 "model": generic_pointer_model(type(row))._meta.label,
@@ -920,7 +869,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             for row in origins
         ]
         existing = subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
-        if existing is not None and existing.rank == existing.Rank.PREFERRED:
+        if existing is not None and existing.rank == existing.StatementRank.PREFERRED:
             subject.statements.asserting_source(asserted_by)
             subject.require_statement_write(source)
             return existing
@@ -934,51 +883,30 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             link=link,
         )
 
-    @staticmethod
-    def _admit_statement_source(source: Any, rows: Iterable[Any]) -> None:
-        """Trusted producers grant their subject, member and owned supporting facts."""
-        if is_sudo() and source.subject_type != "auth/user":
-            write_relationships(
-                [
-                    RelationshipTuple(resource=to_object_ref(row), relation="statement_source", subject=source)
-                    for row in rows
-                ]
-            )
-
     def lock_identity_rows(
         self,
         *,
         party_ids: Iterable[int],
         handle_ids: Iterable[int],
     ) -> tuple[dict[int, Any], dict[int, Any]]:
-        """Lock Handles, then every competing Party, then retained statements."""
+        """Lock Handles, competing Parties and statements in bounded key batches."""
         with system_context(reason="parties.identity.lock"):
-            handles = {
-                row.pk: row
-                for row in apps.get_model("parties", "Handle")
-                .objects.filter(
-                    pk__in=sorted(set(handle_ids)),
-                )
-                .order_by("pk")
-                .lock_if_supported()
-            }
+            handle_model = apps.get_model("parties", "Handle")
+            party_model = apps.get_model("parties", "Party")
+            handles: dict[int, Any] = {}
+            for batch in by_key(handle_model.objects.using(self.db), sorted(set(handle_ids))):
+                handles.update((row.pk, row) for row in batch.order_by("pk").lock_if_supported())
             ids = set(party_ids) | {row.party_id for row in handles.values() if row.party_id is not None}
-            ids.update(self.handle_statements().filter(handle_id__in=handles).values_list("subject_id", flat=True))
-            parties = {
-                row.pk: row
-                for row in apps.get_model("parties", "Party")
-                .objects.filter(
-                    pk__in=sorted(ids),
-                )
-                .order_by("pk")
-                .lock_if_supported()
-            }
-            list(
-                self.handle_statements()
-                .filter(subject_id__in=ids, handle_id__in=handles)
-                .order_by("pk")
-                .lock_if_supported()
-            )
+            statements = self.handle_statements().using(self.db)
+            for batch in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+                ids.update(statements.filter(handle_id__in=batch.values("pk")).values_list("subject_id", flat=True))
+            parties: dict[int, Any] = {}
+            for batch in by_key(party_model.objects.using(self.db), sorted(ids)):
+                parties.update((row.pk, row) for row in batch.order_by("pk").lock_if_supported())
+            for batch in by_key(handle_model._base_manager.using(self.db), sorted(handles)):
+                keys = list(statements.filter(handle_id__in=batch.values("pk")).values_list("pk", flat=True))
+                for rows in by_key(statements, sorted(keys)):
+                    list(rows.order_by("pk").lock_if_supported())
         return handles, parties
 
     def propose_manual_contact(
@@ -1082,9 +1010,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 .members()
                 .filter(
                     handle_id=handle.pk,
-                    rank="preferred",
-                    snak="value",
-                    status="asserted",
+                    rank=self.handle_statements().model.StatementRank.PREFERRED,
+                    snak=self.handle_statements().model.StatementSnak.VALUE,
+                    status=self.handle_statements().model.StatementStatus.ASSERTED,
                 )
                 .exists()
             )
@@ -1113,7 +1041,10 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
         with system_context(reason="parties.statement.assess_claimed_handle"):
             authoritative = tuple(
-                self.handle_statements().filter(handle_id=handle.pk, status="asserted").members().order_by("pk")
+                self.handle_statements()
+                .filter(handle_id=handle.pk, status=self.handle_statements().model.StatementStatus.ASSERTED)
+                .members()
+                .order_by("pk")
             )
         same = tuple(link for link in authoritative if link.subject_id == party.pk)
         if any(link.is_dismissed for link in same):
@@ -1194,9 +1125,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             locked_handle = handles[handle.pk]
             locked_party = parties[party.pk]
             source = self.rule_source("source_sender")
-            write_relationships(
-                [RelationshipTuple(resource=to_object_ref(evidence), relation="reader", subject=to_subject_ref(source))]
-            )
             existing = (
                 self.handle_statements()
                 .filter(
@@ -1209,7 +1137,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             refs = list(existing.evidence) if existing is not None else []
             if evidence_ref not in refs:
                 refs.append(evidence_ref)
-            self._admit_handle_source(locked_party, locked_handle, to_subject_ref(source))
             return locked_party.statements.set(
                 aspect="handle",
                 handle=locked_handle,
@@ -1314,8 +1241,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             left, right = (self.model._base_manager.get(pk=pk) for pk in (left_id, right_id))
             evidence = [origins[pk] for pk in sorted(origins)]
             source_ref = to_subject_ref(source)
-            self._admit_statement_source(source_ref, (left, *evidence))
-            self._admit_statement_source(source_ref, (right, *evidence))
             pair = self.model.same_as.for_pair(left.with_actor(source_ref), right)
             pair.statements.set(
                 aspect="same_as",
@@ -1402,7 +1327,11 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         party_ids = {party_id for _owner_id, party_id, _value in supported}
         existing = set(
             self.handle_statements()
-            .filter(status="asserted", handle__platform=handle_model.Platform.PHONE, subject_id__in=party_ids)
+            .filter(
+                status=self.handle_statements().model.StatementStatus.ASSERTED,
+                handle__platform=handle_model.Platform.PHONE,
+                subject_id__in=party_ids,
+            )
             .values_list("subject_id", "handle__normalized_value")
         )
         parties = party_model.objects.in_bulk(party_ids)
@@ -1479,7 +1408,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             # get_or_create probe for each is the pass's dominant cost.
             existing_pairs = set(
                 self.handle_statements()
-                .filter(status="asserted", handle__created_by_id=owner_id)
+                .filter(status=self.handle_statements().model.StatementStatus.ASSERTED, handle__created_by_id=owner_id)
                 .values_list("subject_id", "handle_id")
             )
             pools: defaultdict[str, list[Any]] = defaultdict(list)
@@ -1544,7 +1473,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             .first()
         )
         self.assert_handle(party, handle, asserted_by=source, confidence=confidence, evidence=evidence)
-        return int(existing is None or existing.status != "asserted")
+        return int(existing is None or existing.status != existing.StatementStatus.ASSERTED)
 
     @staticmethod
     def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
@@ -2081,7 +2010,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         addresses = apps.get_model("parties", "Address")
         relationships = apps.get_model("parties", "Relationship")
         source = folder.directory.integration_ptr
-        source_ref = to_subject_ref(source)
         with transaction.atomic():
             target = target or link.target
             if target is not None:
@@ -2092,7 +2020,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 created_by_id=created_by_id,
             )
             parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
-            self._admit_statement_source(source_ref, (parent, person))
+            apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
             for subject, aspect, values in (
                 (
                     parent,
@@ -2145,7 +2073,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 )
                 if address is None:
                     address = addresses.objects.create(party_id=person.pk, created_by_id=created_by_id, **values)
-                self._admit_statement_source(source_ref, (address,))
                 address.statements.set(aspect="address", values=values, asserted_by=source, link=link)
                 supported_addresses.append(address.pk)
             removed = addresses.statements.filter(link=link).exclude(subject_id__in=supported_addresses)
@@ -2164,7 +2091,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     edge = relationships.objects.create(
                         party_id=person.pk, kind=employee, other_name=parsed.organization, created_by_id=created_by_id
                     )
-                self._admit_statement_source(source_ref, (edge,))
                 edge.statements.set(
                     aspect="relationship",
                     asserted_by=source,

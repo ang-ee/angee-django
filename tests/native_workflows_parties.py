@@ -110,7 +110,14 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(
             (address.street, address.label, address.created_by_id), ("17 Sample Lane", "Primary", self.admin.pk)
         )
-        self.assertTrue(Party.statements.filter(subject=party, handle=handle, rank="preferred", snak="value").exists())
+        self.assertTrue(
+            Party.statements.filter(
+                subject=party,
+                handle=handle,
+                rank=Party.statements.model.StatementRank.PREFERRED,
+                snak=Party.statements.model.StatementSnak.VALUE,
+            ).exists()
+        )
         self.assertEqual(run.output["context"], {"source": "directory"})
 
     def test_matching_identity_skips_admission(self):
@@ -232,7 +239,14 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(system_queryset(Party).get(pk=pairs[0][1].pk).merged_into_id, pairs[0][0].pk)
         self.assertEqual(system_queryset(Party).get(pk=pairs[3][0].pk).merged_into_id, pairs[3][1].pk)
         self.assertTrue(
-            pairs[1][0].same_as.for_pair(*pairs[1]).statements.current().filter(applied=True, snak="no_value").exists()
+            pairs[1][0]
+            .same_as.for_pair(*pairs[1])
+            .statements.current()
+            .filter(
+                applied=True,
+                snak=Party.statements.model.StatementSnak.NO_VALUE,
+            )
+            .exists()
         )
         with actor_context(self.reviewer):
             remaining = Party.objects.same_as_pairs()

@@ -1,18 +1,17 @@
 """Frozen evidence facts, retained derivation links, and admission readability."""
 
-from collections.abc import Sequence
 from enum import StrEnum
 
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import models
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from angee.base.identity import EvidenceReference as EvidenceReference
 from angee.base.identity import readable_records as readable_records
 from angee.base.mixins import AppendOnlyModel
 from angee.base.models import AngeeDataModel
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation
 
 
 class FactAuthority(StrEnum):
@@ -46,11 +45,5 @@ class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
         abstract = True
 
 
-class DerivedFromRelation(GenericRelation):
-    """Query retained derivation links without collecting them on source deletion.
-
-    Declare on the canonical source model, matching the links' content type.
-    """
-
-    def bulk_related_objects(self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS) -> list[models.Model]:
-        return []
+DerivedFromRelation = RetainedGenericRelation
+"""Historical import for retained evidence declarations."""

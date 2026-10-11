@@ -1,5 +1,5 @@
 # Persist each built-in matcher once at resource bootstrap. Producers use the
-# same key with Rule.objects.for_key(); users remain person principals.
+# same key through lookup only; users remain person principals.
 - xref: normalized_twin
   key: parties.normalized_twin
 - xref: email_domain

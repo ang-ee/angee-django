@@ -38,6 +38,7 @@ from django.db import connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 from rebac import (
+    PermissionDenied,
     RelationshipTuple,
     app_settings,
     delete_relationship,
@@ -47,6 +48,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
 from simple_history.signals import post_create_historical_record
@@ -1497,7 +1499,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, AuditMixin, AngeeData
         return cast(type[Integration] | None, ContentType.objects.get_for_id(self.concrete_type_id).model_class())
 
     @property
-    def source_kind(self) -> SourceKind:
+    def source_kind(self) -> SourceKind | None:
         """The capability child owns classification of this persisted principal."""
 
         model = self.declared_concrete_model()
@@ -3119,7 +3121,7 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
     def with_open_failures(self) -> Self:
         """Select open-state owners in stable order without their payloads."""
         return (
-            self.filter(Q(status=LinkStatus.DISCREPANT) | Q(outbox_state__isnull=False))
+            self.filter(Q(status=LinkStatus.FAILED) | Q(outbox_state__isnull=False))
             .order_by("pk")
             .only(
                 "stream_id",
@@ -3208,7 +3210,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             if (
                 remote_version is not None
                 and remote_version != link.remote_version
-                and link.status != LinkStatus.DISCREPANT
+                and link.status != LinkStatus.FAILED
             ):
                 link.status = LinkStatus.OBSERVED
             if remote_version is not None:
@@ -3332,6 +3334,18 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             link.target_content_type, object_id = generic_pointer_target(target)
             link.target_object_id = str(object_id)
 
+    def bind_target(self, link: Any, target: models.Model) -> None:
+        """Bind the source before assertion admission inside its application transaction.
+
+        The driver's promotion records this binding in the application snapshot.
+        Like applied_base, this completes that write without a pointer-only snapshot.
+        """
+
+        if not transaction.get_connection(self.db).in_atomic_block or not is_sudo():
+            raise PermissionDenied("Target binding requires the trusted application transaction.")
+        self._set_target(link, target)
+        link.save_without_historical_record(using=self.db, update_fields=("target_content_type", "target_object_id"))
+
     def revalidate(self, link: Any, *, target: Any = UNSET) -> Any:
         """Restore a verified identity without advancing its application base."""
         locked = self.lock_if_supported().get(pk=link.pk)
@@ -3365,7 +3379,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             count = 0
             for link in rows:
                 link.absence_count += 1
-                if link.status != LinkStatus.DISCREPANT:
+                if link.status != LinkStatus.FAILED:
                     link.status = LinkStatus.UNAVAILABLE
                     if link.absence_count >= stream.absence_threshold:
                         link.status, link.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
@@ -3457,8 +3471,8 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
     def update_sync_status(self) -> None:
         """Open failures dominate observation/application status until resolved."""
         if self.failures(open_only=True):
-            self.status = LinkStatus.DISCREPANT
-        elif self.status == LinkStatus.DISCREPANT:
+            self.status = LinkStatus.FAILED
+        elif self.status == LinkStatus.FAILED:
             self.status = LinkStatus.CURRENT if self.applied_base_id else LinkStatus.OBSERVED
 
     def on_sync_state_saved(self, locked: Self) -> None:

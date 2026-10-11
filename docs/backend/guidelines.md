@@ -1500,6 +1500,10 @@ source-hash owner; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.
 
+RecordLink is a pointing row with `merge_policy = MOVE`. Merging its target
+moves every link to the survivor; both remote cards receive the survivor's
+projection through their existing write-back policies and remote preconditions.
+
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
   one transaction. Semantic, field-validation and record-level database data
@@ -1825,14 +1829,16 @@ collisions remain retained as superseded rows outside the current per-aspect key
 The Statement owner ranks collisions and highest-trust resolution by preferred
 rank, confidence, update time and primary key, in that order.
 Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
-refuses missing or unknown classifications. Statements retain the assertion-time
-classification across source edits and deletion. The explicit link option owns
-the optional integration column: composer extensions do not reach generated models.
+classifies eligible sources; `set()` refuses missing or unknown classifications.
+Statements retain the assertion-time classification across source edits and
+deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`;
+core defaults to `None`. Composer extensions do not reach generated models.
 
 Ordinary person saves on aspect-backed fields assert normal statements, including
 separate MTI child tables; parent declarations keep their shared-pk owner.
-Consumers contribute domain aspects and `aspect_precedence` through the descriptor's
-abstract donors. Preferred person decisions precede normal source ordering.
+Consumers contribute domain aspects through the descriptor's abstract donors;
+`Aspect.precedence` owns source ordering. Preferred person decisions precede
+normal source ordering.
 Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
 the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
 

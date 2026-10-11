@@ -56,6 +56,7 @@ module = "runtime_migrations.retire_party_carriers"
 [resources]
 install = [
   { path = "resources/install/010_provenance.rule.yaml", adopt = "key" },
+  { path = "resources/install/020_statement_source_grants.yaml", kind = "grants", depends_on = ["resources/install/010_provenance.rule.yaml"] },
 ]
 master = [
   { path = "resources/master/010_parties.relationshipkind.yaml", adopt = "slug" },

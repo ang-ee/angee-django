@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from django.apps import apps
@@ -10,8 +11,22 @@ from django.db import models, transaction
 
 from angee.base.actors import instance_actor
 from angee.base.identity import EvidenceReference, instance_from_public_id
-from angee.base.mixins import Statement
+from angee.base.mixins import Statement, StatementsMixin
 from angee.base.scoping import read_scoped_queryset
+
+
+class PartyAspectMixin(StatementsMixin):
+    """Lock a Party's identity owner before its dependent aspect subject."""
+
+    party: Any
+
+    class Meta:
+        abstract = True
+
+    def lock_statement_subject(self, members: Mapping[str, Any], *, using: str) -> Any:
+        for manager in self.party.statement_managers():
+            manager.db_manager(using).lock_subject(manager.instance, {})
+        return super().lock_statement_subject(members, using=using)
 
 
 class MembershipDecisionMixin(models.Model):
@@ -46,11 +61,11 @@ class PartyStatementMixin(Statement):
 
     @property
     def is_confirmed(self) -> bool:
-        return self.rank == self.Rank.PREFERRED and self.snak == self.Snak.VALUE
+        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.VALUE
 
     @property
     def is_dismissed(self) -> bool:
-        return self.rank == self.Rank.PREFERRED and self.snak == self.Snak.NO_VALUE
+        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.NO_VALUE
 
     def confirm(self) -> Any:
         return self.subject.with_actor(instance_actor(self)).confirm(

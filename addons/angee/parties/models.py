@@ -59,7 +59,7 @@ from angee.base.mixins import (
     TrashMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, StatementSubjectManager
-from angee.base.refs import concrete_child, concrete_child_models
+from angee.base.refs import RetainedGenericRelation, concrete_child, concrete_child_models
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
@@ -71,7 +71,7 @@ from angee.parties.managers import (
     PartyStatementManager,
     PartyStatementQuerySet,
 )
-from angee.parties.mixins import MembershipDecisionMixin, PartyStatementMixin
+from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.tags.models import TaggedModel
 
 
@@ -88,7 +88,11 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
     rebac_grantable = {"reader": "write"}
 
     sqid_prefix = "pty_"
+    record_links = RetainedGenericRelation(
+        "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
+    )
     statements = StatementRecords(
+        link="integrate.RecordLink",
         aspects={
             "identity": Aspect(
                 fields=("display_name",),
@@ -111,7 +115,7 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
         history_manager=PartyStatementManager,
         historical_queryset=PartyStatementQuerySet,
     )
-    same_as = PairAspect()
+    same_as = PairAspect(link="integrate.RecordLink")
     MERGED_PERMISSION = "write"
     retains_merged = True
 
@@ -395,7 +399,11 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             raise ValidationError("Only canonical parties can be merged.")
         for row in merged:
             pair = self.same_as.for_pair(self, row)
-            if pair.statements.current().filter(applied=True, snak="no_value").exists():
+            if (
+                pair.statements.current()
+                .filter(applied=True, snak=pair.statements.model.StatementSnak.NO_VALUE)
+                .exists()
+            ):
                 raise ValidationError("These parties have been marked to stay separate.")
 
     def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:
@@ -418,6 +426,7 @@ class Person(models.Model, metaclass=RebacModelBase):
     extends = "parties.Party"
 
     statements = StatementRecords(
+        link="integrate.RecordLink",
         aspects={
             "name": Aspect(
                 fields=("name_prefix", "given_name", "additional_name", "family_name", "name_suffix", "nickname"),
@@ -468,6 +477,7 @@ class Organization(models.Model, metaclass=RebacModelBase):
     extends = "parties.Party"
 
     statements = StatementRecords(
+        link="integrate.RecordLink",
         aspects={
             "legal_identity": Aspect(
                 fields=("legal_name", "domain"),
@@ -838,7 +848,7 @@ class AddressManager(StatementSubjectManager):
             return "matched", current.with_actor(actor)
 
 
-class Address(TrashMixin, StatementsMixin, HistoryMixin, AuditMixin, AngeeDataModel):
+class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel):
     """A physical or postal address of a party (the vCard ``ADR`` property).
 
     There is intentionally no ``(party, label)`` uniqueness — a party may carry
@@ -850,6 +860,7 @@ class Address(TrashMixin, StatementsMixin, HistoryMixin, AuditMixin, AngeeDataMo
 
     sqid_prefix = "adr_"
     statements = StatementRecords(
+        link="integrate.RecordLink",
         aspects={
             "address": Aspect(
                 fields=(
@@ -917,7 +928,7 @@ class Address(TrashMixin, StatementsMixin, HistoryMixin, AuditMixin, AngeeDataMo
 
     def apply_resolved(self, **kwargs: Any) -> None:
         statement = kwargs["statement"]
-        if statement is not None and statement.snak == statement.Snak.VALUE:
+        if statement is not None and statement.snak == statement.StatementSnak.VALUE:
             super().apply_resolved(**kwargs)
 
     def __str__(self) -> str:
@@ -1216,7 +1227,7 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
             errors[field] = f"{self.name} requires {required} on this end."
 
 
-class Relationship(TrashMixin, StatementsMixin, HistoryMixin, AuditMixin, AngeeDataModel):
+class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel):
     """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
 
     ``kind.name`` names what the counterparty is to the anchor ("Mother",
@@ -1235,6 +1246,7 @@ class Relationship(TrashMixin, StatementsMixin, HistoryMixin, AuditMixin, AngeeD
     objects = StatementSubjectManager()
     sqid_prefix = "rel_"
     statements = StatementRecords(
+        link="integrate.RecordLink",
         aspects={
             "relationship": Aspect(
                 fields=(
@@ -1312,7 +1324,7 @@ class Relationship(TrashMixin, StatementsMixin, HistoryMixin, AuditMixin, AngeeD
 
     def apply_resolved(self, **kwargs: Any) -> None:
         statement = kwargs["statement"]
-        if statement is not None and statement.snak == statement.Snak.VALUE:
+        if statement is not None and statement.snak == statement.StatementSnak.VALUE:
             super().apply_resolved(**kwargs)
 
     def __str__(self) -> str:

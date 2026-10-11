@@ -370,11 +370,11 @@ def test_quarantine_survives_observation_and_absence_until_last_resolution(repli
     for _ in range(replica.absence_threshold):
         RecordLink.objects.mark_absent(replica, [link.external_key])
     link.refresh_from_db()
-    assert link.status == LinkStatus.DISCREPANT
+    assert link.status == LinkStatus.FAILED
     assert link.tombstoned_at is None
     first.resolve()
     link.refresh_from_db()
-    assert link.status == LinkStatus.DISCREPANT
+    assert link.status == LinkStatus.FAILED
     second.resolve()
     link.refresh_from_db()
     assert link.status == LinkStatus.OBSERVED

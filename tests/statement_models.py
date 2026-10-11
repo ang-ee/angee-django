@@ -19,7 +19,7 @@ class StatementSubject(StatementsMixin, HistoryMixin, AngeeDataModel):
                 member={"member": models.ForeignKey("base.StatementSubject", on_delete=models.PROTECT)},
             ),
         },
-        link=False,
+        link=None,
     )
     same_as = PairAspect()
 

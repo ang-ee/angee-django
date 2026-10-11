@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 12
+// @rebac_schema_revision: 13
 
 // A party and its related rows (handles, links, addresses, relationships) are
 // each owned by the user that created them, with platform admins reaching every
@@ -21,9 +21,11 @@ definition parties/party {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    // This grant admits normal handle assertions through the subject's write.
-    // It also lets the producer read its subject; it grants no human preference.
-    relation statement_source: provenance/rule | provenance/seed | integrate/integration | parties/directory
+    relation carrier_reader: auth/user | auth/group#member
+    // Admission follows retained source links and registered principal roles.
+    relation directory: integrate/integration // rebac:field=record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
     relation trashed: parties/party // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated
@@ -31,8 +33,8 @@ definition parties/party {
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = (read_granted - withheld) + delete
-    permission read_private = ((owner + editor + reader + statement_source + admin->member) - withheld) + delete
+    permission read = ((read_granted + carrier_reader) - withheld) + delete
+    permission read_private = ((owner + editor + reader + admin->member) - withheld) + delete
     permission read__notes = read_private
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
@@ -48,7 +50,9 @@ definition parties/person {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation statement_source: provenance/rule | provenance/seed | integrate/integration | parties/directory
+    relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
     relation trashed: parties/person // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated
@@ -57,7 +61,7 @@ definition parties/person {
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
     permission read = (read_granted - withheld) + delete
-    permission read_private = ((owner + editor + reader + statement_source + admin->member) - withheld) + delete
+    permission read_private = ((owner + editor + reader + admin->member) - withheld) + delete
     // Field gates are per resource definition, including inherited columns.
     permission read__notes = read_private
     permission read__first_met_note = read_private
@@ -73,7 +77,9 @@ definition parties/organization {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation statement_source: provenance/rule | provenance/seed | integrate/integration | parties/directory
+    relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
     relation trashed: parties/organization // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated
@@ -90,8 +96,10 @@ definition parties/handle {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    // Typed statement members retain their own read admission.
-    relation statement_source: provenance/rule | provenance/seed | integrate/integration | parties/directory
+    // Person assertions retain their typed members' own read admission.
+    relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
@@ -104,7 +112,9 @@ definition parties/address {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation statement_source: provenance/rule | provenance/seed | integrate/integration | parties/directory
+    relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
     relation trashed: parties/address // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated
@@ -175,7 +185,10 @@ definition parties/relationship {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation statement_source: provenance/rule | provenance/seed | integrate/integration | parties/directory
+    relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
+    relation other_directory: integrate/integration // rebac:field=other_party__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + other_directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
     relation trashed: parties/relationship // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated

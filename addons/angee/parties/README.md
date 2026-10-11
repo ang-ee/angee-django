@@ -19,12 +19,12 @@ name/date aspects for the directory principal. Address and Relationship retain
 canonical identities and have their own statement tables. Missing source members
 withdraw that directory statement; no address replacement or employment deletion
 can erase another source or a person decision. Their canonical scopes include
-asserted, applied value statements and exclude trash. Relationship retains
+rows without statements and exclude trash and wholly withdrawn assertions. Relationship retains
 free-text counterparties, date bounds and its kind end validation.
 
 People edit aspect values through ordinary saves, producing normal PERSON
 statements. A person confirm/dismiss is preferred and always wins. Consumers
-contribute their own tax aspects and aspect_precedence through declared donors;
+contribute their own tax aspects through declared donors;
 the framework supplies no tax vocabulary. Precedence groups win together; losing
 statements remain inspectable.
 
@@ -63,10 +63,14 @@ retained workflow references to statement IDs and subject concern records.
 Pre-cutover frozen identity hashes require fresh review. Migration reversals do
 not recreate discarded carrier metadata or roster source labels.
 
-Trusted matchers grant their persisted source explicit reads of the supporting
-Party/Handle records before assertion admission. Claimed-sender origins must
-admit the RULE principal on their native reader relation; messaging declares
-that source type. Human decisions cite only bounded origins the person can read.
+Source admission follows retained RecordLinks and resource-granted Rule/Seed
+role membership. Producers never grant themselves per-record access.
+Statement sources and migrated carrier readers gain no private-field reads.
+Origin readability belongs to the person at the bounded evidence surface.
+Import adapters must provide observed source links before asserting on a subject.
+`ingest_connection` takes `link=`; `ingest_connections` consumes `(parsed, link)`
+pairs. The owning import adapter supplies those observed links; parties binds
+each canonical target inside its application transaction.
 
 Identity matching writes normal RULE same_as statements on the ordered Party
 pair. A preferred no_value is the durable symmetric anti-link. A preferred value
@@ -79,6 +83,10 @@ The phase 4 upgrade follows the handle cutover with party_aspect_schema,
 fold_party_aspects and retire_party_carriers. The fold uses historical base
 managers under its changeset without evaluating REBAC. Unproven source identities,
 missing application evidence or dangling retired-resource pointers block by row.
+The fold bootstraps needed principals on historical models and applies the
+carrier's decisive stance. Recorded updated_by people own confirm/dismiss decisions;
+missing actors block with their rows and count. Unattributed scalar values stay
+on canonical columns without invented assertions.
 Retirement drops the directory columns, Relationship source label and veto table
 only after retained statement/link parity. Reversal restores empty legacy schema;
 it does not recreate competing provenance stores.

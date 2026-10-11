@@ -10,11 +10,11 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import NotSupportedError, connections, models, transaction
 from rebac import app_settings, system_context
 from rebac.managers import RebacQuerySet, TrackedQuerySet
-from rebac.watch import by_key, statement_keys
+from rebac.watch import statement_keys
 
 from angee.base.autoconfig import SETTINGS
 from angee.base.changesets import current_changeset, write_group
-from angee.base.scoping import lock_if_supported
+from angee.base.scoping import by_key, lock_if_supported
 
 if TYPE_CHECKING:
     from angee.base.mixins import ModelHistory
@@ -219,7 +219,9 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         return self.filter(superseded__isnull=True)
 
     def canonical(self) -> Any:
-        return self.current().filter(status=self.model.Status.ASSERTED, applied=True, snak=self.model.Snak.VALUE)
+        return self.current().filter(
+            status=self.model.StatementStatus.ASSERTED, applied=True, snak=self.model.StatementSnak.VALUE
+        )
 
     def provenance(self, field: str) -> Any:
         """Return the applied assertions, including a preferred dismissal."""

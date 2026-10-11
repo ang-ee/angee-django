@@ -639,11 +639,11 @@ class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, Optimi
         return self.kind == UserKind.PERSON
 
     @property
-    def source_kind(self) -> SourceKind:
-        """Only an active person account can assert statements as a user."""
+    def source_kind(self) -> SourceKind | None:
+        """Classify active person accounts; other users are not statement sources."""
 
         if not self.is_active or not self.is_person:
-            raise ValidationError("Statement user sources must be active people.")
+            return None
         return cast(SourceKind, SourceKind.PERSON)
 
     class Meta:

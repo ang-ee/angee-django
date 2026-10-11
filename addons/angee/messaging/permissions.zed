@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 17
+// @rebac_schema_revision: 18
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -42,7 +42,7 @@ definition messaging/message {
     relation channel: messaging/channel // rebac:field=channel
     relation editor: auth/user | auth/group#member
     // Evidence-producing rules receive only explicit origin reads.
-    relation reader: auth/user | auth/group#member | provenance/rule
+    relation reader: auth/user | auth/group#member
     relation trashed: messaging/message // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     relation admin: angee/role // rebac:const=admin
 

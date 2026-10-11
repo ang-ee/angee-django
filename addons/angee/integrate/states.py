@@ -57,7 +57,7 @@ class LinkStatus(models.TextChoices, StrEnum):
     CURRENT = "current", "Current"
     OBSERVED = "observed", "Observed"
     UNAVAILABLE = "unavailable", "Unavailable"
-    DISCREPANT = "discrepant", "Discrepant"
+    FAILED = "failed", "Failed"
     WITHDRAWN = "withdrawn", "Withdrawn"
     TOMBSTONE = "tombstone", "Tombstone"
 

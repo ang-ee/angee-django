@@ -23,17 +23,17 @@ and orphans edge rows on delete.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models
 from django.utils.text import capfirst
 from rebac import ObjectRef, to_object_ref
 from rebac.field_backing import canonical_model
@@ -42,6 +42,13 @@ from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
 from angee.base.permissions import effective_rebac_definition
+
+
+class RetainedGenericRelation(GenericRelation):
+    """Query retained edges without collecting them on the target's deletion."""
+
+    def bulk_related_objects(self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS) -> list[models.Model]:
+        return []
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,15 +417,17 @@ class RecordRefMixin(models.Model):
                 pk = field.public_id_to_value(value) if field else model._meta.pk.to_python(value)
                 if pk is None or public_id_for(model, pk) != value:
                     continue
-            except (TypeError, ValueError, ValidationError):
+            except TypeError, ValueError, ValidationError:
                 continue
-            candidates.append(models.When(
-                **{
-                    f"{reference.ct_field}__app_label": model._meta.app_label,
-                    f"{reference.ct_field}__model": model._meta.model_name,
-                },
-                then=models.Value(str(pk)),
-            ))
+            candidates.append(
+                models.When(
+                    **{
+                        f"{reference.ct_field}__app_label": model._meta.app_label,
+                        f"{reference.ct_field}__model": model._meta.model_name,
+                    },
+                    then=models.Value(str(pk)),
+                )
+            )
         return models.Case(*candidates, default=models.Value(""), output_field=models.CharField())
 
     @property

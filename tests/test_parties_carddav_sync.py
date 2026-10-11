@@ -693,7 +693,7 @@ def test_concurrent_vcard_changes_remain_conflicts(
         next((row for row in RecordLink.objects.get(pk=link.pk).failures(open_only=False))).kind
         == SyncFailureKind.CONFLICT
     )
-    assert link.status == LinkStatus.DISCREPANT
+    assert link.status == LinkStatus.FAILED
     assert (
         link.applied_base.source_hash,
         canonical_json_sha256(link.applied_base.mapped_payload),
@@ -1058,7 +1058,11 @@ def test_removed_member_tombstones_link_and_withdraws_directory_statements(repli
     assert link.status == LinkStatus.TOMBSTONE
     assert link.tombstoned_at is not None
     assert Party.objects.filter(pk=person.pk).exists()
-    assert not Party.statements.filter(subject_id=person.pk, link=link, status="asserted").exists()
+    assert not Party.statements.filter(
+        subject_id=person.pk,
+        link=link,
+        status=Party.statements.model.StatementStatus.ASSERTED,
+    ).exists()
     assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
@@ -1489,7 +1493,7 @@ def test_malformed_vcard_is_quarantined_while_later_contact_commits(replica: Rep
     failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
     assert failure.kind == SyncFailureKind.SEMANTIC
     assert failure.source_hash
-    assert RecordLink.objects.get(pk=failure.link_pk).status == LinkStatus.DISCREPANT
+    assert RecordLink.objects.get(pk=failure.link_pk).status == LinkStatus.FAILED
     assert list(
         RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
             "external_key", flat=True
@@ -1795,7 +1799,7 @@ def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_comm
     assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
     failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
     link = RecordLink.objects.get(pk=failure.link_pk)
-    assert link.status == LinkStatus.DISCREPANT
+    assert link.status == LinkStatus.FAILED
     assert link.metadata["href"] == _HREF
     assert failure.kind == SyncFailureKind.SEMANTIC
     assert failure.code == "vcard_response_too_large"
@@ -2010,7 +2014,7 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
     failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
     link = RecordLink.objects.get(pk=failure.link_pk)
     assert failure.kind == SyncFailureKind.SEMANTIC
-    assert link.status == LinkStatus.DISCREPANT
+    assert link.status == LinkStatus.FAILED
     assert link.external_key == link.metadata["href"] == duplicate_href
     assert replica.stream.cursor == {"sync_token": replica.server.token}
 
@@ -2056,7 +2060,7 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
     failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
     refused = RecordLink.objects.get(pk=failure.link_pk)
     assert failure.kind == SyncFailureKind.SEMANTIC
-    assert refused.status == LinkStatus.DISCREPANT
+    assert refused.status == LinkStatus.FAILED
     assert refused.metadata["href"] == collision_href
     assert refused.external_key != owner.external_key
     assert refused.target_object_id is None

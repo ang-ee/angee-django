@@ -929,7 +929,7 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
     if replica:
         link = RecordLink.objects.get(stream=stream, external_key="poison")
         assert failure.link_pk == link.pk
-        assert link.status == LinkStatus.DISCREPANT
+        assert link.status == LinkStatus.FAILED
         assert not applied_history().filter(id=link.pk).exists()
     else:
         assert not RecordLink.objects.filter(stream=stream).exists()
@@ -1895,7 +1895,7 @@ def test_failed_conflict_reread_keeps_quarantine(
         failure.resolve_conflict(keep=keep)
     link.refresh_from_db()
     assert len(RecordLink.objects.get(pk=link.pk).failures(open_only=True)) == 1
-    assert link.status == LinkStatus.DISCREPANT
+    assert link.status == LinkStatus.FAILED
     assert adapter.closed == 1
 
 

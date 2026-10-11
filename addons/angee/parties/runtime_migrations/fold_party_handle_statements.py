@@ -6,9 +6,9 @@ admission is for new assertions only. Every referenced origin must still exist.
 Missing principals, missing origins, conflicting producer clues, contradictory
 decisions and decisions without a proven person actor block with PartyHandle's id.
 
-Audit ownership alone does not identify a rule/importer or a decision actor.
-Unattributed confirmed imports remain normal assertions (the #356 exception);
-their count is printed. A legacy import label needs its owning addon's persisted
+The carrier's recorded updated_by identifies a confirm/dismiss actor. Decisions
+without that actor block; their count is printed for the upgrading database.
+A legacy import label needs its owning addon's persisted
 Integration attribution, supplied by a RecordLink targeting this carrier, or a canonical
 Integration SubjectRef in that label. Never choose an account by its audit owner,
 display name or backend, and never create a legacy.<source> principal.
@@ -19,8 +19,8 @@ the later retirement's parity review. Fold-time history dates record the fold,
 not invented historical assertion times. No operational Handle/Party values are
 re-derived here; parties' survivorship cutover is the next commit.
 
-Carrier owner/editor/reader grants become Party reader grants, deliberately
-granting subject-level (including private-field) reads. No edit grant is added.
+Carrier owner/editor/reader grants become Party carrier_reader grants, granting
+read only, with zero private-field or edit grants added. The copied count is printed.
 Caveats and expiry are retained; incompatible caveat contexts block. Legacy
 field-backed ownership is carried explicitly. Provision still migrates before
 permission sync. The applied migration record freezes carrier writes.
@@ -33,14 +33,12 @@ preceding schema migrations drops the newly created statement/history tables.
 
 from django.apps import apps as live_apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import migrations
+from django.db import migrations, models
 from django.utils import timezone
 from rebac import SubjectRef, app_settings, system_context
 from rebac.resources import resource_id_attr, subject_id_attr
 
 from angee.base.identity import EvidenceReference, instance_from_public_id, public_id_for
-from angee.base.mixins import StatementSourceMixin
 
 REASON = "fold.party_handle"
 
@@ -123,9 +121,7 @@ def _source(apps, db, row, party, refs, origins):
             key = "parties.display_name"
         else:
             _blocked(row, "rule/matcher identity or typed origin was not retained")
-        principal = _rows(apps, "provenance.Rule", db).filter(key=key).first()
-        if principal is None:
-            _blocked(row, f"source Rule:{key} is missing; bootstrap its persisted principal before folding")
+        principal, _ = _rows(apps, "provenance.Rule", db).get_or_create(key=key)
         return (*_principal(apps, db, row, "provenance.Rule", principal.pk, "provenance/rule", "rule"), None)
     if row.source == "import":
         if producer_evidence or metadata.get("claim"):
@@ -169,41 +165,21 @@ def _source(apps, db, row, party, refs, origins):
             _blocked(row, f"source Integration:{ref.subject_id} is missing")
         if not refs:
             _blocked(row, "import origin was not retained")
-        try:
-            kind = StatementSourceMixin.kind_for(ref)
-        except (ImproperlyConfigured, ValidationError) as error:
-            _blocked(row, f"Integration source classification is not declared by its owner: {error}")
-        if kind == "person":
-            _blocked(row, "an Integration cannot be a person source")
-        return str(ref), kind, next((pk for source, pk in sorted(sources, key=str) if pk is not None), None)
+        if not _rows(apps, "parties.Directory", db).filter(pk=principal.pk).exists():
+            _blocked(row, "Integration source classification has no historical Directory child row")
+        return str(ref), "directory", next((pk for source, pk in sorted(sources, key=str) if pk is not None), None)
     _blocked(row, f"source {row.source!r} has no proven persisted principal")
 
 
 def _decision(apps, db, row):
-    """A flag's transition history identifies its actor; audit ownership does not."""
+    """A carrier decision belongs to its recorded updating person."""
     if row.is_confirmed and row.is_dismissed:
         _blocked(row, "confirmed and dismissed flags contradict one another")
     if not (row.is_confirmed or row.is_dismissed):
         return None
-    flag = "is_confirmed" if row.is_confirmed else "is_dismissed"
-    try:
-        history = apps.get_model("parties", "HistoricalPartyHandle")
-    except LookupError:
-        history = None
-    actor = None
-    if history is not None:
-        previous = False
-        for version in _rows(apps, history._meta.label, db).filter(id=row.pk).order_by("history_date", "history_id"):
-            if getattr(version, flag) and not previous:
-                actor = version.history_user_id
-            previous = getattr(version, flag)
-        if not previous:
-            actor = None
-    if actor is None:
-        if row.source == "import" and row.is_confirmed:
-            return "unattributed_import"
-        _blocked(row, "decision has no proven person actor in its transition history")
-    return _principal(apps, db, row, settings.AUTH_USER_MODEL, actor, app_settings.REBAC_USER_TYPE, "person")[0]
+    if row.updated_by_id is None:
+        _blocked(row, "decision has no recorded updated_by person actor")
+    return _principal(apps, db, row, settings.AUTH_USER_MODEL, row.updated_by_id, app_settings.REBAC_USER_TYPE, "person")[0]
 
 
 def _carry_readers(apps, db, row, party):
@@ -220,7 +196,7 @@ def _carry_readers(apps, db, row, party):
         ref = SubjectRef.parse(source)
         grants.append(model(subject_type=ref.subject_type, subject_id=ref.subject_id))
     for grant in grants:
-        key = dict(resource_type="parties/party", resource_id=party_id, relation="reader",
+        key = dict(resource_type="parties/party", resource_id=party_id, relation="carrier_reader",
                    subject_type=grant.subject_type, subject_id=grant.subject_id,
                    optional_subject_relation=grant.optional_subject_relation, caveat_name=grant.caveat_name)
         existing, created = rows.get_or_create(**key, defaults={
@@ -232,6 +208,7 @@ def _carry_readers(apps, db, row, party):
             if existing.expires_at is not None:
                 expires = None if grant.expires_at is None else max(existing.expires_at, grant.expires_at)
                 rows.filter(pk=existing.pk).update(expires_at=expires)
+    return len(grants)
 
 
 def forwards(apps, schema_editor):
@@ -239,13 +216,20 @@ def forwards(apps, schema_editor):
     carriers = _rows(apps, "parties.PartyHandle", db)
     if not carriers.exists():
         return
+    missing_actors = carriers.filter(models.Q(is_confirmed=True) | models.Q(is_dismissed=True)).exclude(
+        updated_by__kind="person",
+    )
+    if missing_actors.exists():
+        print(f"PartyHandle fold: {missing_actors.count()} decisions without a recorded person actor block this database.")
+        _blocked(missing_actors.order_by("pk").first(), "decision has no recorded updated_by person actor")
     statements = _rows(apps, "parties.PartyStatement", db)
     history = _rows(apps, "parties.HistoricalPartyStatement", db)
     cs_model = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
     with system_context(reason=REASON):
         cs = cs_model._base_manager.using(db).create(activity="system", change_reason=REASON,
                                                    state="closed", outcome="success")
-        count = unattributed = 0
+        count = readers = 0
+        winners = {}
         for row in carriers.order_by("pk").iterator():
             party = _rows(apps, "parties.Party", db).filter(pk=row.party_id).first()
             handle = _rows(apps, "parties.Handle", db).filter(pk=row.handle_id).first()
@@ -264,9 +248,6 @@ def forwards(apps, schema_editor):
                     refs.append(ref)
             source, kind, link_id = _source(apps, db, row, party, refs, origins)
             decision = _decision(apps, db, row)
-            if decision == "unattributed_import":
-                unattributed += 1
-                decision = None
             assertions = [(source, kind, "normal", "value", row.confidence)]
             if decision is not None:
                 assertions.append((decision, "person", "preferred", "value" if row.is_confirmed else "no_value", 1.0))
@@ -283,12 +264,24 @@ def forwards(apps, schema_editor):
                 history.create(**snapshot, history_date=timezone.now(), history_type="+" if created else "~",
                                history_change_reason=REASON)
                 count += 1
-            _carry_readers(apps, db, row, party)
+                if rank == "preferred" or confidence >= 0.5:
+                    group = (row.party_id, row.handle_id)
+                    order = (rank == "preferred", confidence, row.updated_at, row.pk)
+                    if group not in winners or order > winners[group][0]:
+                        winners[group] = (order, statement.pk)
+            readers += _carry_readers(apps, db, row, party)
+        for _, statement_id in winners.values():
+            statement = statements.get(pk=statement_id)
+            statements.filter(pk=statement_id).update(applied=True)
+            statement.applied = True
+            snapshot = {field.attname: getattr(statement, field.attname) for field in statement._meta.concrete_fields}
+            history.create(**snapshot, history_date=timezone.now(), history_type="~", history_change_reason=REASON)
+            count += 1
         cs_model._base_manager.using(db).filter(pk=cs.pk).update(
             counts={"parties.partystatement": count}, touched=["parties.partystatement"],
         )
-        print(f"PartyHandle fold: {carriers.count()} carriers, {count} assertions/decisions; "
-              f"{unattributed} confirmed imports without a person actor retained at normal rank.")
+        print(f"PartyHandle fold: {carriers.count()} carriers, {count} statement snapshots; "
+              f"{readers} carrier grants copied to read only; 0 decisions without a recorded actor.")
 
 
 class Migration(migrations.Migration):

@@ -22,7 +22,6 @@ from rebac import (
     is_anonymous_actor,
     system_context,
     to_object_ref,
-    to_subject_ref,
     write_relationships,
 )
 from rebac.actors import is_sudo
@@ -33,32 +32,28 @@ from rebac.schema.walker import subject_allowed_by_relation
 from angee.base.actors import instance_actor
 from angee.base.changesets import changeset, current_changeset
 from angee.base.fields import StateField
-from angee.base.merge import named_in_relationships, references
 from angee.base.mixins import (
     SourceKind,
     SqidMixin,
-    Statement,
-    StatementPair,
-    StatementsMixin,
     StatementSourceMixin,
-    TrashMixin,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeUnscopedManager
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeUnscopedManager, role_anchor
 from angee.base.querysets import model_history
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import lock_if_supported
 from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
+
+ProvenanceRole = role_anchor("provenance/role")
 
 
 class StatementPrincipalManager(AngeeManager):
     """Resolve a producer's durable identity without creating duplicate principals."""
 
     def for_key(self, key: str) -> Any:
-        """Return or create the principal named by the owning producer's key."""
+        """Return the principal bootstrapped by its owning resource declaration."""
 
         if not key:
             raise ValueError("A statement principal requires a nonempty key.")
-        return self.get_or_create(key=key)[0]
+        return self.get(key=key)
 
 
 class Rule(StatementSourceMixin, AngeeDataModel):
@@ -276,149 +271,31 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             transaction.atomic(using=using),
             changeset(fresh=True, activity="revert", origin=self),
         ):
-            owners = sorted(
-                self.history_rows(),
-                key=lambda owner: (
-                    issubclass(owner[0], Statement),
-                    len(owner[0]._meta.get_parent_list()),
-                    owner[0]._meta.label_lower,
-                ),
-            )
             states = []
-            for model, versions in owners:
-                keys = versions.values_list(model._meta.pk.attname, flat=True)
-                list(lock_if_supported(model._base_manager.using(using).filter(pk__in=keys).order_by("pk")))
+            for model, _ in self.history_rows():
                 history = model_history(model)
                 if history is None:
                     raise ValidationError(f"{model._meta.label}: no history owner.")
+                # Acquire subject-owned locks before checking later touches.
+                for first in model.history.using(using).filter(changeset_id=self.pk).order_by("history_id").iterator():
+                    history.lock_revert(first, first, None)
                 for first, last, previous in history.changeset_states(model, self, using=using):
-                    row = model._base_manager.using(using).filter(pk=getattr(first, model._meta.pk.attname)).first()
-                    subject = row or last.instance
-                    if issubclass(model, Statement):
-                        # Every pre/post subject needs admission, including a
-                        # statement moved by a merge. Deleted subjects admit
-                        # after their native restoration, before stance replay.
-                        subject_ids = {version.subject_id for version in (first, last, previous) if version is not None}
-                        if not is_sudo():
-                            for subject in model.statement_subject_model._base_manager.using(using).filter(
-                                pk__in=subject_ids
-                            ):
-                                subject.require_statement_write(actor)
-                    elif isinstance(subject, StatementPair):
-                        if not is_sudo():
-                            subject.require_statement_write(to_subject_ref(actor))
-                    elif row is not None:
-                        subject.require_access("write", actor=actor)
-                    states.append((model, first, last, previous, row))
-
-            # Parents restore before children. Only local fields are replayed on
-            # MTI children, so a flattened child cannot overwrite its parent.
+                    history.lock_revert(first, last, previous)
+                    history.authorize_revert(first, last, previous, actor)
+                    states.append((history, first, last, previous))
             subjects = {}
-            for model, first, last, previous, row in sorted(
-                states,
-                key=lambda state: (len(state[0]._meta.get_parent_list()), state[0]._meta.label_lower),
-            ):
-                if issubclass(model, Statement) or previous is None:
-                    continue
-                if previous.history_type == "-":
-                    continue
-                fields = [field.name for field in model._meta.local_concrete_fields if not field.primary_key]
-                # as_of is date-based; preserve the exact native predecessor at a tie.
-                if (
-                    model.history.using(using)
-                    .filter(
-                        **{model._meta.pk.attname: getattr(previous, model._meta.pk.attname)},
-                        history_date=previous.history_date,
-                    )
-                    .exclude(history_id=previous.history_id)
-                    .exists()
-                ):
-                    restored = previous.instance
-                else:
-                    restored = (
-                        model.history.db_manager(using)
-                        .as_of(previous.history_date)
-                        .get(pk=getattr(previous, model._meta.pk.attname))
-                    )
-                if row is None:
-                    for parent in model._meta.get_parent_list():
-                        stored = parent._base_manager.using(using).filter(pk=restored.pk).first()
-                        if stored is None:
-                            raise ValidationError(f"{parent._meta.label} {restored.pk}: the MTI parent is unavailable.")
-                        for field in parent._meta.local_concrete_fields:
-                            if not field.primary_key:
-                                setattr(restored, field.attname, getattr(stored, field.attname))
-                delta = last.diff_against(previous, included_fields=fields)
-                changed = set(delta.changed_fields)
-                target = row or restored
-                for name in changed:
-                    field = model._meta.get_field(name)
-                    setattr(target, field.attname, getattr(previous, field.attname))
-                with system_context(reason="changeset.revert"):
-                    if row is not None and isinstance(target, TrashMixin) and "is_trashed" in changed:
-                        # Use the removal owner, retaining its lock and stamps.
-                        target.refresh_from_db(using=using)
-                        if previous.is_trashed:
-                            target.trash(reason=previous.trash_reason, using=using)
-                        else:
-                            target.restore(using=using)
-                        changed.difference_update(target.TRASH_FIELDS)
-                        for name in changed:
-                            field = model._meta.get_field(name)
-                            setattr(target, field.attname, getattr(previous, field.attname))
-                    if row is None:
-                        restored.save(using=using)
-                        target = restored
-                    elif changed:
-                        target.save(using=using, update_fields=sorted(changed))
-                if isinstance(target, StatementPair):
-                    if not is_sudo():
-                        target.require_statement_write(to_subject_ref(actor))
-                else:
-                    target.require_access("write", actor=actor)
-                if isinstance(target, StatementsMixin):
-                    subjects[(model, target.pk)] = target
-
-            for model, _ in owners:
-                if issubclass(model, Statement):
-                    for subject in model.objects.db_manager(using).revert(self, resolve=False):
-                        subjects[(type(subject), subject.pk)] = subject
             with system_context(reason="changeset.revert"):
-                # Remove creations after restoring references, children first.
-                removed = set()
-                for model, first, _, previous, row in sorted(
+                for history, first, last, previous in states:
+                    history.stage_revert(first, last, previous)
+                for history, first, last, previous in sorted(
                     states,
-                    key=lambda state: (-len(state[0]._meta.get_parent_list()), state[0]._meta.label_lower),
+                    key=lambda state: state[0].revert_order(*state[1:]),
                 ):
-                    if (
-                        issubclass(model, Statement)
-                        or (previous is not None and previous.history_type != "-")
-                        or row is None
-                    ):
-                        continue
-                    if isinstance(row, TrashMixin):
-                        owner = row._meta.get_field("is_trashed").model
-                        key = (owner, row.pk)
-                        if key not in removed:
-                            target = owner._base_manager.using(using).get(pk=row.pk)
-                            if actor is not None:
-                                target.with_actor(actor)
-                            if not target.is_trashed:
-                                target.trash(reason=f"Revert changeset {self.pk}", using=using)
-                            removed.add(key)
-                    else:
-                        if named_in_relationships(row) or any(
-                            reference.retains(row) for reference in references(model)
-                        ):
-                            raise ValidationError(
-                                f"{model._meta.label} {row.pk}: retained rows prevent removal without a trash owner."
-                            )
-                        removed.add((model, row.pk))
-                        row.delete(using=using)
-                for (model, pk), subject in subjects.items():
-                    if (model, pk) in removed and not issubclass(model, TrashMixin):
-                        continue
-                    for manager in subject.statement_managers():
-                        manager.resolve()
+                    for subject in history.revert_row(first, last, previous):
+                        subjects[(type(subject), subject.pk)] = subject
+                for subject in subjects.values():
+                    if type(subject)._base_manager.using(using).filter(pk=subject.pk).exists():
+                        for manager in subject.statement_managers():
+                            manager.resolve()
                 result = current_changeset(required=True, record=True)
         return result

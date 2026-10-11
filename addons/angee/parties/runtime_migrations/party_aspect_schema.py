@@ -1,17 +1,11 @@
-"""Frozen schema for identity, claimed rows and symmetric same-as statements.
-
-The existing handle cutover is untouched. Helpers expand this migration's frozen
-field declarations only; they do not import current model or generator policy.
-Fresh hosts obtain the same schema through Django's native makemigrations.
-"""
-
-from copy import deepcopy
-
+import angee.base.fields
+import angee.parties.fields
+import django.core.validators
+import django.db.models.deletion
+import django.db.models.manager
+import simple_history.models
 from django.conf import settings
 from django.db import migrations, models
-from simple_history.models import HistoricalChanges
-
-from angee.parties.fields import CountryCodeField
 
 
 def applies(state):
@@ -27,181 +21,1065 @@ def applies(state):
     return True
 
 
-def fk(to, *, null=True, protect=True):
-    return models.ForeignKey(to, null=null, blank=null, on_delete=models.PROTECT if protect else models.DO_NOTHING,
-                             related_name="+", db_constraint=protect)
-
-
-def text():
-    return models.TextField(null=True, blank=True)
-
-
-def dates(names):
-    return [(name, models.DateField(null=True, blank=True)) for name in names]
-
-
-TRASH = [
-    ("is_trashed", models.BooleanField(default=False, db_index=True, editable=False)),
-    ("trashed_at", models.DateTimeField(null=True, blank=True, editable=False)),
-    ("trashed_by", models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
-                                   related_name="+", editable=False)),
-    ("trash_reason", models.TextField(blank=True, default="", editable=False)),
-]
-AUDIT = [
-    ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
-    ("updated_at", models.DateTimeField(auto_now=True, db_index=True)),
-    ("created_by", models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")),
-    ("updated_by", models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")),
-]
-ADDRESS = [
-    ("label", models.CharField(max_length=64, null=True, blank=True)),
-    ("po_box", models.CharField(max_length=128, null=True, blank=True)),
-    *[(name, text()) for name in ("extended", "street", "city", "region")],
-    ("postal_code", models.CharField(max_length=32, null=True, blank=True)),
-    ("country", CountryCodeField(null=True, blank=True)),
-    ("latitude", models.FloatField(null=True, blank=True)),
-    ("longitude", models.FloatField(null=True, blank=True)),
-]
-RELATIONSHIP = [*[(name, text()) for name in ("other_name", "title", "notes")],
-                *dates(("started_at", "ended_at"))]
-STANCE = [
-    ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
-    ("updated_at", models.DateTimeField(auto_now=True, db_index=True)),
-    ("asserted_by", models.TextField()),
-    ("source_kind", models.CharField(max_length=16, db_index=True)),
-    ("snak", models.CharField(max_length=10, db_index=True, default="value")),
-    ("confidence", models.FloatField(default=1.0)),
-    ("rank", models.CharField(max_length=9, db_index=True, default="normal")),
-    ("status", models.CharField(max_length=11, db_index=True, default="asserted")),
-    ("applied", models.BooleanField(default=False)),
-    ("evidence", models.JSONField(default=list, blank=True)),
-    ("basis_hash", models.CharField(max_length=64, blank=True)),
-    ("changeset", fk(settings.ANGEE_CHANGESET_MODEL)),
-    ("link", fk("integrate.recordlink")),
-]
-
-
-def history(name, fields):
-    copied = deepcopy(fields)
-    for column, field in copied:
-        if isinstance(field, models.ForeignKey):
-            field.null = field.blank = True
-            field.db_constraint = False
-            field.remote_field.on_delete = models.DO_NOTHING
-        elif isinstance(field, models.DateTimeField):
-            field.auto_now = field.auto_now_add = False
-            field.editable = False
-            field.blank = True
-    copied = [(column, models.BigIntegerField(db_index=True) if column == "id" else field) for column, field in copied]
-    copied.extend([
-        ("history_id", models.AutoField(primary_key=True)),
-        ("history_date", models.DateTimeField(db_index=True)),
-        ("history_type", models.CharField(max_length=1, choices=(("+", "Created"), ("~", "Changed"), ("-", "Deleted")))),
-        ("history_change_reason", models.TextField(null=True)),
-        ("history_user", models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")),
-    ])
-    if not any(column == "changeset" for column, _ in copied):
-        copied.append(("changeset", fk(settings.ANGEE_CHANGESET_MODEL)))
-    return migrations.CreateModel(name="Historical" + name, fields=copied,
-                                  bases=(HistoricalChanges, models.Model),
-                                  options={"ordering": ("-history_date", "-history_id"),
-                                           "get_latest_by": ("history_date", "history_id")})
-
-
-def statements(subject, aspects, columns):
-    name = subject + "Statement"
-    fields = [("id", models.BigAutoField(primary_key=True)), *deepcopy(STANCE), *deepcopy(columns),
-              ("subject", fk("parties." + subject.lower(), null=False)),
-              ("superseded", fk("parties." + name.lower())),
-              ("aspect", models.CharField(max_length=64, choices=[(key, key) for key in aspects]))]
-    constraints = [
-        models.CheckConstraint(condition=models.Q(aspect__in=aspects), name=f"parties_{name.lower()}_aspect"),
-        models.CheckConstraint(condition=models.Q(confidence__gte=0, confidence__lte=1)
-                               & (models.Q(rank="normal") | models.Q(rank="preferred", source_kind="person"))
-                               & models.Q(snak__in=("value", "some_value", "no_value"),
-                                          status__in=("asserted", "withdrawn", "quarantined", "deprecated"),
-                                          source_kind__in=("person", "system_of_record", "directory", "network", "import", "seed", "document", "extraction", "rule")),
-                               name=f"parties_{name.lower()}_stance"),
-    ]
-    for aspect in aspects:
-        current = models.Q(aspect=aspect, superseded__isnull=True)
-        for suffix, key, condition in (
-            ("key", ("asserted_by", "subject", "aspect"), current),
-            ("applied", ("subject", "aspect"), current & models.Q(applied=True)),
-        ):
-            constraints.append(models.UniqueConstraint(fields=key, condition=condition,
-                                                       name=f"parties_{name.lower()}_{suffix}_{aspect}"))
-    return [migrations.CreateModel(name=name, fields=fields,
-                                   options={"db_table": f"parties_{subject.lower()}_statement", "constraints": constraints,
-                                            "base_manager_name": "_angee_base"},
-                                   managers=[("objects", models.Manager()), ("_angee_base", models.Manager())]),
-            history(name, fields)]
-
-
-operations = []
-for name in ("party", "historicalparty", "historicalperson", "historicalorganization", "address", "relationship"):
-    for column, field in TRASH:
-        copied = deepcopy(field)
-        if name.startswith("historical") and isinstance(copied, models.ForeignKey):
-            copied.remote_field.on_delete = models.DO_NOTHING
-            copied.db_constraint = False
-        operations.append(migrations.AddField(model_name=name, name=column, field=copied))
-for column, field in [("display_name", text()), ("notes", text()), ("avatar", fk("storage.file"))]:
-    for name in ("partystatement", "historicalpartystatement"):
-        copied = deepcopy(field)
-        if name.startswith("historical") and isinstance(copied, models.ForeignKey):
-            copied.remote_field.on_delete = models.DO_NOTHING
-            copied.db_constraint = False
-        operations.append(migrations.AddField(model_name=name, name=column, field=copied))
-for name in ("partystatement", "historicalpartystatement"):
-    operations.append(migrations.AlterField(model_name=name, name="aspect", field=models.CharField(
-        max_length=64, choices=[(key, key) for key in ("contact", "handle", "identity")],
-    )))
-operations.extend([migrations.RemoveConstraint(model_name="partystatement", name="parties_partystatement_aspect"),
-                   migrations.AddConstraint(model_name="partystatement", constraint=models.CheckConstraint(
-                       condition=models.Q(aspect__in=("contact", "handle", "identity")), name="parties_partystatement_aspect"))])
-for aspect in ("contact", "identity"):
-    current = models.Q(aspect=aspect, superseded__isnull=True)
-    for suffix, key, condition in (("key", ("asserted_by", "subject", "aspect"), current),
-                                   ("applied", ("subject", "aspect"), current & models.Q(applied=True))):
-        operations.append(migrations.AddConstraint(model_name="partystatement", constraint=models.UniqueConstraint(
-            fields=key, condition=condition, name=f"parties_partystatement_{suffix}_{aspect}")))
-operations.extend(statements("Person", ("dates", "name"), [
-    *dates(("birthday", "anniversary")),
-    *[(name, text()) for name in ("name_prefix", "given_name", "additional_name", "family_name", "name_suffix", "nickname")],
-]))
-operations.extend(statements("Organization", ("legal_identity",), [("legal_name", text()),
-                                                                  ("domain", models.CharField(max_length=255, null=True, blank=True))]))
-operations.extend(statements("Address", ("address",), ADDRESS))
-operations.extend(statements("Relationship", ("relationship",), RELATIONSHIP))
-for name, columns, links in (
-    ("Address", ADDRESS, [("party", fk("parties.party")), ("is_primary", models.BooleanField(default=False))]),
-    ("Relationship", RELATIONSHIP, [("party", fk("parties.party")), ("other_party", fk("parties.party")),
-                                     ("kind", fk("parties.relationshipkind"))]),
-):
-    columns = deepcopy(columns)
-    for _, field in columns:
-        if field.null and not isinstance(field, models.ForeignKey):
-            field.null = False if not isinstance(field, (models.DateField, models.FloatField)) else True
-            if isinstance(field, (models.CharField, models.TextField)):
-                field.default = ""
-    fields = [("id", models.BigAutoField(primary_key=True)), *deepcopy(AUDIT), *deepcopy(TRASH), *columns, *links]
-    operations.append(history(name, fields))
-pair_fields = [("id", models.BigAutoField(primary_key=True)), *deepcopy(AUDIT[:2]), *deepcopy(TRASH),
-               ("left", fk("parties.party", null=False)), ("right", fk("parties.party", null=False))]
-operations.extend([
-    migrations.CreateModel(name="PartySameAsPair", fields=pair_fields,
-                           options={"base_manager_name": "_angee_base", "constraints": [
-                               models.UniqueConstraint(fields=("left", "right"), name="parties_partysameaspair_pair"),
-                               models.CheckConstraint(condition=models.Q(left__lt=models.F("right")), name="parties_partysameaspair_order"),
-                           ]}, managers=[("objects", models.Manager()), ("_angee_base", models.Manager())]),
-    history("PartySameAsPair", pair_fields),
-    *statements("PartySameAsPair", ("same_as",), []),
-])
-
-
 class Migration(migrations.Migration):
-    dependencies = [("integrate", "__latest__"), ("storage", "__latest__"),
-                    migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-                    migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)]
-    operations = operations
+
+    dependencies = [
+        ("integrate", "__latest__"),
+        ("storage", "__latest__"),
+        migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL),
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='AddressStatement',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('updated_at', models.DateTimeField(auto_now=True, db_index=True)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('label', models.CharField(blank=True, max_length=64, null=True)),
+                ('po_box', models.CharField(blank=True, max_length=128, null=True)),
+                ('extended', models.TextField(blank=True, null=True)),
+                ('street', models.TextField(blank=True, null=True)),
+                ('city', models.TextField(blank=True, null=True)),
+                ('region', models.TextField(blank=True, null=True)),
+                ('postal_code', models.CharField(blank=True, max_length=32, null=True)),
+                ('country', angee.parties.fields.CountryCodeField(blank=True, null=True)),
+                ('latitude', models.FloatField(blank=True, null=True)),
+                ('longitude', models.FloatField(blank=True, null=True)),
+                ('aspect', models.CharField(choices=[('address', 'address')], max_length=64)),
+            ],
+            options={
+                'db_table': 'parties_address_statement',
+                'base_manager_name': '_angee_base',
+                'default_manager_name': 'objects',
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+            managers=[
+                ('objects', django.db.models.manager.Manager()),
+                ('_angee_base', django.db.models.manager.Manager()),
+            ],
+        ),
+        migrations.CreateModel(
+            name='HistoricalAddress',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('is_trashed', models.BooleanField(db_index=True, default=False, editable=False)),
+                ('trashed_at', models.DateTimeField(blank=True, editable=False, null=True)),
+                ('trash_reason', models.TextField(blank=True, default='', editable=False)),
+                ('label', models.CharField(blank=True, default='', max_length=64)),
+                ('po_box', models.CharField(blank=True, default='', max_length=128)),
+                ('extended', models.TextField(blank=True, default='')),
+                ('street', models.TextField(blank=True, default='')),
+                ('city', models.TextField(blank=True, default='')),
+                ('region', models.TextField(blank=True, default='')),
+                ('postal_code', models.CharField(blank=True, default='', max_length=32)),
+                ('country', angee.parties.fields.CountryCodeField(blank=True, default='')),
+                ('latitude', models.FloatField(blank=True, null=True)),
+                ('longitude', models.FloatField(blank=True, null=True)),
+                ('is_primary', models.BooleanField(default=False)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical address',
+                'verbose_name_plural': 'historical addresses',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalAddressStatement',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('label', models.CharField(blank=True, max_length=64, null=True)),
+                ('po_box', models.CharField(blank=True, max_length=128, null=True)),
+                ('extended', models.TextField(blank=True, null=True)),
+                ('street', models.TextField(blank=True, null=True)),
+                ('city', models.TextField(blank=True, null=True)),
+                ('region', models.TextField(blank=True, null=True)),
+                ('postal_code', models.CharField(blank=True, max_length=32, null=True)),
+                ('country', angee.parties.fields.CountryCodeField(blank=True, null=True)),
+                ('latitude', models.FloatField(blank=True, null=True)),
+                ('longitude', models.FloatField(blank=True, null=True)),
+                ('aspect', models.CharField(choices=[('address', 'address')], max_length=64)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical address statement',
+                'verbose_name_plural': 'historical address statements',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalOrganizationStatement',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('legal_name', models.TextField(blank=True, null=True)),
+                ('domain', models.CharField(blank=True, db_index=True, max_length=255, null=True)),
+                ('aspect', models.CharField(choices=[('legal_identity', 'legal_identity')], max_length=64)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical organization statement',
+                'verbose_name_plural': 'historical organization statements',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalPartySameAsPair',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('is_trashed', models.BooleanField(db_index=True, default=False, editable=False)),
+                ('trashed_at', models.DateTimeField(blank=True, editable=False, null=True)),
+                ('trash_reason', models.TextField(blank=True, default='', editable=False)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical party same as pair',
+                'verbose_name_plural': 'historical party same as pairs',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalPartySameAsPairStatement',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('aspect', models.CharField(choices=[('same_as', 'same_as')], max_length=64)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical party same as pair statement',
+                'verbose_name_plural': 'historical party same as pair statements',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalPersonStatement',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('name_prefix', models.TextField(blank=True, null=True)),
+                ('given_name', models.TextField(blank=True, null=True)),
+                ('additional_name', models.TextField(blank=True, null=True)),
+                ('family_name', models.TextField(blank=True, null=True)),
+                ('name_suffix', models.TextField(blank=True, null=True)),
+                ('nickname', models.TextField(blank=True, null=True)),
+                ('birthday', models.DateField(blank=True, null=True)),
+                ('anniversary', models.DateField(blank=True, null=True)),
+                ('aspect', models.CharField(choices=[('dates', 'dates'), ('name', 'name')], max_length=64)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical person statement',
+                'verbose_name_plural': 'historical person statements',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalRelationship',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('is_trashed', models.BooleanField(db_index=True, default=False, editable=False)),
+                ('trashed_at', models.DateTimeField(blank=True, editable=False, null=True)),
+                ('trash_reason', models.TextField(blank=True, default='', editable=False)),
+                ('other_name', models.TextField(blank=True, default='')),
+                ('title', models.TextField(blank=True, default='')),
+                ('started_at', models.DateField(blank=True, null=True)),
+                ('ended_at', models.DateField(blank=True, null=True)),
+                ('notes', models.TextField(blank=True, default='')),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical relationship',
+                'verbose_name_plural': 'historical relationships',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='HistoricalRelationshipStatement',
+            fields=[
+                ('id', models.BigIntegerField(auto_created=True, blank=True, db_index=True, verbose_name='ID')),
+                ('created_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('updated_at', models.DateTimeField(blank=True, db_index=True, editable=False)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('other_name', models.TextField(blank=True, null=True)),
+                ('title', models.TextField(blank=True, null=True)),
+                ('started_at', models.DateField(blank=True, null=True)),
+                ('ended_at', models.DateField(blank=True, null=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('aspect', models.CharField(choices=[('relationship', 'relationship')], max_length=64)),
+                ('history_id', models.AutoField(primary_key=True, serialize=False)),
+                ('history_date', models.DateTimeField(db_index=True)),
+                ('history_change_reason', models.TextField(null=True)),
+                ('history_type', models.CharField(choices=[('+', 'Created'), ('~', 'Changed'), ('-', 'Deleted')], max_length=1)),
+            ],
+            options={
+                'verbose_name': 'historical relationship statement',
+                'verbose_name_plural': 'historical relationship statements',
+                'ordering': ('-history_date', '-history_id'),
+                'get_latest_by': ('history_date', 'history_id'),
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+        ),
+        migrations.CreateModel(
+            name='OrganizationStatement',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('updated_at', models.DateTimeField(auto_now=True, db_index=True)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('legal_name', models.TextField(blank=True, null=True)),
+                ('domain', models.CharField(blank=True, db_index=True, max_length=255, null=True)),
+                ('aspect', models.CharField(choices=[('legal_identity', 'legal_identity')], max_length=64)),
+            ],
+            options={
+                'db_table': 'parties_organization_statement',
+                'base_manager_name': '_angee_base',
+                'default_manager_name': 'objects',
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+            managers=[
+                ('objects', django.db.models.manager.Manager()),
+                ('_angee_base', django.db.models.manager.Manager()),
+            ],
+        ),
+        migrations.CreateModel(
+            name='PartySameAsPair',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('updated_at', models.DateTimeField(auto_now=True, db_index=True)),
+                ('is_trashed', models.BooleanField(db_index=True, default=False, editable=False)),
+                ('trashed_at', models.DateTimeField(blank=True, editable=False, null=True)),
+                ('trash_reason', models.TextField(blank=True, default='', editable=False)),
+            ],
+            options={
+                'base_manager_name': '_angee_base',
+                'default_manager_name': 'objects',
+            },
+            managers=[
+                ('objects', django.db.models.manager.Manager()),
+                ('_angee_base', django.db.models.manager.Manager()),
+            ],
+        ),
+        migrations.CreateModel(
+            name='PartySameAsPairStatement',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('updated_at', models.DateTimeField(auto_now=True, db_index=True)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('aspect', models.CharField(choices=[('same_as', 'same_as')], max_length=64)),
+            ],
+            options={
+                'db_table': 'parties_partysameaspair_statement',
+                'base_manager_name': '_angee_base',
+                'default_manager_name': 'objects',
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+            managers=[
+                ('objects', django.db.models.manager.Manager()),
+                ('_angee_base', django.db.models.manager.Manager()),
+            ],
+        ),
+        migrations.CreateModel(
+            name='PersonStatement',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('updated_at', models.DateTimeField(auto_now=True, db_index=True)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('name_prefix', models.TextField(blank=True, null=True)),
+                ('given_name', models.TextField(blank=True, null=True)),
+                ('additional_name', models.TextField(blank=True, null=True)),
+                ('family_name', models.TextField(blank=True, null=True)),
+                ('name_suffix', models.TextField(blank=True, null=True)),
+                ('nickname', models.TextField(blank=True, null=True)),
+                ('birthday', models.DateField(blank=True, null=True)),
+                ('anniversary', models.DateField(blank=True, null=True)),
+                ('aspect', models.CharField(choices=[('dates', 'dates'), ('name', 'name')], max_length=64)),
+            ],
+            options={
+                'db_table': 'parties_person_statement',
+                'base_manager_name': '_angee_base',
+                'default_manager_name': 'objects',
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+            managers=[
+                ('objects', django.db.models.manager.Manager()),
+                ('_angee_base', django.db.models.manager.Manager()),
+            ],
+        ),
+        migrations.CreateModel(
+            name='RelationshipStatement',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('updated_at', models.DateTimeField(auto_now=True, db_index=True)),
+                ('asserted_by', models.TextField()),
+                ('source_kind', angee.base.fields.StateField(choices=[('person', 'Person'), ('system_of_record', 'System of record'), ('directory', 'Directory'), ('network', 'Network'), ('import', 'Import'), ('seed', 'Seed'), ('document', 'Document'), ('extraction', 'Extraction'), ('rule', 'Rule')], db_index=True, max_length=16)),
+                ('snak', angee.base.fields.StateField(choices=[('value', 'Value'), ('some_value', 'Some Value'), ('no_value', 'No Value')], db_index=True, default='value', max_length=10)),
+                ('confidence', models.FloatField(default=1.0, validators=[django.core.validators.MinValueValidator(0), django.core.validators.MaxValueValidator(1)])),
+                ('rank', angee.base.fields.StateField(choices=[('preferred', 'Preferred'), ('normal', 'Normal')], db_index=True, default='normal', max_length=9)),
+                ('status', angee.base.fields.StateField(choices=[('asserted', 'Asserted'), ('withdrawn', 'Withdrawn'), ('quarantined', 'Quarantined'), ('deprecated', 'Deprecated')], db_index=True, default='asserted', max_length=11)),
+                ('applied', models.BooleanField(default=False)),
+                ('evidence', models.JSONField(blank=True, default=list)),
+                ('basis_hash', models.CharField(blank=True, max_length=64)),
+                ('other_name', models.TextField(blank=True, null=True)),
+                ('title', models.TextField(blank=True, null=True)),
+                ('started_at', models.DateField(blank=True, null=True)),
+                ('ended_at', models.DateField(blank=True, null=True)),
+                ('notes', models.TextField(blank=True, null=True)),
+                ('aspect', models.CharField(choices=[('relationship', 'relationship')], max_length=64)),
+            ],
+            options={
+                'db_table': 'parties_relationship_statement',
+                'base_manager_name': '_angee_base',
+                'default_manager_name': 'objects',
+            },
+            bases=(simple_history.models.HistoricalChanges, models.Model),
+            managers=[
+                ('objects', django.db.models.manager.Manager()),
+                ('_angee_base', django.db.models.manager.Manager()),
+            ],
+        ),
+        migrations.RemoveConstraint(
+            model_name='partystatement',
+            name='parties_partystatement_aspect',
+        ),
+        migrations.AddField(
+            model_name='address',
+            name='is_trashed',
+            field=models.BooleanField(db_index=True, default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name='address',
+            name='trash_reason',
+            field=models.TextField(blank=True, default='', editable=False),
+        ),
+        migrations.AddField(
+            model_name='address',
+            name='trashed_at',
+            field=models.DateTimeField(blank=True, editable=False, null=True),
+        ),
+        migrations.AddField(
+            model_name='address',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, editable=False, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalorganization',
+            name='is_trashed',
+            field=models.BooleanField(db_index=True, default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name='historicalorganization',
+            name='trash_reason',
+            field=models.TextField(blank=True, default='', editable=False),
+        ),
+        migrations.AddField(
+            model_name='historicalorganization',
+            name='trashed_at',
+            field=models.DateTimeField(blank=True, editable=False, null=True),
+        ),
+        migrations.AddField(
+            model_name='historicalorganization',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, editable=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalparty',
+            name='is_trashed',
+            field=models.BooleanField(db_index=True, default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name='historicalparty',
+            name='trash_reason',
+            field=models.TextField(blank=True, default='', editable=False),
+        ),
+        migrations.AddField(
+            model_name='historicalparty',
+            name='trashed_at',
+            field=models.DateTimeField(blank=True, editable=False, null=True),
+        ),
+        migrations.AddField(
+            model_name='historicalparty',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, editable=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartystatement',
+            name='avatar',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='storage.file'),
+        ),
+        migrations.AddField(
+            model_name='historicalpartystatement',
+            name='display_name',
+            field=models.TextField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='historicalpartystatement',
+            name='notes',
+            field=models.TextField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='historicalperson',
+            name='is_trashed',
+            field=models.BooleanField(db_index=True, default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name='historicalperson',
+            name='trash_reason',
+            field=models.TextField(blank=True, default='', editable=False),
+        ),
+        migrations.AddField(
+            model_name='historicalperson',
+            name='trashed_at',
+            field=models.DateTimeField(blank=True, editable=False, null=True),
+        ),
+        migrations.AddField(
+            model_name='historicalperson',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, editable=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='party',
+            name='is_trashed',
+            field=models.BooleanField(db_index=True, default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name='party',
+            name='trash_reason',
+            field=models.TextField(blank=True, default='', editable=False),
+        ),
+        migrations.AddField(
+            model_name='party',
+            name='trashed_at',
+            field=models.DateTimeField(blank=True, editable=False, null=True),
+        ),
+        migrations.AddField(
+            model_name='party',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, editable=False, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='partystatement',
+            name='avatar',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='storage.file'),
+        ),
+        migrations.AddField(
+            model_name='partystatement',
+            name='display_name',
+            field=models.TextField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='partystatement',
+            name='notes',
+            field=models.TextField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='relationship',
+            name='is_trashed',
+            field=models.BooleanField(db_index=True, default=False, editable=False),
+        ),
+        migrations.AddField(
+            model_name='relationship',
+            name='trash_reason',
+            field=models.TextField(blank=True, default='', editable=False),
+        ),
+        migrations.AddField(
+            model_name='relationship',
+            name='trashed_at',
+            field=models.DateTimeField(blank=True, editable=False, null=True),
+        ),
+        migrations.AddField(
+            model_name='relationship',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, editable=False, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AlterField(
+            model_name='historicalpartystatement',
+            name='aspect',
+            field=models.CharField(choices=[('contact', 'contact'), ('handle', 'handle'), ('identity', 'identity')], max_length=64),
+        ),
+        migrations.AlterField(
+            model_name='partystatement',
+            name='aspect',
+            field=models.CharField(choices=[('contact', 'contact'), ('handle', 'handle'), ('identity', 'identity')], max_length=64),
+        ),
+        migrations.AddConstraint(
+            model_name='partystatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'contact'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_partystatement_key_contact'),
+        ),
+        migrations.AddConstraint(
+            model_name='partystatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'contact'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_partystatement_applied_contact'),
+        ),
+        migrations.AddConstraint(
+            model_name='partystatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'identity'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_partystatement_key_identity'),
+        ),
+        migrations.AddConstraint(
+            model_name='partystatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'identity'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_partystatement_applied_identity'),
+        ),
+        migrations.AddConstraint(
+            model_name='partystatement',
+            constraint=models.CheckConstraint(condition=models.Q(('aspect__in', ('contact', 'handle', 'identity'))), name='parties_partystatement_aspect'),
+        ),
+        migrations.AddField(
+            model_name='addressstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='addressstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='addressstatement',
+            name='subject',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.address'),
+        ),
+        migrations.AddField(
+            model_name='addressstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.addressstatement'),
+        ),
+        migrations.AddField(
+            model_name='historicaladdress',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdress',
+            name='created_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdress',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdress',
+            name='party',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='historicaladdress',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, editable=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdress',
+            name='updated_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdressstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdressstatement',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicaladdressstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='historicaladdressstatement',
+            name='subject',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.address'),
+        ),
+        migrations.AddField(
+            model_name='historicaladdressstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.addressstatement'),
+        ),
+        migrations.AddField(
+            model_name='historicalorganizationstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalorganizationstatement',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalorganizationstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='historicalorganizationstatement',
+            name='subject',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.organization'),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspair',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspair',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspair',
+            name='left',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspair',
+            name='right',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspair',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, editable=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspairstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspairstatement',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspairstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='historicalpersonstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpersonstatement',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpersonstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='historicalpersonstatement',
+            name='subject',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.person'),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='created_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='kind',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.relationshipkind'),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='other_party',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='party',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, editable=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationship',
+            name='updated_by',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationshipstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationshipstatement',
+            name='history_user',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationshipstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationshipstatement',
+            name='subject',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.relationship'),
+        ),
+        migrations.AddField(
+            model_name='organizationstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='organizationstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='organizationstatement',
+            name='subject',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.organization'),
+        ),
+        migrations.AddField(
+            model_name='organizationstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.organizationstatement'),
+        ),
+        migrations.AddField(
+            model_name='historicalorganizationstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.organizationstatement'),
+        ),
+        migrations.AddField(
+            model_name='partysameaspair',
+            name='left',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='partysameaspair',
+            name='right',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.party'),
+        ),
+        migrations.AddField(
+            model_name='partysameaspair',
+            name='trashed_by',
+            field=models.ForeignKey(blank=True, editable=False, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspairstatement',
+            name='subject',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.partysameaspair'),
+        ),
+        migrations.AddField(
+            model_name='partysameaspairstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='partysameaspairstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='partysameaspairstatement',
+            name='subject',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.partysameaspair'),
+        ),
+        migrations.AddField(
+            model_name='partysameaspairstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.partysameaspairstatement'),
+        ),
+        migrations.AddField(
+            model_name='historicalpartysameaspairstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.partysameaspairstatement'),
+        ),
+        migrations.AddField(
+            model_name='personstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='personstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='personstatement',
+            name='subject',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.person'),
+        ),
+        migrations.AddField(
+            model_name='personstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.personstatement'),
+        ),
+        migrations.AddField(
+            model_name='historicalpersonstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.personstatement'),
+        ),
+        migrations.AddField(
+            model_name='relationshipstatement',
+            name='changeset',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to=settings.ANGEE_CHANGESET_MODEL),
+        ),
+        migrations.AddField(
+            model_name='relationshipstatement',
+            name='link',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='integrate.recordlink'),
+        ),
+        migrations.AddField(
+            model_name='relationshipstatement',
+            name='subject',
+            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.relationship'),
+        ),
+        migrations.AddField(
+            model_name='relationshipstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='parties.relationshipstatement'),
+        ),
+        migrations.AddField(
+            model_name='historicalrelationshipstatement',
+            name='superseded',
+            field=models.ForeignKey(blank=True, db_constraint=False, null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='parties.relationshipstatement'),
+        ),
+        migrations.AddConstraint(
+            model_name='addressstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind', 'person')), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_addressstatement_stance'),
+        ),
+        migrations.AddConstraint(
+            model_name='addressstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'address'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_addressstatement_key_address'),
+        ),
+        migrations.AddConstraint(
+            model_name='addressstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'address'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_addressstatement_applied_address'),
+        ),
+        migrations.AddConstraint(
+            model_name='addressstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('aspect__in', ('address',))), name='parties_addressstatement_aspect'),
+        ),
+        migrations.AddConstraint(
+            model_name='organizationstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind', 'person')), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_organizationstatement_stance'),
+        ),
+        migrations.AddConstraint(
+            model_name='organizationstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'legal_identity'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_organizationstatement_key_legal_identity'),
+        ),
+        migrations.AddConstraint(
+            model_name='organizationstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'legal_identity'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_organizationstatement_applied_legal_identity'),
+        ),
+        migrations.AddConstraint(
+            model_name='organizationstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('aspect__in', ('legal_identity',))), name='parties_organizationstatement_aspect'),
+        ),
+        migrations.AddConstraint(
+            model_name='partysameaspair',
+            constraint=models.UniqueConstraint(fields=('left', 'right'), name='parties_partysameaspair_pair'),
+        ),
+        migrations.AddConstraint(
+            model_name='partysameaspair',
+            constraint=models.CheckConstraint(condition=models.Q(('left__lt', models.F('right'))), name='parties_partysameaspair_order'),
+        ),
+        migrations.AddConstraint(
+            model_name='partysameaspairstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind', 'person')), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_partysameaspairstatement_stance'),
+        ),
+        migrations.AddConstraint(
+            model_name='partysameaspairstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'same_as'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_partysameaspairstatement_key_same_as'),
+        ),
+        migrations.AddConstraint(
+            model_name='partysameaspairstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'same_as'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_partysameaspairstatement_applied_same_as'),
+        ),
+        migrations.AddConstraint(
+            model_name='partysameaspairstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('aspect__in', ('same_as',))), name='parties_partysameaspairstatement_aspect'),
+        ),
+        migrations.AddConstraint(
+            model_name='personstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind', 'person')), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_personstatement_stance'),
+        ),
+        migrations.AddConstraint(
+            model_name='personstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'dates'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_personstatement_key_dates'),
+        ),
+        migrations.AddConstraint(
+            model_name='personstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'dates'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_personstatement_applied_dates'),
+        ),
+        migrations.AddConstraint(
+            model_name='personstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'name'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_personstatement_key_name'),
+        ),
+        migrations.AddConstraint(
+            model_name='personstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'name'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_personstatement_applied_name'),
+        ),
+        migrations.AddConstraint(
+            model_name='personstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('aspect__in', ('dates', 'name'))), name='parties_personstatement_aspect'),
+        ),
+        migrations.AddConstraint(
+            model_name='relationshipstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind', 'person')), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_relationshipstatement_stance'),
+        ),
+        migrations.AddConstraint(
+            model_name='relationshipstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'relationship'), ('superseded__isnull', True)), fields=('asserted_by', 'subject', 'aspect'), name='parties_relationshipstatement_key_relationship'),
+        ),
+        migrations.AddConstraint(
+            model_name='relationshipstatement',
+            constraint=models.UniqueConstraint(condition=models.Q(('aspect', 'relationship'), ('superseded__isnull', True), ('applied', True)), fields=('subject', 'aspect'), name='parties_relationshipstatement_applied_relationship'),
+        ),
+        migrations.AddConstraint(
+            model_name='relationshipstatement',
+            constraint=models.CheckConstraint(condition=models.Q(('aspect__in', ('relationship',))), name='parties_relationshipstatement_aspect'),
+        ),
+    ]

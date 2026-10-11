@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models import Exists, OuterRef
 from django.db.models.functions import Coalesce
@@ -34,6 +34,7 @@ from rebac.resources import model_resource_type, resource_id_attr
 from angee.base.actors import instance_actor
 from angee.base.identity import PublicIdentity
 from angee.base.impl import ImplClassField
+from angee.base.merge import named_in_relationships, references
 from angee.base.mixins import (
     MergeContractMixin,
     SqidMixin,
@@ -240,8 +241,9 @@ class StatementSubjectQuerySet(TrashQuerySet, AngeeQuerySet):
     """Canonical asserted rows, retaining withdrawn subjects and their identities."""
 
     def canonical(self) -> Any:
-        statements = self.model.statements.model._base_manager.canonical().filter(subject_id=OuterRef("pk"))
-        return self.untrashed().filter(Exists(statements))
+        statements = self.model.statements.model._base_manager.filter(subject_id=OuterRef("pk"))
+        remaining = statements.exclude(status=self.model.statements.model.StatementStatus.WITHDRAWN)
+        return self.untrashed().filter(~Exists(statements) | Exists(remaining))
 
 
 class StatementSubjectManager(AngeeManager.from_queryset(StatementSubjectQuerySet)):  # type: ignore[misc]
@@ -265,6 +267,13 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
 
     _angee_base = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
+    def revert_removal(self, *, using: str, reason: str = "") -> None:
+        """Remove a reverted creation only when no retained evidence points at it."""
+
+        if named_in_relationships(self) or any(reference.retains(self) for reference in references(type(self))):
+            raise ValidationError(f"{self._meta.label} {self.pk}: retained rows prevent removal without a trash owner.")
+        self.delete(using=using)
 
     extends: str | None = None
     """Optional ``app_label.ModelName`` target this source model extends."""

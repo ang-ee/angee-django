@@ -68,14 +68,15 @@ class ParsedConnection:
 
 
 def ingest_connections(
-    parsed_connections: Iterable[ParsedConnection], *, created_by_id: Any, asserted_by: Any
+    parsed_connections: Iterable[tuple[ParsedConnection, Any]], *, created_by_id: Any, asserted_by: Any
 ) -> list[Any]:
     """Idempotently land parsed connections and return their Person rows.
 
     The batch entry point: the source user, its anchor Party, and each required
     ``RelationshipKind`` resolve once for the whole run — a friends export is
-    thousands of records and must not repeat loop-invariant lookups. Each
-    record still lands in its own transaction, so one bad record fails alone.
+    thousands of records and must not repeat loop-invariant lookups.
+    Each item pairs the parsed value with its observed RecordLink. Records land
+    in separate transactions, so one bad record fails alone.
     """
 
     if StatementSourceMixin.kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
@@ -90,30 +91,33 @@ def ingest_connections(
         return [
             _ingest_one_connection(
                 parsed,
+                link=link,
                 owner_party=owner_party,
                 kind_model=kind_model,
                 kinds=kinds,
                 created_by_id=created_by_id,
                 asserted_by=asserted_by,
             )
-            for parsed in parsed_connections
+            for parsed, link in parsed_connections
         ]
 
 
 def ingest_connection(
     parsed: ParsedConnection,
     *,
+    link: Any,
     created_by_id: Any,
     asserted_by: Any,
 ) -> Any:
     """Idempotently land one parsed connection and return its Person."""
 
-    return ingest_connections([parsed], created_by_id=created_by_id, asserted_by=asserted_by)[0]
+    return ingest_connections([(parsed, link)], created_by_id=created_by_id, asserted_by=asserted_by)[0]
 
 
 def _ingest_one_connection(
     parsed: ParsedConnection,
     *,
+    link: Any,
     owner_party: Any,
     kind_model: Any,
     kinds: dict[str, Any],
@@ -132,6 +136,8 @@ def _ingest_one_connection(
     person_model = apps.get_model("parties", "Person")
     parties = apps.get_model("parties", "Party").objects
     relationship_model = apps.get_model("parties", "Relationship")
+    if to_subject_ref(link.stream.integration) != to_subject_ref(asserted_by):
+        raise ValidationError("The connection link must belong to its asserting integration.")
     with transaction.atomic():
         handle = handle_model.objects.upsert(
             platform=parsed.handle.platform,
@@ -147,6 +153,8 @@ def _ingest_one_connection(
             person_model=person_model,
             created_by_id=created_by_id,
         )
+        parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+        apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
         parties.assert_handle(
             person,
             handle,
@@ -190,7 +198,6 @@ def _ingest_one_connection(
             asserted_by=asserted_by,
             evidence=handle,
         )
-        parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
         parent.statements.set(
             aspect="identity",
             values={"display_name": parsed.handle.display_name or parsed.handle.value},
@@ -255,7 +262,6 @@ def _land_acquaintance(
         kind=kind,
         defaults={"created_by_id": created_by_id},
     )
-    apps.get_model("parties", "Party").objects._admit_statement_source(to_subject_ref(asserted_by), (edge,))
     edge.statements.set(
         aspect="relationship",
         asserted_by=asserted_by,
@@ -295,7 +301,6 @@ def _land_employment(
         kind=kind,
         defaults={"created_by_id": created_by_id},
     )
-    apps.get_model("parties", "Party").objects._admit_statement_source(to_subject_ref(asserted_by), (edge,))
     edge.statements.set(
         aspect="relationship",
         asserted_by=asserted_by,

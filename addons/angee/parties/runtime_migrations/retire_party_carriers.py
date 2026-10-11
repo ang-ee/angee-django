@@ -26,8 +26,17 @@ def forwards(apps, schema_editor):
             rows = apps.get_model("parties", name)._base_manager.using(db).order_by()
             history = apps.get_model("parties", "Historical" + name + "Statement")._base_manager.using(db).order_by()
             for row in rows.order_by("pk").iterator():
+                party = row if name == "Party" else apps.get_model("parties", "Party")._base_manager.using(db).get(
+                    pk=row.party_id if name in ("Address", "Relationship") else row.pk,
+                )
+                directory = row.source == "carddav" if name == "Relationship" else bool(party.folder_id and party.source_uid)
+                actor = apps.get_model(settings.AUTH_USER_MODEL)._base_manager.using(db).order_by().filter(
+                    pk=row.updated_by_id or row.created_by_id, kind="person",
+                ).exists()
                 for aspect in aspects:
-                    if not history.filter(subject_id=row.pk, aspect=aspect, history_change_reason="fold.party_aspects").exists():
+                    if (directory or actor) and not history.filter(
+                        subject_id=row.pk, aspect=aspect, history_change_reason="fold.party_aspects",
+                    ).exists():
                         raise ValueError(f"{name} {row.pk}: {aspect} has no retained fold snapshot")
                 if name != "Party":
                     continue
