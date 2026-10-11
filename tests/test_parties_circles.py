@@ -490,6 +490,52 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
 
 
 @pytest.mark.django_db(transaction=True)
+def test_moving_links_to_another_handle_folds_each_partys_decisions_and_evidence(composed_tables: None) -> None:
+    """A party on both handles keeps one link with both decisions and evidence; a lone link moves as it is."""
+
+    del composed_tables
+    first, second, third = ({"model": "messaging.Message", "id": f"msg_{index}"} for index in range(3))
+    with system_context(reason="test move links"):
+        owner = _user("move-links")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324870@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421935", created_by=owner)
+        confirmed, dismissed, stronger = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Bob", "Robert", "Rob")
+        )
+        for party, handle, confidence, is_confirmed, is_dismissed, metadata in (
+            (confirmed, alias, 1.0, True, False, {"claim": "alias", "seen": 1, "evidence_refs": [first, third]}),
+            (confirmed, phone, 0.6, False, True, {"claim": "phone", "evidence_refs": [second, first]}),
+            (dismissed, alias, 0.6, False, True, {}),
+            (stronger, alias, 0.3, False, True, {}),
+            (stronger, phone, 0.9, False, False, {}),
+        ):
+            PartyHandle._base_manager.create(
+                party=party, handle=handle, confidence=confidence, source=LinkSource.IMPORT,
+                is_confirmed=is_confirmed, is_dismissed=is_dismissed, metadata=metadata, created_by=owner,
+            )
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        links = {
+            party_id: (confidence, is_confirmed, is_dismissed, metadata)
+            for party_id, confidence, is_confirmed, is_dismissed, metadata in PartyHandle._base_manager.filter(
+                handle=phone
+            ).values_list("party_id", "confidence", "is_confirmed", "is_dismissed", "metadata")
+        }
+        phone.refresh_from_db()
+        confirmed.refresh_from_db()
+        assert not PartyHandle._base_manager.filter(handle=alias).exists()
+
+    assert links == {
+        confirmed.pk: (1.0, True, False, {"claim": "phone", "seen": 1, "evidence_refs": [second, first, third]}),
+        dismissed.pk: (0.6, False, True, {}),
+        stronger.pk: (0.9, False, True, {}),
+    }
+    assert (phone.party_id, phone.party_link_confirmed) == (confirmed.pk, True)
+    assert confirmed.handle_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 

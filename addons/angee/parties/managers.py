@@ -626,6 +626,53 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
         return handles, parties
 
+    def move_links(self, from_handle: Any, to_handle: Any) -> None:
+        """Move ``from_handle``'s links onto ``to_handle``, keeping every human decision and its evidence.
+
+        For a handle that turned out to be another's spelling (a resolved alias). A
+        party not yet linked to ``to_handle`` takes its link as it is. A party
+        linked to both keeps one link folding the two: confirmed if either was,
+        dismissed if either was and it is not confirmed, the higher confidence, and
+        both links' metadata, with the kept link's keys winning except
+        ``evidence_refs``, which joins both lists in order without repeats. Runs
+        under the identity lock order, then re-resolves ``to_handle``, which
+        recounts the parties it gains or loses; ``from_handle`` is left unlinked.
+        """
+
+        rows = self.model._base_manager
+        with transaction.atomic():
+            self.lock_identity_rows(
+                party_ids=rows.filter(handle_id=from_handle.pk).values_list("party_id", flat=True),
+                handle_ids=(from_handle.pk, to_handle.pk),
+            )
+            for row in rows.filter(handle_id=from_handle.pk).order_by("pk"):
+                kept = rows.filter(handle_id=to_handle.pk, party_id=row.party_id).first()
+                if kept is None:
+                    row.handle_id = to_handle.pk
+                    row.save(update_fields=["handle", "updated_at"])
+                    continue
+                confirmed = kept.is_confirmed or row.is_confirmed
+                metadata = {**(row.metadata or {}), **(kept.metadata or {})}
+                refs = list((kept.metadata or {}).get("evidence_refs", ()))
+                for ref in (row.metadata or {}).get("evidence_refs", ()):
+                    if ref not in refs:
+                        refs.append(ref)
+                if refs:
+                    metadata["evidence_refs"] = refs
+                folded = {
+                    "is_confirmed": confirmed,
+                    "is_dismissed": not confirmed and (kept.is_dismissed or row.is_dismissed),
+                    "confidence": max(kept.confidence, row.confidence),
+                    "metadata": metadata,
+                }
+                dirty = [name for name, value in folded.items() if getattr(kept, name) != value]
+                if dirty:
+                    for name in dirty:
+                        setattr(kept, name, folded[name])
+                    kept.save(update_fields=[*dirty, "updated_at"])
+                row.delete()
+            self.resolve(to_handle)
+
     def _transition(self, link: Any, *, action: str, actor: Any) -> None:
         """Apply a confirmation transition under the canonical identity lock set."""
 
