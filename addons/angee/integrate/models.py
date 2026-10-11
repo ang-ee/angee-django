@@ -3401,7 +3401,7 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
     or failed write; a null outbox state means no write is pending.
     """
 
-    merge_policy = MergePolicy.BLOCK
+    merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "rlk_"
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")

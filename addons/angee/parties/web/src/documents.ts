@@ -39,9 +39,15 @@ export const PARTY_MERGE_INVALIDATES = [
   "parties.Person",
   "parties.Organization",
   "parties.Handle",
+  "parties.PartyStatement",
+  "parties.PersonStatement",
+  "parties.OrganizationStatement",
+  "parties.Address",
+  "parties.AddressStatement",
+  "parties.RelationshipStatement",
   "parties.CircleMember",
   "parties.Relationship",
-  "parties.MergeVeto",
+  "parties.PartySameAsPairStatement",
 ] as const;
 
 export const CIRCLE_MEMBER_INVALIDATES = [
@@ -114,7 +120,7 @@ export const PartiesOverview = graphql(`
         count
       }
     }
-    duplicate_party_candidates(limit: $duplicateLimit) {
+    same_as_pairs(limit: $duplicateLimit) {
       left {
         id
       }
@@ -190,10 +196,6 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
-      folder {
-        id
-        name
-      }
     }
     right_person: people_by_pk(id: $right) {
       id
@@ -204,17 +206,13 @@ export const PartyMergeComparison = graphql(`
       name_suffix
       nickname
       birthday
-      folder {
-        id
-        name
-      }
     }
   }
 `);
 
-export const DuplicatePartyCandidates = graphql(`
-  query DuplicatePartyCandidates($limit: Int = 50) {
-    duplicate_party_candidates(limit: $limit) {
+export const SameAsPairs = graphql(`
+  query SameAsPairs($limit: Int = 50) {
+    same_as_pairs(limit: $limit) {
       normalized_value
       left {
         id
@@ -251,9 +249,9 @@ export const MergeParties = graphql(`
   }
 `);
 
-export const VetoMerge = graphql(`
-  mutation VetoMerge($aId: ID!, $bId: ID!) {
-    veto_merge(a_id: $aId, b_id: $bId) {
+export const DismissSameAs = graphql(`
+  mutation DismissSameAs($aId: ID!, $bId: ID!) {
+    dismiss_same_as(a_id: $aId, b_id: $bId) {
       id
     }
   }

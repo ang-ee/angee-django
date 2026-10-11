@@ -20,12 +20,12 @@ export function OverviewPage(): React.ReactElement {
       "parties.Organization",
       "parties.Handle",
       "parties.PartyStatement",
-      "parties.MergeVeto",
+      "parties.PartySameAsPairStatement",
     ],
   });
   const contributions = useContainer("parties.overview#items");
   const data = overview.data;
-  const duplicateCount = data?.duplicate_party_candidates.length;
+  const duplicateCount = data?.same_as_pairs.length;
 
   return (
     <DashboardView className="p-1">

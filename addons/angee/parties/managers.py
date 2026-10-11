@@ -3,7 +3,7 @@
 A directory backend parses a source into neutral ``ParsedContact`` rows; these
 managers turn one into a ``Party`` (a ``Person``) and its ``Handle`` /
 ``PartyStatement`` / ``Address`` rows. A contact is keyed by its source UID within
-its folder (the idempotent ``(folder, source_uid)`` upsert), handles dedupe on
+its observed RecordLink identity, handles dedupe on
 ``(platform, value)``, and ``handle_count`` plus the resolved ``Handle.party`` are
 maintained here in the same transaction — so every directory source shares one
 write path (the map lives on the models, not in each backend) and a re-sync
@@ -17,7 +17,7 @@ import mimetypes
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from itertools import chain, combinations
 from typing import Any, NamedTuple, Self
@@ -48,10 +48,10 @@ from rebac import (
 from rebac.actors import is_sudo, to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import public_id_for
+from angee.base.identity import EvidenceReference, public_id_for
 from angee.base.impl import resolve_hooks
 from angee.base.managers import StatementManager
-from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind
+from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
 from angee.base.refs import generic_pointer_model
@@ -59,7 +59,6 @@ from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.parties.mixins import LinkSource
 from angee.storage.models import UploadState
 
 # An undecided link below this confidence is a suggestion awaiting review.
@@ -430,11 +429,9 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
     def _refresh(handle: Any, fields: dict[str, Any]) -> None:
         """Apply the non-blank ``fields`` that differ; one save, only when dirty.
 
-        ``metadata`` merges key-wise instead of replacing: several producers
-        stamp independent evidence on one handle (a message importer's identity
-        confidence, the connections owner's provenance), and a whole-dict write
-        from one would silently erase the others' — the same merge rule
-        :meth:`PartyManager.assert_handle` applies to link metadata.
+        Adapter-owned metadata merges key-wise so refreshing one identifier does
+        not erase another adapter's retained identifiers. Assertion provenance
+        belongs to statements, independently of this transport metadata.
         """
 
         merged = fields.get("metadata")
@@ -520,7 +517,15 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         with transaction.atomic(), system_context(reason="parties.handle.resolve"):
             handles, parties = owner.lock_identity_rows(party_ids=(), handle_ids=(handle_id,))
             handle = handles[handle_id]
-            candidates = list(owner.handle_statements().canonical().filter(handle=handle).select_related("subject"))
+            candidates = list(
+                owner.handle_statements()
+                .canonical()
+                .filter(
+                    handle=handle,
+                    subject__is_trashed=False,
+                )
+                .select_related("subject")
+            )
             ordered = sorted(
                 candidates,
                 key=lambda row: (
@@ -677,7 +682,7 @@ class PartyStatementManager(StatementManager.from_queryset(PartyStatementQuerySe
 
 
 @dataclass(frozen=True, slots=True)
-class DuplicatePartyCandidate:
+class SameAsPair:
     """One deterministic pair with its normalized identity and readable evidence rows."""
 
     left: Any
@@ -686,106 +691,18 @@ class DuplicatePartyCandidate:
     handles: tuple[Any, ...]
 
 
-class MergeVetoManager(AngeeManager):
-    """Own canonical keep-separate pair lookup and creation."""
-
-    def forbids(self, a: Any, b: Any) -> bool:
-        """Return whether the canonical pair ``a``/``b`` has a durable veto."""
-
-        party_a_id, party_b_id = self._ordered_ids(a, b)
-        with system_context(reason="parties.merge_veto.forbids"):
-            return self.model._base_manager.filter(
-                party_a_id=party_a_id,
-                party_b_id=party_b_id,
-            ).exists()
-
-    def forbidden_pairs(self, party_ids: set[Any]) -> set[tuple[Any, Any]]:
-        """Return vetoed canonical pairs whose two endpoints are in ``party_ids``."""
-
-        if not party_ids:
-            return set()
-        with system_context(reason="parties.merge_veto.forbidden_pairs"):
-            rows = self.model._base_manager.filter(
-                party_a_id__in=party_ids,
-                party_b_id__in=party_ids,
-            ).values_list("party_a_id", "party_b_id")
-            return set(rows)
-
-    def veto(self, a: Any, b: Any, *, actor: Any = None) -> Any:
-        """Persist the canonical keep-separate fact after locking both writable parties.
-
-        The pair lock is the same lock, in the same order, that :meth:`PartyManager.merge`
-        takes. A simultaneous merge and veto therefore serialize around the human
-        identity decision instead of both committing after independent checks.
-        """
-
-        party_a_id, party_b_id = self._ordered_ids(a, b)
-        actor = actor or current_actor()
-        party_model = apps.get_model("parties", "Party")
-        with transaction.atomic(), actor_context(actor):
-            locked = {
-                party.pk: party
-                for party in party_model.objects.lock_if_supported()
-                .filter(pk__in=(party_a_id, party_b_id))
-                .order_by("pk")
-            }
-            if party_a_id not in locked or party_b_id not in locked:
-                raise ValidationError("One of the parties no longer exists.")
-            party_a = locked[party_a_id].with_actor(actor)
-            party_b = locked[party_b_id].with_actor(actor)
-            if party_a.merged_into_id is not None or party_b.merged_into_id is not None:
-                raise ValidationError("Only canonical parties can be kept separate.")
-            if not party_a.has_access("write") or not party_b.has_access("write"):
-                raise PermissionDenied("write access to both parties is required")
-
-            with system_context(reason="parties.merge_veto.lookup"):
-                existing = self.model._base_manager.filter(
-                    party_a_id=party_a_id,
-                    party_b_id=party_b_id,
-                ).first()
-            if existing is not None:
-                return existing.with_actor(actor) if actor is not None else existing
-
-            verified_actor = self.check_create()
-            veto = self.model(party_a_id=party_a_id, party_b_id=party_b_id)
-            veto.full_clean(validate_unique=False, validate_constraints=False)
-            veto.sudo(reason="parties.merge_veto.create")
-            try:
-                with transaction.atomic():
-                    veto.save()
-            except IntegrityError:
-                # Retain idempotence on databases without row-level pair locks.
-                with system_context(reason="parties.merge_veto.concurrent_lookup"):
-                    veto = self.model._base_manager.get(
-                        party_a_id=party_a_id,
-                        party_b_id=party_b_id,
-                    )
-            return veto.with_actor(verified_actor)
-
-    @staticmethod
-    def _ordered_ids(a: Any, b: Any) -> tuple[Any, Any]:
-        """Return saved, distinct party primary keys in canonical order."""
-
-        if a.pk is None or b.pk is None:
-            raise ValidationError("Both parties must be saved.")
-        if a.pk == b.pk:
-            raise ValidationError("A party cannot be kept separate from itself.")
-        party_a_id, party_b_id = sorted((a.pk, b.pk))
-        return party_a_id, party_b_id
-
-
-class PartyQuerySet(AngeeQuerySet):
+class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
 
     def canonical(self) -> Self:
         """Return only the canonical (unmerged) parties.
 
-        Writes flatten every merge chain to its terminal (``Party.merge_into``), so a party
+        The merge owner flattens redirects, so a party
         is canonical exactly when it points nowhere — one indexed filter that stays
         correct even against a longer chain, since a terminal always points nowhere.
         """
 
-        return self.filter(merged_into__isnull=True)
+        return self.untrashed().filter(merged_into__isnull=True)
 
     def named(self, name: str) -> Self:
         """Return canonical candidates with an exact display or legal name.
@@ -915,7 +832,7 @@ class PartyQuerySet(AngeeQuerySet):
 
         actor = self.actor() or current_actor()
         organizations = apps.get_model("parties", "Organization").objects.all()
-        relationships = apps.get_model("parties", "Relationship").objects.all()
+        relationships = apps.get_model("parties", "Relationship").objects.canonical()
         if actor is not None:
             organizations = organizations.with_actor(actor)
             relationships = relationships.with_actor(actor)
@@ -927,94 +844,39 @@ class PartyQuerySet(AngeeQuerySet):
             ended_at__isnull=True,
         )
 
-    def duplicate_candidates(self, *, limit: int = 50) -> list[DuplicatePartyCandidate]:
-        """Return bounded actor-visible party pairs sharing a normalized handle.
+    def same_as_pairs(self, *, limit: int = 50) -> list[SameAsPair]:
+        """Read resolved value pairs through both endpoints and each evidence row."""
 
-        Candidate order is deterministic by normalized value then primary-key pair.
-        A pair appears once even if it shares several handles, and any durable
-        :class:`~angee.parties.models.MergeVeto` removes it from the queue.
-        """
-
-        bounded = max(0, min(int(limit), 101))
-        if bounded == 0:
+        if limit <= 0:
             return []
-
-        handle_model = apps.get_model("parties", "Handle")
-        merge_veto_model = apps.get_model("parties", "MergeVeto")
-        visible_party_ids = self.canonical().scoped_for_aggregate().values("pk")
-        handles = handle_model.objects.all()
         actor = self.actor() or current_actor()
-        if actor is not None:
-            handles = handles.with_actor(actor)
-        handles = (
-            handles.scoped_for_aggregate()
-            .filter(
-                party_id__in=Subquery(visible_party_ids),
+        visible = self.canonical().scoped_for_aggregate().values("pk")
+        pairs = (
+            self.model.same_as.model._base_manager.filter(
+                left_id__in=Subquery(visible),
+                right_id__in=Subquery(visible),
             )
-            .exclude(normalized_value="")
+            .untrashed()
+            .order_by("left_id", "right_id")
         )
-        shared_handles = list(
-            handles.values("platform", "normalized_value")
-            .annotate(party_count=Count("party_id", distinct=True))
-            .filter(party_count__gt=1)
-            .order_by("normalized_value", "platform")
-            .values_list("platform", "normalized_value")[:bounded]
-        )
-        if not shared_handles:
-            return []
-
-        shared_filter = Q()
-        for platform, normalized_value in shared_handles:
-            shared_filter |= Q(platform=platform, normalized_value=normalized_value)
-
-        parties_by_handle: dict[tuple[str, str], dict[Any, list[Any]]] = {}
-        for handle in (
-            handles.filter(shared_filter)
-            .only("platform", "normalized_value", "party_id")
-            .order_by(
-                "normalized_value",
-                "platform",
-                "party_id",
-                "pk",
+        result = []
+        for pair in pairs:
+            statement = pair.statements.canonical().first()
+            if statement is None:
+                continue
+            refs = [EvidenceReference.model_validate(value) for value in statement.evidence]
+            handles = []
+            for ref in refs:
+                if ref.model.lower() == "parties.handle":
+                    handle = apps.get_model("parties", "Handle").objects.with_actor(actor).from_public_id(ref.id)
+                    if handle is not None:
+                        handles.append(handle)
+            result.append(
+                SameAsPair(pair.left, pair.right, handles[0].normalized_value if handles else "", tuple(handles))
             )
-        ):
-            parties_by_handle.setdefault((handle.platform, handle.normalized_value), {}).setdefault(
-                handle.party_id,
-                [],
-            ).append(handle)
-
-        candidate_party_ids = {party_id for party_ids in parties_by_handle.values() for party_id in party_ids}
-        forbidden = merge_veto_model.objects.forbidden_pairs(candidate_party_ids)
-        pairs: list[tuple[str, Any, Any, tuple[Any, ...]]] = []
-        seen: set[tuple[Any, Any]] = set()
-        for (_platform, normalized_value), party_ids in parties_by_handle.items():
-            for party_a_id, party_b_id in combinations(party_ids, 2):
-                pair = (party_a_id, party_b_id)
-                if pair in seen or pair in forbidden:
-                    continue
-                seen.add(pair)
-                pairs.append((normalized_value, *pair, (*party_ids[party_a_id], *party_ids[party_b_id])))
-                if len(pairs) >= bounded:
-                    break
-            if len(pairs) >= bounded:
+            if len(result) >= max(0, min(int(limit), 101)):
                 break
-
-        paired_party_ids = {
-            party_id
-            for _normalized_value, party_a_id, party_b_id, _handles in pairs
-            for party_id in (party_a_id, party_b_id)
-        }
-        parties = {party.pk: party for party in self.canonical().filter(pk__in=paired_party_ids)}
-        return [
-            DuplicatePartyCandidate(
-                left=parties[party_a_id],
-                right=parties[party_b_id],
-                normalized_value=normalized_value,
-                handles=evidence,
-            )
-            for normalized_value, party_a_id, party_b_id, evidence in pairs
-            if party_a_id in parties and party_b_id in parties
-        ]
+        return result
 
 
 class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]
@@ -1049,7 +911,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         source = to_subject_ref(asserted_by)
         subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
         origins = list(evidence)
-        self._admit_handle_source(subject, handle, source, origins)
+        self._admit_statement_source(source, (subject, handle, *origins))
         refs = [
             {
                 "model": generic_pointer_model(type(row))._meta.label,
@@ -1073,13 +935,13 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
 
     @staticmethod
-    def _admit_handle_source(party: Any, handle: Any, source: Any, origins: Iterable[Any] = ()) -> None:
+    def _admit_statement_source(source: Any, rows: Iterable[Any]) -> None:
         """Trusted producers grant their subject, member and owned supporting facts."""
         if is_sudo() and source.subject_type != "auth/user":
             write_relationships(
                 [
                     RelationshipTuple(resource=to_object_ref(row), relation="statement_source", subject=source)
-                    for row in (party, handle, *origins)
+                    for row in rows
                 ]
             )
 
@@ -1425,6 +1287,46 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 )
         return None
 
+    def reconcile_same_as(self) -> int:
+        """Assert the normalized-handle matcher once per symmetric pair."""
+
+        source = self.rule_source("same_as")
+        handles = (
+            apps.get_model("parties", "Handle")
+            ._base_manager.exclude(normalized_value="")
+            .filter(
+                party__merged_into__isnull=True,
+                party__is_trashed=False,
+                party__isnull=False,
+            )
+            .order_by("platform", "normalized_value", "party_id", "pk")
+        )
+        groups: defaultdict[tuple[str, str], dict[Any, list[Any]]] = defaultdict(dict)
+        for handle in handles:
+            groups[(handle.platform, handle.normalized_value)].setdefault(handle.party_id, []).append(handle)
+        evidence_by_pair: defaultdict[tuple[Any, Any], dict[Any, Any]] = defaultdict(dict)
+        for parties in groups.values():
+            for left_id, right_id in combinations(sorted(parties), 2):
+                for handle in (*parties[left_id], *parties[right_id]):
+                    evidence_by_pair[left_id, right_id][handle.pk] = handle
+        supported = []
+        for (left_id, right_id), origins in sorted(evidence_by_pair.items()):
+            left, right = (self.model._base_manager.get(pk=pk) for pk in (left_id, right_id))
+            evidence = [origins[pk] for pk in sorted(origins)]
+            source_ref = to_subject_ref(source)
+            self._admit_statement_source(source_ref, (left, *evidence))
+            self._admit_statement_source(source_ref, (right, *evidence))
+            pair = self.model.same_as.for_pair(left.with_actor(source_ref), right)
+            pair.statements.set(
+                aspect="same_as",
+                values={},
+                asserted_by=source,
+                evidence=[{"model": row._meta.label, "id": row.public_id} for row in evidence],
+            )
+            supported.append({"subject": pair, "aspect": "same_as"})
+        self.model.same_as.model.statements.withdraw_unsupported(source, supported)
+        return len(supported)
+
     def resolve_handle_statements(self) -> None:
         """Reapply retained statements, including rows folded before cutover."""
         party_model = apps.get_model("parties", "Party")
@@ -1682,7 +1584,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         reason = "parties.party.identity_basis"
         address_owner = apps.get_model("parties", "Address").objects
         link_owner = apps.get_model("parties", "Party").objects
-        addresses = address_owner.system_context(reason=reason).filter(party=party)
+        addresses = address_owner.system_context(reason=reason).canonical().filter(party=party)
         links = link_owner.handle_statements().filter(subject=party)
         if lock:
             _handles, locked_parties = link_owner.lock_identity_rows(
@@ -1828,7 +1730,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             if left is None or right is None:
                 raise ValidationError({"pair": "Duplicate pair references a missing party."})
             if action == "keep_separate":
-                apps.get_model("parties", "MergeVeto").objects.veto(left, right, actor=actor)
+                self.model.same_as.for_pair(left.with_actor(actor), right).with_actor(actor).dismiss(aspect="same_as")
                 return "vetoed"
             locked = {
                 row.pk: row.with_actor(actor)
@@ -1838,6 +1740,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 (locked[left.pk], locked[right.pk]) if survivor == "left" else (locked[right.pk], locked[left.pk])
             )
             already_merged = source.merged_into_id == into.pk
+            if already_merged and into.merged_into_id is None:
+                return "already_merged"
             self.merge(into=into, source=source, actor=actor)
             return "already_merged" if already_merged else "merged"
 
@@ -1928,33 +1832,11 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
 
     def merge(self, *, into: Any, source: Any, field_overrides: Any = None, actor: Any = None) -> Any:
-        """Merge ``source`` into ``into`` with vetted scalar overrides in one transaction."""
+        """Dispatch selected values to the shared survivor-owned merge action."""
 
-        if into.pk is None or source.pk is None:
-            raise ValidationError("Both parties must be saved before merging.")
-        if into.pk == source.pk:
-            raise ValidationError("A party cannot be merged into itself.")
-
-        actor = actor or current_actor()
-        merge_veto_model = apps.get_model("parties", "MergeVeto")
-        with transaction.atomic(), actor_context(actor):
-            locked = {
-                party.pk: party for party in self.lock_if_supported().filter(pk__in=(into.pk, source.pk)).order_by("pk")
-            }
-            if into.pk not in locked or source.pk not in locked:
-                raise ValidationError("One of the parties no longer exists.")
-            survivor = locked[into.pk].with_actor(actor)
-            merged = locked[source.pk].with_actor(actor)
-            if not survivor.has_access("write") or not merged.has_access("write"):
-                raise PermissionDenied("write access to both parties is required")
-            if merged.merged_into_id == survivor.pk and survivor.merged_into_id is None:
-                return survivor
-            if survivor.merged_into_id is not None or merged.merged_into_id is not None:
-                raise ValidationError("Only canonical parties can be merged.")
-            if merge_veto_model.objects.forbids(survivor, merged):
-                raise ValidationError("These parties have been marked to stay separate.")
-            survivor.apply_merge_field_overrides(merged, field_overrides)
-            return merged.merge_into(survivor)
+        return into.with_actor(actor or current_actor()).merge(
+            records=[source.public_id], field_overrides=field_overrides
+        )
 
     def identity_for_user_id(self, user_id: Any) -> Any | None:
         """Return the existing Person party linked to ``user_id`` without creating one."""
@@ -2030,7 +1912,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             .objects.filter(
                 party_id=person.pk,
                 kind__slug="employee",
-                source=LinkSource.CARDDAV,
                 other_party__isnull=True,
             )
             .order_by("pk")
@@ -2070,7 +1951,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 (row["handle__value"], row["handle__label"], row["handle__is_preferred"])
             )
         addresses: dict[Any, list[ParsedAddress]] = defaultdict(list)
-        for address in apps.get_model("parties", "Address").objects.filter(party_id__in=ids):
+        for address in apps.get_model("parties", "Address").objects.canonical().filter(party_id__in=ids):
             addresses[address.party_id].append(
                 ParsedAddress(
                     label=address.label,
@@ -2086,9 +1967,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         employment = {
             edge.party_id: edge
             for edge in (
-                apps.get_model("parties", "Relationship").objects.filter(
-                    party_id__in=ids, kind__slug="employee", source=LinkSource.CARDDAV, other_party__isnull=True
-                )
+                apps.get_model("parties", "Relationship")
+                .objects.canonical()
+                .filter(party_id__in=ids, kind__slug="employee", other_party__isnull=True)
             )
         }
         photos = {
@@ -2103,9 +1984,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         for person in people:
             edge = employment.get(person.pk)
             result[person.pk] = ParsedContact(
-                uid=person.source_uid,
-                etag=person.source_etag,
-                raw_vcard=person.raw_vcard,
                 # ingest_contact stores the placeholder for a nameless card; the card stays nameless.
                 display_name="" if person.display_name == person.PLACEHOLDER_NAME else person.display_name,
                 name_prefix=person.name_prefix,
@@ -2182,178 +2060,135 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         *,
         folder: Any,
         created_by_id: Any,
+        link: Any,
         target: Any = None,
     ) -> Any:
-        """Upsert a person and its handles/addresses from one parsed contact.
+        """Assert one link's contact facts; preserve other sources and person preferences.
 
-        Keyed on ``(folder, source_uid)`` so a re-sync updates the same row instead
-        of forking a duplicate, and the whole contact is written in one transaction
-        so a partial card is never half-applied. Emails/phones still upsert as shared
-        ``Handle`` rows and link to the person, but the person's identity is the
-        source UID, not handle overlap. A contact with no ``source_uid`` has no stable
-        key and is skipped — without it the ``(folder, "")`` upsert would collapse
-        every keyless card onto one row. ``target`` binds a previously local
-        Person after its first push; only a blank or matching source UID may
-        adopt the observed identity, and it must remain in the same folder.
+        The link owns stable source identity, transport version and lossless bytes.
+        Addresses are matched by content, including repeated equal addresses; removed
+        members withdraw only this source's statements instead of deleting rows.
         """
-
         if not parsed.uid:
             return None
-        if folder.directory_id is None:
-            raise ValidationError("Contact ingestion requires an identified directory source.")
+        if folder.directory_id is None or link.stream.integration_id != folder.directory_id:
+            raise ValidationError("Contact ingestion requires its directory's observed link.")
+        if link.stream.partition != folder.source_href or link.external_key != parsed.uid:
+            raise ValidationError("The contact does not match the observed link identity.")
         parsed = self.prepare_contact(parsed, created_by_id=created_by_id)
-
-        person_model = apps.get_model("parties", "Person")
-        handle_model = apps.get_model("parties", "Handle")
-        address_model = apps.get_model("parties", "Address")
-        relationship_model = apps.get_model("parties", "Relationship")
-        relationship_kind_model = apps.get_model("parties", "RelationshipKind")
-
+        people = apps.get_model("parties", "Person").objects
+        handles = apps.get_model("parties", "Handle").objects
+        addresses = apps.get_model("parties", "Address")
+        relationships = apps.get_model("parties", "Relationship")
+        source = folder.directory.integration_ptr
+        source_ref = to_subject_ref(source)
         with transaction.atomic():
+            target = target or link.target
             if target is not None:
                 self.lock_contact(target, parsed=parsed)
-            handles = []
-            for platform, values in (
-                (handle_model.Platform.EMAIL, parsed.emails),
-                (handle_model.Platform.PHONE, parsed.phones),
+                target = people.lock_if_supported().get(pk=target.pk)
+            person = target or people.create(
+                display_name=(parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME),
+                created_by_id=created_by_id,
+            )
+            parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+            self._admit_statement_source(source_ref, (parent, person))
+            for subject, aspect, values in (
+                (
+                    parent,
+                    "identity",
+                    {"display_name": (parsed.display_name or parsed.family_name or people.model.PLACEHOLDER_NAME)},
+                ),
+                (
+                    parent,
+                    "contact",
+                    {"notes": parsed.notes, "avatar": self.resolve_contact_photo(parsed.photo, lock=True)},
+                ),
+                (
+                    person,
+                    "name",
+                    {name: getattr(parsed, name) for name in person.statements.model.statement_aspects["name"].fields},
+                ),
+                (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}),
             ):
-                for value, label, is_preferred in values:
-                    handle = handle_model.objects.upsert(
+                subject.statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
+            supported_handles = []
+            for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
+                for value, label, preferred in points:
+                    handle = handles.upsert(
                         platform=platform,
                         value=value,
                         created_by_id=created_by_id,
-                        label=label,
-                        is_preferred=is_preferred,
                         display_name=parsed.display_name,
+                        label=label,
+                        is_preferred=preferred,
                     )
-                    # Unlike a generic enrichment upsert, the source mapping also
-                    # represents a removed label or preference.
-                    mapped = {"label": label, "is_preferred": is_preferred}
+                    mapped = {"label": label, "is_preferred": preferred}
                     dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
                     if dirty:
                         for name in dirty:
                             setattr(handle, name, mapped[name])
-                        handle.save(update_fields=[*dirty, "updated_at"])
-                    handles.append(handle)
-            people = person_model.objects
-            identity = {"folder": folder, "source_uid": parsed.uid}
-            if target is not None:
-                target = people.lock_if_supported().filter(pk=target.pk).first()
-                if target is None or target.folder_id != folder.pk or target.source_uid not in ("", parsed.uid):
-                    raise ValidationError("The linked contact no longer has the expected folder and source identity.")
-                if people.filter(folder=folder, source_uid=parsed.uid).exclude(pk=target.pk).exists():
-                    raise ValidationError("Another contact already has this directory source identity.")
-                identity = {"pk": target.pk, "folder": folder}
-            try:
-                with transaction.atomic():
-                    person, _created = people.update_or_create(
-                        **identity,
-                        defaults={
-                            "source_uid": parsed.uid,
-                            "display_name": parsed.display_name or parsed.family_name or person_model.PLACEHOLDER_NAME,
-                            "name_prefix": parsed.name_prefix,
-                            "given_name": parsed.given_name,
-                            "additional_name": parsed.additional_name,
-                            "family_name": parsed.family_name,
-                            "name_suffix": parsed.name_suffix,
-                            "nickname": parsed.nickname,
-                            "notes": parsed.notes,
-                            "birthday": parsed.birthday,
-                            "anniversary": parsed.anniversary,
-                            # Preparation stored the bytes before this transaction.
-                            "avatar": self.resolve_contact_photo(parsed.photo, lock=True),
-                            "raw_vcard": parsed.raw_vcard,
-                            "source_etag": parsed.etag,
-                            "created_by_id": created_by_id,
-                        },
+                        handle.save(update_fields=(*dirty, "updated_at"))
+                    self.assert_handle(parent, handle, asserted_by=source, link=link, evidence=[parent])
+                    supported_handles.append({"subject": parent, "aspect": "handle", "handle": handle})
+            parent.statements.withdraw_unsupported(source, supported_handles, aspect="handle", link=link)
+            supported_addresses: list[Any] = []
+            for parsed_address in parsed.addresses:
+                values = asdict(parsed_address)
+                address = (
+                    addresses._base_manager.filter(party_id=person.pk, **values)
+                    .exclude(
+                        pk__in=supported_addresses,
                     )
-            except IntegrityError as exc:
-                if (
-                    target is not None
-                    and people.filter(
-                        folder=folder,
-                        source_uid=parsed.uid,
-                    )
-                    .exclude(pk=target.pk)
-                    .exists()
-                ):
-                    raise ValidationError("Another contact already has this directory source identity.") from exc
-                raise
-
-            source = folder.directory.integration_ptr
-            for handle in handles:
-                self.assert_handle(
-                    person,
-                    handle,
-                    asserted_by=source,
-                    evidence=[apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)],
+                    .order_by("pk")
+                    .first()
                 )
-            person.statements.withdraw_unsupported(
-                source, [{"subject": person, "aspect": "handle", "handle": handle} for handle in handles]
-            )
-
-            # Addresses carry no stable id, so mirror the parsed set wholesale —
-            # idempotent because the result is exactly the source's.
-            address_model.objects.filter(party=person).delete()
-            for addr in parsed.addresses:
-                address_model.objects.create(
-                    party=person,
-                    label=addr.label,
-                    po_box=addr.po_box,
-                    extended=addr.extended,
-                    street=addr.street,
-                    city=addr.city,
-                    region=addr.region,
-                    postal_code=addr.postal_code,
-                    country=addr.country,
-                    created_by_id=created_by_id,
-                )
-
-            # Employment maps to a typed edge: the vCard ORG is the counterparty
-            # (free-text — a synced card names an employer, not a tracked org row),
-            # TITLE rides on the edge, and a non-empty ROLE folds into its notes.
-            # The catalogue kind is part of the mapper contract; without it the
-            # source cannot be represented truthfully, so fail the contact atomically.
+                if address is None:
+                    address = addresses.objects.create(party_id=person.pk, created_by_id=created_by_id, **values)
+                self._admit_statement_source(source_ref, (address,))
+                address.statements.set(aspect="address", values=values, asserted_by=source, link=link)
+                supported_addresses.append(address.pk)
+            removed = addresses.statements.filter(link=link).exclude(subject_id__in=supported_addresses)
+            addresses.statements.withdraw(source, list(removed.values_list("subject_id", flat=True)), link=link)
+            kinds = apps.get_model("parties", "RelationshipKind")
             try:
-                employee_kind = relationship_kind_model.objects.get(slug="employee")
-            except relationship_kind_model.DoesNotExist as exc:
+                employee = kinds.objects.get(slug="employee")
+            except kinds.DoesNotExist as error:
                 raise ValidationError(
                     "CardDAV employment sync requires the employee RelationshipKind master row."
-                ) from exc
-            employment = relationship_model.objects.filter(
-                party=person,
-                kind=employee_kind,
-                source=LinkSource.CARDDAV,
-                other_party__isnull=True,
-            )
-            if not parsed.organization:
-                employment.delete()
-            else:
-                edge, created = relationship_model.objects.get_or_create(
-                    party=person,
-                    kind=employee_kind,
-                    source=LinkSource.CARDDAV,
-                    other_party=None,
-                    defaults={
+                ) from error
+            previous = relationships.statements.filter(link=link, subject__party_id=person.pk, subject__kind=employee)
+            edge = relationships._base_manager.filter(pk__in=previous.values("subject_id")).order_by("pk").first()
+            if parsed.organization:
+                if edge is None:
+                    edge = relationships.objects.create(
+                        party_id=person.pk, kind=employee, other_name=parsed.organization, created_by_id=created_by_id
+                    )
+                self._admit_statement_source(source_ref, (edge,))
+                edge.statements.set(
+                    aspect="relationship",
+                    asserted_by=source,
+                    link=link,
+                    values={
                         "other_name": parsed.organization,
                         "title": parsed.title,
                         "notes": parsed.role,
-                        "created_by_id": created_by_id,
+                        "started_at": None,
+                        "ended_at": None,
                     },
                 )
-                if not created:
-                    employment_values = {
-                        "other_name": parsed.organization,
-                        "title": parsed.title,
-                        "notes": parsed.role,
-                    }
-                    dirty = [name for name, value in employment_values.items() if getattr(edge, name) != value]
-                    if dirty:
-                        for name in dirty:
-                            setattr(edge, name, employment_values[name])
-                        edge.save(update_fields=[*dirty, "updated_at"])
-
+            elif edge is not None:
+                edge.statements.withdraw(source, link=link)
+            person.refresh_from_db()
             return person
+
+    def withdraw_contact(self, link: Any) -> None:
+        """Withdraw this directory's contact statements; preferred decisions remain."""
+        source = to_subject_ref(link.stream.integration)
+        for model_name in ("Party", "Person", "Address", "Relationship"):
+            statements = apps.get_model("parties", model_name).statements
+            subjects = list(statements.filter(link=link).values_list("subject_id", flat=True))
+            statements.withdraw(source, subjects, link=link)
 
 
 def _user_display_name(user: Any) -> str:

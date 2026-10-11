@@ -203,7 +203,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         integration = Integration.objects.get(pk=directory.pk)
         handle = Handle.objects.get()
         person = Person.objects.get()
-        link = Party.statements.get()
+        link = Party.statements.handles().get()
 
         assert credential.user_id == admin.pk
         assert credential.name == "CardDAV — Ada Contacts"

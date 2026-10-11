@@ -44,4 +44,5 @@ def _refresh_handle_suggestions() -> int:
         handles = apps.get_model("parties", "Handle").objects
         changed = int(handles.renormalize_phone_values()) + int(handles.resolve_stale_owners())
         changed += int(parties.reconcile_suggestions())
+        changed += int(parties.reconcile_same_as())
     return changed

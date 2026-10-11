@@ -14,19 +14,6 @@ from angee.base.mixins import Statement
 from angee.base.scoping import read_scoped_queryset
 
 
-class LinkSource(models.TextChoices):
-    """Legacy Relationship vocabulary; retires with its phase-4 cutover."""
-
-    MANUAL = "manual", "Manual"
-    IMPORT = "import", "Import"
-    EMAIL_MATCH = "email_match", "Email Match"
-    LLM = "llm", "LLM"
-    OAUTH = "oauth", "OAuth"
-    CARDDAV = "carddav", "CardDAV"
-    COMMUNITY = "community", "Community"
-    RULE = "rule", "Rule"
-
-
 class MembershipDecisionMixin(models.Model):
     """Plain roster decisions, independent of assertion provenance."""
 

@@ -258,7 +258,15 @@ class Replica:
     def baseline(self) -> tuple[Any, Any]:
         result = self.pull()
         assert result.count == 1
-        return Person.objects.get(source_uid="ada"), RecordLink.objects.get(stream=self.stream, external_key="ada")
+        link = RecordLink.objects.get(stream=self.stream, external_key="ada")
+        return link.target, link
+
+    def enroll(self, person: Any, *, external_key: str | None = None) -> Any:
+        """Bind the existing contact fixture through the external-identity owner."""
+        link = RecordLink.objects.observe(self.stream, external_key or f"angee-{person.pk}")
+        link.target = person
+        link.save(update_fields=["target_content_type", "target_object_id"])
+        return link
 
     def reconcile(self, *, page_bound: int = 100) -> int:
         absent = 0
@@ -313,7 +321,7 @@ def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
 def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica) -> None:
     person, link = replica.baseline()
-    assert person.folder_id == Folder.objects.get(directory=replica.directory, source_href=_BOOK).pk
+    assert link.stream.partition == Folder.objects.get(directory=replica.directory, source_href=_BOOK).source_href
     assert link.target_object_id == str(person.pk)
     assert link.remote_version == replica.server.cards[_HREF][1]
     assert link.applied_base.source_hash and canonical_json_sha256(link.applied_base.mapped_payload)
@@ -350,7 +358,7 @@ def test_tokenless_collection_lists_etags_for_new_changed_removed_and_unchanged_
     link.refresh_from_db()
     assert person.notes == "Changed"
     assert link.remote_version == replica.server.cards[_HREF][1]
-    assert Person.objects.get(source_uid="grace").display_name == "Grace Hopper"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
     multigets = [body for method, _, _, body in replica.server.requests if method == "REPORT"]
     assert len(multigets) == 1 and "sync-collection" not in multigets[0]
     assert {item.text for item in ElementTree.fromstring(multigets[0]).findall("d:href", _NAMESPACES)} == {
@@ -391,7 +399,7 @@ def test_tokenless_listing_pages_resume_without_relisting_and_commit_the_capture
     assert [request[0] for request in replica.server.requests] == ["REPORT"]
     assert replica.stream.cursor == {"sync_token": "", "ctag": captured_ctag}
     assert replica.pull().count == 1
-    assert Person.objects.get(source_uid="ada").notes == "Edited during paging"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.notes == "Edited during paging"
     assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version)}
 
 
@@ -404,7 +412,7 @@ def test_tokenless_collection_completes_a_bridge_sync_without_error_telemetry(re
     assert replica.directory.sync_error == replica.directory.last_error == ""
     assert replica.directory.sync_stage == replica.directory.SyncStage.COMPLETED
     assert replica.stream.cursor == {"sync_token": "", "ctag": str(replica.server.version)}
-    assert Person.objects.get(source_uid="ada").display_name == "Ada Lovelace"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.display_name == "Ada Lovelace"
 
 
 def test_carddav_refusal_reaches_bridge_telemetry_with_the_failed_partition(
@@ -479,17 +487,16 @@ def test_tokenless_collection_without_complete_etag_inventory_reports_a_safe_err
 def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
     replica: Replica, reset_before_baseline: bool
 ) -> None:
-    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     existing = {
         uid: Person.objects.create(
             display_name=f"Local {uid}",
             notes="Pre-existing local notes",
-            source_uid=uid,
-            folder=folder,
             created_by_id=replica.directory.owner_id,
         )
         for uid in ("ada", "grace")
     }
+    for uid, person in existing.items():
+        replica.enroll(person, external_key=uid)
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper", notes="Remote Grace"))
     if reset_before_baseline:
         replica.stream = SyncStream.objects.bump_generation(replica.stream)
@@ -528,19 +535,17 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
 
 @pytest.mark.parametrize("bounded", [False, True])
 def test_local_only_contact_waits_until_first_baseline_completes(replica: Replica, bounded: bool) -> None:
-    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     person = Person.objects.create(
         display_name="Grace Hopper",
         given_name="Grace",
         family_name="Hopper",
-        source_uid="grace",
-        folder=folder,
         created_by_id=replica.directory.owner_id,
     )
+    replica.enroll(person, external_key="grace")
     replica.server.requests.clear()
 
     assert push_stream(replica.stream, replica.backend).count == 0
-    assert not RecordLink.objects.exists()
+    assert not RecordLink.objects.filter(applied_base__isnull=False).exists()
     assert not replica.server.requests
 
     if bounded:
@@ -618,20 +623,20 @@ def test_selected_push_projects_only_requested_contacts(
     person.save(update_fields=["notes"])
     named = Person.objects.create(
         display_name="Grace Hopper",
-        source_uid="grace",
-        folder_id=person.folder_id,
         created_by_id=replica.directory.owner_id,
     )
     generated = Person.objects.create(
         display_name="Margaret Hamilton",
-        folder_id=person.folder_id,
         created_by_id=replica.directory.owner_id,
     )
+    replica.enroll(generated)
+    if selected != "bound-alias":
+        replica.enroll(named, external_key="grace")
     choices = {
         "linked": (link.external_key, person),
-        "named": (named.source_uid, named),
+        "named": ("grace", named),
         "generated": (f"angee-{generated.pk}", generated),
-        "bound-alias": (named.source_uid, named),
+        "bound-alias": ("grace", named),
     }
     if selected == "bound-alias":
         aliased = RecordLink.objects.observe(replica.stream, "remote-grace")
@@ -673,7 +678,7 @@ def test_concurrent_vcard_changes_remain_conflicts(
     )
     person_pk = person.pk
     if local_deleted:
-        person.delete()
+        person.trash()
     else:
         person.notes = "Local edit"
         person.save(update_fields=["notes"])
@@ -772,11 +777,11 @@ def _refused_new_contacts(replica: Replica, count: int) -> list[Any]:
     replica.server.read_only = True
     with system_context(reason="test new local contacts"):
         people = [
-            Person.objects.create(
-                display_name=f"New {index}", folder_id=person.folder_id, created_by_id=person.created_by_id
-            )
+            Person.objects.create(display_name=f"New {index}", created_by_id=person.created_by_id)
             for index in range(count)
         ]
+    for local in people:
+        replica.enroll(local)
     replica.server.requests.clear()
     assert push_stream(replica.stream, replica.backend).count == 0
     return people
@@ -964,7 +969,7 @@ def test_a_refused_contact_deleted_locally_closes_its_refusal(replica: Replica) 
     )
     replica.server.requests.clear()
     with system_context(reason="test refused contact deleted"):
-        Person.objects.filter(pk=person.pk).delete()
+        person.trash()
     assert push_stream(replica.stream, replica.backend).count == 0
 
     refusal = failure_state(refusal)
@@ -1042,7 +1047,7 @@ def test_keeping_the_local_side_keeps_a_remote_edit_the_hash_cannot_see(replica:
 
 
 @pytest.mark.parametrize("policy", ["retain", "propagate"])
-def test_removed_member_tombstones_link_and_obeys_local_policy(replica: Replica, policy: str) -> None:
+def test_removed_member_tombstones_link_and_withdraws_directory_statements(replica: Replica, policy: str) -> None:
     person, link = replica.baseline()
     replica.stream.config = {**replica.stream.config, "remote_delete": policy}
     replica.stream.save(update_fields=["config"])
@@ -1052,7 +1057,8 @@ def test_removed_member_tombstones_link_and_obeys_local_policy(replica: Replica,
     assert not result.failure_ids
     assert link.status == LinkStatus.TOMBSTONE
     assert link.tombstoned_at is not None
-    assert Party.objects.filter(pk=person.pk).exists() is (policy == "retain")
+    assert Party.objects.filter(pk=person.pk).exists()
+    assert not Party.statements.filter(subject_id=person.pk, link=link, status="asserted").exists()
     assert push_stream(replica.stream, replica.backend).count == 0
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
@@ -1062,7 +1068,7 @@ def test_local_delete_requires_explicit_propagation(replica: Replica, policy: st
     person, link = replica.baseline()
     replica.stream.config = {**replica.stream.config, "local_delete": policy}
     replica.stream.save(update_fields=["config"])
-    person.delete()
+    person.trash()
     result = push_stream(replica.stream, replica.backend)
     link.refresh_from_db()
     if policy == "conflict":
@@ -1129,14 +1135,13 @@ def test_invalid_sync_token_bumps_generation_and_repeats_baseline(replica: Repli
 
 def test_new_local_person_is_created_conditionally_then_recognized(replica: Replica) -> None:
     replica.baseline()
-    folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     person = Person.objects.create(
         display_name="Grace Hopper",
         given_name="Grace",
         family_name="Hopper",
-        folder=folder,
         created_by_id=replica.directory.owner_id,
     )
+    replica.enroll(person)
     result = push_stream(replica.stream, replica.backend)
     link = RecordLink.objects.get(stream=replica.stream, target_object_id=str(person.pk))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
@@ -1210,7 +1215,7 @@ def test_removing_one_line_of_a_shared_group_keeps_its_other_properties(replica:
     )
     person, _link = replica.baseline()
     with system_context(reason="test shared group edit"):
-        for row in person.statements.filter(handle__value__in=("+14155550100", "+14155550199")):
+        for row in person.statements_for("handle").filter(handle__value__in=("+14155550100", "+14155550199")):
             row.with_actor(person.created_by).dismiss()
     assert push_stream(replica.stream, replica.backend).count == 1
 
@@ -1237,7 +1242,7 @@ def test_removing_a_line_takes_its_own_label_when_labels_are_equal(replica: Repl
     )
     person, _link = replica.baseline()
     with system_context(reason="test equal labels"):
-        for row in person.statements.filter(handle__value="+14155550199"):
+        for row in person.statements_for("handle").filter(handle__value="+14155550199"):
             row.with_actor(person.created_by).dismiss()
     assert push_stream(replica.stream, replica.backend).count == 1
 
@@ -1266,7 +1271,7 @@ def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) ->
     )
     person, _link = replica.baseline()
     with system_context(reason="test contact point edit"):
-        for row in person.statements.filter(handle__value="+14155550100"):
+        for row in person.statements_for("handle").filter(handle__value="+14155550100"):
             row.with_actor(person.created_by).dismiss()
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
         person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
@@ -1336,7 +1341,16 @@ def test_written_out_country_survives_an_address_edit(replica: Replica) -> None:
     person, _link = replica.baseline()
     assert person.addresses.get().country == "US"
     with system_context(reason="test address edit"):
-        person.addresses.create(street="2 Rue Neuve", city="Paris", country="FR", created_by_id=person.created_by_id)
+        address = person.addresses.create(
+            street="2 Rue Neuve", city="Paris", country="FR", created_by_id=person.created_by_id
+        )
+        address.statements.set(
+            aspect="address",
+            values={
+                name: getattr(address, name) for name in address.statements.model.statement_aspects["address"].fields
+            },
+            asserted_by=replica.directory.owner,
+        )
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1362,7 +1376,7 @@ def test_deleting_one_of_two_equal_addresses_reaches_the_card(replica: Replica) 
     )
     person, _link = replica.baseline()
     with system_context(reason="test equal addresses"):
-        person.addresses.order_by("pk").last().delete()
+        person.addresses.order_by("pk").last().trash()
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1370,7 +1384,7 @@ def test_deleting_one_of_two_equal_addresses_reaches_the_card(replica: Replica) 
     assert [(line.group, line.value) for line in card.contents["x-abadr"]] == [("item3", "us")]
     assert push_stream(replica.stream, replica.backend).count == 0
     assert replica.pull().count == 0
-    assert person.addresses.count() == 1
+    assert person.addresses.canonical().count() == 1
 
 
 def test_nameless_card_stays_nameless_across_a_local_edit(replica: Replica) -> None:
@@ -1439,7 +1453,7 @@ def test_bounded_baseline_commits_each_identity_and_replays_concurrent_edit(repl
     assert first.stream.cursor["sync_token"] == ""
     assert first.stream.cursor["next_token"] == baseline_token
     assert len(first.stream.cursor["pending"]) == 1
-    ada = Person.objects.get(source_uid="ada")
+    ada = RecordLink.objects.get(stream=replica.stream, external_key="ada").target
     ada_link = RecordLink.objects.get(stream=first.stream, external_key="ada")
 
     replica.server.store(_HREF, _card(notes="Edited during the baseline"))
@@ -1476,7 +1490,11 @@ def test_malformed_vcard_is_quarantined_while_later_contact_commits(replica: Rep
     assert failure.kind == SyncFailureKind.SEMANTIC
     assert failure.source_hash
     assert RecordLink.objects.get(pk=failure.link_pk).status == LinkStatus.DISCREPANT
-    assert list(Person.objects.values_list("source_uid", flat=True)) == ["grace"]
+    assert list(
+        RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
+            "external_key", flat=True
+        )
+    ) == ["grace"]
     assert RecordLink.objects.get(stream=replica.stream, external_key="grace").status == LinkStatus.CURRENT
     assert replica.stream.cursor == {"sync_token": replica.server.token}
 
@@ -1494,7 +1512,8 @@ def test_corrected_first_seen_vcard_reuses_its_quarantined_identity(replica: Rep
 
     failure = failure_state(failure)
     assert RecordLink.objects.filter(stream=replica.stream).count() == 1
-    assert Person.objects.get().source_uid == link.external_key == _HREF
+    assert str(Person.objects.get().pk) == link.target_object_id
+    assert link.external_key == _HREF
     assert link.status == LinkStatus.CURRENT
     assert failure.status == SyncFailureStatus.RESOLVED
 
@@ -1530,15 +1549,14 @@ def test_push_preview_lists_what_a_push_writes_and_writes_nothing(replica: Repli
     person.notes = "Changed locally"
     person.save(update_fields=["notes"])
     with system_context(reason="test new local contact"):
-        grace = Person.objects.create(
-            display_name="Grace Hopper", folder_id=person.folder_id, created_by_id=person.created_by_id
-        )
+        grace = Person.objects.create(display_name="Grace Hopper", created_by_id=person.created_by_id)
+    replica.enroll(grace)
     replica.server.requests.clear()
 
     preview = preview_push(replica.stream, replica.backend)
     assert set(preview.writes) == {"ada", f"angee-{grace.pk}"}
     assert preview.held == ()
-    assert RecordLink.objects.filter(stream=replica.stream).count() == 1
+    assert RecordLink.objects.filter(stream=replica.stream).count() == 2
     assert not replica.server.requests
 
     assert push_stream(replica.stream, replica.backend).count == 2
@@ -1551,7 +1569,7 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     person, link = replica.baseline()
     replica.stream.config = {**replica.stream.config, "local_delete": "propagate"}
     replica.stream.save(update_fields=["config"])
-    person.delete()
+    person.trash()
     assert push_stream(replica.stream, replica.backend).count == 1
     link.refresh_from_db()
     assert (link.status, link.origin) == (LinkStatus.TOMBSTONE, "local")
@@ -1566,7 +1584,7 @@ def test_propagated_local_delete_round_trip_keeps_local_tombstone(replica: Repli
     assert (link.status, link.origin) == (LinkStatus.TOMBSTONE, "local")
     assert link.tombstoned_at is not None
     assert not bool(SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False))
-    assert not Party.objects.exists()
+    assert not Party.objects.canonical().exists()
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
@@ -1774,7 +1792,7 @@ def test_oversized_single_card_is_quarantined_while_healthy_card_and_cursor_comm
 
     assert result.count == 1 and result.exhausted
     assert result.failure_ids
-    assert Person.objects.get(source_uid="grace").display_name == "Grace Hopper"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="grace").target.display_name == "Grace Hopper"
     failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
     link = RecordLink.objects.get(pk=failure.link_pk)
     assert link.status == LinkStatus.DISCREPANT
@@ -1984,7 +2002,11 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
             break
     assert result.exhausted
     assert landed == 2
-    assert set(Person.objects.values_list("source_uid", flat=True)) == {"ada", "grace"}
+    assert set(
+        RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
+            "external_key", flat=True
+        )
+    ) == {"ada", "grace"}
     failure = next((row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)))
     link = RecordLink.objects.get(pk=failure.link_pk)
     assert failure.kind == SyncFailureKind.SEMANTIC
@@ -2001,7 +2023,11 @@ def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Repli
     result = replica.pull()
     assert result.count == 2
     assert not result.failure_ids
-    assert set(Person.objects.values_list("source_uid", flat=True)) == {_HREF, other_href}
+    assert set(
+        RecordLink.objects.filter(stream=replica.stream, target_object_id__isnull=False).values_list(
+            "external_key", flat=True
+        )
+    ) == {_HREF, other_href}
     assert set(RecordLink.objects.values_list("external_key", flat=True)) == {_HREF, other_href}
 
 
@@ -2010,7 +2036,7 @@ def test_uid_matching_uidless_resource_href_quarantines_without_rebinding_owner(
     collision_href = f"{_BOOK}duplicate.vcf"
     replica.server.store(_HREF, _card(uid=collision_href))
     assert replica.pull().count == 1
-    original = Person.objects.get(source_uid=collision_href)
+    original = RecordLink.objects.get(stream=replica.stream, external_key=collision_href).target
     owner = RecordLink.objects.get(stream=replica.stream, external_key=collision_href)
     bases = (
         owner.applied_base.source_hash,
@@ -2073,7 +2099,7 @@ def test_due_read_keys_redrives_only_discrepant_hrefs_without_advancing_cursor(r
     link.refresh_from_db()
     assert failure.status == SyncFailureStatus.RESOLVED
     assert link.status == LinkStatus.CURRENT
-    assert Person.objects.get(source_uid="ada").notes == "Fixed without a baseline"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="ada").target.notes == "Fixed without a baseline"
     assert replica.stream.cursor == old_cursor
     assert replica.stream.generation == old_generation
     assert replica.stream.last_advanced_at == old_advanced_at
@@ -2104,7 +2130,7 @@ def test_read_keys_returns_tombstone_for_missing_unbound_href(replica: Replica, 
 def test_enumeration_sweep_reads_present_href_and_marks_vanished_unavailable(replica: Replica) -> None:
     replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
     assert replica.pull().count == 2
-    person = Person.objects.get(source_uid="ada")
+    person = RecordLink.objects.get(stream=replica.stream, external_key="ada").target
     replica.server.remove(_HREF)
     old_cursor = dict(replica.stream.cursor)
     replica.server.requests.clear()
@@ -2210,13 +2236,13 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     committed_cursor = dict(replica.stream.cursor)
     committed_reconcile_state = dict(replica.stream.reconcile_state)
     assert committed_reconcile_state["after"] == "zulu"
-    assert Person.objects.get(source_uid="zulu").notes == "First committed page"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="zulu").target.notes == "First committed page"
     original_apply = replica.backend.apply_record
 
     def crash_after_apply(stream: Any, record: Any) -> Any:
         outcome = original_apply(stream, record)
         assert record.external_key == "alpha"
-        assert Person.objects.get(source_uid="alpha").notes == "Second page"
+        assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Second page"
         assert outcome
         raise RuntimeError("Interrupted CardDAV sweep apply")
 
@@ -2226,7 +2252,7 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == committed_cursor
     assert replica.stream.reconcile_state == committed_reconcile_state
-    assert Person.objects.get(source_uid="alpha").notes == "Original"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Original"
     assert Person.objects.count() == 2
     assert applied_history().count() == 3
 
@@ -2236,7 +2262,7 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert replica.reconcile(page_bound=1) == 0
     assert replica.stream.cursor == old_cursor
     assert replica.stream.last_reconciled_at is not None
-    assert Person.objects.get(source_uid="alpha").notes == "Second page"
+    assert RecordLink.objects.get(stream=replica.stream, external_key="alpha").target.notes == "Second page"
     assert Person.objects.count() == RecordLink.objects.count() == 3
     assert applied_history().count() == 5
     fetched = [

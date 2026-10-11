@@ -17,7 +17,6 @@ from angee.workflows.testing.drivers import decide, load_workflow, run_until, st
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
 Handle = apps.get_model("parties", "Handle")
-MergeVeto = apps.get_model("parties", "MergeVeto")
 Decision = apps.get_model("decisions", "Decision")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
@@ -180,7 +179,7 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(run.status, "failed")
         self.assertFalse(self.decisions(run))
 
-    def test_demo_resources_supply_browsable_identity_and_duplicate_candidates(self):
+    def test_demo_resources_supply_browsable_identity_and_same_as_pairs(self):
         ledger = apps.get_model("resources", "Resource").objects
         ledger.load_xref("angee.iam.user_admin", model=get_user_model(), actor=self.admin, allow_non_dev=True)
         sample, left, right = (
@@ -191,7 +190,9 @@ class PartyWorkflowTests(TransactionTestCase):
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Handle, actor=self.admin, allow_non_dev=True)
         self.assertEqual(sample.display_name, "Directory sample")
         with actor_context(self.admin):
-            candidates = Party.objects.duplicate_candidates()
+            with system_context(reason="test same-as rule"):
+                Party.objects.reconcile_same_as()
+            candidates = Party.objects.same_as_pairs()
         self.assertEqual([(pair.left.pk, pair.right.pk) for pair in candidates], [(left.pk, right.pk)])
 
     def duplicate_pair(self, prefix):
@@ -200,9 +201,11 @@ class PartyWorkflowTests(TransactionTestCase):
         with actor_context(self.reviewer):
             Handle.objects.create(platform="email", value=f"{prefix}@example.test", party=left)
             Handle.objects.create(platform="email", value=f"{prefix.upper()}@example.test", party=right)
+        with system_context(reason="test same-as rule"):
+            Party.objects.reconcile_same_as()
         return left, right
 
-    def test_map_reviews_each_pair_and_composes_merge_veto_and_skip(self):
+    def test_map_reviews_each_pair_and_composes_merge_dismiss_and_skip(self):
         pairs = [self.duplicate_pair(name) for name in ("alpha", "bravo", "charlie", "delta")]
         run = start_run(self.dedupe, actor=self.admin, input={"assignee": public_id_of(self.reviewer)})
         run_until(run)
@@ -228,9 +231,11 @@ class PartyWorkflowTests(TransactionTestCase):
         )
         self.assertEqual(system_queryset(Party).get(pk=pairs[0][1].pk).merged_into_id, pairs[0][0].pk)
         self.assertEqual(system_queryset(Party).get(pk=pairs[3][0].pk).merged_into_id, pairs[3][1].pk)
-        self.assertTrue(MergeVeto.objects.forbids(*pairs[1]))
+        self.assertTrue(
+            pairs[1][0].same_as.for_pair(*pairs[1]).statements.current().filter(applied=True, snak="no_value").exists()
+        )
         with actor_context(self.reviewer):
-            remaining = Party.objects.duplicate_candidates()
+            remaining = Party.objects.same_as_pairs()
         self.assertEqual([(pair.left.pk, pair.right.pk) for pair in remaining], [(pairs[2][0].pk, pairs[2][1].pk)])
 
     def test_empty_and_non_admin_scoped_duplicate_scans(self):
@@ -252,7 +257,7 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertFalse(self.decisions(run))
         attempt = system_queryset(StepAttempt).filter(step_run__run=run, result="failed").get()
         self.assertIn("declared permission", attempt.error)
-        self.assertEqual(Party.objects.with_actor(self.reviewer).duplicate_candidates(), [])
+        self.assertEqual(Party.objects.with_actor(self.reviewer).same_as_pairs(), [])
 
     def test_duplicate_merge_replay_is_idempotent_and_a_different_merge_stays_intact(self):
         for prefix, same_target in (("repeat", True), ("changed", False)):

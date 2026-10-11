@@ -14,9 +14,9 @@ from datetime import date, timedelta
 from typing import Any
 
 from django.apps import apps
-from django.db.models import CharField, Exists, OuterRef, Q, Value
+from django.db.models import CharField
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Cast, Coalesce, Concat, NullIf
+from django.db.models.functions import Coalesce
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
@@ -257,22 +257,19 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             return {}
         linked = {link.external_key: link for link in links if link.external_key in keys}
         people = tuple(
-            apps.get_model("parties", "Person").objects.filter(
-                Q(pk__in=[link.target_object_id for link in linked.values() if link.target_object_id])
-                | Q(source_uid__in=keys),
-                folder=self._folder(stream),
+            apps.get_model("parties", "Person")
+            .objects.untrashed()
+            .filter(
+                pk__in=[link.target_object_id for link in linked.values() if link.target_object_id],
             )
         )
         by_id = {str(person.pk): person for person in people}
-        by_uid = {person.source_uid: person for person in people}
         parsed = apps.get_model("parties", "Party").objects.project_contacts(people)
         projections = {pk: contact_projection(contact) for pk, contact in parsed.items()}
         states = {}
         for key in keys:
             link = linked.get(key)
             person = by_id.get(str(link.target_object_id)) if link is not None else None
-            if person is None:
-                person = by_uid.get(key)
             projection = projections.get(person.pk) if person is not None else None
             states[key] = (person, projection, canonical_json_sha256(projection) if projection is not None else "")
         return states
@@ -414,15 +411,20 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         if local_hash != record.local_hash:
             raise SemanticError("local_changed_during_pull", kind=SyncFailureKind.CONFLICT)
         if record.tombstone:
-            if target is not None and stream.config.get("remote_delete", "retain") == "propagate":
-                parties.filter(pk=target.pk).delete()
-                target, projection = None, None
+            link = apps.get_model("integrate", "RecordLink").objects.get(
+                stream=stream, external_key=record.external_key
+            )
+            parties.withdraw_contact(link)
+            projection = contact_projection(parties.project_contact(target)) if target is not None else None
         else:
             target = parties.ingest_contact(
                 parsed,
                 folder=self._folder(stream),
                 target=target,
                 created_by_id=self.bridge.owner_id,
+                link=apps.get_model("integrate", "RecordLink").objects.get(
+                    stream=stream, external_key=record.external_key
+                ),
             )
             projection = contact_projection(parties.project_contact(target))
         return ApplyResult(
@@ -443,39 +445,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             target, projection, _ = states[link.external_key]
             if link.local_changed(projection):
                 yield LocalChange(link.external_key, projection, target=target)
-        people_query = (
-            apps.get_model("parties", "Person")
-            .objects.filter(
-                folder=self._folder(stream),
-            )
-            .exclude(
-                Exists(
-                    stream_links.filter(
-                        Q(target_object_id=Cast(OuterRef("pk"), output_field=CharField()))
-                        | Q(external_key=OuterRef("source_uid"))
-                    )
-                )
-            )
-            .annotate(
-                external_key=Coalesce(
-                    NullIf("source_uid", Value("")),
-                    Concat(Value("angee-"), "pk", output_field=CharField()),
-                )
-            )
-            .order_by("pk")
-        )
-        if keys is not None:
-            people_query = people_query.filter(external_key__in=keys)
-        people = tuple(people_query)
-        parties = apps.get_model("parties", "Party").objects
-        parsed = parties.project_contacts(people)
-        for person in people:
-            projection = contact_projection(parsed[person.pk])
-            yield LocalChange(
-                person.external_key,
-                projection,
-                target=person,
-            )
 
 
 class ManualDirectoryBackend(DirectoryBackend):

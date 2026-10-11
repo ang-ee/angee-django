@@ -330,9 +330,11 @@ def run(args: argparse.Namespace) -> None:
         raise SystemExit(bool(failures))
     if args.action == "state":
         from django.apps import apps
+        from django.core.management import call_command
         from django.db.migrations.state import ProjectState
         from django.db.migrations.writer import MigrationWriter
 
+        call_command("check", verbosity=1)
         states = {
             key: (state.name, state.fields, state.options, state.bases, state.managers)
             for key, state in ProjectState.from_apps(apps).models.items()

@@ -38,6 +38,21 @@ name = "retire_party_handle"
 app_label = "parties"
 module = "runtime_migrations.retire_party_handle"
 
+[[migrations]]
+name = "party_aspect_schema"
+app_label = "parties"
+module = "runtime_migrations.party_aspect_schema"
+
+[[migrations]]
+name = "fold_party_aspects"
+app_label = "parties"
+module = "runtime_migrations.fold_party_aspects"
+
+[[migrations]]
+name = "retire_party_carriers"
+app_label = "parties"
+module = "runtime_migrations.retire_party_carriers"
+
 [resources]
 install = [
   { path = "resources/install/010_provenance.rule.yaml", adopt = "key" },

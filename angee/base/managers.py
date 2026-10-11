@@ -14,7 +14,7 @@ from rebac.errors import PermissionDenied
 
 from angee.base.actors import instance_actor
 from angee.base.identity import EvidenceReference, readable_records
-from angee.base.querysets import AngeeUnscopedQuerySet, StatementQuerySet
+from angee.base.querysets import AngeeUnscopedQuerySet, StatementQuerySet, model_history
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.validation import validate_value
 
@@ -29,6 +29,8 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         super().__init__()
         self.model = model
         self.instance = instance
+        if instance is not None:
+            self._db = instance._state.db
 
     def get_queryset(self) -> Any:
         rows = super().get_queryset()
@@ -61,8 +63,10 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             natural_key = {"pk": self.instance.pk}
         if not natural_key:
             raise ValidationError("Statements require a subject natural key.")
-        with transaction.atomic():
-            subject = system_queryset(self.model.statement_subject_model, lock=("self",)).get(**natural_key)
+        with transaction.atomic(using=self.db):
+            subject = (
+                system_queryset(self.model.statement_subject_model, lock=("self",)).using(self.db).get(**natural_key)
+            )
             source, members, defaults = self._admit(
                 subject,
                 declaration,
@@ -79,11 +83,11 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             key = dict(subject=subject, asserted_by=str(source), aspect=aspect, superseded=None, **members)
             candidate = self.model(**key, **defaults)
             candidate.full_clean(validate_unique=False, validate_constraints=False)
-            existing = self.model._base_manager.filter(**key).first()
+            existing = self.model._base_manager.using(self.db).filter(**key).first()
             if existing is not None and existing.same_values(candidate, defaults):
                 return existing
             with system_context(reason="statements.set"):
-                statement, _ = self.model._base_manager.update_or_create(**key, defaults=defaults)
+                statement, _ = self.model._base_manager.db_manager(self.db).update_or_create(**key, defaults=defaults)
                 self.resolve(subject=subject)
             statement.refresh_from_db()
             return statement
@@ -149,11 +153,17 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         subjects: Sequence[Any] | None = None,
         supported: Sequence[Mapping[str, Any]] | None = None,
         changeset: Any = None,
+        aspect: str | None = None,
+        link: Any = None,
     ) -> int:
         source = self.asserting_source(asserted_by)
         rows = self.model._base_manager.filter(asserted_by=str(source), superseded__isnull=True)
         if (bound := self.instance) is not None:
             rows = rows.filter(subject=bound)
+        if aspect is not None:
+            rows = rows.filter(aspect=aspect)
+        if link is not None:
+            rows = rows.filter(link=link)
         if subjects is not None:
             rows = rows.filter(subject__in=subjects)
         if changeset is not None:
@@ -178,11 +188,15 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                     self.resolve(subject=subject)
         return count
 
-    def withdraw(self, asserted_by: Any, subjects: Sequence[Any] | None = None) -> int:
-        return self._transition(self.model.Status.WITHDRAWN, asserted_by=asserted_by, subjects=subjects)
+    def withdraw(self, asserted_by: Any, subjects: Sequence[Any] | None = None, *, link: Any = None) -> int:
+        return self._transition(self.model.Status.WITHDRAWN, asserted_by=asserted_by, subjects=subjects, link=link)
 
-    def withdraw_unsupported(self, asserted_by: Any, supported: Sequence[Mapping[str, Any]]) -> int:
-        return self._transition(self.model.Status.WITHDRAWN, asserted_by=asserted_by, supported=supported)
+    def withdraw_unsupported(
+        self, asserted_by: Any, supported: Sequence[Mapping[str, Any]], *, aspect: str | None = None, link: Any = None
+    ) -> int:
+        return self._transition(
+            self.model.Status.WITHDRAWN, asserted_by=asserted_by, supported=supported, aspect=aspect, link=link
+        )
 
     def quarantine(self, asserted_by: Any, subjects: Sequence[Any] | None = None) -> int:
         return self._transition(self.model.Status.QUARANTINED, asserted_by=asserted_by, subjects=subjects)
@@ -204,6 +218,69 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             ]
             return sum(counts)
 
+    def revert(self, changeset: Any, *, resolve: bool = True) -> list[Any]:
+        """Restore pre-boundary assertions; first assertions withdraw, never delete.
+
+        Stage current keys outside uniqueness before undoing a merge collapse.
+        The restored stance and supersession are historical facts; attribution of
+        this write belongs to the new changeset. Admission belongs to the subjects,
+        rather than to the original asserting principal.
+        """
+
+        using = self.db
+        history = model_history(self.model)
+        if history is None:
+            raise ValidationError("Statement revert requires registered history.")
+        with transaction.atomic(using=using):
+            states = list(history.changeset_states(self.model, changeset, using=using))
+            subject_ids = {version.subject_id for state in states for version in state if version is not None}
+            subjects = list(
+                system_queryset(self.model.statement_subject_model, lock=("self",))
+                .using(using)
+                .filter(pk__in=subject_ids)
+                .order_by("pk")
+            )
+            missing = subject_ids - {subject.pk for subject in subjects}
+            if missing:
+                raise ValidationError(
+                    f"{self.model.statement_subject_model._meta.label} {sorted(missing)}: "
+                    "retained subjects are missing."
+                )
+            if not is_sudo():
+                for subject in subjects:
+                    subject.require_statement_write(
+                        instance_actor(self.instance) if self.instance is not None else current_actor()
+                    )
+            with system_context(reason="statements.revert"):
+                for first, _, _ in states:
+                    row = self.model._base_manager.using(using).filter(pk=first.id).first()
+                    if row is None:
+                        raise ValidationError(f"{self.model._meta.label} {first.id}: a retained statement is missing.")
+                    row.superseded = row
+                    row.applied = False
+                    row.save(using=using, update_fields=("superseded", "applied"))
+                # Restore occupied keys first; new withdrawn assertions remain
+                # outside those keys when the pre-state already occupies one.
+                for first, _, previous in sorted(states, key=lambda state: state[2] is None):
+                    row = (previous or first).instance
+                    row.applied = False
+                    if previous is None:
+                        row.status = self.model.Status.WITHDRAWN
+                        row.superseded = (
+                            self.model._base_manager.using(using)
+                            .filter(
+                                **row.current_key(),
+                                superseded__isnull=True,
+                            )
+                            .exclude(pk=row.pk)
+                            .first()
+                        )
+                    row.save(using=using)
+                if resolve:
+                    for subject in subjects:
+                        self.resolve(subject=subject)
+            return subjects
+
     def resolve(self, *, subject: Any = None) -> None:
         """Resolve each field group atomically; normal unknowns never erase values."""
         subject = subject if subject is not None else self.instance
@@ -212,9 +289,12 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         actor = instance_actor(subject)
         if not is_sudo():
             subject.require_statement_write(actor)
-        with transaction.atomic(), system_context(reason="statements.resolve"):
-            subject = system_queryset(self.model.statement_subject_model, lock=("self",)).get(pk=subject.pk)
-            rows = self.model._base_manager.filter(subject=subject, superseded__isnull=True)
+        using = subject._state.db or self.db
+        with transaction.atomic(using=using), system_context(reason="statements.resolve"):
+            subject = (
+                system_queryset(self.model.statement_subject_model, lock=("self",)).using(using).get(pk=subject.pk)
+            )
+            rows = self.model._base_manager.using(using).filter(subject=subject, superseded__isnull=True)
             members = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
 
             def group(row: Any) -> tuple[Any, ...]:
@@ -267,7 +347,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 for row in sorted(candidates, key=lambda row: row is winner):
                     if row.applied != (row is winner):
                         row.applied = row is winner
-                        row.save(update_fields=("applied",))
+                        row.save(using=using, update_fields=("applied",))
                 if (winner is not None and winner.snak == self.model.Snak.SOME_VALUE) or (
                     winner is None and any(row.snak == self.model.Snak.SOME_VALUE for row in asserted)
                 ):
@@ -282,18 +362,12 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
 
     def merge(self, reference: Any, rows: models.QuerySet[Any], *, survivor: Any) -> None:
         """Retain both assertions on key collisions, then resolve the moved subject."""
-        target = reference.lookup(survivor)
+        target = reference.lookup(survivor) if reference is not None else {"subject_id": survivor.pk}
+        columns = reference.columns if reference is not None else ("subject",)
         subjects = set()
         for row in rows.order_by("pk"):
             if row.superseded_id is None:
-                aspect = row.statement_aspects[row.aspect]
-                key = {
-                    row._meta.get_field(name).attname: getattr(row, row._meta.get_field(name).attname)
-                    for name in aspect.members
-                }
-                key.update(
-                    subject_id=row.subject_id, asserted_by=row.asserted_by, aspect=row.aspect, superseded__isnull=True
-                )
+                key = dict(row.current_key(), superseded__isnull=True)
                 key.update(target)
                 kept = self.model._base_manager.filter(**key).exclude(pk=row.pk).first()
                 if kept is not None:
@@ -306,7 +380,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 setattr(row, name, value)
             # Applied rows from different sources also share the destination's key.
             row.applied = False
-            row.save(update_fields=(*reference.columns, "applied"))
+            row.save(update_fields=(*columns, "applied"))
             subjects.add(row.subject_id)
         for subject_id in sorted(subjects):
             subject = self.model.statement_subject_model._base_manager.get(pk=subject_id)
@@ -339,4 +413,20 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         with transaction.atomic():
             list(system_queryset(model, lock=("self",)).filter(pk__in=ordered).order_by("pk"))
             pair, _ = self.model._base_manager.get_or_create(left_id=ordered[0], right_id=ordered[1])
+            pair.with_actor(actor)
+            if pair.is_trashed:
+                pair.require_statement_write(actor)
+                with system_context(reason="statements.pair.restore"):
+                    pair.restore()
         return pair
+
+    def merge(self, reference: Any, rows: Any, *, survivor: Any) -> None:
+        """Re-key third-party decisions; keep the merged endpoints as evidence."""
+
+        for pair in rows.untrashed().order_by("pk"):
+            other = pair.right if "left" in reference.columns else pair.left
+            if other.pk == survivor.pk:
+                continue
+            target = self.for_pair(survivor, other)
+            self.model.statements.merge(None, pair.statements.all(), survivor=target)
+            pair.trash(reason="Merged pair endpoints")

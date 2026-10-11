@@ -889,10 +889,10 @@ and current contracts before applying a historical example to a new deployment.
   [`ModelHistory`](../../angee/base/mixins.py) gives native history construction a
   detached snapshot and records deletion inside the delete transaction before
   the source row disappears; it never unredacts the caller's instance.
-- **Review local-only rows before upgrading pull-only record sync.** The
-  [record-sync driver](../../addons/angee/integrate/README.md) may create them
-  remotely as soon as the first baseline completes. Remove rows that must remain
-  local from the synchronized scope before enabling two-way sync.
+- **Review enrolled local rows before enabling two-way record sync.** The
+  [record-sync driver](../../addons/angee/integrate/README.md) may publish targeted
+  links after the first baseline. Directory membership belongs to RecordLink;
+  creating a Party never enrolls it in a remote address book.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
   row. Base autoconfig enables the native
@@ -1828,6 +1828,22 @@ Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
 refuses missing or unknown classifications. Statements retain the assertion-time
 classification across source edits and deletion. The explicit link option owns
 the optional integration column: composer extensions do not reach generated models.
+
+Ordinary person saves on aspect-backed fields assert normal statements, including
+separate MTI child tables; parent declarations keep their shared-pk owner.
+Consumers contribute domain aspects and `aspect_precedence` through the descriptor's
+abstract donors. Preferred person decisions precede normal source ordering.
+Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
+the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
+
+The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
+revert and deterministic lossless export. Revert uses native history ordering and
+diffs, refuses later touches, retains withdrawn/superseded statements, and reuses
+trash for created subjects. Without trash, retained references block removal.
+Restoring database state does not undo HTTP effects; record sync detects the
+corrected local projection under its existing write-back policy. Archive callers
+use an explicit system boundary; serving exports retain subject authorization and
+gated-field redaction. No archive sink or history-pruning policy is introduced.
 
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps

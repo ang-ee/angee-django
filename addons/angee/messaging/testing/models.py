@@ -30,7 +30,6 @@ from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
-from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
 from angee.parties.models import Person as AbstractPerson
@@ -272,18 +271,6 @@ class Organization(AbstractOrganization, Party):
         app_label = "parties"
         db_table = "test_parties_organization"
         rebac_resource_type = "parties/organization"
-
-
-class MergeVeto(AbstractMergeVeto):
-    """Concrete keep-separate pair used by parties-schema imports across the suite."""
-
-    class Meta(AbstractMergeVeto.Meta):
-        """Django model options for the canonical test merge veto."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_merge_veto"
-        rebac_resource_type = "parties/merge_veto"
 
 
 class Address(AbstractAddress):

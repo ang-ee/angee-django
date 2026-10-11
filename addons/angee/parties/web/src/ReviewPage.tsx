@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Tag, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
-import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
+import { SameAsPairs, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
 import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
@@ -22,8 +22,8 @@ export function ReviewPage(): React.ReactElement {
   const counts = useAuthoredQuery(PartyReviewCounts, undefined, {
     models: ["parties.PartyStatement"],
   });
-  const duplicates = useAuthoredQuery(DuplicatePartyCandidates, { limit: 50 }, {
-    models: ["parties.Party", "parties.Handle", "parties.MergeVeto"],
+  const duplicates = useAuthoredQuery(SameAsPairs, { limit: 50 }, {
+    models: ["parties.Party", "parties.Handle", "parties.PartySameAsPairStatement"],
   });
   const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
 
@@ -48,7 +48,7 @@ export function ReviewPage(): React.ReactElement {
     [recordHref, t],
   );
   const handleCount = counts.data?.party_statements_aggregate.aggregate?.count ?? 0;
-  const duplicateCandidates = duplicates.data?.duplicate_party_candidates ?? [];
+  const duplicateCandidates = duplicates.data?.same_as_pairs ?? [];
 
   return (
     <Page>

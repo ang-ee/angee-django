@@ -13,6 +13,8 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 
+from angee.integrate.states import StreamKind
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import (
     Circle,
     CircleMember,
@@ -26,7 +28,6 @@ from angee.messaging.testing.models import (
     RelationshipKind,
 )
 from angee.parties.backends import ParsedContact
-from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from tests.conftest import make_integration
 from tests.test_messaging import _grant
@@ -747,7 +748,7 @@ def test_relationship_kind_end_legality_requires_org_counterparty(
 
 @pytest.mark.django_db(transaction=True)
 def test_merged_into_flattens_transitively(composed_tables: None) -> None:
-    """Party.merge_into atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
+    """Party.merge atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
 
     del composed_tables
     with system_context(reason="test merge"):
@@ -756,12 +757,12 @@ def test_merged_into_flattens_transitively(composed_tables: None) -> None:
         b = Party._base_manager.create(display_name="B", created_by=owner)
         c = Party._base_manager.create(display_name="C", created_by=owner)
 
-        a.merge_into(b)
+        b.with_actor(owner).merge(records=[a.public_id])
         a.refresh_from_db()
         assert a.merged_into_id == b.pk
 
         # Merging B into C repoints A forward in the same write — no two-hop chain.
-        b.merge_into(c)
+        c.with_actor(owner).merge(records=[b.public_id])
         a.refresh_from_db()
         b.refresh_from_db()
         assert a.merged_into_id == c.pk
@@ -784,7 +785,7 @@ def test_has_real_name_rejects_placeholder_and_letterless_names() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_merge_into_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
+def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
     """The verb rejects A→B when B→A exists; the database is the direct-write floor."""
 
     del composed_tables
@@ -792,10 +793,10 @@ def test_merge_into_rejects_reversal_and_database_rejects_self_merge(composed_ta
         owner = _user("reversal")
         a = Party._base_manager.create(display_name="A", created_by=owner)
         b = Party._base_manager.create(display_name="B", created_by=owner)
-        b.merge_into(a)
+        a.with_actor(owner).merge(records=[b.public_id])
 
-        with pytest.raises(ValidationError, match="reverse"):
-            a.merge_into(b)
+        with pytest.raises(ValidationError, match="canonical"):
+            b.with_actor(owner).merge(records=[a.public_id])
 
         a.merged_into = a
         with pytest.raises(IntegrityError), transaction.atomic():
@@ -813,6 +814,8 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
         folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact-1")
         employee = RelationshipKind._base_manager.create(
             slug="employee",
             name="Employee",
@@ -828,11 +831,11 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             role="Programmer",
         )
 
-        person = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
+        person = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
         synced = Relationship._base_manager.get(
             party=person,
             kind=employee,
-            source=LinkSource.CARDDAV,
+            pk__in=Relationship.statements.filter(link=link).values("subject_id"),
             other_party__isnull=True,
         )
         first_pk = synced.pk
@@ -841,16 +844,15 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
         manual = Relationship._base_manager.create(
             party=person,
             kind=employee,
-            source=LinkSource.MANUAL,
             other_name="Human-maintained employer",
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
+        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link, target=person)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
-            source=LinkSource.CARDDAV,
+            pk__in=Relationship.statements.filter(link=link).values("subject_id"),
             other_party__isnull=True,
         )
 
@@ -861,7 +863,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             title="Principal Mathematician",
             role="Research lead",
         )
-        Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk)
+        Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
 
     assert synced.other_name == "Analytical Engines"
@@ -872,7 +874,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert unchanged.updated_at == first_updated_at
     assert refreshed.title == "Principal Mathematician"
     assert refreshed.notes == "Research lead"
-    assert Relationship._base_manager.filter(pk=manual.pk, source=LinkSource.MANUAL).exists()
+    assert Relationship._base_manager.filter(pk=manual.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -886,12 +888,14 @@ def test_ingest_contact_requires_employee_relationship_kind(composed_tables: Non
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
         folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact-2")
         parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
-            Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
+            Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
 
-    assert not Person._base_manager.filter(source_uid="contact-2").exists()
+    assert not Person._base_manager.filter(display_name="Grace").exists()
 
 
 def test_seed_vocabulary_matches_model_contract() -> None:

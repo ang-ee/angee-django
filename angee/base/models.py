@@ -13,6 +13,7 @@ from typing import Any, Self, TypeVar, cast
 from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from django.db.models import Exists, OuterRef
 from django.db.models.functions import Coalesce
 from rebac import (
     RebacMixin,
@@ -37,6 +38,7 @@ from angee.base.mixins import (
     MergeContractMixin,
     SqidMixin,
     TimestampMixin,
+    TrashQuerySet,
 )
 from angee.base.mixins import Statement as Statement
 from angee.base.mixins import StatementPair as StatementPair
@@ -232,6 +234,18 @@ class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[m
         if not result.allowed:
             raise PermissionDenied(f"Denied: {actor} cannot create {resource_type}")
         return actor
+
+
+class StatementSubjectQuerySet(TrashQuerySet, AngeeQuerySet):
+    """Canonical asserted rows, retaining withdrawn subjects and their identities."""
+
+    def canonical(self) -> Any:
+        statements = self.model.statements.model._base_manager.canonical().filter(subject_id=OuterRef("pk"))
+        return self.untrashed().filter(Exists(statements))
+
+
+class StatementSubjectManager(AngeeManager.from_queryset(StatementSubjectQuerySet)):  # type: ignore[misc]
+    """Shared scope for canonical models whose presence is asserted."""
 
 
 class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]

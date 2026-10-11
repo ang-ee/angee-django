@@ -331,6 +331,20 @@ which is a set of authorization principals.
 
 **Relationship** — the single typed Party-to-Party factual edge, including
 employment as one relationship kind rather than a separate identity model.
+It remains canonical for tracked or free-text, time-bounded counterparties;
+its asserted values live in its own statement table. Address is likewise a
+canonical, referencable subject with independently retained source assertions.
+
+**same_as** — a symmetric identity statement on an ordered Party pair.
+Preferred no-value keeps both directions separate. Preferred value awaits a
+merge action whose input chooses the survivor; survivorship never merges rows.
+The pointing model's **merge_contract** owns statement union and retained
+supersession through the existing reference dispatcher.
+
+**Revert** — a Changeset restoring each row's pre-boundary state and re-running
+survivorship after refusing later touches. Created subjects use trash where
+available; their statements withdraw rather than disappear. A **document** is
+the deterministic changeset/history export consumed by a future archive sink.
 
 **Tie** — a derived Party-to-Party interaction edge. **Cadence** is the human,
 per-user stay-in-touch intent; recomputable interaction evidence and personal

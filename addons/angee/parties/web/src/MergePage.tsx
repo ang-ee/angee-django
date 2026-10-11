@@ -26,7 +26,7 @@ import {
   MergeParties,
   PARTY_MERGE_INVALIDATES,
   PartyMergeComparison,
-  VetoMerge,
+  DismissSameAs,
   type MergePartyRecord,
   type MergePersonRecord,
 } from "./documents";
@@ -125,11 +125,9 @@ function relationshipIds(record: MergePartyRecord): readonly string[] {
 
 function originLabel(
   record: MergePartyRecord,
-  person: MergePersonRecord | null | undefined,
   t: ReturnType<typeof usePartiesT>,
 ): string {
   const platforms = [...new Set(record.handles.map((handle) => handle.platform))].join(", ");
-  if (person?.folder?.name) return t("merge.origin.folder", { name: person.folder.name });
   if (platforms) return t("merge.origin.handles", { platforms });
   return t("merge.origin.manual");
 }
@@ -192,7 +190,7 @@ export function MergePage(): React.ReactElement {
   const [merge, mergeState] = useAuthoredMutation(MergeParties, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
-  const [veto, vetoState] = useAuthoredMutation(VetoMerge, {
+  const [veto, vetoState] = useAuthoredMutation(DismissSameAs, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
@@ -271,7 +269,7 @@ export function MergePage(): React.ReactElement {
   const keepSeparate = React.useCallback(async () => {
     if (!left || !right) return;
     const result = await veto({ aId: left.id, bId: right.id });
-    if (result?.veto_merge) goBack();
+    if (result?.dismiss_same_as) goBack();
   }, [goBack, left, right, veto]);
 
   if (comparison.isFetching && !left && !right) {
@@ -328,13 +326,13 @@ export function MergePage(): React.ReactElement {
             <SurvivorOption
               side="left"
               record={left}
-              origin={originLabel(left, leftPerson, t)}
+              origin={originLabel(left, t)}
               survivorLabel={t("merge.survivor")}
             />
             <SurvivorOption
               side="right"
               record={right}
-              origin={originLabel(right, rightPerson, t)}
+              origin={originLabel(right, t)}
               survivorLabel={t("merge.survivor")}
             />
           </RadioGroup>

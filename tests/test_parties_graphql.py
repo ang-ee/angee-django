@@ -52,7 +52,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "created_at",
         "id",
         "family_name",
-        "folder",
         "given_name",
         "updated_at",
     }
@@ -60,12 +59,11 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "display_name",
         "created_at",
         "family_name",
-        "folder",
         "given_name",
         "updated_at",
     }
     assert metadata.aggregate_fields == ("id",)
-    assert set(metadata.query.axes) == {"folder", "created_at"}
+    assert set(metadata.query.axes) == {"created_at"}
     assert metadata.capabilities == (
         "list",
         "detail",
@@ -74,10 +72,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "create",
         "update",
     )
-    assert metadata.query.axes["folder"].field == "folder"
-    assert metadata.query.fields["folder"].relation.model == "parties.Folder"
-    assert metadata.query.fields["folder"].relation.identity_path == "folder.id"
-    assert metadata.query.axes["folder"].server.label_key == "folder__name"
     assert metadata.query.identity.field == "id"
 
     serialized = schema._schema.extensions["angee"]["resources"]
@@ -92,7 +86,7 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert person["roots"]["create"] == "insert_people_one"
     assert person["roots"]["update"] == "update_people_by_pk"
     assert person["roots"]["delete"] is None
-    assert list(person["query"]["axes"]) == ["folder", "created_at"]
+    assert list(person["query"]["axes"]) == ["created_at"]
     group_dimensions = person["query"]["axes"]
     assert {
         field: (
@@ -102,7 +96,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         )
         for field, dimension in group_dimensions.items()
     } == {
-        "folder": ("FOLDER", "folder_id", "relation"),
         "created_at": ("CREATED_AT", "created_at", "date"),
     }
     created_at_extractions = {
@@ -151,17 +144,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "birthday",
         "anniversary",
     ]
-    assert person["query"]["fields"]["folder"]["relation"] == {
-        "model": "parties.Folder",
-        "identityPath": "folder.id",
-        "labelPath": "folder.name",
-    }
-    folder_field = {field["name"]: field for field in person["fields"]}["folder"]
-    assert folder_field["kind"] == "relation"
-    assert folder_field["widget"] == "many2one"
-    assert folder_field["readable"] is True
-    assert folder_field["relationModelLabel"] == "parties.Folder"
-    assert person["query"]["fields"]["folder"]["relation"]["labelPath"] == "folder.name"
     display_name_field = {field["name"]: field for field in person["fields"]}["display_name"]
     assert display_name_field["creatable"] is True
     assert display_name_field["updatable"] is True

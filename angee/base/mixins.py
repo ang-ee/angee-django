@@ -5,9 +5,10 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum, StrEnum
+from itertools import groupby
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
@@ -20,7 +21,7 @@ from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Q, Value
 from django.db.models.functions import Replace
 from django.utils import timezone
-from rebac import PermissionDenied, RebacMixin, SubjectRef, current_actor, system_context
+from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_for_subject_type
@@ -871,6 +872,27 @@ class ModelHistory(HistoricalRecords):
 
         transaction.on_commit(committed, using=using)
 
+    def changeset_states(self, model: Any, changeset: Any, *, using: str) -> Iterable[tuple[Any, Any, Any]]:
+        """Yield first, last and pre-boundary versions; sequence IDs break date ties.
+
+        A later write, including an unattributed one, refuses the whole revert.
+        The caller holds the operational row locks throughout restoration.
+        """
+
+        history = model.history.using(using)
+        key = model._meta.pk.attname
+        rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
+        for pk, grouped in groupby(rows, key=lambda row: getattr(row, key)):
+            versions = list(grouped)
+            first, last = versions[0], versions[-1]
+            timeline = history.filter(**{key: pk})
+            if timeline.filter(history_id__gt=last.history_id).exists():
+                raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
+            previous = timeline.filter(history_id__lt=first.history_id).order_by("-history_id").first()
+            if previous is None and first.history_type != "+":
+                raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
+            yield first, last, previous
+
     def bulk_history_create(
         self,
         model: type[models.Model],
@@ -1141,8 +1163,76 @@ class Aspect:
 class StatementsMixin(models.Model):
     """Subject-owned eligibility and application hooks for typed statements."""
 
+    aspect_precedence: ClassVar[Mapping[str, Sequence[str]]] = {}
+
     class Meta:
         abstract = True
+
+    def statement_managers(self) -> Iterable[Any]:
+        """Yield each MTI owner's bound table once, including parent declarations."""
+
+        seen = set()
+        for owner in (type(self), *self._meta.get_parent_list()):
+            declaration = getattr(owner, "statements", None)
+            if declaration is None or declaration.model in seen:
+                continue
+            seen.add(declaration.model)
+            subject_model = declaration.model.statement_subject_model
+            subject = (
+                self
+                if subject_model is type(self)
+                else subject_model._base_manager.db_manager(self._state.db).get(pk=self.pk)
+            )
+            if subject is not self and (actor := instance_actor(self)) is not None:
+                subject.with_actor(actor)
+            yield subject.statements
+
+    def statements_for(self, aspect: str) -> Any:
+        """Return the single table declaring this aspect; conflicting owners refuse."""
+
+        owners = [manager for manager in self.statement_managers() if aspect in manager.model.statement_aspects]
+        if len(owners) != 1:
+            raise ImproperlyConfigured(f"Expected one statement owner for {aspect!r}.")
+        return owners[0]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Ordinary person edits assert normal statements; resolved saves stay ordinary."""
+
+        if is_sudo():
+            super().save(*args, **kwargs)
+            return
+        actor = instance_actor(self)
+        if actor is None or StatementSourceMixin.kind_for(actor) != SourceKind.PERSON:
+            super().save(*args, **kwargs)
+            return
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        update_fields = kwargs.get("update_fields")
+        with actor_context(actor), transaction.atomic(using=using):
+            previous = type(self)._base_manager.using(using).filter(pk=self.pk).first() if self.pk else None
+            super().save(*args, **kwargs)
+            for manager in self.statement_managers():
+                for aspect, declaration in manager.model.statement_aspects.items():
+                    fields = declaration.fields
+                    if (
+                        declaration.members
+                        or not fields
+                        or not any(
+                            (
+                                update_fields is None
+                                or name in update_fields
+                                or self._meta.get_field(name).attname in update_fields
+                            )
+                            and (previous is None or getattr(previous, name) != getattr(self, name))
+                            for name in fields
+                        )
+                    ):
+                        continue
+                    manager.set(
+                        aspect=aspect,
+                        values={name: getattr(self, name) for name in fields},
+                        asserted_by=actor,
+                    )
+            self.refresh_from_db(using=using)
 
     def require_statement_write(self, actor: SubjectRef) -> None:
         """Admit assertions through the subject's native REBAC write scope."""
@@ -1184,22 +1274,27 @@ class StatementsMixin(models.Model):
         return getattr(self, self.REVISION_FIELD) if isinstance(self, OptimisticLockMixin) else None
 
     def provenance(self, field: str) -> Any:
-        return self.statements.provenance(field)
+        for manager in self.statement_managers():
+            if any(field in (*aspect.fields, *aspect.members) for aspect in manager.model.statement_aspects.values()):
+                return manager.provenance(field)
+        raise FieldDoesNotExist(f"No aspect owns {field!r}.")
 
     def confirm(self, *, aspect: str, values: Mapping[str, Any], **members: Any) -> Any:
-        return self.statements.set(
+        manager = self.statements_for(aspect)
+        return manager.set(
             aspect=aspect,
             values=values,
-            rank=self.statements.model.Rank.PREFERRED,
+            rank=manager.model.Rank.PREFERRED,
             **members,
         )
 
     def dismiss(self, *, aspect: str, **members: Any) -> Any:
-        return self.statements.set(
+        manager = self.statements_for(aspect)
+        return manager.set(
             aspect=aspect,
             values={},
-            rank=self.statements.model.Rank.PREFERRED,
-            snak=self.statements.model.Snak.NO_VALUE,
+            rank=manager.model.Rank.PREFERRED,
+            snak=manager.model.Snak.NO_VALUE,
             **members,
         )
 
@@ -1210,20 +1305,27 @@ class StatementsMixin(models.Model):
 class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, TimestampMixin, RebacMixin):
     """Retained shadow row; its canonical subject owns admission and field gates."""
 
-    class Snak(models.TextChoices):
+    # Class names are the GraphQL enum names, so they carry the owner's prefix
+    # (the example Note model already exposes a ``Status``); the short aliases are
+    # the model-owned spelling the querysets read.
+    class StatementSnak(models.TextChoices):
         VALUE = "value"
         SOME_VALUE = "some_value"
         NO_VALUE = "no_value"
 
-    class Rank(models.TextChoices):
+    class StatementRank(models.TextChoices):
         PREFERRED = "preferred"
         NORMAL = "normal"
 
-    class Status(models.TextChoices):
+    class StatementStatus(models.TextChoices):
         ASSERTED = "asserted"
         WITHDRAWN = "withdrawn"
         QUARANTINED = "quarantined"
         DEPRECATED = "deprecated"
+
+    Snak = StatementSnak
+    Rank = StatementRank
+    Status = StatementStatus
 
     SourceKind = SourceKind
     source_kind_for = StatementSourceMixin.kind_for
@@ -1348,6 +1450,14 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
             for name in names
         )
 
+    def current_key(self) -> dict[str, Any]:
+        """The aspect's identity, shared by merge collapse and its inverse."""
+
+        fields = ("subject", "asserted_by", "aspect", *self.statement_aspects[self.aspect].members)
+        return {
+            self._meta.get_field(name).attname: self._meta.get_field(name).value_from_object(self) for name in fields
+        }
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         if not is_sudo():
             raise PermissionDenied("Write statements through their owning manager verbs.")
@@ -1364,11 +1474,17 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         cls.objects.merge(reference, rows, survivor=survivor)
 
 
-class StatementPair(MergeContractMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin):
+class StatementPairQuerySet(TrashQuerySet, AngeeUnscopedQuerySet):
+    """Retained pair carriers use the same removal scopes as canonical subjects."""
+
+
+class StatementPair(
+    MergeContractMixin, TrashMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin
+):
     """Ordered pair subject; admission and application stay on its endpoints."""
 
-    objects = StatementPairManager()
-    _angee_base = StatementPairManager()
+    objects = StatementPairManager.from_queryset(StatementPairQuerySet)()
+    _angee_base = StatementPairManager.from_queryset(StatementPairQuerySet)()
     left: Any
     right: Any
     pair_name: str
@@ -1381,6 +1497,12 @@ class StatementPair(MergeContractMixin, StatementsMixin, HistoryMixin, SqidMixin
     def require_statement_write(self, actor: SubjectRef) -> None:
         for endpoint in (self.left, self.right):
             endpoint.require_statement_write(actor)
+
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
+        """Union third-party stances while retaining the merged pair as evidence."""
+
+        cls.objects.merge(reference, rows, survivor=survivor)
 
     def apply_resolved(
         self,
@@ -1436,6 +1558,7 @@ class StatementRecords(HistoricalRecords):
 
     def aspects_for(self, model: Any) -> dict[str, Any]:
         aspects: dict[str, Any] = {}
+        donors = []
         for donor in reversed(model.__mro__):
             if donor is not model and (
                 donor is models.Model
@@ -1444,11 +1567,17 @@ class StatementRecords(HistoricalRecords):
                 or any(issubclass(parent, donor) for parent in model._meta.parents)
             ):
                 continue
+            donors.append(donor)
             declaration = self if donor is self.cls else donor.__dict__.get(self.manager_name)
             if isinstance(declaration, StatementRecords):
                 for key, aspect in declaration.aspects.items():
                     # A conflicting declaration is reported by Statement.check().
                     aspects[key] = None if key in aspects and aspects[key] != aspect else aspect
+        for donor in donors:
+            for key, precedence in donor.__dict__.get("aspect_precedence", {}).items():
+                if key not in aspects or not isinstance(aspects[key], Aspect):
+                    raise ImproperlyConfigured(f"No declared aspect owns precedence {key!r}.")
+                aspects[key] = replace(aspects[key], precedence=tuple(precedence))
         return aspects
 
     def finalize(self, sender: Any, **kwargs: Any) -> None:
@@ -1570,7 +1699,7 @@ class PairAspect(StatementRecords):
         super().__init__(aspects={}, link=link)
         self.bases = (StatementPair,)
         self.history_manager = StatementPairManager
-        self.historical_queryset = AngeeUnscopedQuerySet
+        self.historical_queryset = StatementPairQuerySet
         self.custom_model_name = lambda name: (
             f"{name}{''.join(part.title() for part in self.manager_name.split('_'))}Pair"
         )

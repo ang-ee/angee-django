@@ -225,7 +225,7 @@ class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
         candidates = (
             apps.get_model("parties", "Party")
             .objects.with_actor(ctx.actor)
-            .duplicate_candidates(
+            .same_as_pairs(
                 limit=ctx.config.limit,
             )
         )

@@ -54,6 +54,7 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
 from angee.base.actors import instance_actor
+from angee.base.changesets import changeset
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
 from angee.base.mixins import (
@@ -62,6 +63,7 @@ from angee.base.mixins import (
     MergeContractMixin,
     auto_now_stamps,
 )
+from angee.base.querysets import model_history
 from angee.base.refs import (
     MergePolicy,
     RecordRefMixin,
@@ -130,6 +132,16 @@ class Reference:
         """Return the rows pointing at ``record``, outside any actor scope."""
 
         return self.model._base_manager.filter(**self.lookup(record))
+
+    def retains(self, record: models.Model) -> bool:
+        """Include earlier pointer versions when deciding whether evidence survives."""
+
+        if self.rows(record).using(record._state.db).exists():
+            return True
+        return (
+            model_history(self.model) is not None
+            and self.model.history.using(record._state.db).filter(**self.lookup(record)).exists()
+        )
 
     def move(self, rows: models.QuerySet[Any], *, survivor: models.Model) -> None:
         """Re-point ``rows`` to ``survivor``, dropping copies of identity rows it already holds.
@@ -318,6 +330,8 @@ class MergeableMixin(models.Model):
     merge by overriding those hooks and calling ``super()``.
     """
 
+    retains_merged: ClassVar[bool] = False
+
     SURVIVOR_PERMISSION: ClassVar[str] = "write"
     """The permission a merge needs on the record that is kept."""
 
@@ -344,7 +358,7 @@ class MergeableMixin(models.Model):
             if reference.policy == MergePolicy.BLOCK
         )
 
-    def merge(self, *, records: Sequence[str]) -> Self:
+    def merge(self, *, records: Sequence[str], **options: Any) -> Self:
         """Merge the records named by public id into this one and return it.
 
         A record the actor cannot read reads as gone. The whole merge commits or
@@ -377,13 +391,18 @@ class MergeableMixin(models.Model):
                 raise PermissionDenied("You are not allowed to change the record that is kept.")
             if not all(record.has_access(self.MERGED_PERMISSION) for record in merged):
                 raise PermissionDenied("You are not allowed to remove every record being merged.")
-            survivor.validate_merge(merged)
-            survivor.merge_fields(merged)
-            with system_context(reason=MERGE_REASON):
+            with changeset(fresh=True, activity="merge", origin=survivor):
+                survivor.validate_merge(merged)
+                survivor.merge_fields(merged, **options)
+                with system_context(reason=MERGE_REASON):
+                    for record in merged:
+                        survivor.merge_references(record)
                 for record in merged:
-                    survivor.merge_references(record)
-            for record in merged:
-                survivor.retire_merged(record)
+                    survivor.retire_merged(record)
+                # A merge touches both endpoints even when every scalar stays
+                # equal; retain the survivor's boundary for later-touch refusal.
+                survivor.refresh_from_db()
+                survivor.save(update_fields=tuple(auto_now_stamps(model, timezone.now())) or None)
         self.refresh_from_db()
         return self
 
@@ -404,16 +423,18 @@ class MergeableMixin(models.Model):
                 if refused.exists():
                     raise ValidationError(message)
             for record in merged:
-                if _named_in_relationships(record):
+                if not self.retains_merged and named_in_relationships(record):
                     raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
                 for guard in guards:
                     if refusal := guard(record):
                         raise ValidationError(refusal)
 
-    def merge_fields(self, merged: Sequence[Self]) -> None:
+    def merge_fields(self, merged: Sequence[Self], **options: Any) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""
 
         del merged
+        if options:
+            raise ValidationError(f"Unsupported merge options: {', '.join(sorted(options))}.")
 
     def merge_references(self, merged: Self) -> None:
         """Re-point what refers to ``merged`` to this record, by each reference's policy.
@@ -443,7 +464,7 @@ class MergeableMixin(models.Model):
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
 
 
-def _named_in_relationships(record: models.Model) -> bool:
+def named_in_relationships(record: models.Model) -> bool:
     """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
 
     The delete takes the record's multi-table parents and children with it, and
@@ -453,12 +474,12 @@ def _named_in_relationships(record: models.Model) -> bool:
     """
 
     model = type(record)
-    rows = active_relationship_model().objects
+    rows = active_relationship_model().objects.using(record._state.db)
     for owner in (model, *model._meta.get_parent_list(), *_descendants(model)):
         typed, subject = bool(model_resource_type(owner)), model_can_resolve_subject(owner)
         if not (typed or subject):
             continue
-        row = owner._base_manager.filter(pk=record.pk).first()
+        row = owner._base_manager.db_manager(record._state.db).filter(pk=record.pk).first()
         if row is None:
             continue
         refs = [to_object_ref(row)] if typed else []

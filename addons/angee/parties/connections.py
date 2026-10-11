@@ -25,7 +25,6 @@ from rebac import system_context
 from rebac.actors import to_subject_ref
 
 from angee.base.mixins import SourceKind, StatementSourceMixin
-from angee.parties.mixins import LinkSource
 
 
 class ConnectionHandle(Protocol):
@@ -57,8 +56,8 @@ class ConnectionHandle(Protocol):
 class ParsedConnection:
     """One social account's connection to a person, neutral of export format.
 
-    ``handle.metadata`` carries adapter evidence about the account handle;
-    ``provenance`` names the connection record source independently.
+    ``handle.metadata`` carries adapter evidence about the account handle.
+    The batch's identified integration supplies the asserting principal.
     """
 
     handle: ConnectionHandle
@@ -66,7 +65,6 @@ class ParsedConnection:
     organization: str = ""
     title: str = ""
     connected_at: date | datetime | None = None
-    provenance: str = ""
 
 
 def ingest_connections(
@@ -134,19 +132,13 @@ def _ingest_one_connection(
     person_model = apps.get_model("parties", "Person")
     parties = apps.get_model("parties", "Party").objects
     relationship_model = apps.get_model("parties", "Relationship")
-    provenance = str(parsed.provenance or "social_takeout")
-    link_metadata = {"provenance": provenance}
-
     with transaction.atomic():
         handle = handle_model.objects.upsert(
             platform=parsed.handle.platform,
             value=parsed.handle.value,
             external_id=parsed.handle.external_id,
             display_name=parsed.handle.display_name,
-            metadata={
-                **(parsed.handle.metadata or {}),
-                "connection_import": link_metadata,
-            },
+            metadata=parsed.handle.metadata,
             created_by_id=created_by_id,
         )
         person = _connection_person(
@@ -180,22 +172,32 @@ def _ingest_one_connection(
             owner_party,
             person,
             connected_at=parsed.connected_at,
-            provenance=provenance,
             relationship_model=relationship_model,
             kind_model=kind_model,
             kinds=kinds,
             created_by_id=created_by_id,
+            asserted_by=asserted_by,
+            evidence=handle,
         )
         _land_employment(
             person,
             organization=parsed.organization,
             title=parsed.title,
-            provenance=provenance,
             relationship_model=relationship_model,
             kind_model=kind_model,
             kinds=kinds,
             created_by_id=created_by_id,
+            asserted_by=asserted_by,
+            evidence=handle,
         )
+        parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+        parent.statements.set(
+            aspect="identity",
+            values={"display_name": parsed.handle.display_name or parsed.handle.value},
+            asserted_by=asserted_by,
+            evidence=[{"model": handle._meta.label, "id": handle.public_id}],
+        )
+        person.refresh_from_db()
         return person
 
 
@@ -206,18 +208,11 @@ def _connection_person(
     person_model: Any,
     created_by_id: Any,
 ) -> Any:
-    """Return the handle's Person, filling a blank display name only.
-
-    An existing name is never overwritten: it may be user-curated, and export
-    text must not clobber curation on every re-run.
-    """
+    """Return the handle's Person; identity statements own subsequent names."""
 
     if handle.party_id is not None:
         person = person_model._base_manager.filter(pk=handle.party_id).first()
         if person is not None:
-            if display_name and not person.display_name:
-                person.display_name = display_name
-                person.save(update_fields=["display_name", "updated_at"])
             return person
     return person_model.objects.create(
         display_name=display_name or person_model.PLACEHOLDER_NAME,
@@ -242,39 +237,37 @@ def _land_acquaintance(
     person: Any,
     *,
     connected_at: date | datetime | None,
-    provenance: str,
     relationship_model: Any,
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
+    asserted_by: Any,
+    evidence: Any,
 ) -> None:
     """Record the source account's idempotent connection to ``person``."""
 
     if owner_party.pk == person.pk:
         return
     kind = _relationship_kind(kind_model, "acquaintance", kinds)
-    edge, created = relationship_model.objects.get_or_create(
+    edge, _ = relationship_model.objects.get_or_create(
         party=owner_party,
         other_party=person,
         kind=kind,
-        defaults={
-            "source": LinkSource.IMPORT,
+        defaults={"created_by_id": created_by_id},
+    )
+    apps.get_model("parties", "Party").objects._admit_statement_source(to_subject_ref(asserted_by), (edge,))
+    edge.statements.set(
+        aspect="relationship",
+        asserted_by=asserted_by,
+        evidence=[{"model": evidence._meta.label, "id": evidence.public_id}],
+        values={
+            "other_name": "",
+            "title": "",
             "started_at": _connection_date(connected_at),
-            "notes": provenance,
-            "created_by_id": created_by_id,
+            "ended_at": None,
+            "notes": "",
         },
     )
-    if created or edge.source != LinkSource.IMPORT:
-        return
-    values = {
-        "started_at": edge.started_at or _connection_date(connected_at),
-        "notes": edge.notes or provenance,
-    }
-    dirty = [name for name, value in values.items() if getattr(edge, name) != value]
-    if dirty:
-        for name in dirty:
-            setattr(edge, name, values[name])
-        edge.save(update_fields=[*dirty, "updated_at"])
 
 
 def _land_employment(
@@ -282,11 +275,12 @@ def _land_employment(
     *,
     organization: str,
     title: str,
-    provenance: str,
     relationship_model: Any,
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
+    asserted_by: Any,
+    evidence: Any,
 ) -> None:
     """Land the existing free-text employee relationship shape when present."""
 
@@ -294,26 +288,26 @@ def _land_employment(
     if not organization:
         return
     kind = _relationship_kind(kind_model, "employee", kinds)
-    edge, created = relationship_model.objects.get_or_create(
+    edge, _ = relationship_model.objects.get_or_create(
         party=person,
         other_party=None,
         other_name=organization,
         kind=kind,
-        source=LinkSource.IMPORT,
-        defaults={
+        defaults={"created_by_id": created_by_id},
+    )
+    apps.get_model("parties", "Party").objects._admit_statement_source(to_subject_ref(asserted_by), (edge,))
+    edge.statements.set(
+        aspect="relationship",
+        asserted_by=asserted_by,
+        evidence=[{"model": evidence._meta.label, "id": evidence.public_id}],
+        values={
+            "other_name": organization,
             "title": str(title or ""),
-            "notes": provenance,
-            "created_by_id": created_by_id,
+            "notes": "",
+            "started_at": None,
+            "ended_at": None,
         },
     )
-    if created:
-        return
-    values = {"title": str(title or ""), "notes": edge.notes or provenance}
-    dirty = [name for name, value in values.items() if getattr(edge, name) != value]
-    if dirty:
-        for name in dirty:
-            setattr(edge, name, values[name])
-        edge.save(update_fields=[*dirty, "updated_at"])
 
 
 def _connection_date(value: date | datetime | None) -> date | None:

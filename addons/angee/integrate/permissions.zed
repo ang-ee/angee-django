@@ -1,7 +1,7 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 11
 
 definition integrate/oauth_client {
     relation admin: angee/role // rebac:const=admin
@@ -83,7 +83,8 @@ definition integrate/sync_stream {
     relation integration: integrate/integration // rebac:field=integration
 
     permission create = integration->write
-    permission read = integration->read
+    // The asserting principal may inspect evidence from its own feed.
+    permission read = integration + integration->read
     permission write = integration->write
     permission delete = integration->delete
 }
