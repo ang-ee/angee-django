@@ -659,8 +659,10 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
         with system_context(reason="intake.need.link_requester"):
             party = apps.get_model("parties", "Party").objects.for_user(user)
             handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
+            # A claimed address is unverified: the link waits for review rather than
+            # deciding who sends from it.
             apps.get_model("parties", "PartyHandle").objects.link(
-                party, handle, source=LinkSource.EMAIL_MATCH, is_confirmed=False
+                party, handle, confidence=0.4, source=LinkSource.EMAIL_MATCH, is_confirmed=False
             )
             self.party = party
         return user
