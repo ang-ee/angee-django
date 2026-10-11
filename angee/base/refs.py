@@ -230,6 +230,22 @@ class MergePolicy(StrEnum):
     """Refuse the merge while such a row exists."""
 
 
+def unique_field_sets(model: type[models.Model]) -> Iterator[tuple[tuple[str, ...], models.Q]]:
+    """Yield each unique field set of ``model`` with the condition it applies under.
+
+    An expression constraint names no field set and is not yielded.
+    """
+
+    for field in model._meta.concrete_fields:
+        if field.unique and not field.primary_key:
+            yield (field.name,), models.Q()
+    for together in model._meta.unique_together:
+        yield tuple(together), models.Q()
+    for constraint in model._meta.constraints:
+        if isinstance(constraint, models.UniqueConstraint) and constraint.fields:
+            yield tuple(constraint.fields), constraint.condition or models.Q()
+
+
 class RecordRefMixin(models.Model):
     """Project a row reference from the model's single declared generic foreign key."""
 
@@ -283,6 +299,17 @@ class RecordRefMixin(models.Model):
                     id="angee.E030",
                 )
             )
+        declared = {fields for fields, _condition in unique_field_sets(cls)}
+        for fields in cls.merge_identity:
+            if tuple(fields) not in declared:
+                errors.append(
+                    checks.Error(
+                        f"{cls._meta.label}.merge_identity names {fields}, which no unique field set declares.",
+                        hint="Declare the identity as a unique field, unique_together or a UniqueConstraint.",
+                        obj=cls,
+                        id="angee.E037",
+                    )
+                )
         return errors
 
     @property
