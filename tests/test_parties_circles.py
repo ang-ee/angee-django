@@ -186,7 +186,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
 def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     composed_tables: None,
 ) -> None:
-    """Social connections confirm one Person and map employment to Relationship."""
+    """Social connections land one Person, unconfirmed but decisive by id, and map employment to Relationship."""
 
     del composed_tables
     with system_context(reason="test connection ingest"):
@@ -219,10 +219,10 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
 
     assert second.pk == first.pk
     assert Person._base_manager.filter(pk=first.pk).count() == 1
-    assert PartyHandle._base_manager.filter(party=first, is_confirmed=True).count() == 2
+    assert PartyHandle._base_manager.filter(party=first, is_confirmed=False, confidence=1.0).count() == 2
     social_handle = Handle._base_manager.get(platform="linkedin")
     social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
-    assert social_handle.party_link_confirmed is True
+    assert (social_handle.party_id, social_handle.party_link_confirmed) == (first.pk, False)
     assert social_link.source == LinkSource.IMPORT
     assert social_link.metadata["provenance"] == "linkedin_takeout"
     acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
@@ -234,8 +234,41 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     assert Relationship._base_manager.count() == 2
 
 
+@pytest.mark.django_db(transaction=True)
+def test_a_name_only_connection_awaits_review_and_reimports_onto_the_same_person(composed_tables: None) -> None:
+    """A name can match a stranger: its link lands for review, and a re-import never mints a second person."""
+
+    del composed_tables
+    with system_context(reason="test name-only connection"):
+        owner = _user("name-only-connection")
+        RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
+        parsed = ParsedConnection(
+            handle=ParsedHandle(
+                platform="facebook",
+                value="Grace Hopper",
+                display_name="Grace Hopper",
+                metadata={"identity_confidence": "name_only"},
+            ),
+            provenance="facebook_takeout",
+        )
+        person = ingest_connection(parsed, created_by_id=owner.pk)
+        link = PartyHandle._base_manager.get(party=person)
+        handle = link.handle
+        assert (link.confidence, link.is_confirmed) == (0.4, False)
+        assert handle.party_id is None
+        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [link.pk]
+        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
+    with actor_context(owner):
+        link.dismiss()
+    with system_context(reason="test name-only connection reimport"):
+        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
+        link.refresh_from_db()
+        assert link.is_dismissed
+        assert Person._base_manager.filter(display_name="Grace Hopper").count() == 1
+
+
 def _reimported_connection(owner: Any) -> tuple[Any, Any, Any]:
-    """A LinkedIn takeout connection's email, confirmed by its import; the re-import repeats it."""
+    """A LinkedIn takeout connection's email, linked by its import; the re-import repeats it."""
 
     RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
     parsed = ParsedConnection(
@@ -488,6 +521,116 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
         for link in links:
             _name(link, "Unknown")
         assert _resolved_owner(handle) == _in_link_order(links)[0].party_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_links_to_another_handle_folds_each_partys_decisions_and_evidence(composed_tables: None) -> None:
+    """A party on both handles keeps one link with both decisions and evidence; a lone link moves as it is."""
+
+    del composed_tables
+    first, second, third = ({"model": "messaging.Message", "id": f"msg_{index}"} for index in range(3))
+    with system_context(reason="test move links"):
+        owner = _user("move-links")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324870@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421935", created_by=owner)
+        confirmed, dismissed, stronger = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Bob", "Robert", "Rob")
+        )
+        for party, handle, confidence, is_confirmed, is_dismissed, metadata in (
+            (confirmed, alias, 1.0, True, False, {"claim": "alias", "seen": 1, "evidence_refs": [first, third]}),
+            (confirmed, phone, 0.6, False, True, {"claim": "phone", "evidence_refs": [second, first]}),
+            (dismissed, alias, 0.6, False, True, {}),
+            (stronger, alias, 0.3, False, True, {}),
+            (stronger, phone, 0.9, False, False, {}),
+        ):
+            PartyHandle._base_manager.create(
+                party=party, handle=handle, confidence=confidence, source=LinkSource.IMPORT,
+                is_confirmed=is_confirmed, is_dismissed=is_dismissed, metadata=metadata, created_by=owner,
+            )
+        PartyHandle.objects.resolve(alias)
+        alias.refresh_from_db()
+        assert alias.party_id == confirmed.pk
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        links = {
+            party_id: (confidence, is_confirmed, is_dismissed, metadata)
+            for party_id, confidence, is_confirmed, is_dismissed, metadata in PartyHandle._base_manager.filter(
+                handle=phone
+            ).values_list("party_id", "confidence", "is_confirmed", "is_dismissed", "metadata")
+        }
+        phone.refresh_from_db()
+        alias.refresh_from_db()
+        confirmed.refresh_from_db()
+        assert not PartyHandle._base_manager.filter(handle=alias).exists()
+        assert alias.party_id is None
+
+    assert links == {
+        confirmed.pk: (1.0, True, False, {"claim": "phone", "seen": 1, "evidence_refs": [second, first, third]}),
+        dismissed.pk: (0.6, False, True, {}),
+        stronger.pk: (0.9, False, True, {}),
+    }
+    assert (phone.party_id, phone.party_link_confirmed) == (confirmed.pk, True)
+    assert confirmed.handle_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_a_handles_only_link_leaves_it_unowned(composed_tables: None) -> None:
+    """Nothing is deleted, so the move itself re-resolves the handle it empties and recounts its owner."""
+
+    del composed_tables
+    with system_context(reason="test move lone link"):
+        owner = _user("move-lone-link")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324871@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421936", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        PartyHandle.objects.link(party, alias, source=LinkSource.IMPORT, created_by_id=owner.pk)
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        for row in (alias, phone, party):
+            row.refresh_from_db()
+    assert (alias.party_id, phone.party_id, party.handle_count) == (None, party.pk, 1)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_folded_link_keeps_the_source_link_would_keep(composed_tables: None) -> None:
+    """A card's assertion folded with an import stays the card's, so the card keeps publishing the number."""
+
+    del composed_tables
+    with system_context(reason="test move links source"):
+        owner = _user("move-links-source")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324872@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421937", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        PartyHandle.objects.link(party, alias, confidence=0.9, source=LinkSource.CARDDAV, created_by_id=owner.pk)
+        PartyHandle.objects.link(party, phone, confidence=1.0, source=LinkSource.IMPORT, created_by_id=owner.pk)
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        link = PartyHandle._base_manager.get(handle=phone, party=party)
+        assert (link.source, link.confidence) == (LinkSource.CARDDAV, 1.0)
+        assert PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_links_from_a_handle_already_gone_moves_nothing(composed_tables: None) -> None:
+    """A second resolver run racing the first finds its alias merged away and leaves the survivor alone."""
+
+    del composed_tables
+    with system_context(reason="test move links gone"):
+        owner = _user("move-links-gone")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324873@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421938", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        PartyHandle.objects.link(party, phone, source=LinkSource.IMPORT, created_by_id=owner.pk)
+        Handle._base_manager.filter(pk=alias.pk).delete()
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        phone.refresh_from_db()
+    assert phone.party_id == party.pk
+    assert PartyHandle._base_manager.filter(handle=phone).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
