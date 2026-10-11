@@ -66,6 +66,16 @@ definition projects/task {
     permission restore = admin->member
 }
 
+// The resource-declared kinds of task about a record; everyone reads the catalog.
+definition projects/activity_type {
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = authenticated
+    permission create = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
 definition projects/task_relation {
     relation task:         projects/task // rebac:field=task
     relation related_task: projects/task // rebac:field=related_task

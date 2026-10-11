@@ -5,7 +5,7 @@ export const CHANNEL_MODEL = "messaging.Channel";
 /** The edge a record carries its chatter and source conversations through. */
 export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
 
-// The models a record thread reads: the live-refresh keys for the thread/activity
+// The models a record thread reads: the live-refresh keys for the thread/history
 // queries and the invalidation set every chatter mutation republishes. One owner,
 // shared by both chatter panes.
 export const READ_MODELS = [
@@ -14,21 +14,17 @@ export const READ_MODELS = [
   THREAD_ATTACHMENT_MODEL,
   "messaging.Message",
   "messaging.ThreadFollower",
-  "messaging.ThreadActivity",
-  "messaging.ActivityType",
   "messaging.ThreadNotification",
   "messaging.Reaction",
   "messaging.MessageStar",
 ] as const;
 
 // The count probe only depends on receipt-moving rows and messages; it avoids
-// the wider thread payload's followers, activities, notifications, and handles.
+// the wider thread payload's followers, notifications, and handles.
 export const RECORD_UNREAD_COUNT_MODELS = [
   "messaging.Message",
   "messaging.ThreadFollower",
 ] as const;
-
-export const ACTIVITY_AGENDA_MODELS = ["messaging.ThreadActivity"] as const;
 
 /** Typed projection rendered by the Message record's structural parts list. */
 export const MessagingPartListRow = graphql(`
@@ -43,24 +39,6 @@ export const MessagingPartListRow = graphql(`
     parent { id }
     fragment { id kind hash text part_count message_count }
     file { id filename title }
-  }
-`);
-
-/** Messaging-owned cross-record agenda used by personal work projections. */
-export const ActivityAgendaDocument = graphql(`
-  query MessagingActivityAgenda($windowStart: Date!, $windowEnd: Date!) {
-    activity_agenda(window_start: $windowStart, window_end: $windowEnd) {
-      id
-      summary
-      due_date
-      state
-      status
-      attachment {
-        label
-        model_label
-        record_id
-      }
-    }
   }
 `);
 
@@ -207,22 +185,6 @@ export const RecordThreadSummaryFields = graphql(`
 
 export const RecordUserFields = graphql(`
   fragment RecordUserFields on UserType { id username display_name }
-`);
-
-export const RecordActivityFields = graphql(`
-  fragment RecordActivityFields on RecordThreadActivityType {
-    id
-    activity_type
-    summary
-    note
-    due_date
-    completed_at
-    feedback
-    status
-    state
-    user { ...RecordUserFields }
-    created_by { ...RecordUserFields }
-  }
 `);
 
 // One owner for the record-feed message selection: the four operations that
@@ -448,11 +410,6 @@ export const RecordThreadDocument = graphql(`
       followers {
         ...RecordFollowerFields
       }
-      activity_count
-      activities {
-        ...RecordActivityFields
-      }
-      activity_types { id key name glyph }
     }
   }
 `);
@@ -514,7 +471,6 @@ export const PostRecordMessageDocument = graphql(`
       needaction_count
       message_has_error
       message_has_error_counter
-      activity_count
       attachment_count
       message {
         ...RecordMessageFields
@@ -549,7 +505,6 @@ export const UpdateRecordMessageDocument = graphql(`
       needaction_count
       message_has_error
       message_has_error_counter
-      activity_count
       attachment_count
       message {
         ...RecordMessageFields
@@ -648,7 +603,6 @@ export const DeleteRecordMessageDocument = graphql(`
       needaction_count
       message_has_error
       message_has_error_counter
-      activity_count
       attachment_count
       thread {
         ...RecordThreadSummaryFields
@@ -790,103 +744,8 @@ export const SetRecordFollowingDocument = graphql(`
   }
 `);
 
-export const LogRecordActivityDocument = graphql(`
-  mutation MessagingLogRecordActivity(
-    $modelLabel: String!
-    $recordId: ID!
-    $activityType: String!
-    $occurredOn: Date!
-    $note: String!
-  ) {
-    log_record_activity(input: {
-      model_label: $modelLabel
-      record_id: $recordId
-      activity_type: $activityType
-      occurred_on: $occurredOn
-      note: $note
-    }) {
-      error
-      error_code
-      activity_count
-      activity { ...RecordActivityFields }
-    }
-  }
-`);
-
-export const ScheduleRecordActivityDocument = graphql(`
-  mutation MessagingScheduleRecordActivity(
-    $modelLabel: String!
-    $recordId: ID!
-    $summary: String!
-    $note: String = ""
-    $dueDate: Date
-    $activityType: String = "todo"
-  ) {
-    schedule_record_activity(
-      input: {
-        model_label: $modelLabel
-        record_id: $recordId
-        summary: $summary
-        note: $note
-        due_date: $dueDate
-        activity_type: $activityType
-      }
-    ) {
-      error
-      error_code
-      activity_count
-      activity {
-        ...RecordActivityFields
-      }
-    }
-  }
-`);
-
-export const CompleteRecordActivityDocument = graphql(`
-  mutation MessagingCompleteRecordActivity(
-    $activityId: ID!
-    $feedback: String = ""
-  ) {
-    complete_record_activity(
-      input: {
-        activity_id: $activityId
-        feedback: $feedback
-      }
-    ) {
-      error
-      error_code
-      activity_count
-      activity {
-        id
-        summary
-        completed_at
-        feedback
-        status
-        state
-      }
-    }
-  }
-`);
-
-export const CancelRecordActivityDocument = graphql(`
-  mutation MessagingCancelRecordActivity($activityId: ID!) {
-    cancel_record_activity(input: { activity_id: $activityId }) {
-      error
-      error_code
-      activity_count
-      activity {
-        id
-        summary
-        completed_at
-        status
-        state
-      }
-    }
-  }
-`);
-
-// Activity reads only retained system updates plus planned activities. Ordinary
-// conversation, follower, and recipient payloads remain owned by Comments.
+// Activity reads only retained system updates. Ordinary conversation, follower,
+// and recipient payloads remain owned by Comments; tasks about the record by projects.
 export const RecordActivityThreadDocument = graphql(`
   query MessagingRecordActivityThread($modelLabel: String!, $recordId: ID!) {
     record_thread(
@@ -900,10 +759,6 @@ export const RecordActivityThreadDocument = graphql(`
       error
       error_code
       message_result_count
-      activity_count
-      activities {
-        ...RecordActivityFields
-      }
       messages {
         ...RecordMessageFields
       }
@@ -920,7 +775,6 @@ export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["rec
 export type RecordActivityThreadPayload =
   DocumentType<typeof RecordActivityThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
-export type RecordActivityRow = NonNullable<RecordActivityThreadPayload["activities"]>[number];
 export type RecordActivityMessageRow = NonNullable<RecordActivityThreadPayload["messages"]>[number];
 export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
 export type SuggestedRecipientRow =

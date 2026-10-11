@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [resources]
-master = [{ path = "resources/master/010_messaging.activitytype.yaml", adopt = "key" }]
+master = []
 
 [[migrations]]
 name = "follower_party"
@@ -48,3 +48,8 @@ module = "runtime_migrations.channel_sync_status"
 name = "message_trash"
 app_label = "messaging"
 module = "runtime_migrations.message_trash"
+
+[[migrations]]
+name = "activities_need_projects"
+app_label = "messaging"
+module = "runtime_migrations.activities_need_projects"

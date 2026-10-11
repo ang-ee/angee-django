@@ -308,8 +308,8 @@ shared UI copy through an addon bundle.
   projection, route transitions, DnD policy, and domain actions. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list:
-  [My Work](../../addons/angee/projects/web/src/views/MyWorkPage.tsx) publishes
-  messaging's `ActivityAgendaPane`. Page tests use
+  the [workflows record timeline](../../addons/angee/workflows/web/src/timeline-pane.tsx)
+  publishes its left-side timeline this way. Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
 - Chatter publishers compose by owner for their mounted lifetime. Panels mount

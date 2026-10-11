@@ -20,9 +20,8 @@ import {
   THREAD_ATTACHMENT_MODEL,
 } from "./documents";
 
-export { CHANNEL_MODEL, LogRecordActivityDocument } from "./documents";
+export { CHANNEL_MODEL } from "./documents";
 export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
-export { ActivityAgendaPane } from "./ActivityAgendaPane";
 export {
   defineChannelBridgeAddon,
   defineChannelPollBridgeAddon,

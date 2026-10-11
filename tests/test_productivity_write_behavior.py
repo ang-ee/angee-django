@@ -111,6 +111,9 @@ class CreateTaskHost(models.Model):
     action_blockers = AbstractTask.__dict__["action_blockers"]
     validate_action = AbstractTask.validate_action
 
+    def _post_completion(self, feedback: str = "", card_message: str | None = None) -> None:
+        """A stand-in task is about no record, so its completion posts nothing."""
+
     class Meta:
         abstract = True
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, ClassVar, cast
 
@@ -75,13 +75,12 @@ from angee.messaging.managers import (
     MessageStarManager,
     PartManager,
     ReactionManager,
-    ThreadActivityManager,
     ThreadAttachmentManager,
     ThreadFollowerManager,
     ThreadManager,
     ThreadNotificationManager,
 )
-from angee.messaging.resources import MessageResource, ThreadActivityResource
+from angee.messaging.resources import MessageResource
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
@@ -251,7 +250,7 @@ class ThreadedModelMixin(models.Model):
     """Subtype key used for automatic record creation messages."""
 
     thread_activity_access: ClassVar[str] = "write"
-    """Record permission required to schedule or update chatter activities."""
+    """Record permission required to schedule, log, complete or cancel tasks about the record."""
 
     thread_tracking_fields: ClassVar[tuple[str, ...]] = ()
     """Model field names automatically tracked into the chatter on save."""
@@ -866,80 +865,6 @@ class ThreadedModelMixin(models.Model):
             {**item, "user": readable[item["user"].pk]} for item in suggestions if item["user"].pk in readable
         )
 
-    def activity_schedule(
-        self,
-        *,
-        user: models.Model | None = None,
-        summary: str,
-        note: str = "",
-        due_date: object | None = None,
-        activity_type: str = "todo",
-        metadata: dict[str, object] | None = None,
-    ) -> models.Model:
-        """Schedule an activity using an installed catalog key.
-
-        The default ``todo`` key comes from messaging's master resources; custom
-        keys must also be loaded before scheduling. Missing keys fail validation.
-        """
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Scheduling activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.schedule(
-            self,
-            user=user,
-            role=self.thread_attachment_role,
-            summary=summary,
-            note=note,
-            due_date=due_date,
-            activity_type=activity_type,
-            metadata=metadata,
-        )
-
-    def activity_ids(self, *, include_done: bool = True) -> models.QuerySet:
-        """Return this row's scheduled chatter activities."""
-
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.for_record(
-            self,
-            role=self.thread_attachment_role,
-            include_done=include_done,
-        )
-
-    def activity_log(self, activity_type: str, occurred_on: date, note: str) -> models.Model:
-        """Record a completed exchange, without also posting a completion message."""
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Logging activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        return apps.get_model("messaging", "ThreadActivity").objects.log(
-            self, activity_type=activity_type, occurred_on=occurred_on, note=note,
-            role=self.thread_attachment_role,
-        )
-
-    def activity_feedback(self, activity: models.Model, *, feedback: str = "") -> models.Model:
-        """Mark an activity done and log the feedback in the chatter thread."""
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Completing activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.complete(activity, feedback=feedback)
-
-    def activity_unlink(self, activity: models.Model) -> models.Model:
-        """Cancel a scheduled activity without logging a completion message."""
-
-        if not self._message_activity_allowed():
-            raise PermissionDenied(
-                f"Canceling activities on {self._meta.label} requires {self.thread_activity_access!r} access."
-            )
-        activity_model = apps.get_model("messaging", "ThreadActivity")
-        return activity_model.objects.cancel(activity)
-
     def message_thread_title(self) -> str:
         """Return the default title text for this row's chatter thread.
 
@@ -1018,7 +943,7 @@ class ThreadedModelMixin(models.Model):
         return bool(has_access(self.thread_read_access))
 
     def _message_activity_allowed(self) -> bool:
-        """Return whether the ambient actor can schedule/update activities."""
+        """Return whether the ambient actor can manage tasks about this record."""
 
         has_access = getattr(self, "has_access", None)
         if not callable(has_access):
@@ -1651,116 +1576,6 @@ class ThreadFollower(AuditMixin, AngeeDataModel):
             notification_policy=NotificationPolicy(self.notification_policy),
             subtype_keys=tuple(self.subtype_keys or ()),
         )
-
-
-class ActivityType(AuditMixin, AngeeDataModel):
-    """Resource-declared exchange types; activity rows retain the stable key."""
-
-    runtime = True
-    sqid_prefix = "act_"
-    key = models.SlugField(max_length=64, unique=True)
-    name = models.CharField(max_length=160)
-    glyph = models.CharField(max_length=128, blank=True, default="")
-
-    class Meta:
-        abstract = True
-        ordering = ("name", "key")
-        rebac_resource_type = "messaging/activity_type"
-
-    def __str__(self) -> str:
-        return self.name
-
-
-class ThreadActivity(ResourceLoadMixin, AuditMixin, AngeeDataModel):
-    """A scheduled activity attached to a model chatter thread."""
-
-    runtime = True
-    resource_class = ThreadActivityResource
-
-    class ActivityStatus(models.TextChoices):
-        """Stored lifecycle for an activity."""
-
-        TODO = "todo", "Todo"
-        DONE = "done", "Done"
-        CANCELED = "canceled", "Canceled"
-
-    sqid_prefix = "tac_"
-    thread = models.ForeignKey(
-        "messaging.Thread",
-        on_delete=models.CASCADE,
-        related_name="activities",
-    )
-    attachment = models.ForeignKey(
-        "messaging.ThreadAttachment",
-        on_delete=models.CASCADE,
-        related_name="activities",
-    )
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="+",
-    )
-    activity_type = models.ForeignKey(
-        "messaging.ActivityType", to_field="key", db_column="activity_type",
-        on_delete=models.PROTECT, default="todo", related_name="activities",
-    )
-    summary = models.CharField(max_length=256)
-    note = models.TextField(blank=True, default="")
-    due_date = models.DateField(null=True, blank=True, db_index=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-    feedback = models.TextField(blank=True, default="")
-    status = StateField(choices_enum=ActivityStatus, default=ActivityStatus.TODO, db_index=True)
-    metadata = models.JSONField(blank=True, default=dict)
-
-    objects = ThreadActivityManager()
-
-    class Meta:
-        """Django model options for thread activities."""
-
-        abstract = True
-        ordering = ("status", "due_date", "sqid")
-        verbose_name_plural = "thread activities"
-        rebac_resource_type = "messaging/thread_activity"
-        indexes = (
-            models.Index(fields=("thread", "status", "due_date")),
-            models.Index(fields=("attachment", "status", "due_date")),
-            models.Index(fields=("user", "status", "due_date")),
-        )
-
-    def clean(self) -> None:
-        """Accept only activity keys declared by the installed catalog."""
-
-        super().clean()
-        catalog = apps.get_model("messaging", "ActivityType")
-        if not catalog.system_queryset().filter(key=self.activity_type_id).exists():
-            raise ValidationError({"activity_type": "Declare this activity type in the catalog first."})
-
-    @property
-    def activity_state(self) -> str:
-        """Return the Odoo-style activity state for presentation."""
-
-        if self.status == self.ActivityStatus.DONE:
-            return "done"
-        if self.status == self.ActivityStatus.CANCELED:
-            return "canceled"
-        if self.due_date is None:
-            return "planned"
-        today = timezone.localdate()
-        if self.due_date < today:
-            return "overdue"
-        if self.due_date == today:
-            return "today"
-        return "planned"
-
-    def completion_message(self) -> str:
-        """Return the chatter body posted when this activity is completed."""
-
-        return f"Activity done: {self.summary}"
-
-    def __str__(self) -> str:
-        """Return a readable activity label."""
-
-        return self.summary
 
 
 class MessageSubtype(AuditMixin, AngeeDataModel):

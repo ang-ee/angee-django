@@ -9,9 +9,9 @@ always allows) cannot:
 - **part 1** — an actor granted ``writer`` may change a tracked field (``write``)
   but may not post comments (``post``), so an automatic tracked-field log must land
   without consulting ``can_post``.
-- **part 3** — a user with no grant cannot read the record, so an activity attached
-  to it is unreachable through complete/cancel (authorization rides the record
-  read, not the activity's own permission).
+- **part 3** — a user with no grant cannot read the record, so a task about it is
+  unreachable through the record's complete/cancel (authorization rides the
+  record read, not the task's own permission).
 
 ``thread_post_access`` is overridden to ``"post"`` so post access diverges from the
 ``"write"`` that authorizes saving a tracked field; the mixin's other access verbs

@@ -41,6 +41,7 @@ from angee.base.mixins import (
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import bind_actor, system_queryset
+from angee.base.serialization import strip_null_bytes
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
@@ -215,6 +216,14 @@ class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
             raise ValueError("Task.visibility requires set_visibility().")
         return super().bulk_update(objs, fields, *args, **kwargs)
 
+    def agenda(self, user: Any, window_start: Any, window_end: Any, *, include_done: bool = False) -> Any:
+        """Return ``user``'s assigned tasks due within ``[window_start, window_end)``, by due date."""
+
+        tasks = self.filter(assignee=user, due_date__gte=window_start, due_date__lt=window_end)
+        if not include_done:
+            tasks = tasks.filter(status=self.model.TaskStatus.OPEN)
+        return tasks.order_by("due_date", "sqid")
+
     def priority_rank_expression(self) -> models.Case:
         """Order urgency by the priority field's declared enum order."""
 
@@ -238,41 +247,141 @@ class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
 
 
 class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[misc]
-    """Own idempotent task promotion from a ThreadActivity."""
+    """Own tasks about a record (card tasks) and an assignee's dated agenda.
 
-    def from_activity(self, activity: models.Model) -> models.Model:
-        """Return the one task promoted from ``activity``, creating it if needed."""
+    A card task's subject is the record's chatter attachment, so the record's own
+    gates decide who reads its tasks (``thread_read_access``) and who schedules,
+    logs, completes or cancels them (``thread_activity_access``).
+    """
 
-        if activity.pk is None:
-            raise ValidationError("An activity must be saved before it can be promoted.")
-        actor = current_actor()
+    def for_record(self, record: Any, *, include_done: bool = True) -> Any:
+        """Read ``record``'s tasks through the record's read gate."""
+
+        if not record._message_read_allowed():
+            raise PermissionDenied("Reading a record's tasks requires record read access.")
+        attachment = _card_attachment(record)
+        if attachment is None:
+            return self.none()
+        tasks = self.sudo(reason="projects.task.for_record").filter(subject=attachment)
+        return tasks if include_done else tasks.filter(status=self.model.TaskStatus.OPEN)
+
+    def schedule(
+        self,
+        record: Any,
+        *,
+        title: str,
+        assignee: Any = None,
+        due_date: Any = None,
+        note: str = "",
+        activity_type: str = "todo",
+    ) -> Any:
+        """Create an open task about ``record``, assigned to ``assignee`` or the actor."""
+
+        _require_card_access(record, "Scheduling")
+        title = strip_null_bytes(title or "").strip()
+        if not title:
+            raise ValidationError({"title": "A task about a record needs a title."})
+        assignee_id = getattr(assignee, "pk", assignee) or actor_user_id(current_actor())
+        if assignee_id is None:
+            raise ValidationError({"assignee": "A task about a record needs an assignee."})
         with transaction.atomic():
-            with system_context(reason="projects.task.promote_from_activity.lookup"):
-                locked_activity = type(activity).objects.lock_if_supported().get(pk=activity.pk)
-                existing = self.filter(converted_from_activity_id=activity.pk).first()
-            if existing is not None:
-                bind_actor(existing, actor)
-                return existing
-
-            verified_actor = self.check_create()
             task = self.model(
-                title=locked_activity.summary,
-                note=locked_activity.note,
-                assignee_id=locked_activity.user_id,
-                due_date=locked_activity.due_date,
-                converted_from_activity_id=locked_activity.pk,
+                title=title,
+                note=strip_null_bytes(note or ""),
+                assignee_id=assignee_id,
+                due_date=due_date or timezone.localdate(),
+                subject=_ensure_card_attachment(record),
+                activity_type_id=strip_null_bytes(activity_type or "todo"),
             )
             task.allocate_ordering_ranks()
             task.full_clean(validate_unique=False, validate_constraints=False)
-            task.sudo(reason="projects.task.promote_from_activity")
-            try:
-                with transaction.atomic():
-                    task.save()
-            except IntegrityError:
-                with system_context(reason="projects.task.promote_from_activity.concurrent_lookup"):
-                    task = self.get(converted_from_activity_id=activity.pk)
-            bind_actor(task, verified_actor)
-            return task
+            task.save()
+        return task
+
+    def log(self, record: Any, *, activity_type: str, occurred_on: Any, note: str) -> Any:
+        """Record one completed exchange about ``record`` and post it on the record's chatter."""
+
+        _require_card_access(record, "Logging")
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
+            raise PermissionDenied("Logging a task requires an account.")
+        note = strip_null_bytes(note or "")
+        title = note.splitlines()[0].strip()[:240] if note else ""
+        if not title:
+            raise ValidationError({"note": "A logged exchange needs a nonempty first line."})
+        if occurred_on is None:
+            raise ValidationError({"due_date": "The day the exchange happened is required."})
+        with transaction.atomic():
+            task = self.model(
+                title=title,
+                note=note,
+                assignee_id=user_id,
+                due_date=occurred_on,
+                subject=_ensure_card_attachment(record),
+                activity_type_id=strip_null_bytes(activity_type),
+            )
+            task.allocate_ordering_ranks()
+            task.full_clean(validate_unique=False, validate_constraints=False)
+            task.save()
+            task.complete(card_message=task.card_log_message())
+        return task
+
+    def card_complete(self, task: Any, *, feedback: str = "") -> Any:
+        """Complete a task about a record under the record's task permission."""
+
+        _require_card_access(_card_record(task), "Completing")
+        with system_context(reason="projects.task.card_complete"):
+            return task.complete(feedback=feedback)
+
+    def card_cancel(self, task: Any) -> Any:
+        """Drop a task about a record as obsolete under the record's task permission."""
+
+        _require_card_access(_card_record(task), "Canceling")
+        with system_context(reason="projects.task.card_cancel"):
+            return task.drop(self.model.TaskDroppedReason.OBSOLETE)
+
+
+def _card_attachment(record: Any) -> Any:
+    """Return ``record``'s chatter attachment, the subject its tasks point at."""
+
+    return apps.get_model("messaging", "ThreadAttachment").objects.for_record(
+        record, role=record.thread_attachment_role,
+    )
+
+
+def _ensure_card_attachment(record: Any) -> Any:
+    """Return ``record``'s chatter attachment, creating its private thread if needed."""
+
+    title = getattr(record, "message_thread_title", None)
+    return apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
+        record, role=record.thread_attachment_role, title=str(title()) if callable(title) else str(record),
+    )
+
+
+def _card_record(task: Any) -> Any:
+    """Return the record a card task is about."""
+
+    if task.subject_id is None:
+        raise ValidationError("This task is not about a record.")
+    with system_context(reason="projects.task.card_record"):
+        attachment = task._meta.get_field("subject").related_model._base_manager.get(pk=task.subject_id)
+        record = attachment.target
+    if record is None:
+        raise ValidationError("The record this task is about no longer exists.")
+    # The card's own read scope: an unreadable record refuses like a missing one.
+    readable = type(record)._default_manager.filter(pk=record.pk).first()
+    if readable is None:
+        raise PermissionDenied("The record this task is about is not readable.")
+    return readable
+
+
+def _require_card_access(record: Any, verb: str) -> None:
+    """Refuse unless the actor holds the record's task permission."""
+
+    if not record._message_activity_allowed():
+        raise PermissionDenied(
+            f"{verb} tasks on {record._meta.label} requires {record.thread_activity_access!r} access."
+        )
 
 
 class LinkManager(AngeeManager):
@@ -778,6 +887,24 @@ class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, Aud
             raise ValidationError("A reached milestone cannot be deleted.")
 
 
+class ActivityType(AuditMixin, AngeeDataModel):
+    """Resource-declared kinds of task about a record; tasks keep the stable key."""
+
+    runtime = True
+    sqid_prefix = "act_"
+    key = models.SlugField(max_length=64, unique=True)
+    name = models.CharField(max_length=160)
+    glyph = models.CharField(max_length=128, blank=True, default="")
+
+    class Meta:
+        abstract = True
+        ordering = ("name", "key")
+        rebac_resource_type = "projects/activity_type"
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Task(
     TaggedModel,
     CreationKeyMixin,
@@ -891,12 +1018,21 @@ class Task(
     sub_sort_order = FractionalRankField()
     done_at = models.DateTimeField(null=True, blank=True, db_index=True)
     dropped_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    converted_from_activity = models.ForeignKey(
-        "messaging.ThreadActivity",
+    subject = models.ForeignKey(
+        "messaging.ThreadAttachment",
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
-        related_name="promoted_tasks",
+        on_delete=models.CASCADE,
+        related_name="subject_tasks",
+        help_text="The record this task is about, through its chatter attachment.",
+    )
+    activity_type = models.ForeignKey(
+        "projects.ActivityType",
+        to_field="key",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tasks",
     )
     links = GenericRelation(
         "projects.Link",
@@ -925,11 +1061,11 @@ class Task(
                 name="uq_projects_task_parent_sub_rank",
                 nulls_distinct=False,
             ),
-            models.UniqueConstraint(
-                fields=("converted_from_activity",),
-                name="uq_projects_task_converted_activity",
-            ),
             CreationKeyMixin.creation_key_constraint(),
+        )
+        indexes = (
+            models.Index(fields=("subject", "status", "due_date")),
+            models.Index(fields=("assignee", "status", "due_date")),
         )
 
     def __str__(self) -> str:
@@ -1088,8 +1224,13 @@ class Task(
             if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
                 raise ValidationError(error)
 
-    def complete(self) -> Task:
-        """Mark this task done, idempotently preserving its first completion time."""
+    def complete(self, *, feedback: str = "", card_message: str | None = None) -> Task:
+        """Mark this task done, idempotently preserving its first completion time.
+
+        A task about a record posts its completion, with ``feedback``, on the
+        record's chatter, as the record's own activity log; ``card_message``
+        replaces that post (a logged exchange posts its own day and note).
+        """
 
         if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
             return self
@@ -1098,8 +1239,80 @@ class Task(
         self.done_at = self.done_at or timezone.now()
         cast(Any, self).dropped_reason = None
         self.dropped_at = None
-        self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+        with transaction.atomic():
+            self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+            self._post_completion(feedback, card_message)
         return self
+
+    def _post_completion(self, feedback: str = "", card_message: str | None = None) -> None:
+        """Post a done card task, with ``feedback``, on its record; other tasks post nothing."""
+
+        if self.subject_id is None:
+            return
+        if card_message is not None:
+            self.post_on_card(card_message)
+            return
+        body = self.card_completion_message()
+        feedback = strip_null_bytes(feedback or "").strip()
+        self.post_on_card(f"{body}\n\n{feedback}" if feedback else body)
+
+    def card_completion_message(self) -> str:
+        """Return the record chatter body posted when this card task is done."""
+
+        if self.activity_type_id in (None, "todo"):
+            return f"Done: {self.title}"
+        return f"{self._activity_label()} done: {self.title}"
+
+    def card_log_message(self) -> str:
+        """Return the record chatter body for a logged exchange: its type, day and note."""
+
+        day = self.due_date.isoformat() if self.due_date else ""
+        return f"{self._activity_label()} on {day}\n\n{self.note}".rstrip()
+
+    def _activity_label(self) -> str:
+        """Return the task's activity type name, or a plain task label."""
+
+        if self.activity_type_id is None:
+            return "Task"
+        with system_context(reason="projects.task.activity_label"):
+            kind = self._meta.get_field("activity_type").related_model._base_manager.filter(
+                key=self.activity_type_id,
+            ).first()
+        return kind.name if kind is not None else self.activity_type_id
+
+    def post_on_card(self, body: str) -> None:
+        """Post ``body`` on the record this task is about, as that record's automatic log."""
+
+        message_model = apps.get_model("messaging", "Message")
+        actor_id = actor_user_id(current_actor())
+        with system_context(reason="projects.task.card_post"):
+            attachment = (
+                self._meta.get_field("subject").related_model._base_manager
+                .select_related("content_type", "thread").get(pk=self.subject_id)
+            )
+            model_class = attachment.content_type.model_class()
+            message_model.objects.post_to_thread(
+                attachment.thread,
+                body=body,
+                created_by_id=actor_id,
+                attachment=attachment,
+                message_type=message_model.MessageKind.AUTO_COMMENT,
+                subtype_key="activity_done",
+                subtype_model_label=model_class._meta.label if model_class is not None else "",
+            )
+
+    def _message_after_create(self) -> None:
+        """A task about a record keeps its conversation on the record, not a thread of its own."""
+
+        if self.subject_id is None:
+            super()._message_after_create()
+
+    def message_track(self, changes: Any, **kwargs: Any) -> Any:
+        """Track field changes only for tasks with their own conversation."""
+
+        if self.subject_id is not None:
+            return None
+        return super().message_track(changes, **kwargs)
 
     def drop(self, reason: str | TaskDroppedReason) -> Task:
         """Drop this task for ``reason``, idempotently preserving the drop time."""
@@ -1501,23 +1714,6 @@ class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
         """Return the link title or URL."""
 
         return self.title or self.url
-
-
-class ThreadActivityProjects(models.Model):
-    """Contribute Activity-to-Task maturation onto messaging.ThreadActivity."""
-
-    extends = "messaging.ThreadActivity"
-
-    class Meta:
-        """Abstract same-row behavior donor for messaging.ThreadActivity."""
-
-        abstract = True
-
-    def promote_to_task(self) -> models.Model:
-        """Return the one task matured from this thread activity."""
-
-        task_model = apps.get_model("projects", "Task")
-        return task_model.objects.from_activity(self)
 
 
 class ProjectBindingsMixin(models.Model):
