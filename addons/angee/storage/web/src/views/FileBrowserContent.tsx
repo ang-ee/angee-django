@@ -1,4 +1,4 @@
-import { useRef, type ReactElement, type ReactNode } from "react";
+import { useRef, type ReactElement } from "react";
 
 import type { ResourceFilter } from "@angee/metadata";
 import {
@@ -27,7 +27,7 @@ export interface FileBrowserContentProps {
   /** Detail route for a clicked row — the list renders each row as a link. */
   rowHref: ListProps<StorageFileRow>["rowHref"];
   /** Bulk actions rendered in the selection bar when files are selected. */
-  bulkActions: (selectedIds: ReadonlySet<string>, clear: () => void) => ReactNode;
+  bulkActions: ListProps<StorageFileRow>["bulkActions"];
   onListStateChange: (state: ResourceListSnapshot<StorageFileRow>) => void;
   uploads: StorageUpload;
   uploadTarget: UploadTarget;

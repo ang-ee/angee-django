@@ -1,7 +1,7 @@
 import * as React from "react";
 import { type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE } from "@angee/refine";
-import { useReactTable, getCoreRowModel, getExpandedRowModel, getGroupedRowModel, type ColumnDef, type ExpandedState } from "@tanstack/react-table";
+import { useReactTable, getCoreRowModel, getExpandedRowModel, getGroupedRowModel, type ColumnDef, type ExpandedState, type Table } from "@tanstack/react-table";
 import { useResourceListQuery } from "./resource-list-query";
 import { useBoardLaneState } from "../resource-view-board-lanes";
 import { modelRowId } from "../resource-view-codecs";
@@ -121,7 +121,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     paginationState.pageSize,
     resourceView.setPage,
   ]);
-  const table = useReactTable<TRow>({
+  const table: Table<TRow> = useReactTable<TRow>({
     data: rows,
     columns: tableColumns as ColumnDef<TRow>[],
     rowCount: total,
@@ -142,7 +142,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     onColumnVisibilityChange: setColumnVisibility,
     onExpandedChange: setExpanded,
     onPaginationChange: handlePaginationChange,
-    onRowSelectionChange: handleRowSelectionChange,
+    onRowSelectionChange: (updater) => handleRowSelectionChange(updater, table),
     onSortingChange: handleSortingChange,
     getRowId: (row, index) => modelRowId(row, index, dataResource),
     enableRowSelection: (row) => !row.getIsGrouped(),
@@ -188,7 +188,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   });
 
   const presentation = useResourceViewPresentationSurfaceFromTable({
-    rows,
     table,
     columnVisibility,
     resourceView,
