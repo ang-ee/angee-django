@@ -41,6 +41,7 @@ Person = apps.get_model("parties", "Person")
 Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
 PartyHandle = apps.get_model("parties", "PartyHandle")
+PartyHandleClaim = apps.get_model("parties", "PartyHandleClaim")
 Address = apps.get_model("parties", "Address")
 Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
@@ -215,14 +216,14 @@ class PartyHandleType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["metadata"])
+    @strawberry_django.field(prefetch_related=[lambda info: PartyHandleClaim.objects.prefetch_for(session_user(info))])
     def evidence_refs(self, info: strawberry.Info) -> list["PartyHandleEvidenceType"]:
         """Return at most twenty actor-readable records supporting this claim."""
 
         page = cast(Any, self).evidence_page(session_user(info))
         return [PartyHandleEvidenceType(model=item.model, id=item.id) for item in page.items]
 
-    @strawberry_django.field(only=["metadata"])
+    @strawberry_django.field(prefetch_related=[lambda info: PartyHandleClaim.objects.prefetch_for(session_user(info))])
     def evidence_truncated(self, info: strawberry.Info) -> bool:
         """Return whether more retained evidence exists beyond the bounded projection."""
 

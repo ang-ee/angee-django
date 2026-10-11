@@ -702,7 +702,12 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
         return f"{self.party_id}↔{self.handle_id} ({self.confidence})"
 
     def evidence_page(self, actor: Any, *, limit: int = 20) -> PartyHandleEvidencePage:
-        """Return a hard-bounded actor-readable projection of retained evidence."""
+        """Return a hard-bounded actor-readable projection of retained evidence.
+
+        The references come from the claims ``actor`` can read, in source order. A
+        page of links batches those claims with
+        :meth:`PartyHandleClaimManager.prefetch_for`; otherwise this link reads its own.
+        """
 
         if actor is None:
             return PartyHandleEvidencePage((), False)
@@ -710,11 +715,9 @@ class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
         from angee.base.identity import instance_from_public_id
         from angee.base.scoping import read_scoped_queryset
 
-        refs = [
-            ref
-            for metadata in self.claims.with_actor(actor).order_by("source").values_list("metadata", flat=True)
-            for ref in (metadata or {}).get("evidence_refs", ())
-        ]
+        prefetched = "claims" in getattr(self, "_prefetched_objects_cache", {})
+        claims = self.claims.all() if prefetched else self.claims.with_actor(actor).order_by("source")
+        refs = [ref for claim in claims for ref in (claim.metadata or {}).get("evidence_refs", ())]
         visible: list[PartyHandleEvidence] = []
         for ref in refs[: bounded + 1]:
             if not isinstance(ref, Mapping):

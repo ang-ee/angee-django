@@ -1420,6 +1420,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 class PartyHandleClaimManager(AngeeManager):
     """Write one source's claim on a party-handle link; the link manager re-derives the pair."""
 
+    def prefetch_for(self, actor: Any) -> Prefetch:
+        """Prefetch the claims ``actor`` can read, so a page of links reads its evidence in one query."""
+
+        return Prefetch("claims", queryset=read_scoped_queryset(self.model, actor).order_by("source"))
+
     def claim(
         self,
         link: Any,
