@@ -54,6 +54,14 @@ class DiscrepancyKind(models.TextChoices, StrEnum):
     REMOTE_REJECTED = "remote_rejected", "Remote rejected"
 
 
+class OutboxState(models.TextChoices, StrEnum):
+    """A link's outstanding write; null means there is no pending write."""
+
+    PENDING = "pending", "Pending"
+    REFUSED = "refused", "Refused"
+    ERROR = "error", "Error"
+
+
 class DiscrepancyStatus(models.TextChoices, StrEnum):
     """Quarantine remains open until a successful rescan resolves it."""
 

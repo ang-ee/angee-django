@@ -52,7 +52,7 @@ from strawberry_django.descriptors import model_property
 
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, HistoryMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -87,6 +87,7 @@ from angee.integrate.states import (
     DiscrepancyKind,
     DiscrepancyStatus,
     LinkStatus,
+    OutboxState,
     StreamDirection,
     StreamKind,
     StreamPhase,
@@ -3282,8 +3283,21 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             return link
 
 
-class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
-    """A stable remote identity with the two last-applied comparison bases."""
+class RecordLink(RecordRefMixin, AuditMixin, HistoryMixin, AngeeDataModel):
+    """A remote identity retaining observations, application facts and run state.
+
+    ``applied_base`` pins this link's own historical application snapshot; an
+    observation never advances it. Its protected FK keeps the active comparison
+    base out of native history pruning. ``pinned`` withholds automatic updates.
+
+    ``inbound`` retains a list of failures, including closed evidence. Each entry
+    carries kind, code, source_hash, mapping_version, details, status, attempts,
+    retry_at, resolved_at, created_at and updated_at. Times are ISO 8601 strings
+    or null. Several open failure identities can coexist; resolution updates an
+    entry instead of removing it. History captures each change to the list.
+    ``outbox_last_error`` retains the same evidence shape for the latest refused
+    or failed write; a null outbox state means no write is pending.
+    """
 
     merge_policy = MergePolicy.BLOCK
     runtime = True
@@ -3291,12 +3305,27 @@ class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     external_key = models.CharField(max_length=512)
+    asserted_by = models.TextField(blank=True, editable=False)
     target_content_type = models.ForeignKey(
         ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     target_object_id = models.CharField(max_length=255, null=True, blank=True)
     target = GenericForeignKey("target_content_type", "target_object_id")
     status = StateField(choices_enum=LinkStatus, default=LinkStatus.OBSERVED)
+    source_payload = models.JSONField(default=dict, blank=True)
+    source_hash = models.CharField(max_length=64, blank=True)
+    mapped_payload = models.JSONField(default=dict, blank=True)
+    mapping_version = models.PositiveIntegerField(default=1)
+    dependency_digest = models.CharField(max_length=64, blank=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    applied_base = models.ForeignKey(
+        "integrate.HistoricalRecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    pinned = models.BooleanField(default=False)
+    inbound = models.JSONField(default=list, blank=True)
+    outbox_state = StateField(choices_enum=OutboxState, null=True, blank=True)
+    outbox_retry_at = models.DateTimeField(null=True, blank=True)
+    outbox_last_error = models.JSONField(default=dict, blank=True)
     remote_version = models.CharField(max_length=512, blank=True)
     remote_base_hash = models.CharField(max_length=64, blank=True)
     local_base_hash = models.CharField(max_length=64, blank=True)
@@ -3313,6 +3342,15 @@ class RecordLink(RecordRefMixin, AuditMixin, AngeeDataModel):
         """Label this remote identity by its external key."""
 
         return self.external_key
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Retain the integration's native SubjectRef when the identity is saved."""
+
+        if not self.asserted_by:
+            self.asserted_by = str(to_subject_ref(self.stream.integration))
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "asserted_by"}
+        super().save(*args, **kwargs)
 
     class Meta:
         abstract = True

@@ -68,6 +68,8 @@ It has no task or scheduler dependency.
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
 | django-simple-history | Shadow history tables and revert | [`HistoryMixin`](../angee/base/mixins.py) for abstract source/donor tracking |
 | `angee.provenance` + Django swappable models + REBAC | Logical write attribution and actor permission tuples | [`changeset()`](../angee/base/changesets.py) carries context to the swappable [`Changeset`](../addons/angee/provenance/models.py); history remains simple-history-owned |
+| deepdiff >= 9.1.0 | Native `DeepDiff` comparisons of nested remote/local and base/side projections | `angee.integrate` owns three-way sync classification; canonical JSON hashing stays with [`canonical_json_sha256`](../angee/base/serialization.py) |
+| jsonpatch >= 1.34 | RFC 6902 JSON Patch, including `test` preconditions | `angee.integrate` composes write-back preconditions alongside the transport's remote-version fence |
 | django.contrib.postgres | Postgres full-text search (`SearchVectorField`, `GinIndex`, `SearchQuery`) | `messaging.Fragment.search` — stamped once at fragment creation (content-addressed rows are immutable, so no trigger/queue); dedup indexes each unique text exactly once. Postgres-only: the SQLite test backend leaves the vector NULL |
 | django-reversion | Versioned field snapshots and revert | `RevisionMixin` convenience API, composer-emitted model registration |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
