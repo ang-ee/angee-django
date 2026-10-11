@@ -47,6 +47,8 @@ from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref
+from rebac.actors import model_can_resolve_subject, to_subject_ref
+from rebac.errors import NoActorResolvedError
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 from reversion.models import Version
@@ -54,7 +56,7 @@ from reversion.models import Version
 from angee.base.actors import instance_actor
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import AppendOnlyModel, auto_now_stamps
+from angee.base.mixins import AppendOnlyModel, AuditMixin, auto_now_stamps
 from angee.base.refs import MergePolicy, RecordRefMixin, concrete_child_models, generic_pointer_model
 from angee.base.scoping import lock_if_supported
 
@@ -62,6 +64,9 @@ MERGE_REASON = "merge"
 """The system-context reason a merge's moves record."""
 
 MERGE_LIMIT = 100
+
+_AUDIT_FIELDS = frozenset(field.name for field in AuditMixin._meta.local_fields)
+"""Columns recording who wrote a row, which an identity duplicate may differ in."""
 """The most records one merge folds into its survivor."""
 
 
@@ -131,9 +136,17 @@ class Reference:
             if not set(self.columns) <= set(fields):
                 continue
             others = [name for name in fields if name not in self.columns]
+            other_keys = [self.model._meta.get_field(name).attname for name in others]
             twins = held.filter(condition).filter(**{name: OuterRef(name) for name in others})
             clashing = rows.filter(condition).filter(Exists(twins))
             if fields in identity:
+                for duplicate in clashing:
+                    kept = held.filter(condition).get(**{key: getattr(duplicate, key) for key in other_keys})
+                    if _state(kept, fields) != _state(duplicate, fields) and not _collapse(kept, duplicate):
+                        raise ValidationError(
+                            f"Both records have {self.label} for the same {', '.join(fields)} with different "
+                            "details; resolve that before merging."
+                        )
                 clashing.delete()
             elif clashing.exists():
                 raise ValidationError(
@@ -391,20 +404,60 @@ class MergeableMixin(models.Model):
 
 
 def _named_in_relationships(record: models.Model) -> bool:
-    """Return whether stored REBAC relationships name ``record``, as their resource or subject.
+    """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
 
+    The delete takes the record's multi-table parents and children with it, and
+    REBAC cleans every identity those rows carry, as a resource or as a subject.
     Relations backed by fields follow a moved key; stored rows (a direct share,
     a membership) would go with the retired record.
     """
 
-    if not model_resource_type(type(record)):
-        return False
-    ref = to_object_ref(record)
+    model = type(record)
     rows = active_relationship_model().objects
-    return (
-        rows.filter(resource_type=ref.resource_type, resource_id=ref.resource_id).exists()
-        or rows.filter(subject_type=ref.resource_type, subject_id=ref.resource_id).exists()
-    )
+    for owner in (model, *model._meta.get_parent_list(), *_descendants(model)):
+        typed, subject = bool(model_resource_type(owner)), model_can_resolve_subject(owner)
+        if not (typed or subject):
+            continue
+        row = owner._base_manager.filter(pk=record.pk).first()
+        if row is None:
+            continue
+        refs = [to_object_ref(row)] if typed else []
+        if subject:
+            try:
+                refs.append(to_subject_ref(row).object)
+            except NoActorResolvedError:
+                pass
+        for ref in refs:
+            if (
+                rows.filter(resource_type=ref.resource_type, resource_id=ref.resource_id).exists()
+                or rows.filter(subject_type=ref.resource_type, subject_id=ref.resource_id).exists()
+            ):
+                return True
+    return False
+
+
+def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:
+    """Return what ``row`` states beyond its identity, pointer and bookkeeping columns.
+
+    Two identity duplicates are one fact only while these agree; timestamps and
+    the audit columns record who wrote the row, not what it states.
+    """
+
+    return {
+        field.attname: getattr(row, field.attname)
+        for field in row._meta.concrete_fields
+        if not field.primary_key
+        and field.name not in identity
+        and field.name not in _AUDIT_FIELDS
+        and not getattr(field, "auto_now", False)
+        and not getattr(field, "auto_now_add", False)
+    }
+
+
+def _collapse(kept: models.Model, duplicate: models.Model) -> bool:
+    """Let an edge fold a differing duplicate into the row a merge keeps; plain link rows cannot."""
+
+    return isinstance(kept, RecordRefMixin) and kept.merge_collapse(duplicate)
 
 
 def _merge_identity(model: type[models.Model]) -> frozenset[tuple[str, ...]]:
