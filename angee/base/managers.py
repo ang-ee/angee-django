@@ -87,7 +87,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 return existing
             with system_context(reason="statements.set"):
                 statement, _ = self.model._base_manager.db_manager(self.db).update_or_create(**key, defaults=defaults)
-                self.resolve(subject=subject)
+                self.resolve(subject=subject, aspect=aspect, members=members)
             statement.refresh_from_db()
             return statement
 
@@ -204,12 +204,19 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 subject = self.lock_subject(subject, {})
                 subject.require_statement_write(source)
                 with system_context(reason="statements.transition"):
+                    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
                     for batch in by_key(rows.filter(subject=subject), subject_keys):
                         for row in batch.order_by("pk").select_for_update():
                             row.status = status
                             row.save(using=self.db, update_fields=("status",))
+                            members = {
+                                name: row._meta.get_field(name).value_from_object(row)
+                                for name in self.model.statement_aspects[row.aspect].members
+                            }
+                            groups[row.aspect, *members.values()] = members
                             count += 1
-                    self.resolve(subject=subject)
+                    for (changed_aspect, *_), members in groups.items():
+                        self.resolve(subject=subject, aspect=changed_aspect, members=members)
         return count
 
     def withdraw(self, asserted_by: Any, subjects: Sequence[Any] | None = None, *, link: Any = None) -> int:
@@ -246,7 +253,9 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             ]
             return sum(counts)
 
-    def resolve(self, *, subject: Any = None) -> None:
+    def resolve(
+        self, *, subject: Any = None, aspect: str | None = None, members: Mapping[str, Any] | None = None
+    ) -> None:
         """Resolve each field group atomically; normal unknowns never erase values."""
         subject = subject if subject is not None else self.instance
         if subject is None:
@@ -256,9 +265,13 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             subject.require_statement_write(actor)
         using = subject._state.db or self.db
         with transaction.atomic(using=using), system_context(reason="statements.resolve"):
-            subject = self.db_manager(using).lock_subject(subject, {})
+            subject = self.db_manager(using).lock_subject(subject, members or {})
             rows = self.model._base_manager.using(using).filter(subject=subject, superseded__isnull=True)
-            members = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
+            if aspect is not None:
+                rows = rows.filter(aspect=aspect, **(members or {}))
+            member_names = sorted(
+                {name for declaration in self.model.statement_aspects.values() for name in declaration.members}
+            )
 
             def group(row: Any) -> tuple[Any, ...]:
                 return (
@@ -269,7 +282,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                     ),
                 )
 
-            for key, grouped in groupby(rows.order_by("aspect", *members), key=group):
+            for key, grouped in groupby(rows.order_by("aspect", *member_names), key=group):
                 candidates = list(grouped)
                 declaration = self.model.statement_aspects[key[0]]
                 asserted = [row for row in candidates if row.status == self.model.StatementStatus.ASSERTED]
@@ -277,10 +290,9 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                     (row for row in asserted if row.rank == self.model.StatementRank.PREFERRED),
                     key=lambda row: row.sort_key(),
                 )
-                normal = subject.statement_candidates(
-                    key[0],
-                    [row for row in asserted if row.rank == self.model.StatementRank.NORMAL],
-                )
+                normal: Sequence[Any] = [row for row in asserted if row.rank == self.model.StatementRank.NORMAL]
+                if declaration.candidates is not None:
+                    normal = declaration.candidates(subject, normal)
                 if any(row not in asserted or row.rank != self.model.StatementRank.NORMAL for row in normal):
                     raise ValidationError("Candidate policy may only select asserted normal statements.")
                 ordered = sorted(normal, key=lambda row: declaration.survivorship.sort_key(declaration, row))

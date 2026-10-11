@@ -31,6 +31,8 @@ statement keys refuses rather than overwriting newer evidence. Reversing the
 preceding schema migrations drops the newly created statement/history tables.
 """
 
+from itertools import batched
+
 from django.apps import apps as live_apps
 from django.conf import settings
 from django.db import migrations, models
@@ -224,6 +226,21 @@ def forwards(apps, schema_editor):
         _blocked(missing_actors.order_by("pk").first(), "decision has no recorded updated_by person actor")
     statements = _rows(apps, "parties.PartyStatement", db)
     history = _rows(apps, "parties.HistoricalPartyStatement", db)
+    pending, snapshots = {}, []
+
+    def flush():
+        records = list(pending.values())
+        existing = [row for row in records if row.pk is not None]
+        statements.bulk_create([row for row in records if row.pk is None], batch_size=500)
+        statements.bulk_update(existing, [field.name for field in statements.model._meta.concrete_fields
+                                           if not field.primary_key], batch_size=500)
+        history.bulk_create([
+            history.model(**(values | {"id": row.pk, "created_at": row.created_at, "updated_at": row.updated_at}),
+                          history_date=timezone.now(), history_type=kind, history_change_reason=REASON)
+            for row, values, kind in snapshots
+        ], batch_size=500)
+        pending.clear()
+        snapshots.clear()
     cs_model = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
     with system_context(reason=REASON):
         cs = cs_model._base_manager.using(db).create(activity="system", change_reason=REASON,
@@ -253,30 +270,42 @@ def forwards(apps, schema_editor):
                 assertions.append((decision, "person", "preferred", "value" if row.is_confirmed else "no_value", 1.0))
             for asserted_by, source_kind, rank, snak, confidence in assertions:
                 key = dict(subject_id=row.party_id, handle_id=row.handle_id, aspect="handle", asserted_by=asserted_by)
-                existing = statements.filter(**key, superseded_id=None).first()
+                identity = tuple(key.values())
+                existing = pending.get(identity) or statements.filter(**key, superseded_id=None).first()
                 if existing is not None and existing.changeset_id != cs.pk:
                     _blocked(row, f"statement key {asserted_by} already contains newer evidence")
                 values = dict(source_kind=source_kind, rank=rank, snak=snak, confidence=confidence,
                               evidence=refs, link_id=link_id, changeset_id=cs.pk, status="asserted", applied=False)
-                statement, created = statements.update_or_create(**key, superseded_id=None, defaults=values)
+                created = existing is None
+                statement = statements.model(**key, superseded_id=None) if created else existing
+                for name, value in values.items():
+                    setattr(statement, name, value)
+                if not created:
+                    statement.updated_at = timezone.now()
+                pending[identity] = statement
                 snapshot = {field.attname: getattr(statement, field.attname)
                             for field in statement._meta.concrete_fields}
-                history.create(**snapshot, history_date=timezone.now(), history_type="+" if created else "~",
-                               history_change_reason=REASON)
+                snapshots.append((statement, snapshot, "+" if created else "~"))
                 count += 1
                 if rank == "preferred" or confidence >= 0.5:
                     group = (row.party_id, row.handle_id)
                     order = (rank == "preferred", confidence, row.updated_at, row.pk)
                     if group not in winners or order > winners[group][0]:
-                        winners[group] = (order, statement.pk)
+                        winners[group] = (order, statement)
             readers += _carry_readers(apps, db, row, party)
-        for _, statement_id in winners.values():
-            statement = statements.get(pk=statement_id)
-            statements.filter(pk=statement_id).update(applied=True)
-            statement.applied = True
-            snapshot = {field.attname: getattr(statement, field.attname) for field in statement._meta.concrete_fields}
-            history.create(**snapshot, history_date=timezone.now(), history_type="~", history_change_reason=REASON)
-            count += 1
+            if len(pending) >= 500:
+                flush()
+        flush()
+        for batch in batched((statement for _, statement in winners.values()), 500):
+            for statement in batch:
+                statement.applied = True
+            statements.bulk_update(batch, ("applied",), batch_size=500)
+            history.bulk_create([
+                history.model(**{field.attname: getattr(statement, field.attname) for field in statement._meta.concrete_fields},
+                              history_date=timezone.now(), history_type="~", history_change_reason=REASON)
+                for statement in batch
+            ], batch_size=500)
+            count += len(batch)
         cs_model._base_manager.using(db).filter(pk=cs.pk).update(
             counts={"parties.partystatement": count}, touched=["parties.partystatement"],
         )

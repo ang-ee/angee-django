@@ -1,4 +1,4 @@
-"""Identity and mapped duplicate-pair reviews using real domain and engine owners."""
+"""Identity and mapped same_as pair reviews using real domain and engine owners."""
 
 from unittest.mock import patch
 
@@ -191,9 +191,9 @@ class PartyWorkflowTests(TransactionTestCase):
         ledger.load_xref("angee.iam.user_admin", model=get_user_model(), actor=self.admin, allow_non_dev=True)
         sample, left, right = (
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Party, actor=self.admin, allow_non_dev=True)
-            for key in ("identity_sample", "duplicate_left", "duplicate_right")
+            for key in ("identity_sample", "same_as_left", "same_as_right")
         )
-        for key in ("duplicate_left_handle", "duplicate_right_handle"):
+        for key in ("same_as_left_handle", "same_as_right_handle"):
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Handle, actor=self.admin, allow_non_dev=True)
         self.assertEqual(sample.display_name, "Directory sample")
         with actor_context(self.admin):
@@ -202,7 +202,7 @@ class PartyWorkflowTests(TransactionTestCase):
             candidates = Party.objects.same_as_pairs()
         self.assertEqual([(pair.left.pk, pair.right.pk) for pair in candidates], [(left.pk, right.pk)])
 
-    def duplicate_pair(self, prefix):
+    def same_as_pair(self, prefix):
         """Distinct native handles normalize to the same comparison identity."""
         left, right = self.party(f"{prefix} left"), self.party(f"{prefix} right")
         with actor_context(self.reviewer):
@@ -213,7 +213,7 @@ class PartyWorkflowTests(TransactionTestCase):
         return left, right
 
     def test_map_reviews_each_pair_and_composes_merge_dismiss_and_skip(self):
-        pairs = [self.duplicate_pair(name) for name in ("alpha", "bravo", "charlie", "delta")]
+        pairs = [self.same_as_pair(name) for name in ("alpha", "bravo", "charlie", "delta")]
         run = start_run(self.dedupe, actor=self.admin, input={"assignee": public_id_of(self.reviewer)})
         run_until(run)
         decisions = self.decisions(run)
@@ -252,8 +252,8 @@ class PartyWorkflowTests(TransactionTestCase):
             remaining = Party.objects.same_as_pairs()
         self.assertEqual([(pair.left.pk, pair.right.pk) for pair in remaining], [(pairs[2][0].pk, pairs[2][1].pk)])
 
-    def test_empty_and_non_admin_scoped_duplicate_scans(self):
-        self.duplicate_pair("hidden")
+    def test_empty_and_non_admin_scoped_same_as_scans(self):
+        self.same_as_pair("hidden")
         with actor_context(self.admin):
             self.dedupe.grant_record_access("starter", self.other)
         run = start_run(self.dedupe, actor=self.other, input={"assignee": public_id_of(self.other)})
@@ -261,8 +261,8 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual((run.status, run.outcome, run.output), ("succeeded", "done", []))
         self.assertFalse(self.decisions(run))
 
-    def test_duplicate_evidence_requires_assignee_read_on_the_supporting_handles(self):
-        left, right = self.duplicate_pair("private")
+    def test_same_as_evidence_requires_assignee_read_on_the_supporting_handles(self):
+        left, right = self.same_as_pair("private")
         with system_context(reason="a separate owner controls the shared handle evidence"):
             Handle.objects.filter(party__in=(left, right)).update(created_by=self.other)
         run = start_run(self.dedupe, actor=self.admin, input={"assignee": public_id_of(self.reviewer)})
@@ -273,16 +273,16 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertIn("declared permission", attempt.error)
         self.assertEqual(Party.objects.with_actor(self.reviewer).same_as_pairs(), [])
 
-    def test_duplicate_merge_replay_is_idempotent_and_a_different_merge_stays_intact(self):
+    def test_same_as_merge_replay_is_idempotent_and_a_different_merge_stays_intact(self):
         for prefix, same_target in (("repeat", True), ("changed", False)):
             with self.subTest(same_target=same_target):
-                left, right = self.duplicate_pair(prefix)
+                left, right = self.same_as_pair(prefix)
                 run = start_run(self.dedupe, actor=self.admin, input={"assignee": public_id_of(self.reviewer)})
                 run_until(run)
                 decision = self.decisions(run)[0]
                 survivor = left if same_target else self.party("Another survivor")
                 with actor_context(self.reviewer):
-                    Party.objects.merge(into=survivor, source=right, actor=self.reviewer)
+                    survivor.with_actor(self.reviewer).merge(records=[right.public_id])
                 decide(decision, actor=self.reviewer, chosen=["merge_left"])
                 run_until(run)
                 self.assertEqual(system_queryset(Party).get(pk=right.pk).merged_into_id, survivor.pk)

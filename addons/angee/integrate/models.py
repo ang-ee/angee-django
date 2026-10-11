@@ -40,6 +40,7 @@ from django.utils import timezone
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
+    SubjectRef,
     app_settings,
     delete_relationship,
     subject_id_attr,
@@ -57,7 +58,8 @@ from strawberry_django.descriptors import model_property
 from angee.base.changesets import current_changeset
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, StatementSourceMixin
+from angee.base.merge import references
+from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, Statement, StatementSourceMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -1505,7 +1507,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, AuditMixin, AngeeData
         model = self.declared_concrete_model()
         if model is None or model is type(self):
             return super().source_kind
-        return model._base_manager.db_manager(self._state.db).get(pk=self.pk).source_kind
+        child = concrete_child(self, model)
+        return child.source_kind if child is not None else None
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
@@ -3467,6 +3470,16 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
             if not open_only or row.is_open:
                 rows.append(row)
         return tuple(rows)
+
+    def withdraw_statements(self) -> int:
+        """Withdraw every linked source assertion through its generated table owner."""
+
+        source = SubjectRef.parse(self.asserted_by) if self.asserted_by else to_subject_ref(self.stream.integration)
+        return sum(
+            reference.model.objects.db_manager(self._state.db).withdraw(source, link=self)
+            for reference in references(type(self))
+            if issubclass(reference.model, Statement) and reference.columns == ("link",)
+        )
 
     def update_sync_status(self) -> None:
         """Open failures dominate observation/application status until resolved."""

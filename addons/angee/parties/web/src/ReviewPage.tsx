@@ -13,7 +13,7 @@ type SuggestionRow = StringIdRow & {
 
 /**
  * Human identity review, split between uncertain party↔handle claims and
- * deterministic duplicate candidates that share a normalized handle.
+ * deterministic same_as statements that share a normalized handle.
  */
 export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
@@ -22,7 +22,7 @@ export function ReviewPage(): React.ReactElement {
   const counts = useAuthoredQuery(PartyReviewCounts, undefined, {
     models: ["parties.PartyStatement"],
   });
-  const duplicates = useAuthoredQuery(SameAsPairs, { limit: 50 }, {
+  const sameAs = useAuthoredQuery(SameAsPairs, { limit: 50 }, {
     models: ["parties.Party", "parties.Handle", "parties.PartySameAsPairStatement"],
   });
   const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
@@ -48,7 +48,7 @@ export function ReviewPage(): React.ReactElement {
     [recordHref, t],
   );
   const handleCount = counts.data?.party_statements_aggregate.aggregate?.count ?? 0;
-  const duplicateCandidates = duplicates.data?.same_as_pairs ?? [];
+  const sameAsCandidates = sameAs.data?.same_as_pairs ?? [];
 
   return (
     <Page>
@@ -59,7 +59,7 @@ export function ReviewPage(): React.ReactElement {
       <PageBody>
         <div className="grid gap-5">
           <RailPanel
-            title={t("review.handleLinks")}
+            title={t("review.statements")}
             count={handleCount}
             fetching={counts.isFetching}
           >
@@ -85,30 +85,30 @@ export function ReviewPage(): React.ReactElement {
               rowActions={rowActions}
               emptyContent={{
                 icon: "user-check",
-                title: t("review.handleLinks.empty.title"),
-                description: t("review.handleLinks.empty.description"),
+                title: t("review.statements.empty.title"),
+                description: t("review.statements.empty.description"),
               }}
             />
           </RailPanel>
 
           <RailPanel
-            title={t("review.possibleDuplicates")}
-            count={duplicateCandidates.length}
-            fetching={duplicates.isFetching && duplicateCandidates.length > 0}
+            title={t("review.sameAs")}
+            count={sameAsCandidates.length}
+            fetching={sameAs.isFetching && sameAsCandidates.length > 0}
           >
-            {duplicates.isFetching && duplicateCandidates.length === 0 ? (
+            {sameAs.isFetching && sameAsCandidates.length === 0 ? (
               <LoadingPanel density="inline" />
-            ) : duplicates.error ? (
+            ) : sameAs.error ? (
               <ErrorBanner description={t("review.error")} />
-            ) : duplicateCandidates.length === 0 ? (
+            ) : sameAsCandidates.length === 0 ? (
               <EmptyState
                 icon="users"
-                title={t("review.possibleDuplicates.empty.title")}
-                description={t("review.possibleDuplicates.empty.description")}
+                title={t("review.sameAs.empty.title")}
+                description={t("review.sameAs.empty.description")}
               />
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {duplicateCandidates.map((candidate) => (
+                {sameAsCandidates.map((candidate) => (
                   <NavLink
                     key={`${candidate.left.id}:${candidate.right.id}`}
                     variant="block-card"
@@ -124,13 +124,13 @@ export function ReviewPage(): React.ReactElement {
                         <PartySummary name={candidate.right.display_name} align="right" />
                       </span>
                       <span className="flex flex-wrap items-center gap-2">
-                        <Tag tone="warning">{t("review.possibleDuplicates.sharedHandle")}</Tag>
+                        <Tag tone="warning">{t("review.sameAs.sharedHandle")}</Tag>
                         <span className="truncate font-mono text-xs text-fg-muted">
                           {candidate.normalized_value}
                         </span>
                       </span>
                       <span className="text-xs font-medium text-link">
-                        {t("review.possibleDuplicates.compare")}
+                        {t("review.sameAs.compare")}
                       </span>
                     </span>
                   </NavLink>

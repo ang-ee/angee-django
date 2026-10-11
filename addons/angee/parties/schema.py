@@ -1,9 +1,8 @@
 """Strawberry-Django schema contributions for parties.
 
 ``Party`` is the unified contact list (the multi-table-inheritance parent);
-``Person`` and ``Organization`` are the concrete kinds you create and edit. A
-contact is created as a person or an organisation and deleted through the party
-(the parent delete cascades to the child row).
+``Person`` and ``Organization`` are the concrete kinds you create and edit.
+Asserted subjects leave active use through the Party's trash owner.
 """
 
 from __future__ import annotations
@@ -15,10 +14,11 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import transaction
-from django.db.models import Exists, OuterRef
-from rebac import system_context
+from django.db.models import Exists, OuterRef, Prefetch
+from rebac import SubjectRef, system_context
 from strawberry import auto
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -95,9 +95,16 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 
     handles: list["HandleType"]
 
-    @strawberry_django.field(only=["id"])
+    @strawberry_django.field(
+        only=["id"],
+        prefetch_related=lambda info: Prefetch(
+            "partystatement_set",
+            queryset=Party.objects.handle_statements(actor=session_user(info)).select_related("subject", "handle"),
+            to_attr="_readable_handle_statements",
+        ),
+    )
     def statements(self, info: strawberry.Info) -> list["PartyStatementType"]:
-        return list(cast(Any, self).statements_for("handle").readable(session_user(info)))
+        return cast(Any, self)._readable_handle_statements
 
     addresses: list["AddressType"]
     circle_members: list["CircleMemberType"]
@@ -191,7 +198,6 @@ class PartyStatementType(AngeeNode):
     subject: PartyType | None = actor_scoped_to_one("subject")
     handle: HandleType | None = actor_scoped_to_one("handle")
     confidence: auto
-    asserted_by: auto
     source_kind: auto
     rank: auto
     snak: auto
@@ -199,6 +205,10 @@ class PartyStatementType(AngeeNode):
     applied: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["asserted_by"])
+    def asserted_by(self) -> str:
+        return str(public_subject_ref(SubjectRef.parse(cast(Any, self).asserted_by)))
 
     @strawberry_django.field(only=["rank", "snak"])
     def is_confirmed(self) -> bool:
@@ -210,13 +220,12 @@ class PartyStatementType(AngeeNode):
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence_refs(self, info: strawberry.Info) -> list[StatementEvidenceType]:
-        refs, _truncated = cast(Any, self).readable_evidence(session_user(info))
+        refs = cast(Any, self).readable_evidence(session_user(info))
         return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id)) for ref in refs]
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence_truncated(self, info: strawberry.Info) -> bool:
-        _refs, truncated = cast(Any, self).readable_evidence(session_user(info))
-        return bool(truncated)
+        return bool(cast(Any, self).evidence_truncated)
 
 
 @strawberry_django.type(Address)
@@ -423,7 +432,7 @@ class PartiesReviewQuery:
 
 @strawberry.type
 class PartiesIdentityMutation:
-    """Human decisions on party identity claims and duplicate records."""
+    """Human decisions on party statements and same_as pairs."""
 
     @strawberry.mutation
     @action_guard("Could not add this contact.")
@@ -455,25 +464,25 @@ class PartiesIdentityMutation:
 
     @strawberry.mutation
     def confirm_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
-        """Confirm a party↔handle link (the review queue's accept)."""
+        """Confirm a handle statement (the review queue's accept)."""
 
         link = require_instance_for_id(
             PartyStatement,
             id,
             queryset=Party.objects.handle_statements(actor=session_user(info)),
-            not_found="party handle link not found",
+            not_found="party statement not found",
         )
         return cast(PartyStatementType, link.with_actor(session_user(info)).confirm())
 
     @strawberry.mutation
     def dismiss_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
-        """Dismiss a party↔handle link — the durable anti-link (the review queue's reject)."""
+        """Dismiss a handle statement — the durable anti-link (the review queue's reject)."""
 
         link = require_instance_for_id(
             PartyStatement,
             id,
             queryset=Party.objects.handle_statements(actor=session_user(info)),
-            not_found="party handle link not found",
+            not_found="party statement not found",
         )
         return cast(PartyStatementType, link.with_actor(session_user(info)).dismiss())
 
@@ -492,11 +501,7 @@ class PartiesIdentityMutation:
             raise ValueError("party not found")
         return cast(
             PartyType,
-            Party.objects.merge(
-                into=survivor,
-                source=source,
-                field_overrides=field_overrides,
-            ),
+            survivor.merge(records=[source.public_id], field_overrides=field_overrides),
         )
 
     @strawberry.mutation
@@ -818,7 +823,9 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
     update=False,
     delete=False,
     field_id_decode={"subject": public_pk_decoder(Party), "handle": public_pk_decoder(Handle)},
-    get_queryset=lambda info: Party.objects.handle_statements(actor=session_user(info)).members(),
+    get_queryset=lambda info: (
+        Party.objects.handle_statements(actor=session_user(info)).members().select_related("subject", "handle")
+    ),
 )
 _CIRCLE_RESOURCE = hasura_model_resource(
     CircleType,

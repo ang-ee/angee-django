@@ -4,6 +4,8 @@ Each scalar aspect must have its fold-time snapshot. Directory locators, bytes,
 versions and extension data must be retained on a targeting link before removal.
 Generic MergeVeto pointers block instead of dangling. Its permission tuples leave
 with the resource; the new pair reads and writes through both Party endpoints.
+Derived handle counts leave history; statement subjects expose native reverse
+relations for batched reads. Neither changes canonical values or attribution.
 Reverse restores empty legacy columns/tables, not a competing provenance store.
 """
 
@@ -112,6 +114,11 @@ class Migration(migrations.Migration):
         *[migrations.RemoveField(model_name=name, name=field)
           for name in ("party", "historicalparty", "historicalperson", "historicalorganization")
           for field in ("folder", "source_uid", "source_etag", "raw_vcard", "extensions")],
+        *[migrations.RemoveField(model_name=name, name="handle_count")
+          for name in ("historicalparty", "historicalperson", "historicalorganization")],
+        *[migrations.AlterField(model_name=name + "statement", name="subject",
+                                field=models.ForeignKey(on_delete=models.PROTECT, to="parties." + name))
+          for name in ("party", "person", "organization", "address", "relationship", "partysameaspair")],
         migrations.RemoveField(model_name="relationship", name="source"),
         migrations.DeleteModel(name="MergeVeto"),
     ]

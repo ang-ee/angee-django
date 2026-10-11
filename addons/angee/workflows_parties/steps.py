@@ -1,4 +1,4 @@
-"""Typed human reviews that delegate identity and duplicate writes to parties."""
+"""Typed human reviews that delegate identity and same_as writes to parties."""
 
 from dataclasses import replace
 from typing import Any
@@ -188,7 +188,7 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         )
 
 
-class DuplicatePair(BaseModel):
+class SameAsPair(BaseModel):
     """Immutable identities and scan evidence for one mapped review."""
 
     model_config = ConfigDict(extra="forbid")
@@ -201,7 +201,7 @@ class DuplicatePair(BaseModel):
 
 
 class DedupeInput(BaseModel):
-    """A reviewer for every candidate in a bounded duplicate scan."""
+    """A reviewer for every candidate in a bounded same_as scan."""
 
     model_config = ConfigDict(extra="forbid")
     assignee: str = Field(min_length=1)
@@ -214,14 +214,14 @@ class DedupeConfig(BaseModel):
     limit: int = Field(default=50, ge=1, le=100)
 
 
-class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
+class DedupeScan(Step[DedupeInput, list[SameAsPair], DedupeConfig]):
     """Read deterministic actor-visible candidates; map owns fan-out and collection."""
 
     key = "parties_dedupe_scan"
-    label = "Find duplicate parties"
+    label = "Find same identity statements"
 
     def run(self, ctx: Any) -> Settlement:
-        """Use the parties owner for shared handles, duplicate suppression and vetoes."""
+        """Read pending same_as statements through the parties owner."""
         candidates = (
             apps.get_model("parties", "Party")
             .objects.with_actor(ctx.actor)
@@ -231,7 +231,7 @@ class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
         )
         return ctx.done(
             [
-                DuplicatePair(
+                SameAsPair(
                     left=public_id_of(pair.left),
                     right=public_id_of(pair.right),
                     left_name=pair.left.display_name,
@@ -247,24 +247,24 @@ class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
         )
 
 
-class DuplicateReviewInput(DedupeInput):
+class SameAsReviewInput(DedupeInput):
     """One scan candidate with its reviewer, supplied by the map binding."""
 
-    pair: DuplicatePair
+    pair: SameAsPair
 
 
-class DuplicateOutput(BaseModel):
+class SameAsOutput(BaseModel):
     """The parties-owned merge or separation result, or the reviewer's skip."""
 
     model_config = ConfigDict(extra="forbid")
     result: str
 
 
-class DedupeReview(DecisionStep[DuplicateReviewInput, DuplicateOutput, None]):
+class DedupeReview(DecisionStep[SameAsReviewInput, SameAsOutput, None]):
     """One independent decision for each mapped pair."""
 
     key = "parties_dedupe_review"
-    label = "Review duplicate parties"
+    label = "Review same identity statements"
     outcomes = {
         "merge_left": "Merged into the left party",
         "merge_right": "Merged into the right party",
@@ -308,13 +308,13 @@ class DedupeReview(DecisionStep[DuplicateReviewInput, DuplicateOutput, None]):
 
     def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Settlement:
         if outcome == "skipped":
-            return ctx.done(DuplicateOutput(result="skipped"), outcome="skipped")
+            return ctx.done(SameAsOutput(result="skipped"), outcome="skipped")
         pair = ctx.input.pair
-        result = apps.get_model("parties", "Party").objects.apply_duplicate_pair(
+        result = apps.get_model("parties", "Party").objects.apply_same_as_pair(
             left_id=pair.left,
             right_id=pair.right,
             survivor="right" if outcome == "merge_right" else "left",
             action="keep_separate" if outcome == "kept_separate" else "merge",
             actor=ctx.actor,
         )
-        return ctx.done(DuplicateOutput(result=result), outcome=outcome)
+        return ctx.done(SameAsOutput(result=result), outcome=outcome)

@@ -19,7 +19,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
-from itertools import chain, combinations
+from itertools import chain, combinations, groupby, islice
 from typing import Any, NamedTuple, Self
 
 from django.apps import apps
@@ -45,9 +45,8 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import EvidenceReference, public_id_for
+from angee.base.identity import EvidenceReference, instances_from_public_ids, public_id_for
 from angee.base.impl import resolve_hooks
-from angee.base.managers import StatementManager
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
@@ -58,8 +57,6 @@ from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.storage.models import UploadState
 
-# An undecided link below this confidence is a suggestion awaiting review.
-_REVIEW_CONFIDENCE = 0.5
 _UNSCOPED = object()
 
 
@@ -285,7 +282,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 
         The pass is idempotent and collision-safe because ``normalized_value`` is a
         comparison projection rather than a uniqueness key: equal E.164 results are
-        deliberately retained on their distinct source handles for duplicate review.
+        deliberately retained on their distinct source handles for same_as review.
         """
 
         phone_platforms = (self.model.Platform.PHONE, self.model.Platform.WHATSAPP)
@@ -523,15 +520,15 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 )
                 .select_related("subject")
             )
-            ordered = sorted(
+            winner = min(
                 candidates,
                 key=lambda row: (
                     *row.sort_key()[:2],
                     not row.subject.has_real_name,
                     *row.sort_key()[2:],
                 ),
+                default=None,
             )
-            winner = ordered[0] if ordered else None
             previous = handle.party_id
             resolved = winner.subject_id if winner else None
             confirmed = bool(winner and winner.is_confirmed)
@@ -546,7 +543,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         count = self.filter(party=party).count()
         if party.handle_count != count:
             party.handle_count = count
-            party.save(update_fields=("handle_count", "updated_at"))
+            party.save_without_historical_record(update_fields=("handle_count",))
 
     def resolve_stale_owners(self) -> int:
         owner = apps.get_model("parties", "Party").objects
@@ -567,10 +564,15 @@ class PartyStatementQuerySet(StatementQuerySet):
     def handles(self) -> Any:
         return self.current().filter(aspect="handle")
 
+    def _unscoped(self) -> "PartyStatementQuerySet":
+        """A fresh queryset of this class: shadow tables carry no read scope of their own."""
+        return type(self)(model=self.model, using=self._db)
+
     def members(self) -> Any:
         """One strongest current stance per subject/member, including weak claims."""
         representative = (
-            self.model._base_manager.handles()
+            self._unscoped()
+            .handles()
             .filter(
                 subject_id=OuterRef("subject_id"),
                 handle_id=OuterRef("handle_id"),
@@ -582,11 +584,15 @@ class PartyStatementQuerySet(StatementQuerySet):
         return self.filter(pk=Subquery(representative))
 
     def to_review(self) -> Any:
-        decision = self.model._base_manager.handles().filter(
-            subject_id=OuterRef("subject_id"),
-            handle_id=OuterRef("handle_id"),
-            status=self.model.StatementStatus.ASSERTED,
-            rank=self.model.StatementRank.PREFERRED,
+        decision = (
+            self._unscoped()
+            .handles()
+            .filter(
+                subject_id=OuterRef("subject_id"),
+                handle_id=OuterRef("handle_id"),
+                status=self.model.StatementStatus.ASSERTED,
+                rank=self.model.StatementRank.PREFERRED,
+            )
         )
         return (
             self.handles()
@@ -595,7 +601,7 @@ class PartyStatementQuerySet(StatementQuerySet):
                 status=self.model.StatementStatus.ASSERTED,
                 rank=self.model.StatementRank.NORMAL,
                 snak=self.model.StatementSnak.VALUE,
-                confidence__lt=_REVIEW_CONFIDENCE,
+                confidence__lt=self.model.statement_subject_model.REVIEW_CONFIDENCE,
             )
             .exclude(Exists(decision))
         )
@@ -613,22 +619,14 @@ class PartyStatementQuerySet(StatementQuerySet):
 
     def readable(self, actor: Any) -> Any:
         """Serving projection only; shadow tables have no independent read grants."""
-        return self.handles().filter(
-            subject_id__in=Subquery(read_scoped_queryset(apps.get_model("parties", "Party"), actor).values("pk")),
-            handle_id__in=Subquery(read_scoped_queryset(apps.get_model("parties", "Handle"), actor).values("pk")),
+        return (
+            super()
+            .readable(actor)
+            .handles()
+            .filter(
+                handle_id__in=Subquery(read_scoped_queryset(apps.get_model("parties", "Handle"), actor).values("pk")),
+            )
         )
-
-
-class PartyStatementManager(StatementManager.from_queryset(PartyStatementQuerySet)):  # type: ignore[misc]
-    """Compose statement writes with the shared Handle, Party lock order."""
-
-    def lock_subject(self, subject: Any, members: Mapping[str, Any]) -> Any:
-        owner = apps.get_model("parties", "Party").objects.db_manager(self.db)
-        handle_ids = set(owner.handle_statements().filter(subject_id=subject.pk).values_list("handle_id", flat=True))
-        if (handle := members.get("handle")) is not None:
-            handle_ids.add(handle.pk if isinstance(handle, models.Model) else handle)
-        owner.lock_identity_rows(party_ids=(subject.pk,), handle_ids=handle_ids)
-        return super().lock_subject(subject, members)
 
 
 @dataclass(frozen=True, slots=True)
@@ -727,7 +725,7 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
         )
 
     def to_review(self) -> Self:
-        """Return canonical parties with an undecided low-confidence handle link."""
+        """Return canonical parties with an undecided low-confidence handle statement."""
 
         visible_review_link = (
             apps.get_model("parties", "Party")
@@ -801,31 +799,39 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
             return []
         actor = self.actor() or current_actor()
         visible = self.canonical().scoped_for_aggregate().values("pk")
+        statements = self.model.same_as.model.statements.canonical()
         pairs = (
             self.model.same_as.model._base_manager.filter(
                 left_id__in=Subquery(visible),
                 right_id__in=Subquery(visible),
             )
             .untrashed()
+            .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
+            .select_related("left", "right")
+            .prefetch_related(
+                Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements")
+            )
             .order_by("left_id", "right_id")
+        )[: max(0, min(int(limit), 101))]
+        refs_by_pair = {
+            pair: [
+                ref
+                for value in pair._resolved_statements[0].evidence
+                if (ref := EvidenceReference.model_validate(value)).model.lower() == "parties.handle"
+            ]
+            for pair in pairs
+        }
+        readable = instances_from_public_ids(
+            apps.get_model("parties", "Handle"),
+            (ref.id for refs in refs_by_pair.values() for ref in refs),
+            queryset=read_scoped_queryset(apps.get_model("parties", "Handle"), actor),
         )
         result = []
-        for pair in pairs:
-            statement = pair.statements.canonical().first()
-            if statement is None:
-                continue
-            refs = [EvidenceReference.model_validate(value) for value in statement.evidence]
-            handles = []
-            for ref in refs:
-                if ref.model.lower() == "parties.handle":
-                    handle = apps.get_model("parties", "Handle").objects.with_actor(actor).from_public_id(ref.id)
-                    if handle is not None:
-                        handles.append(handle)
+        for pair, refs in refs_by_pair.items():
+            handles = [readable[ref.id] for ref in refs if ref.id in readable]
             result.append(
                 SameAsPair(pair.left, pair.right, handles[0].normalized_value if handles else "", tuple(handles))
             )
-            if len(result) >= max(0, min(int(limit), 101)):
-                break
         return result
 
 
@@ -1108,9 +1114,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         """Retain a claim after the caller authorized exact Handle and evidence reads."""
 
         party.require_access("write", actor)
-        if not 0 < confidence < _REVIEW_CONFIDENCE:
+        if not 0 < confidence < self.model.REVIEW_CONFIDENCE:
             raise ValidationError(
-                {"confidence": f"Claimed-handle proposals require confidence below {_REVIEW_CONFIDENCE}."}
+                {"confidence": f"Claimed-handle proposals require confidence below {self.model.REVIEW_CONFIDENCE}."}
             )
         evidence_model = generic_pointer_model(type(evidence))
         evidence_ref = {
@@ -1214,9 +1220,17 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 )
         return None
 
-    def reconcile_same_as(self) -> int:
-        """Assert the normalized-handle matcher once per symmetric pair."""
+    def reconcile_same_as(self, *, limit: int = 1000) -> int:
+        """Process at most ``limit`` unsupported or unasserted pairs per run.
 
+        Current assertions and dismissals are skipped before the cap, so retained
+        statements advance discovery without continuation state. Withdrawal
+        checks support independently; unvisited pairs are never withdrawn.
+        """
+
+        limit = max(0, min(int(limit), 1000))
+        if not limit:
+            return 0
         source = self.rule_source("same_as")
         handles = (
             apps.get_model("parties", "Handle")
@@ -1228,19 +1242,37 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             )
             .order_by("platform", "normalized_value", "party_id", "pk")
         )
-        groups: defaultdict[tuple[str, str], dict[Any, list[Any]]] = defaultdict(dict)
-        for handle in handles:
-            groups[(handle.platform, handle.normalized_value)].setdefault(handle.party_id, []).append(handle)
-        evidence_by_pair: defaultdict[tuple[Any, Any], dict[Any, Any]] = defaultdict(dict)
-        for parties in groups.values():
-            for left_id, right_id in combinations(sorted(parties), 2):
-                for handle in (*parties[left_id], *parties[right_id]):
-                    evidence_by_pair[left_id, right_id][handle.pk] = handle
-        supported = []
-        for (left_id, right_id), origins in sorted(evidence_by_pair.items()):
+        source_ref = to_subject_ref(source)
+        statements = self.model.same_as.model.statements
+        current = statements.current().filter(status=statements.model.StatementStatus.ASSERTED)
+        shared = handles.filter(party_id=OuterRef("subject__left_id")).filter(
+            Exists(
+                handles.filter(
+                    party_id=OuterRef(OuterRef("subject__right_id")),
+                    platform=OuterRef("platform"),
+                    normalized_value=OuterRef("normalized_value"),
+                )
+            )
+        )
+        unsupported = list(
+            current.filter(asserted_by=str(source_ref))
+            .exclude(Exists(shared))
+            .order_by("subject__left_id", "subject__right_id")
+            .values_list("subject_id", flat=True)[:limit]
+        )
+        changed = statements.withdraw(source, unsupported) if unsupported else 0
+
+        def candidates() -> Iterable[Any]:
+            for _, grouped in groupby(handles.iterator(), key=lambda row: (row.platform, row.normalized_value)):
+                parties: defaultdict[Any, list[Any]] = defaultdict(list)
+                for handle in grouped:
+                    parties[handle.party_id].append(handle)
+                for left_id, right_id in combinations(sorted(parties), 2):
+                    if not current.filter(subject__left_id=left_id, subject__right_id=right_id).exists():
+                        yield left_id, right_id, (*parties[left_id], *parties[right_id])
+
+        for left_id, right_id, evidence in islice(candidates(), limit - changed):
             left, right = (self.model._base_manager.get(pk=pk) for pk in (left_id, right_id))
-            evidence = [origins[pk] for pk in sorted(origins)]
-            source_ref = to_subject_ref(source)
             pair = self.model.same_as.for_pair(left.with_actor(source_ref), right)
             pair.statements.set(
                 aspect="same_as",
@@ -1248,9 +1280,8 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 asserted_by=source,
                 evidence=[{"model": row._meta.label, "id": row.public_id} for row in evidence],
             )
-            supported.append({"subject": pair, "aspect": "same_as"})
-        self.model.same_as.model.statements.withdraw_unsupported(source, supported)
-        return len(supported)
+            changed += 1
+        return changed
 
     def resolve_handle_statements(self) -> None:
         """Reapply retained statements, including rows folded before cutover."""
@@ -1364,7 +1395,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 evidence=[handle_model._base_manager.get(pk=sender_id)],
             )
         withdrawn = self._withdraw_unsupported(
-            "signature_phone", supported, ("created_by_id", "subject_id", "handle__normalized_value")
+            "signature_phone", supported, ("handle__created_by_id", "subject_id", "handle__normalized_value")
         )
         return created + withdrawn
 
@@ -1449,19 +1480,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         source = self.rule_source(kind)
         rows = self.handle_statements().filter(asserted_by=str(to_subject_ref(source)))
         keys = [
-            {"subject": row.subject, "aspect": "handle", "handle": row.handle}
-            for row in rows.select_related("subject", "handle")
-            if tuple(
-                row.handle.created_by_id
-                if name == "created_by_id"
-                else row.handle.normalized_value
-                if name == "handle__normalized_value"
-                else row.subject_id
-                if name == "subject_id"
-                else row.handle_id
-                for name in key
-            )
-            in supported
+            {"subject": row["subject_id"], "aspect": "handle", "handle": row["handle_id"]}
+            for row in rows.values("subject_id", "handle_id", *key)
+            if tuple(row[name] for name in key) in supported
         ]
         return rows.model.objects.withdraw_unsupported(source, keys)
 
@@ -1619,48 +1640,19 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             outcome = "applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged"
             return outcome, results
 
-    @staticmethod
-    def prepare_duplicate_pairs(proposed: Any, approved: Any) -> list[dict[str, str]]:
-        """Validate the fixed pair basis and retain only supported pair operations."""
-
-        if not isinstance(proposed, list) or not isinstance(approved, list) or len(proposed) != len(approved):
-            raise ValidationError({"pairs": "Duplicate review must preserve every proposed pair."})
-        rows = []
-        for expected, resolved in zip(proposed, approved, strict=True):
-            if not isinstance(expected, Mapping) or not isinstance(resolved, Mapping):
-                raise ValidationError({"pairs": "Duplicate pairs must be objects."})
-            if any(
-                resolved.get(key) != expected.get(key)
-                for key in ("left", "right", "left_name", "right_name", "evidence")
-            ):
-                raise ValidationError({"pairs": "Duplicate review changed a proposed pair."})
-            action, survivor = resolved.get("action"), resolved.get("survivor")
-            if action not in {"merge", "skip", "keep_separate"} or survivor not in {"left", "right"}:
-                raise ValidationError({"pairs": "Duplicate review carries an unsupported choice."})
-            if action != "skip":
-                rows.append(
-                    {
-                        "left": str(expected["left"]),
-                        "right": str(expected["right"]),
-                        "action": action,
-                        "survivor": survivor,
-                    }
-                )
-        return rows
-
-    def apply_duplicate_pair(self, *, left_id: str, right_id: str, survivor: str, action: str, actor: Any) -> str:
-        """Apply one merge or durable veto using plain values and an explicit actor."""
+    def apply_same_as_pair(self, *, left_id: str, right_id: str, survivor: str, action: str, actor: Any) -> str:
+        """Apply one merge or durable dismissal using plain values and an explicit actor."""
 
         if survivor not in {"left", "right"} or action not in {"merge", "keep_separate"}:
-            raise ValidationError({"pair": "Unsupported duplicate pair operation."})
+            raise ValidationError({"pair": "Unsupported same_as pair operation."})
         with transaction.atomic(), actor_context(actor):
             left = self.with_actor(actor).from_public_id(left_id)
             right = self.with_actor(actor).from_public_id(right_id)
             if left is None or right is None:
-                raise ValidationError({"pair": "Duplicate pair references a missing party."})
+                raise ValidationError({"pair": "Same_as pair references a missing party."})
             if action == "keep_separate":
                 self.model.same_as.for_pair(left.with_actor(actor), right).with_actor(actor).dismiss(aspect="same_as")
-                return "vetoed"
+                return "dismissed"
             locked = {
                 row.pk: row.with_actor(actor)
                 for row in self.lock_if_supported().filter(pk__in=[left.pk, right.pk]).order_by("pk")
@@ -1671,7 +1663,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             already_merged = source.merged_into_id == into.pk
             if already_merged and into.merged_into_id is None:
                 return "already_merged"
-            self.merge(into=into, source=source, actor=actor)
+            into.merge(records=[source.public_id])
             return "already_merged" if already_merged else "merged"
 
     def replace_name_exact(self, *, party: Any, expected: str, proposed: str, actor: Any) -> str:
@@ -1758,13 +1750,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             .with_circle_names()
             .filter(display_name__icontains=query.strip())
             .order_by("display_name", "sqid")[:bounded]
-        )
-
-    def merge(self, *, into: Any, source: Any, field_overrides: Any = None, actor: Any = None) -> Any:
-        """Dispatch selected values to the shared survivor-owned merge action."""
-
-        return into.with_actor(actor or current_actor()).merge(
-            records=[source.public_id], field_overrides=field_overrides
         )
 
     def identity_for_user_id(self, user_id: Any) -> Any | None:
@@ -2107,14 +2092,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 edge.statements.withdraw(source, link=link)
             person.refresh_from_db()
             return person
-
-    def withdraw_contact(self, link: Any) -> None:
-        """Withdraw this directory's contact statements; preferred decisions remain."""
-        source = to_subject_ref(link.stream.integration)
-        for model_name in ("Party", "Person", "Address", "Relationship"):
-            statements = apps.get_model("parties", model_name).statements
-            subjects = list(statements.filter(link=link).values_list("subject_id", flat=True))
-            statements.withdraw(source, subjects, link=link)
 
 
 def _user_display_name(user: Any) -> str:

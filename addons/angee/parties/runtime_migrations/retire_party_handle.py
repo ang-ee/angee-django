@@ -21,6 +21,7 @@ from django.db import migrations, models
 from rebac import system_context
 
 from angee.base.identity import SqidPublicIdentity, public_id_for
+from angee.base.merge import EdgeReference, references
 
 
 def applies(state):
@@ -112,37 +113,32 @@ def forwards(apps, schema_editor):
             party_ct, _ = apps.get_model("contenttypes", "ContentType")._base_manager.using(db).get_or_create(
                 app_label="parties", model="party",
             )
-            for model in apps.get_models():
-                if any(field.name == "history_id" for field in model._meta.fields):
+            for reference in references(carriers.model):
+                model = apps.get_model(reference.model._meta.label)
+                if not isinstance(reference, EdgeReference):
+                    if model._base_manager.using(db).exists():
+                        raise ValueError(f"{reference.label}: unsupported retired carrier reference")
                     continue
+                name, object_name = reference.columns
                 fields = {field.name: field for field in model._meta.fields}
-                for name, field in fields.items():
-                    if not isinstance(field, models.ForeignKey) or field.remote_field.model._meta.label_lower != "contenttypes.contenttype":
-                        continue
-                    object_name = name.removesuffix("content_type") + "object_id"
-                    if object_name not in fields:
-                        if model._base_manager.using(db).filter(**{name: ct.pk}).exists():
-                            raise ValueError(f"{model._meta.label}.{name}: unsupported retired model reference")
-                        continue
-                    rows = model._base_manager.using(db).filter(**{name: ct.pk}).order_by("pk")
-                    for row in rows.iterator():
-                        old_pk = int(getattr(row, object_name))
-                        if old_pk not in by_pk:
-                            raise ValueError(f"{model._meta.label} {row.pk}: unresolved retired handle pointer")
-                        key = {name: party_ct.pk, object_name: by_pk[old_pk]}
-                        # Native unique-key collision: keep the same concern/operation once.
-                        lookup = dict(key)
-                        for constraint in model._meta.constraints:
-                            if isinstance(constraint, models.UniqueConstraint) and {name, object_name}.issubset(constraint.fields):
-                                lookup.update({column: getattr(row, fields[column].attname) for column in constraint.fields
-                                               if column not in key})
-                        other = model._base_manager.using(db).filter(**lookup).exclude(pk=row.pk).first()
-                        if other is not None and len(lookup) > len(key):
-                            if model._meta.label_lower == "workflows.stepwatch" and row.pending and not other.pending:
-                                model._base_manager.using(db).filter(pk=other.pk).update(pending=True)
-                            model._base_manager.using(db).filter(pk=row.pk).delete()
-                        else:
-                            model._base_manager.using(db).filter(pk=row.pk).update(**key)
+                rows = model._base_manager.using(db).filter(**{name: ct.pk}).order_by("pk")
+                for row in rows.iterator():
+                    old_pk = int(getattr(row, object_name))
+                    if old_pk not in by_pk:
+                        raise ValueError(f"{model._meta.label} {row.pk}: unresolved retired handle pointer")
+                    key = {name: party_ct.pk, object_name: by_pk[old_pk]}
+                    lookup = dict(key)
+                    for constraint in model._meta.constraints:
+                        if isinstance(constraint, models.UniqueConstraint) and {name, object_name}.issubset(constraint.fields):
+                            lookup.update({column: getattr(row, fields[column].attname) for column in constraint.fields
+                                           if column not in key})
+                    other = rows.model._base_manager.using(db).filter(**lookup).exclude(pk=row.pk).first()
+                    if other is not None and len(lookup) > len(key):
+                        if model._meta.label_lower == "workflows.stepwatch" and row.pending and not other.pending:
+                            model._base_manager.using(db).filter(pk=other.pk).update(pending=True)
+                        model._base_manager.using(db).filter(pk=row.pk).delete()
+                    else:
+                        model._base_manager.using(db).filter(pk=row.pk).update(**key)
 
         for label, resource, subject in (
             ("Relationship", "resource_type", "subject_type"),

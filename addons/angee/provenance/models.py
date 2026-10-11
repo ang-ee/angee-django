@@ -210,7 +210,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         self.outcome = self.Outcome(outcome)
         self.touched = sorted(set(self.touched))
         with system_context(reason="changeset.close"):
-            self.hash = canonical_json_sha256(self._document_values())
+            self.hash = canonical_json_sha256(chunks=self._document_chunks())
         type(self)._base_manager.filter(pk=self.pk).update(
             state=self.state,
             outcome=self.outcome,
@@ -229,17 +229,22 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 raise ValidationError(f"{label}: the history owner is unavailable.")
             yield model, model.history.using(using).filter(changeset_id=self.pk).order_by("history_id")
 
-    def _document_values(self) -> dict[str, Any]:
+    def _document_chunks(self) -> Any:
         fields = {
             field.name: field.value_from_object(self) for field in self._meta.concrete_fields if field.name != "hash"
         }
-        rows = {
-            model._meta.label_lower: [
-                {field.name: field.value_from_object(row) for field in row._meta.concrete_fields} for row in history
-            ]
-            for model, history in self.history_rows()
-        }
-        return json_safe({"changeset": fields, "history": rows})
+        yield '{"changeset":' + canonical_json(json_safe(fields)) + ',"history":{'
+        separator = ""
+        for model, history in self.history_rows():
+            yield separator + canonical_json(model._meta.label_lower) + ":["
+            row_separator = ""
+            for row in history.iterator():
+                values = {field.name: field.value_from_object(row) for field in row._meta.concrete_fields}
+                yield row_separator + canonical_json(json_safe(values))
+                row_separator = ","
+            yield "]"
+            separator = ","
+        yield "}}"
 
     def document(self) -> str:
         """Canonical cold-store document, excluding its own digest.
@@ -251,7 +256,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
 
         if not is_sudo():
             raise PermissionDenied("Lossless history export requires a system boundary.")
-        return canonical_json(self._document_values())
+        return "".join(self._document_chunks())
 
     def revert(self) -> Any:
         """Undo the first-to-last boundary atomically as a new changeset.

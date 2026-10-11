@@ -51,6 +51,7 @@ from angee.base.mixins import (
     AuditMixin,
     HierarchyMixin,
     HistoryMixin,
+    ModelHistory,
     PairAspect,
     SourceKind,
     StatementRecords,
@@ -64,11 +65,9 @@ from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
-    _REVIEW_CONFIDENCE,
     CircleManager,
     HandleManager,
     PartyManager,
-    PartyStatementManager,
     PartyStatementQuerySet,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
@@ -88,6 +87,15 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
     rebac_grantable = {"reader": "write"}
 
     sqid_prefix = "pty_"
+    history = ModelHistory(inherit=True, excluded_fields=("handle_count",))
+    REVIEW_CONFIDENCE: ClassVar[float] = 0.5
+
+    def handle_candidates(self, candidates: Sequence[Any]) -> Sequence[Any]:
+        return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
+
+    def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
+        apps.get_model("parties", "Handle").objects.resolve(member["handle"])
+
     record_links = RetainedGenericRelation(
         "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
     )
@@ -108,11 +116,12 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             "handle": Aspect(
                 member={"handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT)},
                 survivorship=Survivorship.HIGHEST_TRUST,
+                candidates=handle_candidates,
+                apply=apply_handle,
             ),
         },
         sqid_prefix="pst_",
         bases=(PartyStatementMixin,),
-        history_manager=PartyStatementManager,
         historical_queryset=PartyStatementQuerySet,
     )
     same_as = PairAspect(link="integrate.RecordLink")
@@ -179,30 +188,16 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             ),
         )
 
-    def statement_candidates(self, aspect: str, candidates: Any) -> Any:
-        if aspect == "handle":
-            return [row for row in candidates if row.confidence >= _REVIEW_CONFIDENCE]
-        return super().statement_candidates(aspect, candidates)
-
-    def apply_resolved(
-        self,
-        *,
-        aspect: str,
-        member: Mapping[str, Any],
-        values: Mapping[str, Any],
-        statement: Any | None,
-        expected_revision: int | None = None,
-    ) -> None:
-        if aspect == "handle":
-            apps.get_model("parties", "Handle").objects.resolve(member["handle"])
-            return
-        super().apply_resolved(
-            aspect=aspect,
-            member=member,
-            values=values,
-            statement=statement,
-            expected_revision=expected_revision,
+    def lock_statement_subject(self, members: Mapping[str, Any], *, using: str) -> Any:
+        owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        handle = members.get("handle")
+        handle_ids = (
+            (handle.pk if isinstance(handle, models.Model) else handle,)
+            if handle is not None
+            else owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
         )
+        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
+        return super().lock_statement_subject(members, using=using)
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
@@ -240,7 +235,7 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
         for child_model in concrete_child_models(apps.get_model("parties", "Party")):
             if isinstance(self, child_model) or concrete_child(self, child_model) is not None:
                 for kind in (RelationshipKind.PartyKind.ORGANIZATION, RelationshipKind.PartyKind.PERSON):
-                    if kind.model() is child_model:
+                    if RelationshipKind.PartyKind(kind).model() is child_model:
                         return cast(RelationshipKind.PartyKind, kind)
         return None
 
@@ -926,11 +921,6 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
             type(self).objects.demote_primaries(self)
             super().save(*args, **kwargs)
 
-    def apply_resolved(self, **kwargs: Any) -> None:
-        statement = kwargs["statement"]
-        if statement is not None and statement.snak == statement.StatementSnak.VALUE:
-            super().apply_resolved(**kwargs)
-
     def __str__(self) -> str:
         """Return a one-line address for Django displays."""
 
@@ -1321,11 +1311,6 @@ class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, Angee
                 name="ck_relationship_has_other",
             ),
         )
-
-    def apply_resolved(self, **kwargs: Any) -> None:
-        statement = kwargs["statement"]
-        if statement is not None and statement.snak == statement.StatementSnak.VALUE:
-            super().apply_resolved(**kwargs)
 
     def __str__(self) -> str:
         """Return a readable edge description for Django displays."""

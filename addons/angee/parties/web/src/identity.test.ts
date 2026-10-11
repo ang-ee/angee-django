@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { senderDisplayName } from "./identity";
 
 describe("senderDisplayName", () => {
-  test("prefers the curated party name once the handle link is confirmed", () => {
+  test("prefers the curated party name once the handle statement is confirmed", () => {
     expect(
       senderDisplayName({
         display_name: "jane@acme.com",

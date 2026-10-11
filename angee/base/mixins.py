@@ -57,7 +57,7 @@ from angee.base.querysets import (
     _AngeeQuerySetMixin,
     model_history,
 )
-from angee.base.refs import concrete_child_models
+from angee.base.refs import concrete_child_models, generic_pointer_model
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
@@ -854,6 +854,7 @@ class ModelHistory(HistoricalRecords):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("history_manager", ModelHistoryManager)
+        kwargs.setdefault("bases", (_ChangesetHistory,))
         super().__init__(*args, **kwargs)
 
     def contribute_to_class(self, cls: Any, name: str) -> None:
@@ -924,7 +925,9 @@ class ModelHistory(HistoricalRecords):
         history = model.history.using(using)
         key = model._meta.pk.attname
         rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
-        for pk, grouped in groupby(rows, key=lambda row: getattr(row, key)):
+        seen = set()
+        for pk, grouped in groupby(rows.iterator(), key=lambda row: getattr(row, key)):
+            seen.add(pk)
             versions = list(grouped)
             first, last = versions[0], versions[-1]
             timeline = history.filter(**{key: pk})
@@ -934,6 +937,23 @@ class ModelHistory(HistoricalRecords):
             if previous is None and first.history_type != "+":
                 raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
             yield first, last, previous
+        # An unchanged merge survivor has no new snapshot. Its touched owner and
+        # origin still define a boundary, without an artificial stamp-only save.
+        origin = changeset.record_ref
+        if (
+            changeset.activity == "merge"
+            and origin.model_label.lower() == generic_pointer_model(model)._meta.label_lower
+        ):
+            pk = model._meta.pk.to_python(origin.object_id)
+            if pk not in seen:
+                timeline = history.filter(**{key: pk})
+                boundary = timeline.order_by("-history_id").first()
+                if boundary is None:
+                    raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
+                self.lock_revert(boundary, boundary, boundary)
+                if timeline.filter(history_date__gt=changeset.recorded_at).exists():
+                    raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
+                yield boundary, boundary, boundary
 
     def lock_revert(self, first: Any, last: Any, previous: Any) -> None:
         """Acquire the subject's lock owner before its operational row."""
@@ -1128,7 +1148,7 @@ class ModelHistory(HistoricalRecords):
 class HistoryMixin(models.Model):
     """Track concrete models through django-simple-history's inherited descriptor."""
 
-    history = ModelHistory(inherit=True, bases=(_ChangesetHistory,))
+    history = ModelHistory(inherit=True)
 
     class Meta:
         abstract = True
@@ -1260,6 +1280,8 @@ class Aspect:
     survivorship: Survivorship | RecentSurvivorship = Survivorship.SOURCE_PRIORITY
     precedence: tuple[SourceKind, ...] = ()
     allow_fill: bool = False
+    candidates: Callable[[Any, Sequence[Any]], Sequence[Any]] | None = None
+    apply: Callable[..., None] | None = None
 
     @property
     def members(self) -> tuple[str, ...]:
@@ -1376,10 +1398,6 @@ class StatementsMixin(models.Model):
         if not rows.exists():
             raise PermissionDenied("The asserting source requires write on the subject.")
 
-    def statement_candidates(self, aspect: str, candidates: Sequence[Any]) -> Sequence[Any]:
-        """Select eligible normal candidates; preferred person decisions stay first."""
-        return candidates
-
     def apply_resolved(
         self,
         *,
@@ -1389,6 +1407,13 @@ class StatementsMixin(models.Model):
         statement: Any | None,
         expected_revision: int | None = None,
     ) -> None:
+        declaration = self.statements_for(aspect).model.statement_aspects[aspect]
+        if declaration.apply is not None:
+            declaration.apply(self, member=member, values=values, statement=statement)
+            return
+        # Unknown, withdrawn and no-value stances retain the operational values.
+        if statement is None or statement.snak != statement.StatementSnak.VALUE:
+            return
         if member:
             raise ImproperlyConfigured("Member aspects require the subject's apply_resolved hook.")
         changed = []
@@ -1464,10 +1489,18 @@ class StatementHistory(ModelHistory):
         return (1, previous is None, first._meta.label_lower, first.id)
 
     def stage_revert(self, first: Any, last: Any, previous: Any) -> None:
-        row = type(first.instance)._base_manager.using(first._state.db).filter(pk=first.id).first()
+        """Release applied uniqueness and stage collisions against a retained peer.
+
+        A real row sharing the current key temporarily holds supersession;
+        replay restores the exact predecessor stance within this transaction.
+        """
+
+        rows = type(first.instance)._base_manager.using(first._state.db)
+        row = rows.filter(pk=first.id).first()
         if row is None:
             raise ValidationError(f"{first._meta.label} {first.id}: a retained statement is missing.")
-        row.superseded = row
+        if row.superseded_id is None:
+            row.superseded = rows.filter(**row.current_key()).exclude(pk=row.pk).first()
         row.applied = False
         row.save(using=first._state.db, update_fields=("superseded", "applied"))
 
@@ -1514,7 +1547,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         DEPRECATED = "deprecated"
 
     SourceKind = SourceKind
-    history = StatementHistory(inherit=True, bases=(_ChangesetHistory,))
+    history = StatementHistory(inherit=True)
     source_kind_for = StatementSourceMixin.kind_for
     objects = StatementManager()
     _angee_base = StatementManager()
@@ -1674,7 +1707,7 @@ class StatementPair(
 ):
     """Ordered pair subject; admission and application stay on its endpoints."""
 
-    history = StatementPairHistory(inherit=True, bases=(_ChangesetHistory,))
+    history = StatementPairHistory(inherit=True)
 
     objects = StatementPairManager.from_queryset(StatementPairQuerySet)()
     _angee_base = StatementPairManager.from_queryset(StatementPairQuerySet)()
@@ -1836,7 +1869,7 @@ class StatementRecords(HistoricalRecords):
             "statement_link": self.link,
             "objects": self.history_manager(),
             "_angee_base": self.history_manager(),
-            "subject": models.ForeignKey(model, on_delete=models.PROTECT, related_name="+"),
+            "subject": models.ForeignKey(model, on_delete=models.PROTECT),
             "aspect": models.CharField(max_length=64, choices={name: name for name in sorted(self.aspects_for(model))}),
             **(
                 {
@@ -2472,7 +2505,7 @@ class HierarchyMixin(models.Model):
     def refresh_from_db(
         self,
         using: str | None = None,
-        fields: Sequence[str] | None = None,
+        fields: Iterable[str] | None = None,
         from_queryset: models.QuerySet[Any] | None = None,
     ) -> None:
         """Reload the row, re-syncing the reparent baseline to the loaded ``parent``.

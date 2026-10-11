@@ -10,6 +10,8 @@ Reverse is a no-op: provenance stays retained alongside the legacy columns until
 the separate retirement. New history records the fold time, not invented dates.
 """
 
+from itertools import groupby
+
 from django.apps import apps as live_apps
 from django.conf import settings
 from django.db import migrations
@@ -81,25 +83,37 @@ def directory_link(apps, db, row, party):
     return source, link
 
 
-def write(apps, db, cs, name, subject_id, aspect, source, kind, values, *, link=None, preferred=False, snak="value"):
+def write(apps, db, cs, batch, name, subject_id, aspect, source, kind, values, *, link=None, preferred=False, snak="value"):
     statements = rows(apps, db, "parties." + name + "Statement")
     key = dict(subject_id=subject_id, aspect=aspect, asserted_by=source, superseded_id=None)
     if statements.filter(**key).exists():
         raise ValueError(f"{name} {subject_id}: occupied {aspect} statement key {source}")
     withdrawn = link is not None and link.status in ("withdrawn", "tombstone")
-    statement = statements.create(**key, **values, source_kind=kind, rank="preferred" if preferred else "normal",
+    statement = statements.model(**key, **values, source_kind=kind, rank="preferred" if preferred else "normal",
                                   snak=snak, status="withdrawn" if withdrawn else "asserted", applied=not withdrawn, confidence=1.0,
                                   link_id=link.pk if link else None, changeset_id=cs.pk,
                                   evidence=[{"model": "integrate.RecordLink" if link else "parties." + name,
                                              "id": public_id_for(live_apps.get_model("integrate.RecordLink"), link.pk)
                                              if link else public_id_for(live_apps.get_model("parties." + name), subject_id)}])
-    snapshot = {field.attname: getattr(statement, field.attname) for field in statement._meta.concrete_fields}
-    rows(apps, db, "parties.Historical" + name + "Statement").create(
-        **snapshot, history_type="+", history_date=timezone.now(), history_change_reason=REASON,
-    )
+    batch.append((statement, "+"))
+    if len(batch) >= 500:
+        flush(apps, db, cs, batch)
     label = statement._meta.label_lower
     cs.counts[label] = cs.counts.get(label, 0) + 1
     cs.touched.append(label)
+
+
+def flush(apps, db, cs, batch):
+    for model, grouped in groupby(sorted(batch, key=lambda item: item[0]._meta.label), key=lambda item: type(item[0])):
+        records = list(grouped)
+        model._base_manager.using(db).bulk_create([row for row, _ in records if row._state.adding], batch_size=500)
+        history = rows(apps, db, model._meta.app_label + ".Historical" + model._meta.object_name)
+        history.bulk_create([
+            history.model(**({field.attname: getattr(row, field.attname) for field in row._meta.concrete_fields} | {"changeset_id": cs.pk}),
+                          history_type=kind, history_date=timezone.now(), history_change_reason=REASON)
+            for row, kind in records
+        ], batch_size=500)
+    batch.clear()
 
 
 def prove_values(apps, db, row, name, fields, link):
@@ -139,6 +153,7 @@ def forwards(apps, schema_editor):
         cs = rows(apps, db, settings.ANGEE_CHANGESET_MODEL).create(
             activity="system", change_reason=REASON, state="closed", outcome="success",
         )
+        batch = []
         for name, aspects in ASPECTS.items():
             for row in rows(apps, db, "parties." + name).order_by("pk").iterator():
                 party = row if name == "Party" else rows(apps, db, "parties.Party").get(pk=row.party_id if name in ("Address", "Relationship") else row.pk)
@@ -158,7 +173,7 @@ def forwards(apps, schema_editor):
                     if directory:
                         prove_values(apps, db, row, name, fields, link)
                     values = {row._meta.get_field(field).attname: getattr(row, row._meta.get_field(field).attname) for field in fields}
-                    write(apps, db, cs, name, row.pk, aspect, source, kind, values, link=link)
+                    write(apps, db, cs, batch, name, row.pk, aspect, source, kind, values, link=link)
                 if name == "Party" and directory:
                     # Payload is the evidence owner; retain old extension data there.
                     if party.extensions:
@@ -168,10 +183,7 @@ def forwards(apps, schema_editor):
                         payload["extensions"] = party.extensions
                         if link.source_payload != payload:
                             link.source_payload = payload
-                            snapshot = {field.attname: getattr(link, field.attname) for field in link._meta.concrete_fields}
-                            rows(apps, db, "integrate.HistoricalRecordLink").create(
-                                **snapshot, changeset_id=cs.pk, history_type="~", history_date=timezone.now(), history_change_reason=REASON,
-                            )
+                            batch.append((link, "~"))
                             cs.touched.append("integrate.recordlink")
                             cs.counts["integrate.recordlink"] = cs.counts.get("integrate.recordlink", 0) + 1
                         rows(apps, db, "integrate.RecordLink").filter(pk=link.pk).update(source_payload=payload)
@@ -181,10 +193,9 @@ def forwards(apps, schema_editor):
                     for claim in claims.order_by("pk"):
                         claim.link_id, claim.changeset_id = link.pk, cs.pk
                         claims.filter(pk=claim.pk).update(link_id=link.pk, changeset_id=cs.pk)
-                        snapshot = {field.attname: getattr(claim, field.attname) for field in claim._meta.concrete_fields}
-                        rows(apps, db, "parties.HistoricalPartyStatement").create(
-                            **snapshot, history_type="~", history_date=timezone.now(), history_change_reason=REASON,
-                        )
+                        batch.append((claim, "~"))
+                        if len(batch) >= 500:
+                            flush(apps, db, cs, batch)
                         cs.touched.append("parties.partystatement")
                         cs.counts["parties.partystatement"] = cs.counts.get("parties.partystatement", 0) + 1
         try:
@@ -199,13 +210,11 @@ def forwards(apps, schema_editor):
             source = person_source(apps, db, veto)
             if source is None:
                 blocked(veto, "anti-link decision has no proven person principal")
-            write(apps, db, cs, "PartySameAsPair", pair.pk, "same_as", source, "person", {}, preferred=True, snak="no_value")
-            snapshot = {field.attname: getattr(pair, field.attname) for field in pair._meta.concrete_fields}
-            rows(apps, db, "parties.HistoricalPartySameAsPair").create(
-                **snapshot, changeset_id=cs.pk, history_type="+", history_date=timezone.now(), history_change_reason=REASON,
-            )
+            write(apps, db, cs, batch, "PartySameAsPair", pair.pk, "same_as", source, "person", {}, preferred=True, snak="no_value")
+            batch.append((pair, "+"))
             cs.touched.append("parties.partysameaspair")
             cs.counts["parties.partysameaspair"] = cs.counts.get("parties.partysameaspair", 0) + 1
+        flush(apps, db, cs, batch)
         rows(apps, db, settings.ANGEE_CHANGESET_MODEL).filter(pk=cs.pk).update(
             counts=cs.counts, touched=sorted(set(cs.touched)),
         )

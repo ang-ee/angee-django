@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -55,6 +55,7 @@ class PartyStatementMixin(Statement):
     """Handle review verbs on the retained assertion, admitted by its Party."""
 
     handle: Any
+    EVIDENCE_LIMIT: ClassVar[int] = 20
 
     class Meta:
         abstract = True
@@ -72,24 +73,25 @@ class PartyStatementMixin(Statement):
             aspect=self.aspect,
             handle=self.handle,
             values={},
-            evidence=[ref.model_dump(mode="json") for ref in self.readable_evidence(instance_actor(self))[0]],
         )
 
     def dismiss(self) -> Any:
         return self.subject.with_actor(instance_actor(self)).dismiss(
             aspect=self.aspect,
             handle=self.handle,
-            evidence=[ref.model_dump(mode="json") for ref in self.readable_evidence(instance_actor(self))[0]],
         )
 
-    def readable_evidence(self, actor: Any, *, limit: int = 20) -> tuple[list[EvidenceReference], bool]:
+    @property
+    def evidence_truncated(self) -> bool:
+        return len(self.evidence) > self.EVIDENCE_LIMIT
+
+    def readable_evidence(self, actor: Any) -> list[EvidenceReference]:
         """Bound inspection and output; each origin retains its own read gate."""
         self.subject.require_access("read", actor)
-        bounded = max(1, min(int(limit), 20))
         visible = []
-        for value in self.evidence[: bounded + 1]:
+        for value in self.evidence[: self.EVIDENCE_LIMIT]:
             ref = EvidenceReference.model_validate(value)
             model = apps.get_model(ref.model)
             if instance_from_public_id(model, ref.id, queryset=read_scoped_queryset(model, actor)) is not None:
                 visible.append(ref)
-        return visible[:bounded], len(self.evidence) > bounded
+        return visible

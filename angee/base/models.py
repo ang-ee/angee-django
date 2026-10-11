@@ -41,8 +41,6 @@ from angee.base.mixins import (
     TimestampMixin,
     TrashQuerySet,
 )
-from angee.base.mixins import Statement as Statement
-from angee.base.mixins import StatementPair as StatementPair
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import AngeeUnscopedQuerySet as AngeeUnscopedQuerySet

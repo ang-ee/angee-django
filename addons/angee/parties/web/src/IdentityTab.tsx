@@ -28,7 +28,7 @@ function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.React
 }
 
 /**
- * The person's identity claims — every party↔handle link with its confidence and
+ * The person's identity claims — every handle statement with its confidence and
  * the two review verbs. Confirm outranks any synced score; dismiss is the durable
  * anti-link (the pair is never re-proposed), so both stay visible here instead of
  * silently vanishing.

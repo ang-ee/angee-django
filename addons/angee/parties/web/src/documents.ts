@@ -95,7 +95,7 @@ export const RemoveCircleMember = graphql(`
 `);
 
 export const PartiesOverview = graphql(`
-  query PartiesOverview($duplicateLimit: Int = 100) {
+  query PartiesOverview($sameAsLimit: Int = 100) {
     contacts: people_aggregate {
       aggregate {
         count
@@ -120,7 +120,7 @@ export const PartiesOverview = graphql(`
         count
       }
     }
-    same_as_pairs(limit: $duplicateLimit) {
+    same_as_pairs(limit: $sameAsLimit) {
       left {
         id
       }

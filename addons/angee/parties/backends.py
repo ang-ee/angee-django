@@ -414,7 +414,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             link = apps.get_model("integrate", "RecordLink").objects.get(
                 stream=stream, external_key=record.external_key
             )
-            parties.withdraw_contact(link)
+            link.withdraw_statements()
             projection = contact_projection(parties.project_contact(target)) if target is not None else None
         else:
             target = parties.ingest_contact(

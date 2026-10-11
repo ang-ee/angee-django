@@ -54,7 +54,7 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
 from angee.base.actors import instance_actor
-from angee.base.changesets import changeset
+from angee.base.changesets import changeset, current_changeset
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
 from angee.base.mixins import (
@@ -399,10 +399,8 @@ class MergeableMixin(models.Model):
                         survivor.merge_references(record)
                 for record in merged:
                     survivor.retire_merged(record)
-                # A merge touches both endpoints even when every scalar stays
-                # equal; retain the survivor's boundary for later-touch refusal.
-                survivor.refresh_from_db()
-                survivor.save(update_fields=tuple(auto_now_stamps(model, timezone.now())) or None)
+                if (context := current_changeset(required=True, record=True)) is not None:
+                    context.touched.append(model._meta.label_lower)
         self.refresh_from_db()
         return self
 

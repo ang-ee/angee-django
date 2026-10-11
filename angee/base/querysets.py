@@ -14,7 +14,7 @@ from rebac.watch import statement_keys
 
 from angee.base.autoconfig import SETTINGS
 from angee.base.changesets import current_changeset, write_group
-from angee.base.scoping import by_key, lock_if_supported
+from angee.base.scoping import by_key, lock_if_supported, read_scoped_queryset
 
 if TYPE_CHECKING:
     from angee.base.mixins import ModelHistory
@@ -217,6 +217,13 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
 
     def current(self) -> Any:
         return self.filter(superseded__isnull=True)
+
+    def readable(self, actor: Any) -> Any:
+        """Scope shadow rows through their subject's standing read permission."""
+
+        return self.filter(
+            subject_id__in=models.Subquery(read_scoped_queryset(self.model.statement_subject_model, actor).values("pk"))
+        )
 
     def canonical(self) -> Any:
         return self.current().filter(
