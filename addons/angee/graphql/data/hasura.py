@@ -1603,6 +1603,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         assert resource.filter_type is not None
         filter_name = get_object_definition(resource.filter_type, strict=True).name
         empty = model._default_manager.none()
+        unscoped = getattr(empty, "system_context", None)
+        if callable(unscoped):
+            empty = unscoped(reason="graphql.filter_expression.output_field")
         output_fields = {
             key: (expression(empty) if callable(expression) else expression).output_field
             for key, expression in expressions.items()

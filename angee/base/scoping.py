@@ -105,6 +105,9 @@ def gated_field_expression(queryset: models.QuerySet[Any], field_name: str) -> m
     actor cannot read. An unscoped (system) queryset projects the column itself.
     """
 
+    readable = getattr(queryset, "readable", None)
+    if callable(readable):
+        return readable(field_name)
     field = queryset.model._meta.get_field(field_name)
     output_field = cast("models.Field[Any, Any]", field).clone()
     output_field.null = True
