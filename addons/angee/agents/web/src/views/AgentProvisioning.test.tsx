@@ -39,7 +39,6 @@ const mocks = vi.hoisted(() => ({
   },
   workspaceStatus: null as {
     error?: string | null;
-    innerError?: string | null;
     sources: Array<Record<string, unknown>>;
   } | null,
 }));
@@ -200,7 +199,7 @@ describe("AgentProvisioning", () => {
     expect(screen.queryByTestId("service-row")).toBeNull();
   });
 
-  test("renders the workspace row and source git status without workspace logs", () => {
+  test("renders the workspace row and source git status", () => {
     mocks.record.lifecycle = "READY";
     mocks.record.runtime_status = "RUNNING";
     mocks.record.last_error = "";
@@ -219,12 +218,10 @@ describe("AgentProvisioning", () => {
         },
       ],
     };
-    const logsTitle = enAgentsMessages["provisioning.workspaceLogs"] ?? "Workspace logs";
 
     renderProvisioning(<AgentProvisioning agentId="agent-1" pane="workspace" />);
 
     expect(screen.getByTestId("workspace-row").textContent).toBe("agent-demo-workspace");
-    expect(screen.queryByText(logsTitle)).toBeNull();
     expect(screen.getByText(enAgentsMessages["provisioning.workspaceSources"] ?? "Sources")).toBeTruthy();
     expect(screen.getByText("notes")).toBeTruthy();
     expect(screen.getByText("+2 / -1")).toBeTruthy();

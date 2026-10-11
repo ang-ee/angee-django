@@ -10,7 +10,6 @@ vi.mock("../../data/transport", () => ({
     endpoint: "http://daemon.test/graphql/",
     token: "TOKEN",
   }),
-  useOperatorSubscription: vi.fn(),
 }));
 
 class FakeWebSocket {
