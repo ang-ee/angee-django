@@ -26,6 +26,11 @@ pages and repeated baseline resets; checkpoints retain its digest and reset coun
 never a second cursor. No bridge-reference input or separate dispatch setting is
 needed: steps resolve `ctx.subject` through the engine's declared subject owner.
 
+Cycles pull only. No stage pushes local changes or retries a refused write, and
+the rescan leaves refused writes to the push, so `StreamStage` and the coverage
+steps refuse a partition that writes back instead of waiting on a refusal that
+nothing would retry. A two-way stream syncs through integrate's own runner.
+
 Coverage uses two steps with the same explicit partition set. `integrate_rescan`
 performs bounded rescan/baseline recovery per partition and waits on a deadline
 while discrepancies remain. `integrate_conflicts` asks one decision per conflict;
