@@ -635,8 +635,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         dismissed if either was and it is not confirmed, the higher confidence, and
         both links' metadata, with the kept link's keys winning except
         ``evidence_refs``, which joins both lists in order without repeats. Runs
-        under the identity lock order, then re-resolves ``to_handle``, which
-        recounts the parties it gains or loses; ``from_handle`` is left unlinked.
+        under the identity lock order, then re-resolves both handles, which
+        recounts the parties each gains or loses: ``from_handle`` is left unlinked
+        and so unowned.
         """
 
         rows = self.model._base_manager
@@ -672,6 +673,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     kept.save(update_fields=[*dirty, "updated_at"])
                 row.delete()
             self.resolve(to_handle)
+            self.resolve(from_handle)
 
     def _transition(self, link: Any, *, action: str, actor: Any) -> None:
         """Apply a confirmation transition under the canonical identity lock set."""

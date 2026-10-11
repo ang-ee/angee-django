@@ -513,6 +513,9 @@ def test_moving_links_to_another_handle_folds_each_partys_decisions_and_evidence
                 party=party, handle=handle, confidence=confidence, source=LinkSource.IMPORT,
                 is_confirmed=is_confirmed, is_dismissed=is_dismissed, metadata=metadata, created_by=owner,
             )
+        PartyHandle.objects.resolve(alias)
+        alias.refresh_from_db()
+        assert alias.party_id == confirmed.pk
 
         PartyHandle.objects.move_links(alias, phone)
 
@@ -523,8 +526,10 @@ def test_moving_links_to_another_handle_folds_each_partys_decisions_and_evidence
             ).values_list("party_id", "confidence", "is_confirmed", "is_dismissed", "metadata")
         }
         phone.refresh_from_db()
+        alias.refresh_from_db()
         confirmed.refresh_from_db()
         assert not PartyHandle._base_manager.filter(handle=alias).exists()
+        assert alias.party_id is None
 
     assert links == {
         confirmed.pk: (1.0, True, False, {"claim": "phone", "seen": 1, "evidence_refs": [second, first, third]}),
@@ -533,6 +538,25 @@ def test_moving_links_to_another_handle_folds_each_partys_decisions_and_evidence
     }
     assert (phone.party_id, phone.party_link_confirmed) == (confirmed.pk, True)
     assert confirmed.handle_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_a_handles_only_link_leaves_it_unowned(composed_tables: None) -> None:
+    """Nothing is deleted, so the move itself re-resolves the handle it empties and recounts its owner."""
+
+    del composed_tables
+    with system_context(reason="test move lone link"):
+        owner = _user("move-lone-link")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324871@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421936", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        PartyHandle.objects.link(party, alias, source=LinkSource.IMPORT, created_by_id=owner.pk)
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        for row in (alias, phone, party):
+            row.refresh_from_db()
+    assert (alias.party_id, phone.party_id, party.handle_count) == (None, party.pk, 1)
 
 
 @pytest.mark.django_db(transaction=True)
