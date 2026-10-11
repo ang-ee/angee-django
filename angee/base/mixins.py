@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import copy
+from dataclasses import dataclass, replace
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DatabaseError, IntegrityError, models, router, transaction
-from django.db.models import F, Value
+from django.db.models import F, Q, Value
 from django.db.models.functions import Replace
 from django.utils import timezone
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.watch import by_key
-from simple_history.manager import HistoryManager
+from simple_history.manager import HistoryDescriptor, HistoryManager
 from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_history_manager_for_model
@@ -981,6 +984,385 @@ class HistoryMixin(models.Model):
             current_changeset(required=True, record=True)
         with write_group():
             return super().delete(*args, **kwargs)
+
+
+class SourceKind(models.TextChoices):
+    """Source classification, never a global precedence order."""
+
+    PERSON = "person", "Person"
+    SYSTEM_OF_RECORD = "system_of_record", "System of record"
+    DIRECTORY = "directory", "Directory"
+    NETWORK = "network", "Network"
+    IMPORT = "import", "Import"
+    SEED = "seed", "Seed"
+    DOCUMENT = "document", "Document"
+    EXTRACTION = "extraction", "Extraction"
+    RULE = "rule", "Rule"
+
+
+class Snak(models.TextChoices):
+    VALUE = "value"
+    SOME_VALUE = "some_value"
+    NO_VALUE = "no_value"
+
+
+class StatementRank(models.TextChoices):
+    PREFERRED = "preferred"
+    NORMAL = "normal"
+
+
+class StatementStatus(models.TextChoices):
+    ASSERTED = "asserted"
+    WITHDRAWN = "withdrawn"
+    QUARANTINED = "quarantined"
+    DEPRECATED = "deprecated"
+
+
+class Survivorship(StrEnum):
+    """Strategies within an aspect, after preferred person decisions."""
+
+    SOURCE_PRIORITY = "source_priority"
+    MOST_RECENT = "most_recent"
+    MOST_COMPLETE = "most_complete"
+    HIGHEST_TRUST = "highest_trust"
+
+    def __call__(self, date_field: str) -> RecentSurvivorship:
+        """MOST_RECENT names the typed date column that owns recency."""
+
+        if self != Survivorship.MOST_RECENT or not date_field:
+            raise ValueError("Only MOST_RECENT(date_field) accepts a field.")
+        return RecentSurvivorship(date_field)
+
+
+@dataclass(frozen=True)
+class RecentSurvivorship:
+    """The date-column parameter for MOST_RECENT."""
+
+    date_field: str
+
+
+@dataclass(frozen=True)
+class Aspect:
+    """One field group and its optional typed membership identity.
+
+    ``member`` reuses a canonical field name or maps names to new Django fields.
+    Shared members reuse one field. ``allow_fill`` fills missing winner values.
+    """
+
+    fields: tuple[str, ...] = ()
+    member: str | Mapping[str, models.Field] | None = None
+    survivorship: Survivorship | RecentSurvivorship = Survivorship.SOURCE_PRIORITY
+    precedence: tuple[SourceKind, ...] = ()
+    allow_fill: bool = False
+
+    @property
+    def members(self) -> tuple[str, ...]:
+        """Return deterministic member-column names for the aspect's key."""
+
+        if isinstance(self.member, str):
+            return (self.member,)
+        return tuple(sorted(self.member or ()))
+
+
+class StatementsMixin(models.Model):
+    """Subject-owned eligibility and application hooks for typed statements."""
+
+    class Meta:
+        abstract = True
+
+    def require_statement_write(self, actor: SubjectRef) -> None:
+        """Admit assertions through the subject's native REBAC write scope."""
+
+        rows = type(self)._default_manager.filter(pk=self.pk).with_actor(actor).with_action("write")
+        if not rows.exists():
+            raise PermissionDenied("The asserting source requires write on the subject.")
+
+    def statement_candidates(self, aspect: str, candidates: Sequence[Any]) -> Sequence[Any]:
+        """Select eligible normal candidates; preferred person decisions stay first."""
+        return candidates
+
+    def apply_resolved(
+        self,
+        *,
+        aspect: str,
+        member: Mapping[str, Any],
+        values: Mapping[str, Any],
+        statement: Any | None,
+        expected_revision: int | None = None,
+    ) -> None:
+        if member:
+            raise ImproperlyConfigured("Member aspects require the subject's apply_resolved hook.")
+        changed = []
+        for name, value in values.items():
+            field = self._meta.get_field(name)
+            value = field.get_default() if value is None and not field.null else value
+            if getattr(self, field.attname) != value:
+                setattr(self, field.attname, value)
+                changed.append(name)
+        if changed:
+            kwargs: dict[str, Any] = {"update_fields": update_fields_with_auto_now(self, changed)}
+            if isinstance(self, OptimisticLockMixin):
+                kwargs["expected_revision"] = expected_revision
+            self.save(**kwargs)
+
+    def provenance(self, field: str) -> Any:
+        return self.statements.provenance(field)
+
+    def confirm(self, *, aspect: str, values: Mapping[str, Any], **members: Any) -> Any:
+        return self.statements.set(
+            aspect=aspect,
+            values=values,
+            rank=StatementRank.PREFERRED,
+            **members,
+        )
+
+    def dismiss(self, *, aspect: str, **members: Any) -> Any:
+        return self.statements.set(
+            aspect=aspect,
+            values={},
+            rank=StatementRank.PREFERRED,
+            snak=Snak.NO_VALUE,
+            **members,
+        )
+
+    def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
+        raise ImproperlyConfigured("Pair aspects require the endpoint's apply_pair hook.")
+
+
+class StatementRecords(HistoricalRecords):
+    """Generate typed assertions through simple-history's native field copying.
+
+    Statement registration is separate from subject history. Generated metadata
+    consists of a model class and an aspect mapping, never this contributor.
+    """
+
+    def __init__(
+        self,
+        *,
+        aspects: Mapping[str, Aspect],
+        sqid_prefix: str = "",
+        excluded_fields: Sequence[str] = (),
+    ) -> None:
+        super().__init__(
+            inherit=True,
+            excluded_fields=excluded_fields,
+            custom_model_name=lambda name: f"{name}Statement",
+        )
+        self.aspects = dict(aspects)
+        self.sqid_prefix = sqid_prefix
+        self._fields: list[models.Field] = []
+
+    def add_extra_methods(self, cls: Any) -> None:
+        """Keep abstract declarations available to native inherited finalization."""
+        setattr(cls, self.manager_name, self)
+
+    def fields_included(self, model: Any) -> list[models.Field]:
+        return self._fields
+
+    def finalize(self, sender: Any, **kwargs: Any) -> None:
+        if sender._meta.abstract or sender._meta.proxy or getattr(sender, self.manager_name, None) is not self:
+            return
+        records = copy(self)
+        records.aspects = {}
+        records._fields = []
+        for donor in reversed(sender.__mro__):
+            meta = getattr(donor, "_meta", None)
+            declaration = donor.__dict__.get(self.manager_name)
+            if meta is not None and (donor is sender or meta.abstract) and isinstance(declaration, StatementRecords):
+                for key, aspect in sorted(declaration.aspects.items()):
+                    if key in records.aspects and records.aspects[key] != aspect:
+                        raise ImproperlyConfigured(f"Conflicting aspect {key!r}.")
+                    records.aspects[key] = aspect
+        module = importlib.import_module(sender.__module__)
+        name = records.get_history_model_name(sender)
+        if name.lower() in sender._meta.apps.all_models[sender._meta.app_label] or hasattr(module, name):
+            raise ImproperlyConfigured(f"Generated model {name} already exists.")
+        model = records.create_history_model(sender, inherited=sender is not self.cls)
+        setattr(module, name, model)
+        manager = model._default_manager
+        descriptor = HistoryDescriptor(model, manager=type(manager), queryset=manager._queryset_class)
+        setattr(sender, self.manager_name, descriptor)
+
+    def create_history_model(self, sender: Any, inherited: bool) -> Any:
+        """Generate an ordinary model without registering a second history owner."""
+        from angee.base.models import Statement
+
+        if not issubclass(sender, StatementsMixin):
+            raise ImproperlyConfigured("StatementRecords requires StatementsMixin.")
+        for donor in reversed(sender.__mro__):
+            for key, order in donor.__dict__.get("aspect_precedence", {}).items():
+                self.aspects[key] = replace(self.aspects[key], precedence=tuple(order))
+        if not self.aspects:
+            raise ImproperlyConfigured("StatementRecords requires an aspect.")
+        fields: dict[str, models.Field] = {}
+        claimed: set[str] = set()
+        extra_fields = self.get_extra_fields(sender, {})
+        reserved = (
+            {field.name for field in Statement._meta.fields}
+            | set(extra_fields)
+            | {"subject", "changeset", "id", "pk", "history"}
+        )
+        constraints: list[models.BaseConstraint] = []
+        for index, (key, aspect) in enumerate(sorted(self.aspects.items())):
+            if not key or len(key) > 64 or not isinstance(aspect, Aspect):
+                raise ImproperlyConfigured(f"Invalid aspect {key!r}.")
+            if claimed.intersection(aspect.fields):
+                raise ImproperlyConfigured("A value field belongs to exactly one aspect.")
+            if (
+                not isinstance(aspect.survivorship, (Survivorship, RecentSurvivorship))
+                or len(set(aspect.precedence)) != len(aspect.precedence)
+                or any(kind not in SourceKind.values for kind in aspect.precedence)
+            ):
+                raise ImproperlyConfigured(f"Invalid survivorship on {key!r}.")
+            claimed.update(aspect.fields)
+            members = (
+                aspect.member
+                if isinstance(aspect.member, Mapping)
+                else {member: sender._meta.get_field(member) for member in aspect.members}
+            )
+            columns = {column: sender._meta.get_field(column) for column in aspect.fields}
+            for column, field in {**columns, **members}.items():
+                if (
+                    column in reserved
+                    or not column.isidentifier()
+                    or not isinstance(field, models.Field)
+                    or field.primary_key
+                    or field.many_to_many
+                    or isinstance(field, models.GeneratedField)
+                    or (isinstance(field, models.ForeignKey) and field.remote_field.parent_link)
+                ):
+                    raise ImproperlyConfigured(f"Invalid statement column {column!r}.")
+                if column in fields and fields[column] is not field:
+                    raise ImproperlyConfigured(f"Member {column!r} must reuse the same field.")
+                fields[column] = field
+            if aspect.survivorship == Survivorship.MOST_RECENT:
+                raise ImproperlyConfigured("MOST_RECENT requires a date_field.")
+            if isinstance(aspect.survivorship, RecentSurvivorship):
+                if not isinstance(columns.get(aspect.survivorship.date_field), models.DateField):
+                    raise ImproperlyConfigured("Recency must name a date column in the aspect.")
+            current = Q(aspect=key, superseded__isnull=True)
+            for suffix, identity, condition in (
+                ("key", ("asserted_by", "subject", "aspect", *aspect.members), current),
+                ("applied", ("subject", "aspect", *aspect.members), current & Q(applied=True)),
+            ):
+                constraints.append(
+                    models.UniqueConstraint(
+                        fields=identity,
+                        condition=condition,
+                        name=f"%(app_label)s_%(class)s_{suffix}_{index}",
+                    )
+                )
+            if aspect.members:
+                constraints.append(
+                    models.CheckConstraint(
+                        condition=~Q(aspect=key) | Q(**{f"{member}__isnull": False for member in aspect.members}),
+                        name=f"%(app_label)s_%(class)s_member_{index}",
+                    )
+                )
+        if claimed.intersection(member for aspect in self.aspects.values() for member in aspect.members):
+            raise ImproperlyConfigured("A member cannot also be a value column.")
+        if set(fields).intersection(self.excluded_fields):
+            raise ImproperlyConfigured("An aspect cannot claim an excluded field.")
+        for column, field in sorted(fields.items()):
+            field = copy(field)
+            field.set_attributes_from_name(column)
+            field.model = sender
+            self._fields.append(field)
+        copied = self.copy_fields(sender)
+        for field in copied.values():
+            field.null = field.blank = True
+            field.default = field.db_default = models.NOT_PROVIDED
+            field.auto_created = False
+            if isinstance(field, models.ForeignKey):
+                field.remote_field.on_delete = models.PROTECT
+                field.remote_field.parent_link = False
+                field.db_constraint = True
+        constraints.append(
+            models.CheckConstraint(
+                condition=Q(aspect__in=tuple(sorted(self.aspects))),
+                name="%(app_label)s_%(class)s_aspect",
+            )
+        )
+        return type(
+            self.get_history_model_name(sender),
+            (Statement,),
+            {
+                **copied,
+                **extra_fields,
+                "subject": models.ForeignKey(sender, on_delete=models.PROTECT, related_name="+"),
+                "changeset": models.ForeignKey(
+                    settings.ANGEE_CHANGESET_MODEL,
+                    null=True,
+                    blank=True,
+                    on_delete=models.PROTECT,
+                    related_name="+",
+                ),
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {
+                        "app_label": sender._meta.app_label,
+                        "db_table": f"{sender._meta.db_table}_statement",
+                        "rebac_resource_type": None,
+                        "constraints": [*Statement._meta.constraints, *constraints],
+                    },
+                ),
+            },
+        )
+
+    def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
+        from angee.base.models import Statement
+
+        aspect = Statement._meta.get_field("aspect").clone()
+        aspect.choices = {name: name for name in sorted(self.aspects)}
+        return {
+            "__module__": model.__module__,
+            "sqid_prefix": self.sqid_prefix,
+            "statement_subject_model": model,
+            "statement_aspects": self.aspects,
+            "aspect": aspect,
+            **dict.fromkeys(self.excluded_fields),
+        }
+
+
+class PairAspect(StatementRecords):
+    """Declare an ordered pair carrier with assertions authorized by both ends."""
+
+    def __init__(self, *, excluded_fields: Sequence[str] = ()) -> None:
+        super().__init__(aspects={}, excluded_fields=excluded_fields)
+        self.custom_model_name = lambda name: (
+            f"{name}{''.join(part.title() for part in self.manager_name.split('_'))}Pair"
+        )
+
+    def create_history_model(self, sender: Any, inherited: bool) -> Any:
+        from angee.base.models import StatementPair
+
+        name = self.manager_name
+        return type(
+            self.get_history_model_name(sender),
+            (StatementPair,),
+            {
+                "__module__": sender.__module__,
+                "pair_name": name,
+                "left": models.ForeignKey(sender, on_delete=models.PROTECT, related_name="+"),
+                "right": models.ForeignKey(sender, on_delete=models.PROTECT, related_name="+"),
+                "statements": StatementRecords(aspects={name: Aspect()}, excluded_fields=self.excluded_fields),
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {
+                        "app_label": sender._meta.app_label,
+                        "rebac_resource_type": None,
+                        "constraints": [
+                            models.UniqueConstraint(fields=("left", "right"), name="%(app_label)s_%(class)s_pair"),
+                            models.CheckConstraint(
+                                condition=Q(left__lt=F("right")), name="%(app_label)s_%(class)s_order"
+                            ),
+                        ],
+                    },
+                ),
+            },
+        )
 
 
 class ImmutableFieldsMixin(models.Model):

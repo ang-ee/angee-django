@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
 from django.conf import settings
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import NotSupportedError, connections, models, transaction
 from rebac import app_settings, system_context
 from rebac.managers import RebacQuerySet, TrackedQuerySet
@@ -188,3 +189,26 @@ class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_M
 
         with system_context(reason="delete.retain"):
             return super().update(**kwargs)
+
+
+class StatementQuerySet(_AngeeQuerySetMixin[Any], TrackedQuerySet[Any]):
+    """Chainable assertion scopes; the manager owns subject admission."""
+
+    def current(self) -> Any:
+        return self.filter(superseded__isnull=True)
+
+    def canonical(self) -> Any:
+        return self.current().filter(status="asserted", applied=True, snak="value")
+
+    def provenance(self, field: str) -> Any:
+        """Return the applied assertions, including a preferred dismissal."""
+
+        aspects = [
+            name for name, aspect in self.model.statement_aspects.items() if field in (*aspect.fields, *aspect.members)
+        ]
+        if not aspects:
+            raise FieldDoesNotExist(f"No aspect owns {field!r}.")
+        return self.current().filter(aspect__in=aspects, applied=True)
+
+    def delete(self) -> Any:
+        raise ValidationError("Statements are retained; withdraw them instead.")

@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models.functions import Coalesce
 from rebac import (
@@ -31,8 +32,20 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.actors import instance_actor
+from angee.base.changesets import current_changeset
 from angee.base.impl import ImplClassField
-from angee.base.mixins import SqidMixin, TimestampMixin
+from angee.base.managers import StatementManager, StatementPairManager
+from angee.base.mixins import (
+    Aspect,
+    HistoryMixin,
+    Snak,
+    SourceKind,
+    SqidMixin,
+    StatementRank,
+    StatementsMixin,
+    StatementStatus,
+    TimestampMixin,
+)
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import _AngeeQuerySetMixin
@@ -91,7 +104,10 @@ class AngeeQuerySet(
 
         rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
         return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
-            "_count", actor=actor, default=0, output_field=models.IntegerField(),
+            "_count",
+            actor=actor,
+            default=0,
+            output_field=models.IntegerField(),
         )
 
     def keyset_page(
@@ -139,9 +155,7 @@ class AngeeQuerySet(
         if around is not None and before_cursor is None and after_cursor is None:
             # Bound the first window around an already authorized record. The
             # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(
-                self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2]
-            )
+            newer = list(self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2])
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
@@ -282,7 +296,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     its own class body to opt in, matching ``runtime``'s structural-marker shape.
     """
 
-    catalogue_tier: str = ResourceTier.MASTER
+    catalogue_tier: str = str(ResourceTier.MASTER)
     """Resource tier the catalogue rows belong to; read non-inherited."""
 
     catalogue_tiers: tuple[str, ...] | None = None
@@ -519,9 +533,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         selected = tuple(declaration) if relations is None else tuple(dict.fromkeys(relations))
         unknown = tuple(relation for relation in selected if relation not in declaration)
         if unknown:
-            raise ValueError(
-                f"{type(self)._meta.label} does not declare grantable relation {unknown[0]!r}."
-            )
+            raise ValueError(f"{type(self)._meta.label} does not declare grantable relation {unknown[0]!r}.")
         self.validate_record_access_target()
         for permission in sorted({declaration[relation] for relation in selected}):
             self.require_access(permission)
@@ -644,8 +656,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
             return []
         return [
             checks.Error(
-                f"{cls._meta.label} must use its primary key as its REBAC identity; "
-                f"got {resource_id_attr(cls)!r}.",
+                f"{cls._meta.label} must use its primary key as its REBAC identity; got {resource_id_attr(cls)!r}.",
                 obj=cls,
                 id="angee.E018",
             )
@@ -808,6 +819,94 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
+
+
+class Statement(HistoryMixin, AngeeDataModel):
+    """Retained assertion row; its subject owns authorization and field gates."""
+
+    objects = StatementManager(None)
+    statement_subject_model: Any
+    statement_aspects: dict[str, Aspect]
+    subject: Any
+    asserted_by = models.TextField()
+    source_kind = models.CharField(max_length=32, choices=SourceKind.choices)
+    """Assertion-time classification: the text principal has no retained FK.
+
+    A later principal edit or deletion cannot change this assertion's kind;
+    the optional integration link cannot reconstruct it for unlinked sources.
+    """
+    aspect = models.CharField(max_length=64)
+    snak = models.CharField(max_length=16, choices=Snak.choices, default=Snak.VALUE)
+    confidence = models.FloatField(default=1.0, validators=(MinValueValidator(0), MaxValueValidator(1)))
+    rank = models.CharField(max_length=16, choices=StatementRank.choices, default=StatementRank.NORMAL)
+    status = models.CharField(max_length=16, choices=StatementStatus.choices, default=StatementStatus.ASSERTED)
+    applied = models.BooleanField(default=False)
+    evidence = models.JSONField(default=list, blank=True)
+    basis_hash = models.CharField(max_length=64, blank=True)
+    link = models.ForeignKey("integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    superseded = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    changeset: Any
+
+    class Meta:
+        abstract = True
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(confidence__gte=0, confidence__lte=1)
+                & (
+                    models.Q(rank=StatementRank.NORMAL)
+                    | models.Q(rank=StatementRank.PREFERRED, source_kind=SourceKind.PERSON)
+                )
+                & models.Q(snak__in=Snak.values, status__in=StatementStatus.values, source_kind__in=SourceKind.values),
+                name="%(app_label)s_%(class)s_stance",
+            )
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not is_sudo():
+            raise PermissionDenied("Write statements through their owning manager verbs.")
+        self.changeset = current_changeset(required=True, record=True)
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = {*kwargs["update_fields"], "changeset"}
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        raise ValidationError("Statements are retained; withdraw them instead.")
+
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
+        """Dispatch retained collision handling to the existing merge owner."""
+        from angee.base.merge import move_statements
+
+        move_statements(reference, rows, survivor=survivor)
+
+
+class StatementPair(StatementsMixin, HistoryMixin, AngeeDataModel):
+    """Ordered pair subject; policy stays on its endpoint model."""
+
+    objects = StatementPairManager(None)
+    left: Any
+    right: Any
+    pair_name: str
+
+    class Meta:
+        abstract = True
+
+    def require_statement_write(self, actor: SubjectRef) -> None:
+        """A pair assertion requires the source's write on both endpoints."""
+
+        for endpoint in (self.left, self.right):
+            endpoint.require_statement_write(actor)
+
+    def apply_resolved(
+        self,
+        *,
+        aspect: str,
+        member: Mapping[str, Any],
+        values: Mapping[str, Any],
+        statement: Any | None,
+        expected_revision: int | None = None,
+    ) -> None:
+        self.left.apply_pair(aspect=self.pair_name, other=self.right, statement=statement)
 
 
 def record_display_label(record: models.Model) -> str:

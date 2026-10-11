@@ -56,7 +56,7 @@ from rebac.resources import model_resource_type
 from angee.base.actors import instance_actor
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import AppendOnlyModel, AuditMixin, auto_now_stamps
+from angee.base.mixins import AppendOnlyModel, AuditMixin, auto_now_stamps, update_fields_with_auto_now
 from angee.base.refs import (
     MergePolicy,
     RecordRefMixin,
@@ -131,10 +131,16 @@ class Reference:
 
         A collision on any other unique set refuses the merge: rows that merely
         share a slot, such as a rank, are different facts.
+        A pointing model may own ``merge_contract(reference, rows, survivor=)``
+        to retain identity collisions; dispatch precedes ordinary deletion.
         """
 
         if not self.holds(survivor):
             raise ValidationError(f"The record that is kept cannot hold {self.label}.")
+        contract = getattr(self.model, "merge_contract", None)
+        if callable(contract):
+            contract(self, rows, survivor=survivor)
+            return
         target = self.lookup(survivor)
         held = self.model._base_manager.filter(**target)
         identity = _merge_identity(self.model)
@@ -169,6 +175,39 @@ class Reference:
                 f"Moving {self.label} to the record that is kept breaks one of their rules; "
                 "resolve that before merging."
             ) from error
+
+
+def move_statements(reference: Reference, rows: models.QuerySet[Any], *, survivor: Any) -> None:
+    """Retain both assertions on key collisions, then resolve the moved subject."""
+    target = reference.lookup(survivor)
+    subjects = set()
+    for row in rows.order_by("pk"):
+        if row.superseded_id is None:
+            aspect = row.statement_aspects[row.aspect]
+            key = {
+                row._meta.get_field(name).attname: getattr(row, row._meta.get_field(name).attname)
+                for name in aspect.members
+            }
+            key.update(
+                subject_id=row.subject_id, asserted_by=row.asserted_by, aspect=row.aspect, superseded__isnull=True
+            )
+            key.update(target)
+            kept = reference.model._base_manager.filter(**key).exclude(pk=row.pk).first()
+            if kept is not None:
+                winner = max((kept, row), key=lambda item: (item.confidence, item.updated_at, item.pk))
+                loser = row if winner is kept else kept
+                loser.superseded = winner
+                loser.applied = False
+                loser.save(update_fields=update_fields_with_auto_now(loser, ("superseded", "applied")))
+        for name, value in target.items():
+            setattr(row, name, value)
+        # Applied rows from different sources also share the destination's key.
+        row.applied = False
+        row.save(update_fields=update_fields_with_auto_now(row, (*reference.columns, "applied")))
+        subjects.add(row.subject_id)
+    for subject_id in sorted(subjects):
+        subject = reference.model.statement_subject_model._base_manager.get(pk=subject_id)
+        reference.model.objects.resolve(subject=subject)
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,10 +278,14 @@ class EdgeReference(Reference):
         """Return a condition on ``target`` rows: an edge row names the target's type and key."""
 
         object_id = self.model._meta.get_field(self.pointer.fk_field)
-        return Exists(self.model._base_manager.filter(**{
-            self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
-            self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
-        }))
+        return Exists(
+            self.model._base_manager.filter(
+                **{
+                    self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
+                    self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
+                }
+            )
+        )
 
 
 def references(model: type[models.Model]) -> Iterator[Reference]:

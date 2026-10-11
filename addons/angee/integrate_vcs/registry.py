@@ -1,6 +1,7 @@
 """Native discovery for VCS source output kinds."""
 
 from django.core import checks
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
 from angee.integrate.registry import models_with
@@ -9,9 +10,15 @@ _Model = type[models.Model]
 
 
 def source_kind_models() -> tuple[_Model, ...]:
-    """Return loaded output models that declare a source kind."""
+    """Return class declarations, excluding columns named ``source_kind``."""
 
-    return models_with(attribute="source_kind")
+    declarations = []
+    for model in models_with(attribute="source_kind"):
+        try:
+            model._meta.get_field("source_kind")
+        except FieldDoesNotExist:
+            declarations.append(model)
+    return tuple(declarations)
 
 
 def check_source_kind_contracts(app_configs=None, **kwargs):
@@ -25,8 +32,7 @@ def check_source_kind_contracts(app_configs=None, **kwargs):
         if kind in by_kind:
             errors.append(
                 checks.Error(
-                    f"{model._meta.label} duplicates source_kind {kind!r} "
-                    f"declared by {by_kind[kind]._meta.label}.",
+                    f"{model._meta.label} duplicates source_kind {kind!r} declared by {by_kind[kind]._meta.label}.",
                     obj=model,
                     id="angee.integrate_vcs.E001",
                 )
