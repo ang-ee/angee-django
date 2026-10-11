@@ -7,12 +7,3 @@
   name: Assets
   description: Default drive for uploaded assets.
   prefix: assets
-# Images the server renders inline (ANGEE_STORAGE_IMAGE_DRIVE). Ownerless and
-# ungranted: a record that shows an image grants its read, and deduplication
-# stays within this drive, away from user files.
-- xref: images
-  slug: images
-  backend: storage.local
-  name: Images
-  description: Images the server renders inline, such as avatars.
-  prefix: images

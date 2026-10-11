@@ -18,6 +18,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging import session as messaging_session
 from angee.messaging.session import LiveChannelSession
 from angee.messaging.testing.models import Handle, Organization, Party, PartyHandle, Person
+from angee.parties import signals as parties_signals
 from angee.parties.backends import AvatarReport, ParsedPhoto
 from angee.parties.mixins import LinkSource
 from tests.conftest import File, SchemaAddon, execute_schema, result_data
@@ -79,6 +80,57 @@ def test_a_report_sets_its_handles_avatar_and_never_creates_or_renames_a_handle(
         assert Handle._base_manager.get(pk=handle.pk).display_name == "Ada"
 
 
+def test_a_report_lands_where_upsert_lands_when_its_external_id_and_value_name_different_handles() -> None:
+    """A @lid handle whose sender resolved to a phone another handle owns: the avatar follows the messages."""
+
+    owner = _user("avatar-converge-owner")
+    with system_context(reason="test reported avatar convergence"):
+        lid = Handle.objects.upsert(
+            platform="whatsapp",
+            value="113352894324870@lid",
+            external_id="113352894324870@lid",
+            created_by_id=owner.pk,
+        )
+        phone = Handle.objects.upsert(platform="whatsapp", value=_PHONE, external_id=_JID, created_by_id=owner.pk)
+        landed = Handle.objects.upsert(
+            platform="whatsapp", value=_PHONE, external_id="113352894324870@lid", created_by_id=owner.pk
+        )
+    assert landed.pk == phone.pk != lid.pk
+    assert Handle.objects.fill_avatar(_report(PNG_BYTES, external_id="113352894324870@lid")) is True
+    with system_context(reason="test reported avatar convergence read"):
+        assert Handle._base_manager.get(pk=phone.pk).avatar_id is not None
+        assert Handle._base_manager.get(pk=lid.pk).avatar_id is None
+
+
+def test_avatars_stored_before_the_image_drive_move_onto_it_once_and_leave_the_old_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One deduplicated onto a user's own file moves off it; a refused one keeps its pointer and never fails migrate."""
+
+    owner = _user("avatar-rehome-owner")
+    with system_context(reason="test legacy avatars"):
+        # Before the image drive, a contact photo deduplicated onto any file with its bytes.
+        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=owner.pk)
+        refused = File.objects.ingest_bytes(SVG_BYTES, filename="old.svg", owner_id=owner.pk)
+        shared = Person._base_manager.create(display_name="Ada", avatar=private, created_by=owner)
+        scripted = Person._base_manager.create(display_name="Grace", avatar=refused, created_by=owner)
+
+    assert Party.objects.rehome_avatars() == 1
+    with system_context(reason="test legacy avatars read"):
+        moved = Party._base_manager.get(pk=shared.pk).avatar
+        assert File.objects.images().filter(pk=moved.pk).exists()
+        assert moved.content_hash == private.content_hash and moved.pk != private.pk
+        untouched = File._base_manager.get(pk=private.pk)
+        assert (untouched.drive_id, untouched.owner_id, untouched.is_trashed) == (private.drive_id, owner.pk, False)
+        assert Party._base_manager.get(pk=scripted.pk).avatar_id == refused.pk
+    assert "1 party avatars remain off the image drive" in caplog.text
+
+    assert Party.objects.rehome_avatars() == 0
+    # The post-migrate receiver runs it for the parties app only, and a refused row never fails it.
+    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
+    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="storage"), using="default")
+
+
 def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> None:
     owner = _user("avatar-display-owner")
     reader = _user("avatar-display-reader")
@@ -86,19 +138,18 @@ def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> N
         party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
         weaker = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=owner.pk)
         stronger = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
-        weaker_link = PartyHandle.objects.link(
-            party, weaker, confidence=0.6, source=LinkSource.IMPORT, created_by_id=owner.pk
-        )
+        PartyHandle.objects.link(party, weaker, confidence=0.6, source=LinkSource.IMPORT, created_by_id=owner.pk)
         PartyHandle.objects.link(party, stronger, source=LinkSource.IMPORT, is_confirmed=True, created_by_id=owner.pk)
     weaker_avatar, stronger_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES), _avatar(PNG_BYTES + b"\x00")
     Handle.objects.set_avatar(weaker, weaker_avatar)
     Handle.objects.set_avatar(stronger, stronger_avatar)
-    for readable in (party, weaker, weaker_link):
+    # Sharing a party and a handle is enough: links are not shareable, and ranking reads none.
+    for readable in (party, weaker):
         _grant_reader(readable, reader)
 
     with system_context(reason="test display avatar read"):
         party = Party._base_manager.get(pk=party.pk)
-    # The confirmed link ranks first; a reader who cannot read that handle sees the next one.
+    # The confirmed winner ranks first; a reader who cannot read that handle sees the next one.
     assert Party.objects.display_avatar(party, actor=owner).pk == stronger_avatar.pk
     assert Party.objects.display_avatar(party, actor=reader).pk == weaker_avatar.pk
 
@@ -198,7 +249,8 @@ def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of
     assert three == one
     assert {row["id"]: row["display_avatar"]["id"] for row in rows} == shown
     for row in rows:
-        assert row["display_avatar"]["mime_type"]["mime_type"] in {"image/png", "image/gif", "application/octet-stream"}
+        # Own avatars are GIFs and handle avatars PNGs, each typed by its sniffed bytes.
+        assert row["display_avatar"]["mime_type"]["mime_type"] == ("image/gif" if row["avatar"] else "image/png")
         assert row["display_avatar"]["id"] == (row["avatar"] or row["handles"][0]["avatar"])["id"]
     with system_context(reason="test avatar graphql single"):
         people = list(Person._base_manager.all())
@@ -215,7 +267,9 @@ def test_a_live_sessions_reports_land_one_by_one_and_stop_between_chunks(monkeyp
     with system_context(reason="test session avatar handle"):
         Handle.objects.upsert(platform="whatsapp", value=_PHONE, external_id=_JID, created_by_id=owner.pk)
     wanted = [True]
-    session = SimpleNamespace(bridge=SimpleNamespace(pk=1), _still_wanted=lambda: wanted[0])
+    session = object.__new__(LiveChannelSession)
+    session.bridge = SimpleNamespace(pk=1)
+    session._still_wanted = lambda: wanted[0]
     real_fill = type(Handle.objects).fill_avatar
 
     def fill(manager: Any, report: AvatarReport) -> bool:

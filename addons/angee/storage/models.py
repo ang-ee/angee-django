@@ -104,6 +104,8 @@ from angee.storage.uploads import (
     attachment_extension,
     detect_mime,
     require_image,
+    require_image_size,
+    require_image_type,
     sha256_stream,
     truncate_filename,
 )
@@ -252,6 +254,26 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
         except IntegrityError as error:
             raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
         return drive
+
+    def image_drive(self) -> Any | None:
+        """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.
+
+        An ownerless volume on the default backend (:meth:`create_on_default_backend`),
+        so images land wherever the deployment keeps its files, apart from any user
+        file. ``None`` while there is no default drive to provision it beside (a
+        fresh database before resources load).
+        """
+
+        slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
+        with system_context(reason="storage.drive.image_drive"):
+            drive = system_queryset(self.model).filter(slug=slug).first()
+            if drive is not None:
+                return drive
+            try:
+                return self.create_on_default_backend(slug=slug, name="Images")
+            except ValidationError:
+                # A concurrent first use created it, or no default drive exists yet.
+                return system_queryset(self.model).filter(slug=slug).first()
 
 
 class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
@@ -818,17 +840,19 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """Ingest an image the server renders inline (an avatar) and return its READY File.
 
         The bytes must pass :func:`require_image`. The stored filename takes the
-        sniffed type's extension. Images land ownerless on
-        ``ANGEE_STORAGE_IMAGE_DRIVE``, so deduplication only ever returns another
-        such image, never a user's file, and read access comes from the records
-        that show the image. Raises :class:`exceptions.UploadTooLarge` or
-        :class:`exceptions.UploadTypeRefused` before anything is stored.
+        sniffed type's extension. Images land ownerless on the image drive
+        (:meth:`DriveManager.image_drive`), so deduplication only ever returns
+        another such image, never a user's file, and read access comes from the
+        records that show the image. Raises :class:`exceptions.UploadTooLarge` or
+        :class:`exceptions.UploadTypeRefused` before anything is stored, and
+        :class:`exceptions.UploadTargetNotFound` while no image drive can exist.
         """
 
         mime = require_image(content)
-        return self.ingest_bytes(
-            content, filename=f"image{attachment_extension(mime)}", drive_slug=settings.ANGEE_STORAGE_IMAGE_DRIVE
-        )
+        drive = self.model._meta.get_field("drive").related_model.objects.image_drive()
+        if drive is None:
+            raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
+        return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
 
     def ingest_stream(
         self,
@@ -1471,11 +1495,10 @@ class File(TaggedModel, TrashMixin, OwnerMixin, AngeeDataModel):
         ``expected_digest`` is as in :meth:`read_verified`.
         """
 
-        cap = int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES)
-        if self.size_bytes > cap:
-            raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
-        content = self.read_verified(max_bytes=cap, expected_digest=expected_digest)
-        require_image(content)
+        require_image_size(self.size_bytes)
+        # The read is bounded by the row's own verified size, which the cap already admitted.
+        content = self.read_verified(max_bytes=self.size_bytes, expected_digest=expected_digest)
+        require_image_type(content)
         return content
 
     def issue_upload_token(self) -> str:

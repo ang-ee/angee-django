@@ -12,7 +12,6 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -296,16 +295,11 @@ def drive(tmp_path: Path, transactional_db: None) -> Any:
 
 @pytest.fixture
 def image_drive(drive: Any) -> Any:
-    """Add storage's image drive beside the ``assets`` drive, on the same backend."""
+    """Provision storage's image drive beside the ``assets`` drive, as its first use does."""
 
     with system_context(reason="test storage image drive"):
-        row = Drive._base_manager.create(
-            backend=drive.backend,
-            slug=settings.ANGEE_STORAGE_IMAGE_DRIVE,
-            name="Images",
-            prefix="images",
-            created_by=drive.alice,
-        )
+        MimeType._base_manager.create(mime_type="image/gif", category="image", label="GIF image")
+        row = Drive.objects.image_drive()
     row.alice = drive.alice
     row.assets = drive
     return row
@@ -990,6 +984,27 @@ def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content
                 File.objects.ingest_image(refused)
         settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
         with pytest.raises(exceptions.UploadTooLarge):
+            File.objects.ingest_image(PNG_BYTES)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_image_drive_is_provisioned_on_the_default_backend_at_first_use(drive: Any, settings: Any) -> None:
+    """Images land wherever the deployment keeps its files, apart from them; without a default drive, nowhere."""
+
+    with system_context(reason="test storage image drive provisioning"):
+        image = File.objects.ingest_image(PNG_BYTES)
+        images = Drive.objects.image_drive()
+        assert (images.slug, images.backend_id, images.owner_id) == (
+            settings.ANGEE_STORAGE_IMAGE_DRIVE,
+            drive.backend_id,
+            None,
+        )
+        assert image.drive_id == images.pk != drive.pk
+        assert Drive.objects.image_drive().pk == images.pk
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "missing"
+        settings.ANGEE_STORAGE_IMAGE_DRIVE = "unprovisioned-images"
+        assert Drive.objects.image_drive() is None
+        with pytest.raises(exceptions.UploadTargetNotFound):
             File.objects.ingest_image(PNG_BYTES)
 
 

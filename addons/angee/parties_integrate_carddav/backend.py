@@ -28,6 +28,7 @@ from xml.sax.saxutils import escape
 import vobject
 from django.apps import apps
 from django.conf import settings
+from django.core.exceptions import ValidationError
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
@@ -44,7 +45,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
+from angee.storage.exceptions import UploadError, UploadTooLarge, UploadTypeRefused
 
 _NS = {
     "d": "DAV:",
@@ -267,14 +268,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
         photo = contact_from_projection(projection).photo
         if photo is not None:
             avatar = link.target.avatar if link.target is not None else None
-            if avatar is None:
-                raise CardDavError("The projected contact photo is no longer available.")
             try:
+                if avatar is None:
+                    raise ValidationError("The projected contact photo is no longer available.")
                 # Still the projected photo; one stored before storage's image rule
                 # may be a type or size it now refuses.
                 photo_data = avatar.read_image(expected_digest=photo.content_hash)
             except (UploadTooLarge, UploadTypeRefused) as error:
                 raise RemoteRejected("unsupported_photo", conflict=False) from error
+            except ValidationError as error:
+                # The avatar changed or its bytes no longer verify: set the write aside.
+                raise RemoteRejected("photo_unavailable", conflict=False) from error
         raw = _render_vcard(projection, source=source, uid=link.external_key, photo_data=photo_data)
         response = self._request(
             "PUT",
@@ -564,13 +568,19 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 continue
             try:
                 contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
-            except (UploadTooLarge, UploadTypeRefused):
-                # A photo storage refuses to render (an SVG, an oversized image)
-                # quarantines its card rather than syncing it without the photo,
-                # which a later write-back would then strip from the card.
+            except UploadError as error:
+                # A photo storage refuses to render (an SVG, an oversized image), or
+                # cannot store yet (no image drive), quarantines its card rather than
+                # syncing it without the photo, which a later write-back would then
+                # strip from the card.
+                refused = isinstance(error, (UploadTooLarge, UploadTypeRefused))
                 contacts[href] = _quarantined(
                     href,
-                    {"href": href, "source_digest": canonical_json_sha256(data), "error": "unsupported_photo"},
+                    {
+                        "href": href,
+                        "source_digest": canonical_json_sha256(data),
+                        "error": "unsupported_photo" if refused else "photo_not_stored",
+                    },
                     remote_version=etag,
                 )
         if set(contacts) != set(hrefs):

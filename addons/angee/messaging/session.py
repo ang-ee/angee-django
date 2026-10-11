@@ -78,22 +78,22 @@ class LiveChannelSession(LiveSession):
         """
 
         handles = apps.get_model("parties", "Handle").objects
-        for start in range(0, len(reports), INGEST_CHUNK):
-            for report in reports[start : start + INGEST_CHUNK]:
+
+        def land(chunk: list[Any]) -> None:
+            for report in chunk:
                 try:
                     handles.fill_avatar(report)
                 except Exception:
                     logger.exception("Setting a %s avatar failed for channel %s.", report.platform, self.bridge.pk)
-            if start + INGEST_CHUNK < len(reports) and not self._still_wanted():
-                return False
-        return self._still_wanted()
+
+        return self._in_chunks(reports, land)
 
     def _ingest(self, batch: list[tuple[Any, Any]]) -> bool:
-        """Land one queued batch in bounded chunks, checking liveness between them."""
+        """Land one queued batch in bounded chunks (:meth:`_in_chunks`)."""
 
         message_model = apps.get_model("messaging", "Message")
-        for start in range(0, len(batch), INGEST_CHUNK):
-            chunk = batch[start : start + INGEST_CHUNK]
+
+        def land(chunk: list[tuple[Any, Any]]) -> None:
             parsed = [
                 self.live_impl.parse_live_message(self._with_media(message, payload)) for message, payload in chunk
             ]
@@ -105,7 +105,15 @@ class LiveChannelSession(LiveSession):
             self._after_ingest(chunk, landed)
             self.landed += len(landed)
             self._report(self.pairing)
-            if start + INGEST_CHUNK < len(batch) and not self._still_wanted():
+
+        return self._in_chunks(batch, land)
+
+    def _in_chunks(self, items: list[Any], land: Callable[[list[Any]], None]) -> bool:
+        """Land ``items`` in ``INGEST_CHUNK`` slices, checking liveness between them; return whether to go on."""
+
+        for start in range(0, len(items), INGEST_CHUNK):
+            land(items[start : start + INGEST_CHUNK])
+            if start + INGEST_CHUNK < len(items) and not self._still_wanted():
                 return False
         return self._still_wanted()
 

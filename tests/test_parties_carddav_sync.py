@@ -1991,13 +1991,23 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
     assert replica.stream.cursor == {"sync_token": replica.server.token}
 
 
-@pytest.mark.parametrize("photo", ["inline_script", "fetched_oversized"])
+@pytest.mark.parametrize(
+    ("photo", "code"),
+    [
+        ("inline_script", "unsupported_photo"),
+        ("fetched_oversized", "unsupported_photo"),
+        ("no_drive", "photo_not_stored"),
+    ],
+)
 def test_a_card_whose_photo_storage_refuses_waits_in_quarantine_and_the_rest_land(
-    replica: Replica, settings: Any, photo: str
+    replica: Replica, settings: Any, photo: str, code: str
 ) -> None:
-    """Inline or fetched, syncing it without the photo would let a later write-back strip the photo from the card."""
+    """Inline, fetched or with no image drive yet, syncing it photo-less would let a write-back strip the photo."""
 
-    if photo == "inline_script":
+    if photo == "no_drive":
+        # A real image, but no default drive exists to provision the image drive beside.
+        line = f"PHOTO;ENCODING=b;TYPE=PNG:{base64.b64encode(PNG_BYTES).decode()}"
+    elif photo == "inline_script":
         script = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>').decode()
         line = f"PHOTO;ENCODING=b;TYPE=SVG:{script}"
     else:
@@ -2012,14 +2022,15 @@ def test_a_card_whose_photo_storage_refuses_waits_in_quarantine_and_the_rest_lan
 
     assert set(Person.objects.values_list("source_uid", flat=True)) == {"grace"}
     discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
-    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, "unsupported_photo")
+    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, code)
     assert not File.objects.exists()
 
 
+@pytest.mark.parametrize(("refusal", "code"), [("oversized", "unsupported_photo"), ("unverified", "photo_unavailable")])
 def test_write_back_refuses_an_avatar_the_image_rule_refuses_and_writes_nothing(
-    replica: Replica, settings: Any
+    replica: Replica, settings: Any, monkeypatch: pytest.MonkeyPatch, refusal: str, code: str
 ) -> None:
-    """An avatar stored before storage's image rule is a remote rejection, not a PUT whose re-read then fails."""
+    """An avatar the image rule refuses, or whose bytes no longer verify, is a remote rejection, never a PUT."""
 
     person, link = replica.baseline()
     backend = Backend.objects.create(slug="legacy", label="Legacy", backend_class="local")
@@ -2033,7 +2044,14 @@ def test_write_back_refuses_an_avatar_the_image_rule_refuses_and_writes_nothing(
         storage_path="assets/old.png",
         upload_state=UploadState.READY,
     )
-    settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+    if refusal == "oversized":
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+    else:
+
+        def unverified(*_args: Any, **_kwargs: Any) -> bytes:
+            raise ValidationError("The stored bytes do not match the file identity.")
+
+        monkeypatch.setattr(File, "read_verified", unverified)
     person.avatar = legacy
     person.save(update_fields=["avatar"])
 
@@ -2041,7 +2059,7 @@ def test_write_back_refuses_an_avatar_the_image_rule_refuses_and_writes_nothing(
 
     discrepancy = SyncDiscrepancy.objects.get(link=link)
     assert result.count == 0
-    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.REMOTE_REJECTED, "unsupported_photo")
+    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.REMOTE_REJECTED, code)
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 

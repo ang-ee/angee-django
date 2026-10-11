@@ -149,8 +149,20 @@ def require_image(content: bytes) -> str:
     or :class:`~angee.storage.exceptions.UploadTypeRefused`.
     """
 
-    if len(content) > int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES):
+    require_image_size(len(content))
+    return require_image_type(content)
+
+
+def require_image_size(size: int) -> None:
+    """Refuse an image larger than ``ANGEE_STORAGE_IMAGE_MAX_BYTES`` (the size half of :func:`require_image`)."""
+
+    if size > int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES):
         raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
+
+
+def require_image_type(content: bytes) -> str:
+    """Return the sniffed type of an admitted image (the type half of :func:`require_image`)."""
+
     mime = detect_mime(content[:MIME_SNIFF_BYTES])
     if mime not in settings.ANGEE_STORAGE_IMAGE_TYPES:
         raise exceptions.UploadTypeRefused(f"{mime} is not an accepted image type.")
