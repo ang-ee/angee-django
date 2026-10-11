@@ -32,7 +32,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "axes",
     "rebac",
-    "reversion",
     "simple_history",
     "tests.settings.BareComposeConfig",
     "angee.base",

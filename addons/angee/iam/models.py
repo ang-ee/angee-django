@@ -606,8 +606,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(default=timezone.now)
     preferences = models.JSONField(default=dict, blank=True)
-    # django-reversion's ``Revision.user`` reverse query name is ``revision``, so
-    # the inherited save counter lives under another name; GraphQL still calls it ``revision``.
+    # The user save counter is stored as ``account_revision``; GraphQL exposes it as ``revision``.
     revision = None
     account_revision = models.PositiveIntegerField(default=1, editable=False)
     REVISION_FIELD = "account_revision"

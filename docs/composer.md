@@ -196,9 +196,8 @@ Tracking and batch behavior stay with their owners. `HistoryMixin` uses a native
 simple-history descriptor adapted for generated module labels and virtual fields;
 every concrete descendant of a tracked source has its own history table,
 including MTI children. Each emitted concrete Meta names the tracked
-`_angee_base` manager; retained models supply its guarded queryset. Revision
-sources use django-reversion registration on completed
-concrete classes. Resource participants inherit the resources-owned
+`_angee_base` manager; retained models supply its guarded queryset. Resource
+participants inherit the resources-owned
 [`ResourceLoadMixin`](../addons/angee/resources/mixins.py) and delegate through
 `super()`. The renderer has no generic decorator/attribute language or resource
 hook aggregator.

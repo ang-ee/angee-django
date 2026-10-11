@@ -49,7 +49,7 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "groups": "notes_groups",
                 "groupsCount": "notes_groups_count",
                 "list": "notes",
-                "revisions": "note_revisions",
+                "revisions": None,
                 "save": None,
                 "update": "update_notes_by_pk",
             },

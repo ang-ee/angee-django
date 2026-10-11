@@ -40,14 +40,12 @@ from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
-from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeModel
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
-from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
@@ -212,46 +210,6 @@ class OptionalWorkflowItem(models.Model):
     nullable_state = StateField(choices_enum=State, null=True)
 
     class Meta:
-        app_label = "tests"
-
-
-class RevisionEntry(RevisionMixin, models.Model):
-    """Concrete model exposing versioned body snapshots in GraphQL tests."""
-
-    revisioned_fields = ("body",)
-
-    title = models.CharField(max_length=32)
-    body = models.TextField(blank=True, default="")
-
-    class Meta:
-        """Django model options for the revision query test model."""
-
-        app_label = "tests"
-
-
-class FieldGatedRevisionEntry(RevisionMixin, models.Model):
-    """Revisioned model with a field-gated value that must not be exposed."""
-
-    revisioned_fields = ("secret",)
-
-    secret = models.TextField(blank=True, default="")
-
-    class Meta:
-        """Django model options for the field-gated revision guard model."""
-
-        app_label = "tests"
-
-
-class RelatedRevisionEntry(RevisionMixin, models.Model):
-    """Revisioned model declaring a relation field, which cannot round-trip."""
-
-    revisioned_fields = ("owner",)
-
-    owner = models.ForeignKey(WorkflowItem, on_delete=models.CASCADE)
-
-    class Meta:
-        """Django model options for the relation guard test model."""
-
         app_label = "tests"
 
 
@@ -427,28 +385,6 @@ class WorkflowItemType:
 
     state: strawberry.auto
     priority: strawberry.auto
-
-
-@strawberry_django.type(RevisionEntry)
-class RevisionEntryType:
-    """GraphQL type exposing a revision-tracked model."""
-
-    title: strawberry.auto
-    body: strawberry.auto
-
-
-@strawberry_django.type(FieldGatedRevisionEntry)
-class FieldGatedRevisionEntryType:
-    """GraphQL type exposing the field-gated revision guard model."""
-
-    secret: strawberry.auto
-
-
-@strawberry_django.type(RelatedRevisionEntry)
-class RelatedRevisionEntryType:
-    """GraphQL type exposing the relation revision guard model."""
-
-    owner: strawberry.auto
 
 
 def _parts(**buckets: list) -> dict[str, tuple]:
@@ -1074,72 +1010,6 @@ def test_nullable_state_auto_preserves_native_enum_across_schema_builds(
         for result in results:
             assert result.errors is None
             assert result.data == {"item": {"state": expected, "nullableState": expected}}
-
-
-def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
-    """A generated revision query replaces consumer-authored resolvers.
-
-    Asserts the emitted schema surface — the bounded query field and its
-    revisioned-field projection. The runtime data path (public id -> instance ->
-    newest-first projection) is covered end-to-end against the real, reversion-
-    registered notes.Note in the in-tree examples/e2e suite (notes-form-interactions
-    "the Activity tab renders the revision timeline"); reversion cannot resolve
-    a ContentType for a schema_editor-created throwaway model, so the version
-    round-trip is not exercised as a unit test.
-    """
-
-    surface = revisions(RevisionEntryType, name="revision_entry")
-    schema = GraphQLSchemas(
-        [
-            addon(
-                public={
-                    "query": [HelloQuery, surface],
-                    "types": [RevisionEntryType],
-                }
-            )
-        ]
-    ).build("public")
-
-    query_type = schema._schema.query_type
-    assert query_type is not None
-    field = query_type.fields["revision_entry_revisions"]
-    # Bounded surface: addressed by id, capped by a `first` argument.
-    assert set(field.args) == {"id", "first"}
-    projection = get_named_type(field.type)
-    assert isinstance(projection, GraphQLObjectType)
-    # Projects the model's revisioned field plus the revision metadata.
-    assert {"body", "created_at", "comment"} <= set(projection.fields)
-
-
-def test_revisions_rejects_field_gated_revision_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Schema build rejects revision snapshots hidden by field-level read rules."""
-
-    monkeypatch.setattr(
-        "angee.graphql.access.gated_read_fields",
-        lambda model: frozenset({"secret", "visible"}),
-    )
-
-    surface = revisions(FieldGatedRevisionEntryType, name="field_gated_revision_entry")
-    with pytest.raises(ImproperlyConfigured, match=r"revisioned_fields.*secret"):
-        GraphQLSchemas(
-            [
-                addon(
-                    public={
-                        "query": [HelloQuery, surface],
-                        "types": [FieldGatedRevisionEntryType],
-                    }
-                )
-            ]
-        ).build("public")
-
-
-def test_revisions_rejects_relation_revision_fields() -> None:
-    """Revision snapshots only expose concrete value fields."""
-
-    with pytest.raises(ImproperlyConfigured, match=r"relation field 'owner'"):
-        revisions(RelatedRevisionEntryType, name="related_revision_entry")
 
 
 def test_build_schema_includes_mutation_root() -> None:

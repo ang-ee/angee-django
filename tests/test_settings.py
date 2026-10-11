@@ -237,7 +237,6 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.compose.apps.ComposeConfig",
         "django.contrib.contenttypes.apps.ContentTypesConfig",
         "rebac.apps.RebacConfig",
-        "reversion.apps.ReversionConfig",
         "simple_history",
         BASE_APP,
         # Core apps are an always-on prefix rather than addon dependencies.
@@ -1067,7 +1066,6 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
         "angee.compose",
         "django.contrib.contenttypes",
         "rebac",
-        "reversion",
         "simple_history",
         "angee.base",
         "django_celery_beat",

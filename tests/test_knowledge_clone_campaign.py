@@ -1,7 +1,6 @@
 """Vault copies preserve content, attribution, replay receipts and bounded work."""
 
 import pytest
-import reversion
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -27,7 +26,7 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
         RecordBinding(
             vault=fixture.source, content_type=ContentType.objects.get_for_model(Vault), object_id=fixture.source.pk,
         ).save()
-    with actor_context(fixture.actor), reversion.create_revision():
+    with actor_context(fixture.actor):
         clone = Vault.objects.create_from(fixture.source, name="Copy", owned=owned)
     assert clone.owner_id == (fixture.actor.pk if owned else None)
     assert clone.pk != fixture.source.pk
@@ -61,7 +60,6 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
                 original.body, original.body_hash, original.word_count,
             )
             assert body.created_by_id == body.updated_by_id == fixture.actor.pk
-            assert body.revisions.count() == 1
         links = {link.target_text: link for link in Link.objects.filter(source_page=copies["Guide"])}
         assert links.keys() == {"Outline", "Guide", "Missing"}
         assert links["Outline"].target_page_id == copies["Outline"].pk
@@ -291,7 +289,7 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
                 MarkdownPage.objects.write_body(page, f"[[Page 0]] [[Page {index}]] [[Missing]]")
                 pages.append(page)
         _grant(source, "viewer", actor)
-        with actor_context(actor), CaptureQueriesContext(connection) as captured, reversion.create_revision():
+        with actor_context(actor), CaptureQueriesContext(connection) as captured:
             clone = Vault.objects.create_from(source, name=f"Copy {size}")
         child_inserts = sum(query["sql"].startswith(child_insert) for query in captured.captured_queries)
         assert child_inserts == size

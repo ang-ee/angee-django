@@ -13,7 +13,6 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
-import reversion
 import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
@@ -219,16 +218,8 @@ class Page(RecordChangedOptIn, AbstractPage):
         rebac_resource_type = "knowledge/page"
 
 
-reversion.register(Page, fields=())
-
-
-@reversion.register(fields=("body", "page_ptr"))
 class MarkdownPage(AbstractMarkdownPage, Page):
-    """Concrete knowledge markdown child used by source-addon tests.
-
-    Registered with django-reversion the way the composer registers the
-    completed runtime model.
-    """
+    """Concrete knowledge markdown child used by source-addon tests."""
 
     class Meta(AbstractMarkdownPage.Meta):
         """Django model options for the canonical test markdown page."""

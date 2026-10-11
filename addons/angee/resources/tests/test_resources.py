@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import reversion
 import yaml
 from django.apps import AppConfig, apps
 from django.contrib.auth.models import Group, Permission
@@ -18,10 +17,8 @@ from django.test.utils import CaptureQueriesContext
 from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
-from reversion.models import Version
 
 from angee.addons import addon_manifest
-from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeModel
 from angee.base.tiers import ResourceTier
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
@@ -695,42 +692,6 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
         assert second.created == 0
         assert second.updated == 0
         assert second.skipped == 2
-
-
-@pytest.mark.django_db(transaction=True)
-def test_resource_import_records_native_revisions(tmp_path: Path) -> None:
-    """A seeded revisioned row has a history entry after the import transaction."""
-
-    class RevisionImportRow(RevisionMixin, AngeeModel):
-        title = models.CharField(max_length=80)
-        revisioned_fields = ("title",)
-
-        class Meta:
-            app_label = "base"
-            rebac_resource_type = "base/revision-import-row"
-
-    class RevisionLedger(Resource):
-        class Meta(Resource.Meta):
-            app_label = "base"
-            abstract = False
-
-    (tmp_path / "010_base.revisionimportrow.csv").write_text(
-        "_xref,title\nfirst,Initial\n", encoding="utf-8",
-    )
-    owner = addon(tmp_path, manifest={"master": ({"path": "010_base.revisionimportrow.csv"},)})
-    reversion.register(RevisionImportRow, fields=RevisionImportRow.revisioned_fields)
-    try:
-        with model_tables((RevisionImportRow, RevisionLedger)):
-            RevisionLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
-            with system_context(reason="revision import assertion"):
-                row = RevisionImportRow.objects.get(title="Initial")
-            versions = Version.objects.get_for_object(row)
-            assert versions.count() == 1
-            assert versions.first().field_dict["title"] == "Initial"
-            RevisionLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
-            assert Version.objects.get_for_object(row).count() == 1
-    finally:
-        reversion.unregister(RevisionImportRow)
 
 
 @pytest.mark.django_db(transaction=True)

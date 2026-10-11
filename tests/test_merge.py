@@ -212,11 +212,10 @@ def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
 
 
-def test_a_generic_pointer_no_edge_declares_blocks_unless_it_is_a_revision() -> None:
-    """A plain generic foreign key cannot be moved safely; a reversion snapshot is history."""
+def test_a_generic_pointer_no_edge_declares_blocks() -> None:
+    """A plain generic foreign key cannot be moved safely."""
 
     plain = {ref.model._meta.label: ref.policy for ref in references(Tag) if isinstance(ref, EdgeReference)}
-    assert plain["reversion.Version"] == MergePolicy.KEEP
     assert plain["rebac.SchemaOverride"] == MergePolicy.BLOCK
 
 

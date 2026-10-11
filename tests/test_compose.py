@@ -21,7 +21,7 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
-from angee.base.mixins import HistoryMixin, RevisionMixin
+from angee.base.mixins import HistoryMixin
 from angee.base.models import AngeeModel, role_anchor
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
@@ -33,22 +33,6 @@ from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL
 from tests.conftest import make_addon
-
-
-class DecoratedRevisionThing(RevisionMixin, AngeeModel):
-    """Abstract model used to test composer-emitted model decorators."""
-
-    runtime = True
-
-    revisioned_fields = ("body",)
-
-    body = models.TextField()
-
-    class Meta:
-        """Django model options for the test source model."""
-
-        abstract = True
-        app_label = "tests"
 
 
 class DecoratedHistoryThing(HistoryMixin, AngeeModel):
@@ -597,7 +581,7 @@ def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
 
     source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
 
-    assert "class DecoratedRevisionThing" in source
+    assert "class DecoratedHistoryThing" in source
     assert "class SkippedRuntimeThing" not in source
 
 
@@ -657,7 +641,7 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path, monkeypatc
 
     class RuntimeChild(models.Model):
         runtime = True
-        extends = "tests.DecoratedRevisionThing"
+        extends = "tests.DecoratedHistoryThing"
         child_value = models.CharField(max_length=16)
 
         class Meta:
@@ -670,16 +654,16 @@ def test_runtime_renders_materialized_child_extension(tmp_path: Path, monkeypatc
         name=__name__,
         module=sys.modules[__name__],
         models_module=SimpleNamespace(
-            DecoratedRevisionThing=DecoratedRevisionThing,
+            DecoratedHistoryThing=DecoratedHistoryThing,
             RuntimeChild=RuntimeChild,
         ),
     )
 
     source = Runtime.discover((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
 
-    assert "from runtime.tests.models import DecoratedRevisionThing" not in source
-    assert "class DecoratedRevisionThing(AbstractDecoratedRevisionThing):" in source
-    assert "class RuntimeChild(AbstractRuntimeChild, DecoratedRevisionThing):" in source
+    assert "from runtime.tests.models import DecoratedHistoryThing" not in source
+    assert "class DecoratedHistoryThing(AbstractDecoratedHistoryThing):" in source
+    assert "class RuntimeChild(AbstractRuntimeChild, DecoratedHistoryThing):" in source
 
 
 def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path) -> None:
