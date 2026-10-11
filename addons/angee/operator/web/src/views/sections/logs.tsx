@@ -1,16 +1,10 @@
 import { Alert, Badge, Card, CardContent, CardHeader, CardTitle, LogStream } from "@angee/ui";
 import { isFatalGraphQLWsCloseCode } from "@angee/refine";
-import type { DocumentData } from "@angee/refine";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorConnection, useOperatorQuery, useOperatorSubscription } from "../../data/transport";
-import type {
-  WORKSPACE_LOGS_QUERY,
-  WORKSPACE_LOGS_SUBSCRIPTION,
-} from "../../data/documents.daemon";
+import { useOperatorConnection } from "../../data/transport";
 
-const HISTORY_LIMIT = 500;
 const MAX_LIVE_LINES = 2000;
 
 /** Append a line to a live tail, keeping only the last {@link MAX_LIVE_LINES}. */
@@ -21,63 +15,10 @@ function appendCapped(prev: readonly string[], line: string): readonly string[] 
 
 export interface DaemonLogStream {
   lines: readonly string[];
-  /** The subscription/history error, if the stream failed to connect. */
+  /** The stream error: the daemon is unavailable or the log socket closed fatally. */
   error: Error | null;
-  /** The subscription is open and receiving. */
+  /** The log socket is open and receiving. */
   streaming: boolean;
-}
-
-/**
- * A daemon log tail: the one-shot history query for first paint, then the live
- * subscription (v0.6 streams these line-by-line). The subscription's `onData`
- * accumulates each emission so none are dropped; its error/connection state is
- * surfaced so an empty pane is never ambiguous (idle service vs failed stream).
- */
-export function useDaemonLogStream({
-  name,
-  historyQuery,
-  historyField,
-  streamSubscription,
-  streamField,
-}: {
-  name: string | undefined;
-  historyQuery: typeof WORKSPACE_LOGS_QUERY;
-  historyField: keyof DocumentData<typeof WORKSPACE_LOGS_QUERY> & string;
-  streamSubscription: typeof WORKSPACE_LOGS_SUBSCRIPTION;
-  streamField: keyof DocumentData<typeof WORKSPACE_LOGS_SUBSCRIPTION> & string;
-}): DaemonLogStream {
-  const history = useOperatorQuery(
-    historyQuery,
-    { name: name ?? "", limit: HISTORY_LIMIT },
-    { enabled: Boolean(name) },
-  );
-  const [live, setLive] = useState<readonly string[]>([]);
-  const stream = useOperatorSubscription(
-    streamSubscription,
-    { name: name ?? "" },
-    {
-      enabled: Boolean(name),
-      onData: (value) => {
-        const line = value[streamField];
-        if (line == null) return;
-        setLive((prev) => appendCapped(prev, line));
-      },
-    },
-  );
-
-  const lines = useMemo(() => {
-    const text = history.data?.[historyField] ?? "";
-    const historyLines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
-    return [...historyLines, ...live];
-  }, [history.data, historyField, live]);
-
-  return {
-    lines,
-    error: stream.error ?? history.error ?? null,
-    // "Live" means a frame has arrived — the subscription's `fetching` only means
-    // it was requested, which would read Live before the socket connects.
-    streaming: stream.data != null && stream.error == null,
-  };
 }
 
 const SERVICE_LOG_TAIL = 500;
@@ -202,8 +143,8 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
 /**
  * A drop-in live service-log panel: the structured `/logs/stream` WebSocket tail
  * + the connection-status panel. The one service-logs surface — the operator
- * console's service detail and any addon that provisions a service (the agents
- * console) compose this rather than re-plumbing a log subscription.
+ * console's service detail and logs drawer, and any addon that provisions a
+ * service (the agents console), compose this rather than re-plumbing a log stream.
  */
 export function ServiceLogs({
   name,
@@ -218,7 +159,7 @@ export function ServiceLogs({
 }
 
 /** A titled log card with a connection-status badge and the {@link LogStream} tail. */
-export function LogPanel({
+function LogPanel({
   logs,
   title,
 }: {

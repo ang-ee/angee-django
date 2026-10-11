@@ -66,7 +66,6 @@ export const OperatorWorkspaceStatusFields = graphql(`
     exists
     state
     error
-    innerError
     template
     processComposePort
     ttl
@@ -380,21 +379,6 @@ export const WORKSPACE_SYNC_BASE_MUTATION = graphql(`
     workspaceSyncBase(name: $name, method: $method) {
       ...OperatorSourceStateFields
     }
-  }
-`);
-
-// The recent log buffer (history) for first paint of the workspace detail logs.
-export const WORKSPACE_LOGS_QUERY = graphql(`
-  query OperatorWorkspaceLogHistory($name: String!, $limit: Int) {
-    workspaceLogs(name: $name, limit: $limit)
-  }
-`);
-
-// The live log tail. Each emission is one log line; the detail view accumulates
-// them past the history (mirrors the service log stream).
-export const WORKSPACE_LOGS_SUBSCRIPTION = graphql(`
-  subscription OperatorWorkspaceLogStream($name: String!) {
-    onWorkspaceLogs(name: $name)
   }
 `);
 

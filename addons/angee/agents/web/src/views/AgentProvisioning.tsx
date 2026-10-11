@@ -234,7 +234,7 @@ function WorkspaceRuntimeView({
 }): React.ReactElement {
   const t = useAgentsT();
   const sources = status?.sources ?? [];
-  const workspaceError = status?.error ?? status?.innerError ?? "";
+  const workspaceError = status?.error ?? "";
 
   return (
     <div className="flex flex-col gap-4">
