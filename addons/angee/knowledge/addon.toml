@@ -21,3 +21,8 @@ demo = [
 name = "markdown_page_child"
 app_label = "knowledge"
 module = "runtime_migrations.markdown_page_child"
+
+[[migrations]]
+name = "markdown_page_history"
+app_label = "knowledge"
+module = "runtime_migrations.markdown_page_history"

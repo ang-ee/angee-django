@@ -336,7 +336,8 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         The clone owner supplies actor-readable source pages. Their unchanged
         scalar values retain source validation; tree edges are checked here and
         database constraints still apply. Insert all pages, restore their parent
-        links, and batch native history before notifying the remaining subscribers.
+        links, then notify lifecycle subscribers. History capture belongs to the
+        shared write owner.
         """
 
         user_id = actor_user_id(actor)
@@ -372,15 +373,10 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
                 children.append(page)
         if children:
             elevated.bulk_update(children, ["parent"])
-        self.model.history.db_manager(self.db).bulk_history_create(batch)
         for page in batch:
-            page.skip_history_when_saving = True
-            try:
-                post_save.send(
-                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
-                )
-            finally:
-                del page.skip_history_when_saving
+            post_save.send(
+                sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
+            )
         return copies
 
 
@@ -904,12 +900,12 @@ class SectionOp(StrEnum):
     PREPEND = "prepend"
 
 
-class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
+class MarkdownPage(RevisionMixin, HistoryMixin, models.Model, metaclass=RebacModelBase):
     """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
-    ``word_count`` are derived on save. Body edits are versioned through
-    ``revisions`` so they can be rolled back.
+    ``word_count`` are derived on save. The child declares its own ``history``
+    so snapshots include the body alongside inherited page metadata.
     """
 
     runtime = True
