@@ -15,7 +15,11 @@ def main() -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
     from django.core.management import execute_from_command_line
 
-    execute_from_command_line(sys.argv)
+    from angee.base.changesets import changeset
+
+    command = sys.argv[1] if len(sys.argv) > 1 else "help"
+    with changeset(activity="system", change_reason=f"manage.{command}"):
+        execute_from_command_line(sys.argv)
 
 
 if __name__ == "__main__":

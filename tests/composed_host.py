@@ -315,4 +315,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from angee.base.changesets import changeset
+
+    with changeset(activity="system", change_reason="manage.test"):
+        main()

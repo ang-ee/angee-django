@@ -959,6 +959,11 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert "{BASE_DIR}/workspaces/src/angee-arp/addons" in arp["ANGEE_ADDON_DIRS"]
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
 
+    manage = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text()
+    assert 'with changeset(activity="system", change_reason=f"manage.{command}"):' in manage
+    assert "        execute_from_command_line(sys.argv)" in manage
+    assert "system_context" not in manage
+
 
 # --- dev (process) contracts ---------------------------------------------------
 

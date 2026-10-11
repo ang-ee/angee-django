@@ -7,7 +7,9 @@ declares provenance in its own manifest.
 
 `changeset()` reads REBAC's current actor and sudo reason. It grants no bypass,
 and records its metadata only when a captured write occurs. Empty request and
-command boundaries require no database table. Nested boundaries are independent.
+command boundaries require no database table. Nested boundaries join the outer
+changeset. Request middleware runs after REBAC's actor middleware; tasks and the
+host's management entrypoint open system activities without granting a bypass.
 The model is not history-tracked.
 
 The serialized actor is attribution data. A native actor relationship tuple

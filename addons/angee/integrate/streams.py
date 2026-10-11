@@ -29,6 +29,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
+from angee.base.changesets import changeset
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError, _safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
@@ -530,7 +531,7 @@ def _apply_page(
     count = 0
     discrepancies: list[int] = []
     applied: list[ApplyResult] = []
-    with transaction.atomic():
+    with transaction.atomic(), changeset(activity="import", origin=stream):
         locked = _manager("SyncStream").lock_current(stream)
         if (
             locked.cursor != original_cursor
@@ -730,7 +731,7 @@ def push_stream(
             except RemoteRejected as error:
                 discrepancies.append(_quarantine(stream, record, error, link=link).pk)
                 continue
-            with transaction.atomic():
+            with transaction.atomic(), changeset(activity="import", origin=stream):
                 locked_stream = _manager("SyncStream").lock_current(stream)
                 locked = links.lock_if_supported().get(pk=link.pk)
                 if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:

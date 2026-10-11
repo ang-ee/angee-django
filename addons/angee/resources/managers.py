@@ -6,7 +6,6 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-import reversion
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -14,6 +13,7 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
@@ -218,7 +218,11 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
-            with system_context(reason=reason), transaction.atomic(), reversion.create_revision():
+            with (
+                system_context(reason=reason),
+                transaction.atomic(),
+                changeset(activity="seed", change_reason=reason),
+            ):
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups

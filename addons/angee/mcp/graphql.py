@@ -26,13 +26,12 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-import reversion
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 from django.http import HttpRequest
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import Tool, ToolResult
@@ -50,6 +49,7 @@ from strawberry.types import get_object_definition
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import changeset
 from angee.graphql.actions import ActionResult
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
@@ -94,8 +94,6 @@ async def execute_under_actor(schema: str, document: str, variables: dict[str, A
 
     built = GraphQLSchemas.from_discovery().build(schema)
     result = await sync_to_async(_execute_sync)(built, document, variables)
-    if result.errors:
-        raise _tool_error(result.errors[0])
     return dict(result.data or {})
 
 
@@ -111,38 +109,41 @@ def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -
 
     A tool call carries a synthetic request whose only meaningful attribute is ``user``:
     the ambient actor's user, or anonymous for a non-user or ineligible user. No HTTP
-    middleware runs, including ``reversion.middleware.RevisionMiddleware``, so open its
-    revision context and bind the same eligible user for attribution. A read records
-    nothing — no registered model saves, so reversion writes no revision — so wrapping
-    every operation is safe.
+    middleware runs, so open a changeset under the ambient REBAC actor. The synthetic
+    user remains the session identity; history attribution comes from the changeset.
+    Reads persist no changeset. GraphQL reports handled errors on the result;
+    translate them before leaving the boundary so the changeset closes as failed.
+    Preserve reversion's transaction: successful statements commit before the
+    result's handled errors are translated to a tool error.
     """
 
     close_old_connections()
     try:
-        with reversion.create_revision():
-            user = _actor_user()
-            request = HttpRequest()
-            request.user = user if user is not None and ModelBackend().user_can_authenticate(user) else AnonymousUser()
-            result = built.execute_sync(
-                document,
-                variable_values=dict(variables or {}),
-                context_value=SimpleNamespace(request=request),
-            )
-            reversion.set_user(request.user if request.user.is_authenticated else None)
+        with changeset():
+            with transaction.atomic():
+                user = _actor_user()
+                request = HttpRequest()
+                request.user = (
+                    user if user is not None and ModelBackend().user_can_authenticate(user) else AnonymousUser()
+                )
+                result = built.execute_sync(
+                    document,
+                    variable_values=dict(variables or {}),
+                    context_value=SimpleNamespace(request=request),
+                )
+            if result.errors:
+                raise _tool_error(result.errors[0])
             return result
     finally:
         close_old_connections()
 
 
 def _actor_user() -> Any | None:
-    """Return the ambient MCP user's session identity and revision attribution.
+    """Return the ambient MCP user's eligible session identity.
 
-    The MCP analog of ``RevisionMiddleware``'s ``request.user`` binding: resolve rebac's
-    ambient actor (entered per call by :class:`~angee.mcp.middleware.ActorMiddleware` and
-    copied into this sync worker thread) to its user row. Returns ``None`` for an actor
-    that is not a user, so the revision stays unattributed exactly as the middleware
-    leaves an anonymous request. Read under ``system_context`` so resolving the attributor
-    never pulls a REBAC-guarded user row into the actor's own scope.
+    Resolve the actor copied into this worker thread to its user row, returning
+    ``None`` for a non-user subject. The explicit system read avoids loading a
+    guarded user row through the actor's own scope.
     """
 
     user_id = actor_user_id(current_actor())

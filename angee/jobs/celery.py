@@ -8,6 +8,6 @@ from celery import Celery
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
 
-app = Celery("angee")
+app = Celery("angee", task_cls="angee.jobs.task:Task")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
