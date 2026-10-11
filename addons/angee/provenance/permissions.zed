@@ -1,0 +1,15 @@
+// @rebac_package: provenance
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition provenance/changeset {
+    relation actor: auth/user | integrate/integration | provenance/rule | provenance/seed
+    relation admin: angee/role // rebac:const=admin
+    permission create = actor + admin->member
+    permission read = actor + admin->member
+    permission write = actor + admin->member
+    permission delete = nil
+}
+
+definition provenance/rule {}
+definition provenance/seed {}

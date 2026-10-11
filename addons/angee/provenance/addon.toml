@@ -1,0 +1,11 @@
+[addon]
+name = "angee.provenance"
+description = "Changesets attributing canonical record history to its actor and origin"
+keywords = ["provenance", "history"]
+category = "Data"
+depends_on = ["angee.graphql"]
+
+[[migrations]]
+name = "changeset"
+app_label = "provenance"
+module = "runtime_migrations.changeset"

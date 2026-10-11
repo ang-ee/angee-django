@@ -123,12 +123,28 @@ addon (discovered by convention); `django-zed-rebac` owns sync.
 **Principal** — an identity that acts: a row in the swappable
 `AUTH_USER_MODEL` table and its
 `auth/user` REBAC subject. The row may represent a person or a service. Every
-fact that answers "who" (audit stamps, history rows, revision authors) is an FK
-to that table.
+user-backed audit and history stamps refer to that table. Changeset attribution
+also accepts non-user REBAC subjects.
 
-**Actor** — the `auth/user` REBAC subject bound to the current operation (the
-`django-zed-rebac` actor context). Its subject ID is the user's database primary
-key; `actor_user_id` converts that canonical value to the FK's Python type.
+**Actor** — the REBAC `SubjectRef` bound to the current operation. For an
+`auth/user` subject its ID is the user's database primary key; `actor_user_id`
+converts it to the FK's Python type and returns no user for other subject types.
+
+**Changeset** — one logical write boundary's actor, action, activity, reason,
+origin and touched-model index. [`changeset()`](../angee/base/changesets.py) owns
+the context; the [provenance addon](../addons/angee/provenance/README.md) stores
+the swappable metadata. It is never historized.
+
+**Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
+classifies the logical work (manual, import, merge, revert, seed or system).
+`change_reason` uses simple-history's vocabulary. `correlation_id` connects
+boundaries; `idempotency_key` records an ingress key without enforcing global
+uniqueness. `occurred_at` names application time and `recorded_at` storage time.
+State is open/closed; outcome is success/failure.
+
+**Write group** — an internal ephemeral identity for nested ORM dispatch. Its
+deduplication ends with the dispatch; successive writes in one changeset remain
+distinct history events.
 
 **User (row)** — the database-layer principal record. Not synonymous with "a
 human" or "a login": `kind` distinguishes `person` from `service`, and only
