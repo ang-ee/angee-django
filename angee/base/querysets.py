@@ -3,29 +3,57 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
 from django.conf import settings
 from django.db import NotSupportedError, connections, models, transaction
-from rebac.managers import RebacQuerySet
-from simple_history.models import registered_models
-from simple_history.utils import get_history_manager_for_model
+from rebac import app_settings, system_context
+from rebac.managers import RebacQuerySet, TrackedQuerySet
+from rebac.watch import by_key, statement_keys
 
+from angee.base.autoconfig import SETTINGS
 from angee.base.changesets import current_changeset, write_group
 from angee.base.scoping import lock_if_supported
+
+if TYPE_CHECKING:
+    from angee.base.mixins import ModelHistory
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-def model_history(model: type[models.Model]) -> Any | None:
-    """Resolve the native registration, excluding history tables and Changeset."""
+def model_history(model: type[models.Model]) -> ModelHistory | None:
+    """Resolve the concrete registration, refusing tracked proxies in strict mode."""
 
-    if model._meta.label_lower == getattr(settings, "ANGEE_CHANGESET_MODEL", "").lower():
+    if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
         return None
-    if registered_models.get(model._meta.db_table) is not model:
+    if (
+        model._meta.label_lower
+        == cast(
+            str,
+            getattr(
+                settings,
+                "ANGEE_CHANGESET_MODEL",
+                SETTINGS["ANGEE_CHANGESET_MODEL"],
+            ),
+        ).lower()
+    ):
         return None
-    manager = get_history_manager_for_model(model)
-    return manager.model._history_records()
+    concrete = model._meta.concrete_model
+    history = getattr(concrete._meta, "angee_model_history", None)
+    if history is None:
+        history = next(
+            (
+                getattr(parent._meta, "angee_model_history", None)
+                for parent in concrete._meta.all_parents
+                if getattr(parent._meta, "angee_model_history", None) is not None
+            ),
+            None,
+        )
+    if history is not None and model._meta.proxy:
+        if app_settings.REBAC_STRICT_MODE:
+            raise NotSupportedError("History capture does not support proxy model writes.")
+        return None
+    return cast("ModelHistory | None", history)
 
 
 class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
@@ -38,30 +66,24 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
 
     model: type[_ModelT]
 
-    def _history_keys(self) -> list[Any]:
-        """Freeze write targets without turning a write gate into a read scope."""
-
-        selection = self
-        if isinstance(self, RebacQuerySet):
-            selection = self._system_capture(reason="angee.history.rows")
-        return list(dict.fromkeys(selection.lock_if_supported().order_by().values_list("pk", flat=True)))
-
     def update(self, **kwargs: Any) -> int:
-        """Capture stored state after a frozen, authorized update."""
+        """Capture stored state after an authorized write of frozen, locked keys."""
 
         history = model_history(self.model)
         if history is None or self.query.is_sliced:
             return super().update(**kwargs)
         self._for_write = True
-        current_changeset(required=True)
-        with transaction.atomic(using=self.db), write_group():
-            keys = self._history_keys()
-            rows = self.filter(pk__in=keys)
-            count = super(_AngeeQuerySetMixin, rows).update(**kwargs)
-            if count:
+        selection = self._system_capture(reason="angee.history.rows") if isinstance(self, RebacQuerySet) else self
+        with transaction.atomic(using=self.db):
+            keys = list(dict.fromkeys(statement_keys(lock_if_supported(selection))))
+            if not keys:
+                return 0
+            current_changeset(required=True, record=True)
+            with transaction.atomic(using=self.db, savepoint=False), write_group():
+                count = sum(super(_AngeeQuerySetMixin, rows).update(**kwargs) for rows in by_key(self, keys))
                 history.bulk_history_create(self.model, keys, "~", using=self.db)
-            self._result_cache = None
-            return count
+                self._result_cache = None
+                return count
 
     def bulk_create(
         self,
@@ -83,19 +105,26 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
                 obj.pk is None for obj in candidates
             ):
                 raise NotSupportedError("History capture requires bulk-insert primary keys on this database.")
-            current_changeset(required=True)
+            current_changeset(required=True, record=True)
         self._for_write = True
         with transaction.atomic(using=self.db), write_group():
             rows = super().bulk_create(
-                candidates, batch_size=batch_size, ignore_conflicts=ignore_conflicts,
-                update_conflicts=update_conflicts, update_fields=update_fields, unique_fields=unique_fields,
+                candidates,
+                batch_size=batch_size,
+                ignore_conflicts=ignore_conflicts,
+                update_conflicts=update_conflicts,
+                update_fields=update_fields,
+                unique_fields=unique_fields,
             )
             if history is not None and rows:
                 if any(row.pk is None for row in rows):
                     raise NotSupportedError("History capture requires a primary key for every bulk-inserted row.")
                 history.bulk_history_create(
-                    self.model, [row.pk for row in rows], "~" if update_conflicts else "+",
-                    using=self.db, batch_size=batch_size,
+                    self.model,
+                    [row.pk for row in rows],
+                    "~" if update_conflicts else "+",
+                    using=self.db,
+                    batch_size=batch_size,
                 )
             return rows
 
@@ -103,17 +132,26 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
         """Batch root snapshots; native receivers retain collector cascade capture."""
 
         history = model_history(self.model)
+        if history is not None and history.cascade_delete_history:
+            history = None
         if history is None or self.query.is_sliced:
             return super().delete()
         self._for_write = True
-        current_changeset(required=True)
-        with transaction.atomic(using=self.db), write_group():
-            keys = self._history_keys()
-            history.bulk_history_create(self.model, keys, "-", using=self.db)
-            rows = self.filter(pk__in=keys)
-            result = super(_AngeeQuerySetMixin, rows).delete()
-            self._result_cache = None
-            return result
+        selection = self._system_capture(reason="angee.history.rows") if isinstance(self, RebacQuerySet) else self
+        with transaction.atomic(using=self.db):
+            keys = list(dict.fromkeys(statement_keys(lock_if_supported(selection))))
+            if not keys:
+                return 0, {}
+            current_changeset(required=True, record=True)
+            with transaction.atomic(using=self.db, savepoint=False), write_group():
+                history.bulk_history_create(self.model, keys, "-", using=self.db)
+                counts: dict[str, int] = {}
+                for rows in by_key(self, keys):
+                    _, deleted = super(_AngeeQuerySetMixin, rows).delete()
+                    for label, count in deleted.items():
+                        counts[label] = counts.get(label, 0) + count
+                self._result_cache = None
+                return sum(counts.values()), counts
 
     def from_public_id(self, value: str) -> _ModelT | None:
         """Return the row addressed by ``value`` within this queryset policy."""
@@ -140,3 +178,13 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
         """Return one row under a database row lock when the backend supports it."""
 
         return cast(models.QuerySet[_ModelT], self.lock_if_supported()).get(*args, **kwargs)
+
+
+class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_ModelT]):
+    """Django's scheduled retained-FK updates, with capture and system authority."""
+
+    def update(self, **kwargs: Any) -> int:
+        """Remove the edge as part of its authorized target deletion."""
+
+        with system_context(reason="delete.retain"):
+            return super().update(**kwargs)

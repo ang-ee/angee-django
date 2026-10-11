@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import Any, ClassVar
 
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -15,15 +16,17 @@ from rebac import (
     SubjectRef,
     backend,
     is_anonymous_actor,
+    system_context,
     to_object_ref,
     write_relationships,
 )
 from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
+from angee.base.changesets import current_changeset
 from angee.base.fields import StateField
 from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager
+from angee.base.models import AngeeManager, AngeeUnscopedManager
 from angee.base.refs import MergePolicy, RecordRefMixin
 
 
@@ -39,6 +42,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
     objects = AngeeManager()
+    _angee_base = AngeeUnscopedManager()
 
     class Action(models.TextChoices):
         CREATE = "C", "Create"
@@ -84,6 +88,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
 
     class Meta:
         abstract = True
+        base_manager_name = "_angee_base"
         swappable = "ANGEE_CHANGESET_MODEL"
         rebac_resource_type = "provenance/changeset"
         ordering = ("-recorded_at", "-pk")
@@ -110,11 +115,20 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         }
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the native actor permission fact in the insert transaction."""
+        """Persist attribution and its native actor fact in the insert transaction.
+
+        Recording the ambient boundary is system bookkeeping, like closure;
+        direct Changeset writes retain their normal actor admission. The actor
+        column is already captured before this local storage boundary opens.
+        """
 
         inserting = self._state.adding
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=using):
+        recording = inserting and current_changeset() is self
+        with (
+            transaction.atomic(using=using),
+            system_context(reason="changeset.record") if recording else nullcontext(),
+        ):
             super().save(*args, **kwargs)
             if inserting:
                 write_relationships(
@@ -136,4 +150,5 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             state=self.State.CLOSED,
             outcome=self.Outcome(outcome),
             touched=sorted(set(self.touched)),
+            counts=self.counts,
         )

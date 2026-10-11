@@ -25,6 +25,7 @@ from rebac.roles import grant as grant_role
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.base.changesets import changeset
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
@@ -81,6 +82,14 @@ pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.
 os.environ.pop("SENTRY_DSN", None)
+
+
+@pytest.fixture(autouse=True)
+def captured_changeset() -> Iterator[None]:
+    """Give existing source-addon fixtures and writes a strict attribution boundary."""
+
+    with changeset(activity="system", change_reason="pytest"):
+        yield
 
 
 @pytest.fixture
@@ -166,14 +175,20 @@ class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """The test source delegates its global role from workflow writers."""
-        return (TriggerGrantTarget(
-            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
-        ),)
+        return (
+            TriggerGrantTarget(
+                ObjectRef("knowledge/role", "vault_viewer"),
+                "member",
+                "write",
+                to_object_ref(trigger.workflow),
+            ),
+        )
 
     class Meta(AbstractVault.Meta):
         """Django model options for the canonical test vault."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_vault"
         rebac_resource_type = "knowledge/vault"
@@ -185,14 +200,20 @@ class Page(RecordChangedOptIn, AbstractPage):
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """Page read follows the vault permission boundary in this fixture."""
-        return (TriggerGrantTarget(
-            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
-        ),)
+        return (
+            TriggerGrantTarget(
+                ObjectRef("knowledge/role", "vault_viewer"),
+                "member",
+                "write",
+                to_object_ref(trigger.workflow),
+            ),
+        )
 
     class Meta(AbstractPage.Meta):
         """Django model options for the canonical test page."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_page"
         rebac_resource_type = "knowledge/page"
@@ -213,6 +234,7 @@ class MarkdownPage(AbstractMarkdownPage, Page):
         """Django model options for the canonical test markdown page."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_markdown_page"
         rebac_resource_type = "knowledge/markdown_page"

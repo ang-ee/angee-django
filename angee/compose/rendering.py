@@ -42,7 +42,11 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
                 )
                 base_names.append(parent_alias)
         meta_name = f"_{name}Meta"
-        meta_lines = ["        abstract = False", f"        app_label = {label!r}"]
+        meta_lines = [
+            "        abstract = False",
+            f"        app_label = {label!r}",
+            '        base_manager_name = "_angee_base"',
+        ]
         constraints = [alias for donor, alias in zip(donors, donor_aliases, strict=True) if donor._meta.constraints]
         if constraints:
             meta_lines.append(
@@ -55,6 +59,18 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             if value is not None:
                 meta_lines.append(f"        {option} = {value!r}")
         body_lines: list[str] = []
+        if parent is None and not any(
+            manager.name == "_angee_base" for base in (*donors, source) for manager in base._meta.managers
+        ):
+            imports.add("from angee.base.models import AngeeUnscopedManager")
+            body_lines.extend(["    _angee_base = AngeeUnscopedManager()", ""])
+            default_manager = source._meta.default_manager
+            if default_manager is None:
+                imports.add("from django.db import models")
+                body_lines.extend(["    objects = models.Manager()", ""])
+            meta_lines.append(
+                f"        default_manager_name = {default_manager.name if default_manager is not None else 'objects'!r}"
+            )
         body_lines.extend(
             [
                 f"    angee_contributed_field_origins = {composition.contributed_field_origins(source)!r}",
@@ -85,7 +101,7 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             *meta_lines,
         ]
         # Registration is the dependency's native API on the completed Django
-        # class. A concrete parent's tracking does not opt its child into tracking.
+        # class. A concrete parent's revision registration does not opt its child in.
         if any(issubclass(base, RevisionMixin) for base in (*donors, source)):
             imports.add("import reversion")
             lines.extend(

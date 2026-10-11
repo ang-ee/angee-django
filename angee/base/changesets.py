@@ -36,6 +36,7 @@ class ChangesetLike(Protocol):
     actor: str
     change_reason: str
     touched: list[str]
+    counts: dict[str, int]
     _state: ModelState
 
     def save(self, *, force_insert: bool = False, using: str | None = None) -> None: ...
@@ -214,7 +215,7 @@ def changeset(
 
 @dataclass
 class _WriteGroup:
-    """Ephemeral deduplication state for one nested ORM dispatch."""
+    """Pending batch-delete snapshots consumed by each row's native receiver."""
 
     seen: set[tuple[str, object]] = field(default_factory=set)
 

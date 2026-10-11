@@ -1165,8 +1165,14 @@ and current contracts before applying a historical example to a new deployment.
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
   not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
-  `retained_set_null` FK policy to materialize the collector selection and schedule
-  Django's native `UpdateQuery.update_batch` path for actor deletion.
+  `retained_set_null` FK policy to schedule nulling inside Django's delete
+  transaction under `system_context(reason="delete.retain")`. Removing that
+  retained edge is part of the authorized target deletion, for tracked and
+  untracked referencing rows alike; tracked rows retain changeset history.
+  Native `SET_NULL` has no collector-origin hook at `QuerySet.update()` and
+  still follows the queryset's ordinary authorization. References needing this
+  system policy must declare `retained_set_null` until an upstream collector
+  hook can carry that origin without elevating ordinary FK edits.
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
   `ModelLabelField` from [`angee.base.fields`](../../angee/base/fields.py), so
   instance saves and queryset writes share their storage rules.

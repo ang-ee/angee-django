@@ -20,16 +20,19 @@ from django.utils import timezone
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.managers import RebacQuerySet, TrackedQuerySet
+from rebac.watch import by_key
+from simple_history.manager import HistoryManager
 from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_history_manager_for_model
 
 from angee.base.actors import actor_user_id, instance_actor
+from angee.base.autoconfig import SETTINGS
 from angee.base.changesets import current_changeset, write_group
 from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
-from angee.base.querysets import _AngeeQuerySetMixin, model_history
+from angee.base.querysets import RetainedReferenceQuerySet, _AngeeQuerySetMixin, model_history
 from angee.base.scoping import system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
@@ -62,23 +65,18 @@ TRASH_REASON_MAX_LENGTH = 1000
 
 
 def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
-    """Null a retained reference through Django's materialized collector path.
+    """Schedule retained-edge removal as system work inside Django's delete transaction."""
 
-    Django's unevaluated SET_NULL path calls QuerySet.update(), which append-only
-    querysets reject. Materializing here selects the collector's native
-    UpdateQuery.update_batch path without opening a general update escape hatch.
-    This loads all matching referencing rows into memory for each FK being
-    nullified; deleting a heavily referenced target can require substantial memory.
-    AuditMixin and retained domain references share this collector policy.
-    """
-
-    if model_history(field.model) is not None:
-        # Keep this unevaluated: Django dispatches the update inside its delete
-        # transaction through the tracked base queryset and the one history owner.
-        keys = [obj.pk for obj in sub_objs]
-        collector.add_field_update(field, None, field.model._base_manager.using(using).filter(pk__in=keys))
+    rows: RetainedReferenceQuerySet[models.Model] = RetainedReferenceQuerySet(model=field.model, using=using)
+    if isinstance(sub_objs, models.QuerySet):
+        rows.query = sub_objs.query.chain()
+        collector.add_field_update(field, None, rows)
     else:
-        collector.add_field_update(field, None, list(sub_objs))
+        for batch in by_key(rows, [obj.pk for obj in sub_objs]):
+            collector.add_field_update(field, None, batch)
+
+
+setattr(retained_set_null, "lazy_sub_objs", True)
 
 
 audit_set_null = retained_set_null
@@ -289,9 +287,15 @@ class OwnerMixin(AuditMixin):
         container = field.get_cached_value(self, default=None)
         if container is not None and not container._state.adding:
             return bool(container.owns_items)
-        return container_id is not None and system_queryset(field.related_model).filter(
-            pk=container_id, owns_items=True,
-        ).exists()
+        return (
+            container_id is not None
+            and system_queryset(field.related_model)
+            .filter(
+                pk=container_id,
+                owns_items=True,
+            )
+            .exists()
+        )
 
     def save(self, *args: Any, ownerless: bool = False, **kwargs: Any) -> None:
         """Apply the insert-only owner default before the audit and permission hooks.
@@ -430,7 +434,9 @@ class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]
 
 
 class AppendOnlyBaseQuerySet(
-    _AngeeQuerySetMixin[_ModelT], _AppendOnlyWritesMixin[_ModelT], TrackedQuerySet[_ModelT],
+    _AngeeQuerySetMixin[_ModelT],
+    _AppendOnlyWritesMixin[_ModelT],
+    TrackedQuerySet[_ModelT],
 ):
     """Unscoped rows for Django's own relation reads, with the same writes closed."""
 
@@ -452,11 +458,11 @@ class AppendOnlyModel(models.Model):
     own retention check; ordinary instance and collection writes stay closed.
     """
 
-    _append_only_base = AppendOnlyBaseManager()
+    _angee_base = AppendOnlyBaseManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "_append_only_base"
+        base_manager_name = "_angee_base"
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
@@ -575,12 +581,14 @@ class TrashMixin(models.Model):
     TRASH_FIELDS: ClassVar[tuple[str, ...]] = (TRASH_FLAG_FIELD, "trashed_at", "trashed_by", "trash_reason")
     """Every column a trash or restore writes."""
 
-    UNTRASHED_VALUES: ClassVar[Mapping[str, Any]] = MappingProxyType({
-        TRASH_FLAG_FIELD: False,
-        "trashed_at": None,
-        "trashed_by": None,
-        "trash_reason": "",
-    })
+    UNTRASHED_VALUES: ClassVar[Mapping[str, Any]] = MappingProxyType(
+        {
+            TRASH_FLAG_FIELD: False,
+            "trashed_at": None,
+            "trashed_by": None,
+            "trash_reason": "",
+        }
+    )
     """Column values of a row outside the trash, for owners restoring in a wider write."""
 
     is_trashed = models.BooleanField(default=False, db_index=True, editable=False)
@@ -730,67 +738,93 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
 
 
 class _ChangesetHistory(models.Model):
-    """Historical base; the constructor supplies the native bulk writer's missing delete type."""
+    """Historical attribution shared by every native generated history model."""
 
     changeset = models.ForeignKey(
-        settings.ANGEE_CHANGESET_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="+",
+        getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]),
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
     )
 
     class Meta:
         abstract = True
 
-    def __init__(self, *args: Any, _history_type: str | None = None, **kwargs: Any) -> None:
-        if _history_type is not None:
-            kwargs["history_type"] = _history_type
-        super().__init__(*args, **kwargs)
+
+class ModelHistoryManager(HistoryManager):
+    """Native bulk construction extended to accept deletion snapshots."""
+
+    def bulk_history_create(
+        self,
+        objs: Iterable[models.Model],
+        batch_size: int | None = None,
+        update: bool = False,
+        default_user: models.Model | None = None,
+        default_change_reason: str = "",
+        default_date: datetime | None = None,
+        custom_historical_attrs: dict[str, Any] | None = None,
+        *,
+        history_type: str | None = None,
+    ) -> list[models.Model]:
+        """Choose the native row type before its single bulk insert.
+
+        Upstream 3.13's constructor loop hardcodes '+'/'~' and exposes no row
+        factory. The manager hook owns this small extension; history models keep
+        Django's constructor and the library's fields, dates and relation shape.
+        """
+
+        if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
+            return []
+        rows = []
+        for instance in objs:
+            attrs = {field.attname: getattr(instance, field.attname) for field in self.model.tracked_fields}
+            attrs.update(custom_historical_attrs or {})
+            row = self.model(
+                history_date=getattr(instance, "_history_date", default_date or timezone.now()),
+                history_user=default_user or self.model.get_default_history_user(instance),
+                history_change_reason=default_change_reason,
+                history_type=history_type or ("~" if update else "+"),
+                **attrs,
+            )
+            if hasattr(self.model, "history_relation"):
+                row.history_relation_id = instance.pk
+            rows.append(row)
+        return cast(list[models.Model], self.model.objects.using(self.db).bulk_create(rows, batch_size=batch_size))
 
 
 class ModelHistory(HistoricalRecords):
     """Native history adapted to abstract sources and generated module names.
 
-    Tracking belongs to an abstract source/donor that includes HistoryMixin.
-    Inheriting only a concrete tracked parent does not create a second history
-    table for its MTI child. Native history construction receives a detached
+    Every concrete descendant of a tracked source owns a history table, including
+    MTI children. Native history construction receives a detached
     snapshot with stored gated values, never the caller's redacted projection.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("history_manager", ModelHistoryManager)
+        super().__init__(*args, **kwargs)
+
     def finalize(self, sender: type[models.Model], **kwargs: Any) -> None:
-        history_source = cast(type[models.Model], self.cls)
-        tracked_abstract_parent = False
-        for candidate in sender.__bases__:
-            if not isinstance(candidate, type) or not issubclass(candidate, models.Model):
-                continue
-            base = cast(type[models.Model], candidate)
-            if base is not models.Model and issubclass(base, history_source) and base._meta.abstract:
-                tracked_abstract_parent = True
-                break
-        if not tracked_abstract_parent:
+        if sender._meta.abstract or sender._meta.proxy or not issubclass(sender, self.cls):
             return
         super().finalize(sender, **kwargs)
+        sender._meta.angee_model_history = self
         pre_create_historical_record.connect(
-            self.set_changeset, sender=get_history_manager_for_model(sender).model, weak=False,
+            self.set_changeset,
+            sender=get_history_manager_for_model(sender).model,
+            weak=False,
         )
-
-    def get_extra_fields(self, model: type[models.Model], fields: dict[str, models.Field]) -> dict[str, Any]:
-        """Expose the native registration's writer to tracked querysets."""
-
-        extra = super().get_extra_fields(model, fields)
-        extra["_history_records"] = staticmethod(lambda: self)
-        return extra
 
     def set_changeset(self, instance: models.Model, history_instance: models.Model, **kwargs: Any) -> None:
         """Bind attribution after native construction and before the history save."""
 
-        history_instance.changeset = current_changeset(record=True)
-        history_instance.history_user = self.get_history_user(instance)
-        history_instance.history_change_reason = self.get_change_reason_for_object(
-            instance, history_instance.history_type, kwargs.get("using"),
-        )
+        history_instance.changeset = current_changeset(required=True, record=True)
 
     def get_history_user(self, instance: models.Model) -> models.Model | None:
         """Derive the user FK from the changeset's native subject, without a lookup."""
 
-        context = current_changeset(required=True)
+        context = current_changeset()
         actor = SubjectRef.parse(context.actor) if context is not None and context.actor else None
         user_id = actor_user_id(actor)
         return get_user_model()(pk=user_id) if user_id is not None else None
@@ -798,56 +832,81 @@ class ModelHistory(HistoricalRecords):
     def get_change_reason_for_object(self, instance: models.Model, history_type: str, using: str | None) -> str:
         """The changeset owns the reason, including for native M2M history."""
 
-        context = current_changeset(required=True)
+        context = current_changeset()
         return context.change_reason if context is not None else ""
 
-    def stored_snapshots(self, model: type[models.Model], keys: Iterable[Any], *, using: str) -> list[models.Model]:
-        """Read a batch of stored fields through the unfiltered tracked base manager."""
+    def record_rows(self, model: type[models.Model], count: int, *, using: str) -> None:
+        """Accumulate durable captures in memory; the boundary closes them once."""
 
-        names = [field.attname for field in self.fields_included(model)]
-        return list(model._base_manager.using(using).filter(pk__in=keys).only(*names).order_by())
+        context = current_changeset()
+        if context is None:
+            return
+        label = model._meta.label_lower
+
+        def committed() -> None:
+            context.touched.append(label)
+            context.counts[label] = context.counts.get(label, 0) + count
+
+        transaction.on_commit(committed, using=using)
 
     def bulk_history_create(
-        self, model: type[models.Model], keys: Iterable[Any], history_type: str,
-        *, using: str, batch_size: int | None = None,
+        self,
+        model: type[models.Model],
+        keys: Iterable[Any],
+        history_type: str,
+        *,
+        using: str,
+        batch_size: int | None = None,
     ) -> None:
         """Feed detached stored snapshots to simple-history's native batch writer."""
 
-        current_changeset(required=True)
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return
         manager = get_history_manager_for_model(model)
         with write_group() as group:
-            keys = [key for key in dict.fromkeys(keys) if (manager.model._meta.label_lower, key) not in group.seen]
-            snapshots = self.stored_snapshots(model, keys, using=using) if keys else []
-            if not snapshots:
-                return
+            keys = list(dict.fromkeys(keys))
+            names = [field.attname for field in self.fields_included(model)]
             history_using = using if self.use_base_model_db else router.db_for_write(manager.model)
-            records = manager.db_manager(history_using).bulk_history_create(
-                snapshots, batch_size=batch_size, update=history_type == "~",
-                default_user=self.get_history_user(snapshots[0]),
-                default_change_reason=self.get_change_reason_for_object(snapshots[0], history_type, using),
-                custom_historical_attrs={"changeset": current_changeset(record=True), "_history_type": history_type},
-            )
-            for record, snapshot in zip(records, snapshots, strict=True):
-                self.create_historical_record_m2ms(record, snapshot)
-            group.seen.update((manager.model._meta.label_lower, snapshot.pk) for snapshot in snapshots)
+            for rows in by_key(model._base_manager.using(using), keys):
+                snapshots = list(rows.only(*names).order_by())
+                if not snapshots:
+                    continue
+                context = current_changeset(required=True, record=True)
+                records = manager.db_manager(history_using).bulk_history_create(
+                    snapshots,
+                    batch_size=batch_size,
+                    history_type=history_type,
+                    default_user=self.get_history_user(snapshots[0]),
+                    default_change_reason=self.get_change_reason_for_object(snapshots[0], history_type, using),
+                    custom_historical_attrs={"changeset": context},
+                )
+                for record, snapshot in zip(records, snapshots, strict=True):
+                    self.create_historical_record_m2ms(record, snapshot)
+                self.record_rows(model, len(records), using=history_using)
+                if history_type == "-":
+                    group.seen.update((model._meta.label_lower, snapshot.pk) for snapshot in snapshots)
 
     def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
         """Keep native signals and M2M capture on the same stored-snapshot writer."""
 
-        manager = get_history_manager_for_model(instance)
-        key = (manager.model._meta.label_lower, instance.pk)
+        model = type(instance)
+        key = (model._meta.label_lower, instance.pk)
         with write_group() as group:
-            if key in group.seen:
+            if history_type == "-" and key in group.seen:
+                group.seen.remove(key)
                 return
-            current_changeset(required=True)
-            alias = using or router.db_for_write(type(instance), instance=instance)
-            snapshot, = self.stored_snapshots(type(instance), [instance.pk], using=alias)
+            current_changeset(required=True, record=True)
+            alias = using or router.db_for_write(model, instance=instance)
+            names = [field.attname for field in self.fields_included(model)]
+            try:
+                snapshot = model._base_manager.using(alias).only(*names).get(pk=instance.pk)
+            except model.DoesNotExist as error:
+                raise model.DoesNotExist(f"Cannot capture missing {model._meta.label} row {instance.pk!r}.") from error
             if hasattr(instance, "_history_date"):
                 snapshot._history_date = instance._history_date
             super().create_historical_record(snapshot, history_type, using=using)
-            group.seen.add(key)
+            manager = get_history_manager_for_model(model)
+            self.record_rows(model, 1, using=alias if self.use_base_model_db else router.db_for_write(manager.model))
 
     def pre_delete(self, instance: models.Model, **kwargs: Any) -> None:
         """Snapshot while stored values exist, inside Django's delete transaction."""
@@ -873,11 +932,7 @@ class ModelHistory(HistoricalRecords):
         fields = super().copy_fields(model)
         for name, field in fields.items():
             source = model._meta.get_field(name)
-            if (
-                source.remote_field is None
-                or not source.auto_created
-                or not source.remote_field.parent_link
-            ):
+            if source.remote_field is None or not source.auto_created or not source.remote_field.parent_link:
                 continue
             field.auto_created = False
             field.remote_field.parent_link = False
@@ -902,18 +957,29 @@ class HistoryMixin(models.Model):
     class Meta:
         abstract = True
 
-    def save_base(self, *args: Any, **kwargs: Any) -> None:
+    def save_base(
+        self,
+        raw: bool = False,
+        force_insert: bool | tuple[type[models.Model], ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
         """Validate attribution before SQL and scope native save dispatch to one group."""
 
-        current_changeset(required=True)
-        alias = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=alias), write_group():
-            super().save_base(*args, **kwargs)
+        if not raw and not hasattr(self, "skip_history_when_saving"):
+            if model_history(type(self)) is not None:
+                current_changeset(required=True, record=True)
+        alias = using or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=alias, savepoint=False), write_group():
+            super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Keep instance and collector receivers in one ephemeral write group."""
 
-        current_changeset(required=True)
+        history = model_history(type(self))
+        if history is not None and not history.cascade_delete_history:
+            current_changeset(required=True, record=True)
         with write_group():
             return super().delete(*args, **kwargs)
 
@@ -1049,10 +1115,12 @@ class RowLockMixin(models.Model):
                 name for name, value in previous.items() if self._meta.get_field(name).value_from_object(self) != value
             ]
             if changed:
-                raise ValidationError({
-                    name: f"The {self._meta.get_field(name).verbose_name} of {label.lower()} cannot change."
-                    for name in changed
-                })
+                raise ValidationError(
+                    {
+                        name: f"The {self._meta.get_field(name).verbose_name} of {label.lower()} cannot change."
+                        for name in changed
+                    }
+                )
             return
         if locked := self.locked_fields():
             raise ValidationError(dict.fromkeys(locked, f"{label} are system-provisioned."))
@@ -1127,7 +1195,11 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         return row
 
     def replay_or_insert(
-        self, scope: Any, key: str | None, fingerprint: str, insert: Callable[[], _ModelT],
+        self,
+        scope: Any,
+        key: str | None,
+        fingerprint: str,
+        insert: Callable[[], _ModelT],
     ) -> tuple[_ModelT, bool]:
         """Return a readable replay or insert once, retrying a uniqueness race.
 
@@ -1143,7 +1215,7 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         try:
             with transaction.atomic(using=self.db):
                 return insert(), True
-        except (IntegrityError, ValidationError):
+        except IntegrityError, ValidationError:
             existing = self.for_creation_key(scope, key, fingerprint)
             if existing is None:
                 raise
@@ -1207,7 +1279,10 @@ class CreationKeyMixin(models.Model):
 
     @classmethod
     def creation_key_constraint(
-        cls, *, scope: str | tuple[str, ...] | None = None, name: str | None = None,
+        cls,
+        *,
+        scope: str | tuple[str, ...] | None = None,
+        name: str | None = None,
     ) -> models.UniqueConstraint:
         """Declare key uniqueness, optionally preserving an adopter's existing constraint name."""
 
@@ -1331,7 +1406,9 @@ class OptimisticLockMixin(models.Model):
             # F-expression INSERT raises ValueError before that INSERT can execute.
             if (
                 isinstance(error, (DatabaseError, ValueError))
-                and existing and expected_revision is None and not rows.exists()
+                and existing
+                and expected_revision is None
+                and not rows.exists()
             ):
                 raise StaleRevisionError(expected=None, current=None) from error
             raise
