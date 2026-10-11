@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.db.models.functions import Coalesce
 from rebac import (
@@ -27,27 +26,23 @@ from rebac import (
 )
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
-from rebac.managers import RebacManager, RebacQuerySet, TrackedQuerySet
+from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.actors import instance_actor
-from angee.base.changesets import current_changeset
+from angee.base.identity import PublicIdentity
 from angee.base.impl import ImplClassField
-from angee.base.managers import StatementManager, StatementPairManager
 from angee.base.mixins import (
-    Aspect,
-    HistoryMixin,
-    Snak,
-    SourceKind,
+    MergeContractMixin,
     SqidMixin,
-    StatementRank,
-    StatementsMixin,
-    StatementStatus,
     TimestampMixin,
 )
+from angee.base.mixins import Statement as Statement
+from angee.base.mixins import StatementPair as StatementPair
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
+from angee.base.querysets import AngeeUnscopedQuerySet as AngeeUnscopedQuerySet
 from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.scoping import lock_if_supported
 from angee.base.tiers import ResourceTier
@@ -193,27 +188,6 @@ class AngeeQuerySet(
         )
 
 
-class AngeeUnscopedQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
-    TrackedQuerySet[_ModelT],
-):
-    """Angee queryset API for intentionally permission-naive managers.
-
-    Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics. It
-    composes the library's tracked writes required by a declared base manager.
-    """
-
-    def scoped_for_aggregate(self) -> Self:
-        """Return this queryset for permission-naive aggregation.
-
-        The manager deliberately supplies no row authorization; aggregation
-        preserves that same explicit unscoped policy.
-        """
-
-        return self
-
-
 class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[misc]
     """Manager backed by AngeeQuerySet."""
 
@@ -269,7 +243,7 @@ class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         return cast(AngeeUnscopedQuerySet[Any], super().get_queryset())
 
 
-class AngeeModel(TimestampMixin, RebacMixin):
+class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin):
     """Abstract base model for Angee source and runtime models."""
 
     objects = AngeeManager()
@@ -777,12 +751,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
         return queryset.from_public_id(value)
 
     @classmethod
-    def public_id_lookup(cls, value: str) -> dict[str, Any]:
-        """Return the Django lookup for this model's public identifier."""
-
-        return {cls._meta.pk.name: value}
-
-    @classmethod
     def public_id_from_pk(cls, value: Any) -> str:
         """Return the public id encoded from this model's primary-key value."""
 
@@ -819,94 +787,6 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
-
-
-class Statement(HistoryMixin, AngeeDataModel):
-    """Retained assertion row; its subject owns authorization and field gates."""
-
-    objects = StatementManager(None)
-    statement_subject_model: Any
-    statement_aspects: dict[str, Aspect]
-    subject: Any
-    asserted_by = models.TextField()
-    source_kind = models.CharField(max_length=32, choices=SourceKind.choices)
-    """Assertion-time classification: the text principal has no retained FK.
-
-    A later principal edit or deletion cannot change this assertion's kind;
-    the optional integration link cannot reconstruct it for unlinked sources.
-    """
-    aspect = models.CharField(max_length=64)
-    snak = models.CharField(max_length=16, choices=Snak.choices, default=Snak.VALUE)
-    confidence = models.FloatField(default=1.0, validators=(MinValueValidator(0), MaxValueValidator(1)))
-    rank = models.CharField(max_length=16, choices=StatementRank.choices, default=StatementRank.NORMAL)
-    status = models.CharField(max_length=16, choices=StatementStatus.choices, default=StatementStatus.ASSERTED)
-    applied = models.BooleanField(default=False)
-    evidence = models.JSONField(default=list, blank=True)
-    basis_hash = models.CharField(max_length=64, blank=True)
-    link = models.ForeignKey("integrate.RecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
-    superseded = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
-    changeset: Any
-
-    class Meta:
-        abstract = True
-        constraints = [
-            models.CheckConstraint(
-                condition=models.Q(confidence__gte=0, confidence__lte=1)
-                & (
-                    models.Q(rank=StatementRank.NORMAL)
-                    | models.Q(rank=StatementRank.PREFERRED, source_kind=SourceKind.PERSON)
-                )
-                & models.Q(snak__in=Snak.values, status__in=StatementStatus.values, source_kind__in=SourceKind.values),
-                name="%(app_label)s_%(class)s_stance",
-            )
-        ]
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        if not is_sudo():
-            raise PermissionDenied("Write statements through their owning manager verbs.")
-        self.changeset = current_changeset(required=True, record=True)
-        if kwargs.get("update_fields") is not None:
-            kwargs["update_fields"] = {*kwargs["update_fields"], "changeset"}
-        super().save(*args, **kwargs)
-
-    def delete(self, *args: Any, **kwargs: Any) -> Any:
-        raise ValidationError("Statements are retained; withdraw them instead.")
-
-    @classmethod
-    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
-        """Dispatch retained collision handling to the existing merge owner."""
-        from angee.base.merge import move_statements
-
-        move_statements(reference, rows, survivor=survivor)
-
-
-class StatementPair(StatementsMixin, HistoryMixin, AngeeDataModel):
-    """Ordered pair subject; policy stays on its endpoint model."""
-
-    objects = StatementPairManager(None)
-    left: Any
-    right: Any
-    pair_name: str
-
-    class Meta:
-        abstract = True
-
-    def require_statement_write(self, actor: SubjectRef) -> None:
-        """A pair assertion requires the source's write on both endpoints."""
-
-        for endpoint in (self.left, self.right):
-            endpoint.require_statement_write(actor)
-
-    def apply_resolved(
-        self,
-        *,
-        aspect: str,
-        member: Mapping[str, Any],
-        values: Mapping[str, Any],
-        statement: Any | None,
-        expected_revision: int | None = None,
-    ) -> None:
-        self.left.apply_pair(aspect=self.pair_name, other=self.right, statement=statement)
 
 
 def record_display_label(record: models.Model) -> str:

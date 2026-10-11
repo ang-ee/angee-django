@@ -1810,6 +1810,10 @@ validated at the driver boundary.
 
 ### Persistence primitives
 
+[Base mixins](../../angee/base/mixins.py) own these row contracts and their
+system checks; compose them instead of a local column, comparison, or guard.
+Their docstrings own the exact behavior.
+
 [`StatementRecords`](../../angee/base/mixins.py) composes simple-history's field
 copying into typed statement models. Their [manager](../../angee/base/managers.py)
 owns locked assertion writes and survivorship; the canonical subject owns source
@@ -1818,15 +1822,10 @@ REBAC resource or ORM read policy. Use the subject-bound `instance.statements`
 accessor after reading the subject; serving surfaces own gated-field redaction.
 Writes use the asserting source's native REBAC write scope on the subject. Merge
 collisions remain retained as superseded rows outside the current per-aspect key.
-Source models declare a per-row `source_kind`; missing or unknown classifications
-are refused. Statements retain the assertion-time classification because the
-text principal and optional link cannot preserve it across source edits/deletion.
-`StatementRecords(excluded_fields=("link",), ...)` omits the optional
-integration link when the host does not compose `angee.integrate`.
-
-[Base mixins](../../angee/base/mixins.py) own these row contracts and their
-system checks; compose them instead of a local column, comparison, or guard.
-Their docstrings own the exact behavior.
+Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
+refuses missing or unknown classifications. Statements retain the assertion-time
+classification across source edits and deletion. The explicit link option owns
+the optional integration column: composer extensions do not reach generated models.
 
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps

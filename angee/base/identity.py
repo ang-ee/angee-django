@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from django.apps import apps
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
 from django.db import models
 from jsonschema.exceptions import ValidationError as SchemaValidationError
+from pydantic import BaseModel, ConfigDict
 from rebac import SubjectRef
-from rebac.resources import model_for_resource_type
+from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields import SqidField
-from angee.base.models import AngeeModel
 from angee.base.scoping import read_scoped_queryset
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+class PublicIdentity(models.Model):
+    """Model-owned public lookup, shared without importing composed model bases."""
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def public_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Return the primary-key lookup; public-id fields override this contract."""
+        return {cls._meta.pk.name: value}
 
 
 def relation_permission_validator(actor: Any) -> Any:
@@ -28,6 +40,7 @@ def relation_permission_validator(actor: Any) -> Any:
     standing permission through the model's existing queryset scope. A submitted
     relation requires an actor; schema-only validation omits this hook.
     """
+
     def validate_relation(validator: Any, relation: dict[str, Any], value: Any, schema: Any) -> Any:
         if not isinstance(value, str):
             return
@@ -36,12 +49,13 @@ def relation_permission_validator(actor: Any) -> Any:
             return
         try:
             model = apps.get_model(relation["resource"])
-        except (LookupError, ValueError):
+        except LookupError, ValueError:
             yield SchemaValidationError("The relation target is unavailable.")
             return
         queryset = read_scoped_queryset(model, actor, action=relation.get("permission", "read"))
         if value not in instances_from_public_ids(model, [value], queryset=queryset):
             yield SchemaValidationError("The selected record is absent or inaccessible.")
+
     return validate_relation
 
 
@@ -105,7 +119,7 @@ def public_id_lookup(
 
     if public_identity is not None:
         return public_identity.public_id_lookup(model, value)
-    if issubclass(model, AngeeModel):
+    if issubclass(model, PublicIdentity):
         return model.public_id_lookup(value)
     pk = model._meta.pk
     return {pk.name: value} if pk is not None else {}
@@ -121,7 +135,10 @@ def instance_from_public_id(
     """Resolve one public identity through the shared batch owner."""
 
     return instances_from_public_ids(
-        model, (value,), queryset=queryset, public_identity=public_identity,
+        model,
+        (value,),
+        queryset=queryset,
+        public_identity=public_identity,
     ).get(value)
 
 
@@ -171,7 +188,7 @@ def instances_from_public_ids(
             if value is not None:
                 lookups[public_id] = (field.name, value)
                 values_by_field[field.name].add(value)
-        except (TypeError, ValueError, ValidationError):
+        except TypeError, ValueError, ValidationError:
             continue
     instances = {
         (field_name, value): instance
@@ -255,3 +272,41 @@ def public_subject_ref(subject: SubjectRef) -> SubjectRef:
         field.public_id_from_value(subject.subject_id),
         subject.optional_relation,
     )
+
+
+class EvidenceReference(BaseModel):
+    """Frozen public identity required by evidence admission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    model: str
+    id: str
+
+
+def readable_records(
+    refs: Sequence[EvidenceReference],
+    actors: Sequence[Any],
+    *,
+    permission: str = "read",
+) -> list[Any]:
+    """Check a standing permission in one scoped query per actor and model."""
+
+    if not actors:
+        raise ValidationError("Evidence admission requires a reader.")
+    grouped: dict[str, set[str]] = {}
+    for ref in refs:
+        grouped.setdefault(ref.model.lower(), set()).add(ref.id)
+    records: list[Any] = []
+    for label, ids in sorted(grouped.items()):
+        try:
+            model = apps.get_model(label)
+        except (LookupError, ValueError) as error:
+            raise ValidationError({"context": "Unknown referenced model."}) from error
+        if not model_resource_type(model):
+            raise PermissionDenied("Referenced records require a standing permission.")
+        for actor in actors:
+            scoped = read_scoped_queryset(model, actor, action=permission)
+            found = instances_from_public_ids(model, ids, queryset=scoped)
+            if set(found) != ids:
+                raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
+        records.extend(found.values())
+    return records

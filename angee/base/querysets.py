@@ -191,14 +191,35 @@ class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT], TrackedQuerySet[_M
             return super().update(**kwargs)
 
 
-class StatementQuerySet(_AngeeQuerySetMixin[Any], TrackedQuerySet[Any]):
+class AngeeUnscopedQuerySet(
+    _AngeeQuerySetMixin[_ModelT],
+    TrackedQuerySet[_ModelT],
+):
+    """Angee queryset API for intentionally permission-naive managers.
+
+    Used by models without REBAC row policy and explicit Django base managers
+    whose unfiltered relation reads must retain native Django semantics. It
+    composes the library's tracked writes required by a declared base manager.
+    """
+
+    def scoped_for_aggregate(self) -> Self:
+        """Return this queryset for permission-naive aggregation.
+
+        The manager deliberately supplies no row authorization; aggregation
+        preserves that same explicit unscoped policy.
+        """
+
+        return self
+
+
+class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
     """Chainable assertion scopes; the manager owns subject admission."""
 
     def current(self) -> Any:
         return self.filter(superseded__isnull=True)
 
     def canonical(self) -> Any:
-        return self.current().filter(status="asserted", applied=True, snak="value")
+        return self.current().filter(status=self.model.Status.ASSERTED, applied=True, snak=self.model.Snak.VALUE)
 
     def provenance(self, field: str) -> Any:
         """Return the applied assertions, including a preferred dismissal."""

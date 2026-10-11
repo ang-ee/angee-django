@@ -12,6 +12,7 @@ from rebac import system_context
 
 from angee.addons import available_addons
 from angee.base.models import AngeeManager, AngeeModel
+from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 
 
@@ -42,7 +43,7 @@ class CatalogProvenance(models.Model):
         abstract = True
 
 
-class AddonCatalogManager(AngeeManager):
+class AddonCatalogManager(AngeeManager, VcsOutputManager):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -105,7 +106,7 @@ class AddonCatalogManager(AngeeManager):
         return len(descriptors)
 
 
-class AddonCatalog(AngeeModel):
+class AddonCatalog(VcsOutput, AngeeModel):
     """The ``addon`` source kind — discovers marketplace rows into ``platform.Addon``.
 
     A table-less binding (``managed = False``): its ``source_kind`` registers the

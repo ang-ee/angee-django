@@ -10,6 +10,7 @@ PostgreSQL DATABASE_URL and creates a separate native test database.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import runpy
@@ -27,7 +28,11 @@ COMPOSED_TEST_TIMEOUT = 120
 
 
 def run_composed_tests(
-    tmp_path: Path, test_label: str, *, app: str | tuple[str, ...], test_postgresql: bool = False,
+    tmp_path: Path,
+    test_label: str,
+    *,
+    app: str | tuple[str, ...],
+    test_postgresql: bool = False,
 ) -> None:
     """Run a native contract group without sharing pytest's source-model registry."""
 
@@ -101,9 +106,7 @@ def boot(
     from angee.compose.composer import Composer
 
     installed_apps = (
-        list(root_apps)
-        if root_apps is not None
-        else [manifest.name for _, manifest in discover(addon_dirs)]
+        list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
     )
     namespace = runpy.run_module(
         "angee.compose.defaults",
@@ -123,6 +126,8 @@ def boot(
     for name, value in namespace.items():
         setattr(settings, name, value)
     django.setup()
+    if root_apps is None:
+        importlib.import_module("tests.statement_models")
 
 
 def resource_values() -> dict[str, Any]:
@@ -252,7 +257,8 @@ def main() -> None:
     from angee.base.changesets import changeset
 
     boundary = (
-        nullcontext() if args.action == "tests"
+        nullcontext()
+        if args.action == "tests"
         else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
     )
     with boundary:
@@ -263,9 +269,12 @@ def run(args: argparse.Namespace) -> None:
     """Dispatch one composed-host action without a process-wide test boundary."""
 
     boot(
-        args.source_root.resolve(), args.runtime_dir.resolve(),
-        [path.resolve() for path in args.addon_dir], include_examples=not args.no_examples,
-        root_apps=args.app, test_postgresql=args.test_postgresql,
+        args.source_root.resolve(),
+        args.runtime_dir.resolve(),
+        [path.resolve() for path in args.addon_dir],
+        include_examples=not args.no_examples,
+        root_apps=args.app,
+        test_postgresql=args.test_postgresql,
     )
     if args.action == "tests":
         from django.apps import apps
@@ -294,10 +303,15 @@ def run(args: argparse.Namespace) -> None:
                         else:
                             # Setup fixtures need attribution; the test body owns
                             # the request/task/command boundaries it exercises.
-                            setattr(test, "setUp", changeset(
-                                fresh=True, activity="system",
-                                change_reason=f"manage.{args.action}.{test.id()}.fixtures",
-                            )(test.setUp))
+                            setattr(
+                                test,
+                                "setUp",
+                                changeset(
+                                    fresh=True,
+                                    activity="system",
+                                    change_reason=f"manage.{args.action}.{test.id()}.fixtures",
+                                )(test.setUp),
+                            )
 
                 fixture_boundaries(suite)
                 return suite
@@ -310,9 +324,7 @@ def run(args: argparse.Namespace) -> None:
         # This disposable host has no migration history. Sync the whole current
         # model graph together, including contenttypes and REBAC's witness table;
         # mixed sync/migrate ordering leaves generated foreign keys dangling.
-        settings.MIGRATION_MODULES = {
-            config.label: None for config in apps.get_app_configs()
-        }
+        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
         args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")
         raise SystemExit(bool(failures))

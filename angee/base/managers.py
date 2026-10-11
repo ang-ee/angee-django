@@ -3,41 +3,35 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from itertools import groupby
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import SubjectRef, current_actor, system_context
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import PermissionDenied
-from rebac.managers import TrackedQuerySet
-from rebac.resources import model_for_subject_type
-from simple_history.manager import HistoryManager
 
 from angee.base.actors import instance_actor
-from angee.base.mixins import (
-    Aspect,
-    OptimisticLockMixin,
-    RecentSurvivorship,
-    Snak,
-    SourceKind,
-    StatementRank,
-    StatementStatus,
-    Survivorship,
-    update_fields_with_auto_now,
-)
-from angee.base.querysets import StatementQuerySet
+from angee.base.identity import EvidenceReference, readable_records
+from angee.base.querysets import AngeeUnscopedQuerySet, StatementQuerySet
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.validation import validate_value
 
+if TYPE_CHECKING:
+    from angee.base.mixins import Aspect
 
-class StatementManager(HistoryManager.from_queryset(StatementQuerySet)):  # type: ignore[misc]
+
+class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type: ignore[misc]
     """Locked upserts and survivorship on the generated assertion model."""
 
+    def __init__(self, model: Any = None, instance: Any = None) -> None:
+        super().__init__()
+        self.model = model
+        self.instance = instance
+
     def get_queryset(self) -> Any:
-        rows = self.get_super_queryset()
+        rows = super().get_queryset()
         return rows if self.instance is None else rows.filter(subject=self.instance)
 
     def set(
@@ -49,90 +43,98 @@ class StatementManager(HistoryManager.from_queryset(StatementQuerySet)):  # type
         link: Any = None,
         evidence: Sequence[Any] = (),
         confidence: float = 1.0,
-        rank: str = StatementRank.NORMAL,
-        snak: str = Snak.VALUE,
+        rank: str | None = None,
+        snak: str | None = None,
         basis_hash: str = "",
         **natural_key: Any,
     ) -> Any:
-        """Authorize the source, then update_or_create under the subject lock.
+        """Lock the subject, admit the source, upsert its assertion, then resolve.
 
-        Per-aspect partial keys cannot arbitrate Django's bulk conflict upserts.
-        Equal assertions return without a save or a historical row.
+        Per-aspect partial keys use locked update_or_create. Equal assertions
+        return without saving or creating a historical row.
         """
-        # Evidence models depend on this foundation; decode through their owner.
-        from angee.base.evidence import EvidenceReference, readable_records
-
         declaration = self.model.statement_aspects[aspect]
-        requester = instance_actor(self.instance) if self.instance is not None else current_actor()
-        source = to_subject_ref(asserted_by if asserted_by is not None else requester)
-        if source != requester and not is_sudo():
-            raise PermissionDenied("Only the source may assert its statements.")
-        resolved = model_for_subject_type(source.subject_type)
-        if resolved is None or source.optional_relation or source.subject_id == "*":
-            raise ValidationError("A statement source must be one persisted principal.")
-        model, id_attr = resolved
-        principal = system_queryset(model).get(**{id_attr: source.subject_id})
-        try:
-            kind = SourceKind(getattr(principal, "source_kind", None))
-        except ValueError as error:
-            raise ValidationError("The source must declare a known per-row source_kind.") from error
-        if rank == StatementRank.PREFERRED and kind != SourceKind.PERSON:
-            raise PermissionDenied("Only person sources may assert preferred statements.")
-        members = {name: natural_key.pop(name) for name in declaration.members if name in natural_key}
-        if set(members) != set(declaration.members) or any(value is None for value in members.values()):
-            raise ValidationError("Every aspect member is required.")
-        if set(values) - set(declaration.fields) or (snak != Snak.VALUE and values):
-            raise ValidationError("Only value snaks carry the declared aspect's values.")
-        refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
-        bound = self.instance
-        if bound is not None:
+        member_key = {name: natural_key.pop(name) for name in declaration.members if name in natural_key}
+        if self.instance is not None:
             if natural_key:
                 raise ValidationError("A bound statement manager already has its subject.")
-            natural_key = {"pk": bound.pk}
+            natural_key = {"pk": self.instance.pk}
         if not natural_key:
             raise ValidationError("Statements require a subject natural key.")
         with transaction.atomic():
             subject = system_queryset(self.model.statement_subject_model, lock=("self",)).get(**natural_key)
-            subject.require_statement_write(source)
-            readable_records(refs, (source,))
-            for name, value in members.items():
-                field = self.model._meta.get_field(name)
-                if isinstance(field, models.ForeignKey):
-                    pk = getattr(value, field.target_field.attname) if isinstance(value, models.Model) else value
-                    members[name] = read_scoped_queryset(field.remote_field.model, source).get(
-                        **{field.target_field.name: pk},
-                    )
-            if link is not None:
-                link.require_access("read", actor=source)
-            defaults = {name: values.get(name) for name in declaration.fields}
-            defaults.update(
-                snak=snak,
+            source, members, defaults = self._admit(
+                subject,
+                declaration,
+                member_key,
+                values=values,
+                asserted_by=asserted_by,
+                link=link,
+                evidence=evidence,
                 confidence=confidence,
                 rank=rank,
-                status=StatementStatus.ASSERTED,
-                source_kind=kind,
-                evidence=[ref.model_dump(mode="json") for ref in refs],
+                snak=snak,
                 basis_hash=basis_hash,
             )
-            if "link" in {field.name for field in self.model._meta.fields}:
-                defaults["link"] = link
-            elif link is not None:
-                raise ValidationError("This statement declaration excludes link.")
             key = dict(subject=subject, asserted_by=str(source), aspect=aspect, superseded=None, **members)
             candidate = self.model(**key, **defaults)
             candidate.full_clean(validate_unique=False, validate_constraints=False)
             existing = self.model._base_manager.filter(**key).first()
-            if existing is not None and all(
-                getattr(existing, self.model._meta.get_field(name).attname)
-                == getattr(candidate, self.model._meta.get_field(name).attname)
-                for name in defaults
-            ):
+            if existing is not None and existing.same_values(candidate, defaults):
                 return existing
             with system_context(reason="statements.set"):
                 statement, _ = self.model._base_manager.update_or_create(**key, defaults=defaults)
                 self.resolve(subject=subject)
             statement.refresh_from_db()
             return statement
+
+    def _admit(
+        self,
+        subject: Any,
+        declaration: Aspect,
+        member_key: dict[str, Any],
+        *,
+        values: Mapping[str, Any],
+        asserted_by: Any,
+        link: Any,
+        evidence: Sequence[Any],
+        confidence: float,
+        rank: str | None,
+        snak: str | None,
+        basis_hash: str,
+    ) -> tuple[SubjectRef, dict[str, Any], dict[str, Any]]:
+        requester = instance_actor(self.instance) if self.instance is not None else current_actor()
+        source = to_subject_ref(asserted_by if asserted_by is not None else requester)
+        if source != requester and not is_sudo():
+            raise PermissionDenied("Only the source may assert its statements.")
+        kind = self.model.source_kind_for(source)
+        rank = self.model.Rank.NORMAL if rank is None else rank
+        snak = self.model.Snak.VALUE if snak is None else snak
+        if rank == self.model.Rank.PREFERRED and kind != self.model.SourceKind.PERSON:
+            raise PermissionDenied("Only person sources may assert preferred statements.")
+        subject.require_statement_write(source)
+        if set(values) - set(declaration.fields) or (snak != self.model.Snak.VALUE and values):
+            raise ValidationError("Only value snaks carry the declared aspect's values.")
+        refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
+        readable_records(refs, (source,))
+        members = declaration.coerce_members(self.model, source, member_key)
+        defaults = {name: values.get(name) for name in declaration.fields}
+        defaults.update(
+            snak=snak,
+            confidence=confidence,
+            rank=rank,
+            status=self.model.Status.ASSERTED,
+            source_kind=kind,
+            evidence=[ref.model_dump(mode="json") for ref in refs],
+            basis_hash=basis_hash,
+        )
+        if self.model.statement_link:
+            if link is not None:
+                link.require_access("read", actor=source)
+            defaults["link"] = link
+        elif link is not None:
+            raise ValidationError("This statement declaration has link=False.")
+        return source, members, defaults
 
     def _transition(
         self,
@@ -169,19 +171,19 @@ class StatementManager(HistoryManager.from_queryset(StatementQuerySet)):  # type
                 with system_context(reason="statements.transition"):
                     for row in rows.filter(subject=subject).exclude(status=status).order_by("pk"):
                         row.status = status
-                        row.save(update_fields=update_fields_with_auto_now(row, ("status",)))
+                        row.save(update_fields=("status",))
                         count += 1
                     self.resolve(subject=subject)
         return count
 
     def withdraw(self, asserted_by: Any, subjects: Sequence[Any] | None = None) -> int:
-        return self._transition(StatementStatus.WITHDRAWN, asserted_by=asserted_by, subjects=subjects)
+        return self._transition(self.model.Status.WITHDRAWN, asserted_by=asserted_by, subjects=subjects)
 
     def withdraw_unsupported(self, asserted_by: Any, supported: Sequence[Mapping[str, Any]]) -> int:
-        return self._transition(StatementStatus.WITHDRAWN, asserted_by=asserted_by, supported=supported)
+        return self._transition(self.model.Status.WITHDRAWN, asserted_by=asserted_by, supported=supported)
 
     def quarantine(self, asserted_by: Any, subjects: Sequence[Any] | None = None) -> int:
-        return self._transition(StatementStatus.QUARANTINED, asserted_by=asserted_by, subjects=subjects)
+        return self._transition(self.model.Status.QUARANTINED, asserted_by=asserted_by, subjects=subjects)
 
     def withdraw_changeset(self, changeset: Any) -> int:
         with transaction.atomic():
@@ -195,26 +197,10 @@ class StatementManager(HistoryManager.from_queryset(StatementQuerySet)):  # type
                 .distinct()
             )
             counts = [
-                self._transition(StatementStatus.WITHDRAWN, asserted_by=SubjectRef.parse(source), changeset=changeset)
+                self._transition(self.model.Status.WITHDRAWN, asserted_by=SubjectRef.parse(source), changeset=changeset)
                 for source in sources
             ]
             return sum(counts)
-
-    def _order(self, aspect: Aspect, row: Any) -> tuple[Any, ...]:
-        priority = (
-            aspect.precedence.index(row.source_kind) if row.source_kind in aspect.precedence else len(aspect.precedence)
-        )
-        tie = (priority, -row.confidence, row.asserted_by, row.pk)
-        if aspect.survivorship == Survivorship.HIGHEST_TRUST:
-            return (-row.confidence, priority, row.asserted_by, row.pk)
-        if aspect.survivorship == Survivorship.MOST_COMPLETE:
-            complete = sum(row._meta.get_field(name).value_from_object(row) not in (None, "") for name in aspect.fields)
-            return (-complete, *tie)
-        if isinstance(aspect.survivorship, RecentSurvivorship):
-            value = getattr(row, aspect.survivorship.date_field)
-            recency = value.timestamp() if isinstance(value, datetime) else value.toordinal() if value else 0
-            return (value is None, -recency, *tie)
-        return tie
 
     def resolve(self, *, subject: Any = None) -> None:
         """Resolve each field group atomically; normal unknowns never erase values."""
@@ -241,33 +227,37 @@ class StatementManager(HistoryManager.from_queryset(StatementQuerySet)):  # type
             for key, grouped in groupby(rows.order_by("aspect", *members), key=group):
                 candidates = list(grouped)
                 declaration = self.model.statement_aspects[key[0]]
-                asserted = [row for row in candidates if row.status == StatementStatus.ASSERTED]
+                asserted = [row for row in candidates if row.status == self.model.Status.ASSERTED]
                 preferred = sorted(
-                    (row for row in asserted if row.rank == StatementRank.PREFERRED),
-                    key=lambda row: (row.snak != Snak.NO_VALUE, row.asserted_by, row.pk),
+                    (row for row in asserted if row.rank == self.model.Rank.PREFERRED),
+                    key=lambda row: (row.snak != self.model.Snak.NO_VALUE, row.asserted_by, row.pk),
                 )
                 normal = subject.statement_candidates(
                     key[0],
-                    [row for row in asserted if row.rank == StatementRank.NORMAL],
+                    [row for row in asserted if row.rank == self.model.Rank.NORMAL],
                 )
-                if any(row not in asserted or row.rank != StatementRank.NORMAL for row in normal):
+                if any(row not in asserted or row.rank != self.model.Rank.NORMAL for row in normal):
                     raise ValidationError("Candidate policy may only select asserted normal statements.")
-                ordered = sorted(normal, key=lambda row: self._order(declaration, row))
-                winner = preferred[0] if preferred else next((row for row in ordered if row.snak == Snak.VALUE), None)
+                ordered = sorted(normal, key=lambda row: declaration.survivorship.sort_key(declaration, row))
+                winner = (
+                    preferred[0]
+                    if preferred
+                    else next((row for row in ordered if row.snak == self.model.Snak.VALUE), None)
+                )
                 values = {
                     name: winner._meta.get_field(name).value_from_object(winner)
-                    if winner is not None and winner.snak == Snak.VALUE
+                    if winner is not None and winner.snak == self.model.Snak.VALUE
                     else None
                     for name in declaration.fields
                 }
-                if winner is not None and winner.snak == Snak.VALUE and declaration.allow_fill:
+                if winner is not None and winner.snak == self.model.Snak.VALUE and declaration.allow_fill:
                     for name, value in values.items():
                         if value in (None, ""):
                             values[name] = next(
                                 (
                                     row._meta.get_field(name).value_from_object(row)
                                     for row in ordered
-                                    if row.snak == Snak.VALUE
+                                    if row.snak == self.model.Snak.VALUE
                                     and row._meta.get_field(name).value_from_object(row) not in (None, "")
                                 ),
                                 value,
@@ -275,28 +265,62 @@ class StatementManager(HistoryManager.from_queryset(StatementQuerySet)):  # type
                 for row in sorted(candidates, key=lambda row: row is winner):
                     if row.applied != (row is winner):
                         row.applied = row is winner
-                        row.save(update_fields=update_fields_with_auto_now(row, ("applied",)))
-                if (winner is not None and winner.snak == Snak.SOME_VALUE) or (
-                    winner is None and any(row.snak == Snak.SOME_VALUE for row in asserted)
+                        row.save(update_fields=("applied",))
+                if (winner is not None and winner.snak == self.model.Snak.SOME_VALUE) or (
+                    winner is None and any(row.snak == self.model.Snak.SOME_VALUE for row in asserted)
                 ):
                     continue
-                expected = (
-                    getattr(subject, subject.REVISION_FIELD) if isinstance(subject, OptimisticLockMixin) else None
-                )
                 subject.apply_resolved(
                     aspect=key[0],
                     member=dict(zip(declaration.members, key[1:], strict=True)),
                     values=values,
                     statement=winner,
-                    expected_revision=expected,
+                    expected_revision=subject.statement_revision,
                 )
 
+    def merge(self, reference: Any, rows: models.QuerySet[Any], *, survivor: Any) -> None:
+        """Retain both assertions on key collisions, then resolve the moved subject."""
+        target = reference.lookup(survivor)
+        subjects = set()
+        for row in rows.order_by("pk"):
+            if row.superseded_id is None:
+                aspect = row.statement_aspects[row.aspect]
+                key = {
+                    row._meta.get_field(name).attname: getattr(row, row._meta.get_field(name).attname)
+                    for name in aspect.members
+                }
+                key.update(
+                    subject_id=row.subject_id, asserted_by=row.asserted_by, aspect=row.aspect, superseded__isnull=True
+                )
+                key.update(target)
+                kept = self.model._base_manager.filter(**key).exclude(pk=row.pk).first()
+                if kept is not None:
+                    winner = max((kept, row), key=lambda item: (item.confidence, item.updated_at, item.pk))
+                    loser = row if winner is kept else kept
+                    loser.superseded = winner
+                    loser.applied = False
+                    loser.save(update_fields=("superseded", "applied"))
+            for name, value in target.items():
+                setattr(row, name, value)
+            # Applied rows from different sources also share the destination's key.
+            row.applied = False
+            row.save(update_fields=(*reference.columns, "applied"))
+            subjects.add(row.subject_id)
+        for subject_id in sorted(subjects):
+            subject = self.model.statement_subject_model._base_manager.get(pk=subject_id)
+            self.resolve(subject=subject)
 
-class StatementPairManager(HistoryManager.from_queryset(TrackedQuerySet)):  # type: ignore[misc]
+
+class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]
     """Bind ordered carriers to an endpoint; endpoints own pair admission."""
 
+    def __init__(self, model: Any = None, instance: Any = None) -> None:
+        super().__init__()
+        self.model = model
+        self.instance = instance
+
     def get_queryset(self) -> Any:
-        rows = self.get_super_queryset()
+        rows = super().get_queryset()
         return (
             rows if self.instance is None else rows.filter(models.Q(left=self.instance) | models.Q(right=self.instance))
         )
