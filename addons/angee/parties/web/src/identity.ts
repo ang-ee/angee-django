@@ -18,7 +18,13 @@ export interface SenderIdentity {
   display_name?: string | null;
   value?: string | null;
   party_link_confirmed?: boolean | null;
-  party?: { display_name?: string | null } | null;
+  /** The avatar the handle's own network shows (a messenger profile picture). */
+  avatar?: { url?: string | null } | null;
+  party?: {
+    display_name?: string | null;
+    /** The party's own avatar, else its strongest handle's (the server's display rule). */
+    display_avatar?: { url?: string | null } | null;
+  } | null;
 }
 
 /** The one rule for a sender's shown name: the curated party name wins once the
@@ -31,4 +37,13 @@ export function senderDisplayName(
 ): string {
   const partyName = sender?.party_link_confirmed ? sender.party?.display_name : null;
   return partyName || sender?.display_name || sender?.value || fallback;
+}
+
+/** The one rule for a sender's avatar image, by the same precedence as its name: the
+ *  party's display avatar once the handle→party link is confirmed, otherwise the
+ *  avatar the handle's own network shows, otherwise none (the caller's initials
+ *  stand). Each is the server's actor-checked file URL, used as given. */
+export function senderAvatarUrl(sender: SenderIdentity | null | undefined): string | undefined {
+  const partyAvatar = sender?.party_link_confirmed ? sender.party?.display_avatar?.url : null;
+  return partyAvatar || sender?.avatar?.url || undefined;
 }

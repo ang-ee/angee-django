@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useAuthoredMutation } from "@angee/refine";
-import { senderDisplayName } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import {
   Alert,
   Avatar,
@@ -61,7 +61,7 @@ export function MessageReader({
     <div className={cn("grid min-w-0 gap-6", previewUrl && "lg:grid-cols-2")}>
       <article aria-label={message.title || t("message.label")} className="min-w-0 space-y-5">
         <header className="flex items-start gap-3">
-          <Avatar initials={avatarInitials(sender)} />
+          <Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="truncate text-13 font-semibold">{sender}</span>
