@@ -36,6 +36,11 @@ app_label = "integrate"
 module = "runtime_migrations.record_link_history_state"
 
 [[migrations]]
+name = "record_sync_state"
+app_label = "integrate"
+module = "runtime_migrations.record_sync_state"
+
+[[migrations]]
 name = "fold_record_sync_history"
 app_label = "integrate"
 module = "runtime_migrations.fold_record_sync_history"
@@ -44,6 +49,11 @@ module = "runtime_migrations.fold_record_sync_history"
 name = "retire_record_sync_stores"
 app_label = "integrate"
 module = "runtime_migrations.retire_record_sync_stores"
+
+[[migrations]]
+name = "retire_record_sync_hash_bases"
+app_label = "integrate"
+module = "runtime_migrations.retire_record_sync_hash_bases"
 
 [resources]
 master = [

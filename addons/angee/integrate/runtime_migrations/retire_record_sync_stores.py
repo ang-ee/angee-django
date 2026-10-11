@@ -2,8 +2,8 @@
 
 The composer attaches this declaration after fold_record_sync_history. Forward
 refuses partial conversion or changed legacy evidence before either DeleteModel.
-Reverse recreates both tables and reconstructs them from link/stream history.
-Original folded IDs, ordering, payloads, mapping and closure facts survive.
+Reverse recreates both tables from ordered link history and retained stream state.
+Legacy revision/failure primary keys do not round-trip; payloads, mapping and closure facts survive.
 New native evidence collapses consecutive identical observations and open failure
 identities; the old schema cannot express pinned history FKs, source attribution,
 pin policy, outbox pending/error distinctions, changeset grouping or state slot
@@ -20,8 +20,6 @@ from django.db.migrations.state import ProjectState
 
 from angee.base.fields import StateField
 
-FOLD = "_sync_history_fold"
-
 
 def applies(state: ProjectState) -> bool:
     """Require the complete folded schema before removing both conversion inputs."""
@@ -33,9 +31,8 @@ def applies(state: ProjectState) -> bool:
     link = state.models.get(("integrate", "recordlink"))
     stream = state.models.get(("integrate", "syncstream"))
     history = state.models.get(("integrate", "historicalrecordlink"))
-    stream_history = state.models.get(("integrate", "historicalsyncstream"))
     # Earlier declarations may still be pending in the composer's fixed point.
-    if history is None or stream_history is None or stream is None or "inbound" not in stream.fields:
+    if history is None or stream is None or "inbound" not in stream.fields:
         return False
     required = {"applied_base", "source_payload", "source_hash", "mapped_payload", "mapping_version",
                 "dependency_digest", "applied_at", "asserted_by", "inbound", "outbox_state",
@@ -44,9 +41,9 @@ def applies(state: ProjectState) -> bool:
         raise ValueError("Record sync retirement requires the complete converted link schema.")
     if not link.fields["mapped_payload"].null or not history.fields["mapped_payload"].null:
         raise ValueError("Record sync retirement requires the completed history fold.")
-    if "changeset" not in history.fields or not {"inbound", "changeset"} <= stream_history.fields.keys():
-        raise ValueError("Record sync retirement requires attributed link and stream history.")
-    if any(name in owner.fields for owner in (stream, stream_history) for name in ("state", "snapshot")):
+    if "changeset" not in history.fields:
+        raise ValueError("Record sync retirement requires attributed link history.")
+    if any(name in stream.fields for name in ("state", "snapshot")):
         raise ValueError("Record sync retirement found partial stream lifecycle columns.")
     return True
 
@@ -57,41 +54,29 @@ def forwards(apps, schema_editor):
     revisions = apps.get_model("integrate", "RecordRevision")
     failures = apps.get_model("integrate", "SyncDiscrepancy")
     history = apps.get_model("integrate", "HistoricalRecordLink")
-    converted = {}
-    retained = {}
+    retained = []
 
-    def retain(owner):
+    def retain(owner, link_id, stream_id):
         entries = [*owner.inbound]
         outbox = getattr(owner, "outbox_last_error", {})
         if outbox:
             entries.append(outbox)
-        for entry in entries:
-            if "legacy_id" in entry:
-                retained.setdefault(entry["legacy_id"], []).append(entry)
+        retained.extend((entry, link_id, stream_id) for entry in entries)
 
     for row in history._base_manager.using(db).order_by("history_id").iterator():
-        values = row.metadata.get(FOLD, {}).get("revision")
-        if values is not None:
-            if values["id"] in converted or row.changeset_id is None:
-                raise ValueError(f"Record sync retirement found invalid converted revision {values['id']}.")
-            evidence = {name: getattr(row, name) for name in (
-                "source_payload", "source_hash", "mapping_version", "mapped_payload", "dependency_digest", "applied_at",
-            )}
-            evidence = {name: value.isoformat() if isinstance(value, datetime) else value
-                        for name, value in evidence.items()}
-            converted[values["id"]] = (row.id, row.history_date.isoformat(), values, evidence)
-        retain(row)
-    for name in ("RecordLink", "HistoricalSyncStream", "SyncStream"):
-        for row in apps.get_model("integrate", name)._base_manager.using(db).order_by("pk").iterator():
-            retain(row)
+        retain(row, row.id, row.stream_id)
+    for row in apps.get_model("integrate", "RecordLink")._base_manager.using(db).order_by("pk").iterator():
+        retain(row, row.pk, row.stream_id)
+    for row in apps.get_model("integrate", "SyncStream")._base_manager.using(db).order_by("pk").iterator():
+        retain(row, None, row.pk)
     for row in revisions._base_manager.using(db).order_by("pk").iterator():
-        expected = {field.attname: getattr(row, field.attname) for field in row._meta.concrete_fields}
-        expected = {name: value.isoformat() if isinstance(value, datetime) else value
-                    for name, value in expected.items()}
-        evidence = {name: expected[name] for name in (
+        evidence = {name: getattr(row, name) for name in (
             "source_payload", "source_hash", "mapping_version", "mapped_payload", "dependency_digest", "applied_at",
         )}
-        if converted.get(row.pk) != (row.link_id, row.created_at.isoformat(), expected, evidence):
+        if not history._base_manager.using(db).filter(
+            id=row.link_id, history_date=row.created_at, history_change_reason="integrate/fold_record_sync_history",
+            changeset_id__isnull=False, **evidence,
+        ).exists():
             raise ValueError(f"Record sync retirement parity failed for revision {row.pk}.")
     for row in failures._base_manager.using(db).order_by("pk").iterator():
         expected = {name: getattr(row, name) for name in (
@@ -100,9 +85,8 @@ def forwards(apps, schema_editor):
         expected.update({name: value.isoformat() if value is not None else None
                          for name in ("retry_at", "resolved_at", "created_at", "updated_at")
                          for value in (getattr(row, name),)})
-        expected.update(legacy_id=row.pk, legacy_link_id=row.link_id, legacy_stream_id=row.stream_id,
-                        legacy_created_by_id=row.created_by_id, legacy_updated_by_id=row.updated_by_id)
-        if expected not in retained.get(row.pk, ()):
+        expected.update(legacy_created_by_id=row.created_by_id, legacy_updated_by_id=row.updated_by_id)
+        if (expected, row.link_id, row.stream_id) not in retained:
             raise ValueError(f"Record sync retirement parity failed for failure {row.pk}.")
     # The protected comparison base must be an applied snapshot of its own link.
     links = apps.get_model("integrate", "RecordLink")._base_manager.using(db)
@@ -118,17 +102,26 @@ def forwards(apps, schema_editor):
 
 
 def _restore(model, db, values):
-    """Restore original audit dates after native auto_now/auto_now_add saves."""
+    """Rebuild legacy natural identities without promising original primary keys."""
     values = deepcopy(values)
     if model._meta.model_name == "recordrevision" and values.get("mapped_payload") is None:
         values["mapped_payload"] = {}
-    pk = values.pop("id", None)
     for name in ("created_at", "updated_at", "applied_at", "retry_at", "resolved_at"):
         if isinstance(values.get(name), str):
             values[name] = datetime.fromisoformat(values[name])
-    row, _ = model._base_manager.using(db).update_or_create(pk=pk, defaults=values) if pk is not None else (
-        model._base_manager.using(db).create(**values), True,
-    )
+    if model._meta.model_name == "recordrevision":
+        key = {name: values[name] for name in ("link_id", "number")}
+        row, _ = model._base_manager.using(db).update_or_create(**key, defaults=values)
+    else:
+        key = {name: values[name] for name in (
+            "stream_id", "link_id", "kind", "code", "source_hash", "mapping_version", "created_at",
+        )}
+        row = model._base_manager.using(db).filter(**key).order_by("pk").first()
+        if row is None and values["status"] != "resolved":
+            open_key = {name: value for name, value in key.items() if name != "created_at"}
+            row = model._base_manager.using(db).filter(**open_key).exclude(status="resolved").order_by("pk").first()
+        if row is None:
+            row = model._base_manager.using(db).create(**values)
     model._base_manager.using(db).filter(pk=row.pk).update(**values)
     return row
 
@@ -136,35 +129,24 @@ def _restore(model, db, values):
 def backwards(apps, schema_editor):
     db = schema_editor.connection.alias
     revisions = apps.get_model("integrate", "RecordRevision")
-    discrepancies = apps.get_model("integrate", "SyncDiscrepancy")
+    failures = apps.get_model("integrate", "SyncDiscrepancy")
     history = apps.get_model("integrate", "HistoricalRecordLink")
     failure_states = {}
 
     def retain_failures(owner, link_id, stream_id):
         for slot, entry in enumerate(owner.inbound):
-            key = ("legacy", entry["legacy_id"]) if "legacy_id" in entry else ("inbound", link_id, stream_id, slot)
-            failure_states[key] = (entry, link_id, stream_id)
+            failure_states[("inbound", link_id, stream_id, slot)] = (entry, link_id, stream_id)
         entry = getattr(owner, "outbox_last_error", {})
         if entry:
-            key = ("legacy", entry["legacy_id"]) if "legacy_id" in entry else ("outbox", link_id, entry["created_at"])
-            failure_states[key] = (entry, link_id, stream_id)
+            failure_states[("outbox", link_id, entry["created_at"])] = (entry, link_id, stream_id)
 
     for link in apps.get_model("integrate", "RecordLink")._base_manager.using(db).order_by("pk").iterator():
-        prior = revisions._base_manager.using(db).filter(link_id=link.pk).order_by("-number").first()
-        previous = None
+        prior, previous = None, None
         rows = history._base_manager.using(db).filter(id=link.pk).order_by("history_date", "history_id")
-        # Restore the original predecessor chain first, in original number order.
-        converted = [row.metadata[FOLD]["revision"] for row in rows if "revision" in row.metadata.get(FOLD, {})]
-        for values in sorted(converted, key=lambda value: value["number"]):
-            _restore(revisions, db, values)
-        prior = revisions._base_manager.using(db).filter(link_id=link.pk).order_by("-number").first()
-        for row in rows:
+        for row in rows.iterator():
             retain_failures(row, link.pk, link.stream_id)
             evidence = (row.source_payload, row.source_hash, row.mapped_payload, row.mapping_version,
                         row.dependency_digest, row.applied_at)
-            if FOLD in row.metadata:
-                previous = evidence
-                continue
             if evidence != previous:
                 prior = _restore(revisions, db, dict(
                     link_id=link.pk, number=1 if prior is None else prior.number + 1,
@@ -176,9 +158,6 @@ def backwards(apps, schema_editor):
                 ))
             previous = evidence
         retain_failures(link, link.pk, link.stream_id)
-    stream_history = apps.get_model("integrate", "HistoricalSyncStream")
-    for row in stream_history._base_manager.using(db).order_by("history_date", "history_id").iterator():
-        retain_failures(row, None, row.id)
     for row in apps.get_model("integrate", "SyncStream")._base_manager.using(db).order_by("pk").iterator():
         retain_failures(row, None, row.pk)
     for entry, link_id, stream_id in failure_states.values():
@@ -186,17 +165,9 @@ def backwards(apps, schema_editor):
             "kind", "code", "source_hash", "mapping_version", "details", "status", "attempts",
             "retry_at", "resolved_at", "created_at", "updated_at",
         )}
-        values.update(id=entry.get("legacy_id"), link_id=entry.get("legacy_link_id", link_id),
-                      stream_id=entry.get("legacy_stream_id", stream_id),
+        values.update(link_id=link_id, stream_id=stream_id,
                       created_by_id=entry.get("legacy_created_by_id"), updated_by_id=entry.get("legacy_updated_by_id"))
-        if values["id"] is None and values["status"] != "resolved":
-            key = {name: values[name] for name in (
-                "stream_id", "link_id", "kind", "code", "source_hash", "mapping_version",
-            )}
-            old = discrepancies._base_manager.using(db).filter(**key).exclude(status="resolved").order_by("pk").first()
-            if old is not None:
-                values["id"] = old.pk
-        _restore(discrepancies, db, values)
+        _restore(failures, db, values)
 
 
 class Migration(migrations.Migration):
@@ -205,11 +176,7 @@ class Migration(migrations.Migration):
     dependencies: list[tuple[str, str]] = []
     operations = [
         migrations.AddField("syncstream", "snapshot", models.BooleanField(default=False)),
-        migrations.AddField("historicalsyncstream", "snapshot", models.BooleanField(default=False)),
         migrations.AddField("syncstream", "state", StateField(
-            choices=[("open", "Open"), ("closed", "Closed")], default="open", max_length=6, db_index=True,
-        )),
-        migrations.AddField("historicalsyncstream", "state", StateField(
             choices=[("open", "Open"), ("closed", "Closed")], default="open", max_length=6, db_index=True,
         )),
         migrations.RunPython(forwards, backwards),

@@ -44,7 +44,7 @@ def applies(state: ProjectState) -> bool:
     if link is not None:
         if set(link.fields) == LEGACY_FIELDS and history is None:
             return True
-        if added <= link.fields.keys() and history is not None and history_fields <= history.fields.keys():
+        if added <= link.fields.keys() and history is not None and (history_fields - {"remote_base_hash", "local_base_hash"}) <= history.fields.keys():
             base = link.fields["applied_base"]
             if (
                 isinstance(base, models.ForeignKey)

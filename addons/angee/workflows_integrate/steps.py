@@ -16,7 +16,7 @@ from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import Bridge
-from angee.integrate.states import DiscrepancyKind, StreamPhase
+from angee.integrate.states import StreamPhase, SyncFailureKind
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import DecisionStep
@@ -38,22 +38,22 @@ class StreamStageInput(StreamReference):
 
 
 class StreamStageOutput(BaseModel):
-    """Acknowledged page counts and current stream/discrepancy evidence."""
+    """Acknowledged page counts and current stream/failure evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     counts: dict[str, int]
-    discrepancy_ids: list[str]
+    failure_ids: list[str]
     evidence: list[DecisionRecordReference]
 
     @classmethod
     def for_streams(cls, streams: list[Any], *, counts: dict[str, int]) -> StreamStageOutput:
         """Project unresolved truth through its manager for the admitted partitions."""
-        discrepancies = [row for stream in streams for row in stream.sync_failures(open_only=True)]
-        links = {row.link.pk: row.link for row in discrepancies if row.link is not None}
+        failures = [row for stream in streams for row in stream.sync_failures(open_only=True)]
+        links = {row.link.pk: row.link for row in failures if row.link is not None}
 
         return cls(
             counts=counts,
-            discrepancy_ids=[row.id for row in discrepancies],
+            failure_ids=[row.id for row in failures],
             evidence=[_reference(row) for row in [*streams, *links.values()]],
         )
 
@@ -81,7 +81,7 @@ class CoverageInput(BaseModel):
 
 
 class RescanConfig(BaseModel):
-    """Bounded work and the polling interval for externally resolved discrepancies."""
+    """Bounded work and the polling interval for externally resolved failures."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     reconcile_seconds: int = Field(default=60, ge=1)
@@ -139,7 +139,7 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
     retry = RetryPolicy(max_attempts=3)
 
     def run(self, ctx: StepContext) -> Settlement:
-        """Bound recovery work before testing the current discrepancy truth."""
+        """Bound recovery work before testing the current failure truth."""
         bridge = _bridge_subject(ctx)
         streams = ctx.input.current_streams(bridge)
         index = ctx.state.get("rescan_index", 0)
@@ -163,13 +163,13 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
             ctx.input.current_streams(bridge),
             counts={"streams": len(streams)},
         )
-        if output.discrepancy_ids:
+        if output.failure_ids:
             return ctx.wait(until=ctx.now + timedelta(seconds=ctx.config.reconcile_seconds), state={"rescan_index": 0})
         return ctx.done(output)
 
 
 class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
-    """Ask independent questions; direct domain edits resolve the discrepancies."""
+    """Ask independent questions; direct domain edits resolve the failures."""
 
     key = "integrate_conflicts"
     label = "Review sync conflicts"
@@ -180,7 +180,7 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
             row
             for stream in streams
             for row in stream.sync_failures(open_only=True)
-            if row.kind == DiscrepancyKind.CONFLICT
+            if row.kind == SyncFailureKind.CONFLICT
         ]
         # Decisions reference permission-bearing owners, never a JSON state slot.
         records = tuple(
@@ -215,7 +215,7 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
     def continue_with(self, ctx: StepContext, decision: Any, outcome: str) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
         if any(
-            row.kind == DiscrepancyKind.CONFLICT for stream in streams for row in stream.sync_failures(open_only=True)
+            row.kind == SyncFailureKind.CONFLICT for stream in streams for row in stream.sync_failures(open_only=True)
         ):
             raise ValidationError({"conflicts": "Resolve the sync conflicts before retrying this step."})
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))

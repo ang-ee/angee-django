@@ -1,11 +1,12 @@
 """Bounded synchronization: transport outside transactions, page and cursor inside.
 
-Adapters own protocol parsing and domain projections. Due discrepancies are
+Adapters own protocol parsing and domain projections. Due failures are
 re-read by identity when supported; there is no durable work queue.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,17 +33,17 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.changesets import changeset, current_changeset
-from angee.base.serialization import canonical_json_sha256
+from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.integrate.errors import IntegrationError, _safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
     UNSET,
-    DiscrepancyKind,
     LinkStatus,
     StreamDirection,
     StreamKind,
     StreamPhase,
     StreamState,
+    SyncFailureKind,
 )
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 
@@ -180,7 +181,6 @@ class LocalChange:
 
     external_key: str
     projection: Any
-    local_hash: str
     target: Any = None
     mapping_version: int = 1
 
@@ -195,7 +195,6 @@ class ApplyResult:
     """
 
     target: Any = UNSET
-    local_hash: str = ""
     mapped_payload: Any = UNSET
     count: int = 1
     dependency_digest: str = ""
@@ -229,7 +228,7 @@ class SemanticError(Exception):
     """An adapter-owned, JSON-safe record refusal that does not abort its page."""
 
     def __init__(
-        self, code: str, *, details: dict[str, Any] | None = None, kind: DiscrepancyKind = DiscrepancyKind.SEMANTIC
+        self, code: str, *, details: dict[str, Any] | None = None, kind: SyncFailureKind = SyncFailureKind.SEMANTIC
     ) -> None:
         super().__init__(code)
         self.code, self.details, self.kind = code, details or {}, kind
@@ -244,7 +243,7 @@ class RemoteRejected(SemanticError):
         super().__init__(
             code,
             details=details,
-            kind=DiscrepancyKind.CONFLICT if conflict else DiscrepancyKind.REMOTE_REJECTED,
+            kind=SyncFailureKind.CONFLICT if conflict else SyncFailureKind.REMOTE_REJECTED,
         )
 
 
@@ -266,6 +265,7 @@ def classify_change(
     mapping_changed: bool = False,
 ) -> ChangeKind:
     """Compare nested mapped facts; concurrent divergent edits require a choice."""
+    base, local, remote = (json.loads(canonical_json(value)) for value in (base, local, remote))
     local_changed = bool(DeepDiff(base, local))
     remote_changed = bool(DeepDiff(base, remote)) or mapping_changed
     if local_changed and (remote_changed or tombstone):
@@ -281,10 +281,13 @@ def classify_change(
 
 def _check_write_precondition(link: Any, expected: dict[str, Any]) -> None:
     """Fence database reflection with native JSON Patch tests, beside the remote fence."""
-    try:
-        jsonpatch.JsonPatch([{"op": "test", "path": "", "value": expected}]).apply(link.sync_precondition)
-    except jsonpatch.JsonPatchTestFailed as error:
-        raise RuntimeError("Record bases changed during write-back; reconcile before retrying.") from error
+    for name in ("applied_base", "source_hash", "remote_version"):
+        try:
+            jsonpatch.JsonPatch([{"op": "test", "path": f"/{name}", "value": expected[name]}]).apply(
+                link.sync_precondition
+            )
+        except jsonpatch.JsonPatchTestFailed as error:
+            raise RuntimeError(f"Record {name} changed during write-back; reconcile before retrying.") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,7 +297,7 @@ class PageResult:
     stream: Any
     count: int = 0
     exhausted: bool = False
-    discrepancy_ids: tuple[Any, ...] = ()
+    failure_ids: tuple[Any, ...] = ()
     reset: bool = False
     progress: str = ""
 
@@ -324,7 +327,7 @@ def _resolve_applied(stream: Any, record: Any) -> None:
         return
     link = _manager("RecordLink").get(stream=stream, external_key=record.external_key)
     for failure in link.failures(open_only=True):
-        if failure.kind != DiscrepancyKind.CONFLICT:
+        if failure.kind != SyncFailureKind.CONFLICT:
             failure.resolve()
 
 
@@ -339,7 +342,7 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
         source_hash=record.source_hash if replica else "",
         mapping_version=record.mapping_version if replica else 1,
         details=details,
-        outbox=isinstance(error, RemoteRejected),
+        **({"outbox": isinstance(error, RemoteRejected)} if link is not None else {}),
     )
 
 
@@ -396,7 +399,6 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
         source_payload=record.source_payload,
         source_hash=record.source_hash,
         mapped_payload=outcome.mapped_payload,
-        local_hash=outcome.local_hash,
         mapping_version=outcome.mapping_version,
         dependency_digest=outcome.dependency_digest,
         target=outcome.target,
@@ -414,7 +416,6 @@ def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult) -> 
         source_payload=result.source_payload,
         source_hash=result.source_hash,
         mapped_payload=record.projection,
-        local_hash=record.local_hash,
         target=record.target,
         remote_version=result.remote_version,
         mapping_version=record.mapping_version,
@@ -525,7 +526,7 @@ def _apply_page(
                     result = error
                 written[record.external_key] = (bases, result)
     count = 0
-    discrepancies: list[str] = []
+    failures: list[str] = []
     applied: list[ApplyResult] = []
     with changeset(fresh=True, activity="pull", origin=stream), transaction.atomic():
         current_changeset(record=True)
@@ -571,12 +572,12 @@ def _apply_page(
                         conflicts = [
                             row.pk
                             for row in (observed.write_holds if observed is not None else ())
-                            if row.kind == DiscrepancyKind.CONFLICT
+                            if row.kind == SyncFailureKind.CONFLICT
                         ]
                         if link.pinned and record.external_key not in force_apply:
                             continue
                         if conflicts:
-                            discrepancies.extend(conflicts)
+                            failures.extend(conflicts)
                             continue
                         revision = observed.applied_base if observed is not None else None
                         decision = (
@@ -587,7 +588,7 @@ def _apply_page(
                         if decision == ChangeKind.UNCHANGED and record.external_key in reapply:
                             decision = ChangeKind.APPLY
                         if decision == ChangeKind.CONFLICT:
-                            raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
+                            raise SemanticError("both_changed", kind=SyncFailureKind.CONFLICT)
                         if decision == ChangeKind.UNCHANGED:
                             assert revision is not None
                             if record.target is not None:
@@ -600,13 +601,13 @@ def _apply_page(
                             continue
                         if decision == ChangeKind.WRITE_BACK:
                             if not locked.writes_back:
-                                raise SemanticError("local_change_on_pull", kind=DiscrepancyKind.CONFLICT)
+                                raise SemanticError("local_change_on_pull", kind=SyncFailureKind.CONFLICT)
                             write = written.get(record.external_key)
                             if write is None and record.external_key in held:
                                 # A refused write waits out its retry time; the local change
                                 # stays. The first pass's hold decides, so a refusal resolved
                                 # since then waits for the next page rather than failing this one.
-                                discrepancies.extend(
+                                failures.extend(
                                     row.pk for row in (observed.write_holds if observed is not None else ())
                                 )
                                 continue
@@ -670,7 +671,7 @@ def _apply_page(
                             ),
                         },
                     )
-                discrepancies.append(_quarantine(locked, record, refusal, link=link).pk)
+                failures.append(_quarantine(locked, record, refusal, link=link).pk)
         adapter.finish_page(locked, page, applied)
         if reconcile_state is not None:
             locked.reconcile_state = reconcile_state
@@ -684,7 +685,7 @@ def _apply_page(
             )
     hashes = [record.source_hash for record in page.records] if locked.kind == StreamKind.RECORD_REPLICA else []
     progress = canonical_json_sha256([locked.generation, page.cursor, hashes])
-    return PageResult(locked, count, page.exhausted, tuple(discrepancies), progress=progress)
+    return PageResult(locked, count, page.exhausted, tuple(failures), progress=progress)
 
 
 def push_stream(
@@ -699,7 +700,7 @@ def push_stream(
     if connection.in_atomic_block:
         raise RuntimeError("Remote writes must run outside a database transaction.")
     count = 0
-    discrepancies: list[str] = []
+    failures: list[str] = []
     with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
         stream.refresh_from_db()
         if not stream.writes_back or _baseline_adoption(stream):
@@ -708,7 +709,7 @@ def push_stream(
         candidates: set[str] = set()
         for candidate, link in _push_candidates(stream, adapter, external_keys):
             if deadline is not None and monotonic() >= deadline:
-                return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
+                return PageResult(stream, count, failure_ids=tuple(failures))
             candidates.add(candidate.external_key)
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
@@ -716,32 +717,24 @@ def push_stream(
                 # The batch loaded its links before the writes ahead of this one; a
                 # concurrent push or conflict resolution may have moved this link since.
                 link = links.filter(pk=link.pk).with_sync_evidence().get()
-                if (
-                    link.pinned
-                    or link.write_holds
-                    or (
-                        link.applied_base is not None
-                        and not DeepDiff(link.applied_base.mapped_payload, candidate.projection)
-                    )
-                ):
+                if link.pinned or link.write_holds or not link.local_changed(candidate.projection):
                     continue
                 revision = link.applied_base
             record = RecordChange(
                 candidate.external_key,
                 None,
                 link.source_hash,
-                candidate.local_hash,
-                link.remote_version,
-                candidate.projection,
-                candidate.target,
-                candidate.mapping_version,
+                remote_version=link.remote_version,
+                projection=candidate.projection,
+                target=candidate.target,
+                mapping_version=candidate.mapping_version,
                 dependency_digest=revision.dependency_digest if revision is not None else "",
             )
             bases = link.sync_precondition
             try:
                 result = adapter.write_back(link, candidate.projection, expected_version=link.remote_version)
             except RemoteRejected as error:
-                discrepancies.append(_quarantine(stream, record, error, link=link).pk)
+                failures.append(_quarantine(stream, record, error, link=link).pk)
                 continue
             with changeset(fresh=True, activity="push", origin=stream), transaction.atomic():
                 current_changeset(record=True)
@@ -755,17 +748,17 @@ def push_stream(
         if external_keys is None:
             # A due refusal whose record has nothing left to write (deleted or
             # reverted locally) has nothing to retry, and no rescan reads it.
-            for link in links.filter(stream=stream, outbox_state__isnull=False):
+            for link in links.filter(stream=stream).with_open_failures():
                 if (
                     link.external_key not in candidates
                     and link.outbox_last_error
                     and (link.outbox_retry_at is None or link.outbox_retry_at <= timezone.now())
                 ):
                     for refusal in link.failures(open_only=True):
-                        if refusal.slot is None and refusal.kind != DiscrepancyKind.CONFLICT:
+                        if refusal.slot is None and refusal.kind != SyncFailureKind.CONFLICT:
                             refusal.resolve()
 
-    return PageResult(stream, count, True, tuple(discrepancies))
+    return PageResult(stream, count, True, tuple(failures))
 
 
 @dataclass(frozen=True, slots=True)
@@ -819,11 +812,7 @@ def _push_candidates(
         }
         for candidate in batch:
             link = known.get(candidate.external_key)
-            if (
-                link is None
-                or link.applied_base is None
-                or DeepDiff(link.applied_base.mapped_payload, candidate.projection)
-            ):
+            if link is None or link.local_changed(candidate.projection):
                 yield candidate, link
 
 

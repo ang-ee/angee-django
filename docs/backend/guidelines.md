@@ -993,6 +993,12 @@ and current contracts before applying a historical example to a new deployment.
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
   addon that stays installed declares a runtime migration that preserves or
   retires the data and removes the field; an empty column needs nothing.
+- **Record-sync hash bases retire through the declared cutover.**
+  [`retire_record_sync_hash_bases`](../../addons/angee/integrate/runtime_migrations/retire_record_sync_hash_bases.py)
+  removes the superseded live and historical hash columns after the applied-history
+  transition; `RecordLink.applied_base` is the comparison owner. Reverse restores
+  empty columns, not the retired hash values. Keep this declaration in the upgrade
+  chain so the composer's drop guard never encounters an undeclared data loss.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its
@@ -1487,8 +1493,9 @@ protocol. Backends declare independently ordered stream partitions; domain
 managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
 replicas pin their own applied link history row as the comparison base.
-Adapters provide comparable local and remote mapped projections; upstream
-`DeepDiff` compares each with that base. `canonical_json_sha256` is the sole
+Adapters provide comparable JSON-native local and remote mapped projections;
+the driver normalizes both sides through the canonical JSON serializer before
+upstream `DeepDiff` compares them with that base. `canonical_json_sha256` is the sole
 source-hash owner; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.
@@ -1506,17 +1513,18 @@ validated at the driver boundary.
   nothing, remote-only changes apply, and local-only changes may write back with
   the expected remote version. Divergent changes on both sides, including a remote
   tombstone against a local edit, are unresolved conflicts: never silently choose a winner. The
-  adapter locks and revalidates its local projection before applying. An origin
+  adapter locks and revalidates its local projection before applying. Identical
+  edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
-  on its next pull. Native JSON Patch `test` preconditions also fence database
-  reflection; they do not replace the remote transport version fence.
+  on its next pull. Separate JSON Patch `test` operations check each retained reflection
+  precondition; they do not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload, mapping version and dependency digest in `ApplyResult`; the driver
   alone promotes the primary link and pins the history row written for that
   application. Observation saves the source on the link without changing that
   protected pointer. History is the observation log; inbound state retains
   simultaneous and closed failures, and refused writes retain link outbox state.
-  Unlinked event failures belong to the stream and its history. Mapping or
+  Unlinked event failures belong to the stream's `inbound` state. Mapping or
   dependency changes count as remote changes. Intermediate adapter promotion is refused and rolled back. Explicit
   `target=None` withdraws a binding; omission preserves it.
 - **Prepare the entire page before singleton application.** The optional
@@ -1568,8 +1576,8 @@ validated at the driver boundary.
 - **Retire conversion inputs only after proving history parity.** Integrate's
   manifest orders its history fold before its store retirement declaration.
   The retirement verifies all converted observations and failures before native
-  `DeleteModel` operations; reverse rebuilds from retained link/stream history
-  with the loss of native-only distinctions documented in the migration.
+  `DeleteModel` operations; reverse rebuilds from ordered link history and retained stream state, with legacy IDs and native-only
+  distinctions lost as documented in the migration.
 
 ### Integrations and workers
 

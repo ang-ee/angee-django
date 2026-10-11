@@ -74,7 +74,7 @@ export const IntegrationSyncStream = graphql(`
       key
       partition
       failures @include(if: $includeFailures) {
-        id kind code status is_open attempts retry_at created_at
+        id stream_id link_id slot kind code status is_open attempts retry_at created_at
       }
     }
   }
@@ -82,12 +82,24 @@ export const IntegrationSyncStream = graphql(`
 
 /** Native observations are read through the actor-authorized link. */
 export const IntegrationRecordLinkHistory = graphql(`
-  query IntegrationRecordLinkHistory($id: String!) {
+  query IntegrationRecordLinkHistory($id: String!, $limit: Int!, $offset: Int!) {
     record_links_by_pk(id: $id) {
       id
-      history {
+      history(limit: $limit, offset: $offset) {
         history_id history_date history_type source_hash remote_version
-        mapping_version dependency_digest applied_at source_payload mapped_payload
+        mapping_version dependency_digest applied_at
+      }
+    }
+  }
+`);
+
+/** Payload evidence is fetched only for the requested history row. */
+export const IntegrationRecordLinkHistoryPayload = graphql(`
+  query IntegrationRecordLinkHistoryPayload($id: String!, $historyId: Int!) {
+    record_links_by_pk(id: $id) {
+      id
+      history_record(history_id: $historyId) {
+        history_id source_payload mapped_payload
       }
     }
   }

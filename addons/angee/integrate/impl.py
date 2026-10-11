@@ -114,6 +114,8 @@ class BridgeImpl(IntegrationImpl):
     def apply_record(self, stream: Any, record: Any) -> ApplyResult:
         """Apply one record using database work only; return its applied evidence.
 
+        Local and remote mapped projections must be JSON-native and comparable.
+        The driver normalizes them with the canonical JSON serializer.
         The driver owns primary link promotion. Record-local refusals raise
         SemanticError, ValidationError or DataError; infrastructure failures propagate.
         """

@@ -13,7 +13,7 @@ from rebac import system_context
 from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import ConflictKeep, DiscrepancyKind, StreamDirection, StreamKind, StreamPhase
+from angee.integrate.states import ConflictKeep, StreamDirection, StreamKind, StreamPhase, SyncFailureKind
 from angee.integrate.streams import (
     ApplyResult,
     CursorInvalid,
@@ -108,7 +108,7 @@ def cycle(execution, register_step, monkeypatch):
             assert connection.in_atomic_block
             applied.append(record.external_key)
             local_hashes[record.external_key] = record.source_hash
-            return ApplyResult(local_hash=record.source_hash, mapped_payload=record.mapped_payload)
+            return ApplyResult(mapped_payload=record.mapped_payload)
 
     monkeypatch.setattr(SyncCycleTestBridge, "backend", property(Adapter), raising=False)
     for step in (StreamStage, Rescan, ConflictReview):
@@ -155,7 +155,7 @@ def conflict(cycle, stream, offset):
     with system_context(reason="test retained sync conflict"):
         link = RecordLink.objects.observe(stream, f"{stream.partition}:{offset}")
         return link.record_failure(
-            kind=DiscrepancyKind.CONFLICT, code=f"conflict_{offset}", source_hash=f"source-{offset}"
+            kind=SyncFailureKind.CONFLICT, code=f"conflict_{offset}", source_hash=f"source-{offset}"
         )
 
 
@@ -262,7 +262,7 @@ def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
             for offset in range(2):
                 failure_state(
                     RecordLink.objects.get(stream=stream, external_key=f"{partition}:{offset}").record_failure(
-                        kind=DiscrepancyKind.SEMANTIC, code=f"retry_{offset}", source_hash=f"source-{offset}"
+                        kind=SyncFailureKind.SEMANTIC, code=f"retry_{offset}", source_hash=f"source-{offset}"
                     ),
                     retry_at=timezone.now(),
                 )
@@ -306,7 +306,7 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
         with system_context(reason="test rescan baseline fallback"):
             failure_state(
                 RecordLink.objects.get(stream=stream, external_key=":0").record_failure(
-                    kind=DiscrepancyKind.SEMANTIC, code="retry_baseline", source_hash="source-0"
+                    kind=SyncFailureKind.SEMANTIC, code="retry_baseline", source_hash="source-0"
                 ),
                 retry_at=timezone.now(),
             )
@@ -332,7 +332,7 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
 def test_rescan_waits_for_conflicts_without_applying_them(cycle):
     stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
     advance_stream(stream, cycle.adapter)
-    discrepancy = conflict(cycle, stream, 0)
+    failure = conflict(cycle, stream, 0)
     cycle.applied.clear()
     run = cycle.start(Rescan, {"streams": [{"key": "records"}]})
 
@@ -340,8 +340,8 @@ def test_rescan_waits_for_conflicts_without_applying_them(cycle):
 
     assert run.status == "waiting" and step_row(run).waiting_kind == "time"
     assert cycle.rescanned == [] and cycle.applied == []
-    discrepancy.refresh_from_db()
-    assert discrepancy.is_open
+    failure.refresh_from_db()
+    assert failure.is_open
 
 
 def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
@@ -357,11 +357,11 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     run_until(run)
     assert run.status == "failed"
     assert len(SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=True)) == 2
-    for discrepancy in conflicts:
-        discrepancy.resolve_conflict(keep=ConflictKeep.REMOTE)
+    for failure in conflicts:
+        failure.resolve_conflict(keep=ConflictKeep.REMOTE)
     StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
     run_until(run)
-    assert run.status == "succeeded" and run.output["discrepancy_ids"] == []
+    assert run.status == "succeeded" and run.output["failure_ids"] == []
     assert system_queryset(Decision).count() == 1
 
 

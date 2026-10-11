@@ -5,14 +5,18 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from angee.integrate.mixins import SyncFailure
+from angee.integrate.states import SyncFailure
 from angee.integrate.testing.models import RecordLink
 
 
 def applied_history() -> Any:
     """Read application snapshots pinned by current or historical link states."""
 
-    return RecordLink.history.filter(history_id__in=RecordLink.history.values("applied_base_id"))
+    return RecordLink.history.filter(
+        history_id__in=RecordLink.history.order_by()
+        .values("applied_base_id")
+        .union(RecordLink.objects.order_by().values("applied_base_id"))
+    )
 
 
 def failure_state(failure: SyncFailure, **values: Any) -> SyncFailure:

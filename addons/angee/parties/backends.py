@@ -13,16 +13,15 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
 from typing import Any
 
-from deepdiff import DeepDiff
 from django.apps import apps
-from django.db.models import CharField, Exists, OuterRef, Q, Subquery, Value
+from django.db.models import CharField, Exists, OuterRef, Q, Value
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast, Coalesce, Concat, NullIf
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import DiscrepancyKind, StreamDirection, StreamKind
+from angee.integrate.states import StreamDirection, StreamKind, SyncFailureKind
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamDefinition
 
 
@@ -227,8 +226,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         )
 
     def _source_payload(self, link: Any) -> dict[str, Any]:
-        observation = link.history.first()
-        return dict(observation.source_payload) if observation is not None else {}
+        return dict(link.source_payload)
 
     def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched media and take the stored form before the driver's page transaction begins."""
@@ -236,20 +234,17 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return apps.get_model("parties", "Party").objects.prepare_contact(parsed, created_by_id=self.bridge.owner_id)
 
     def _links(self, stream: Any) -> tuple[Any, ...]:
-        """Read locators in one query, including locally pushed history evidence."""
+        """Read the latest retained locators directly from their owning links."""
 
-        latest = (
-            apps.get_model("integrate", "RecordLink")
-            .history.filter(id=OuterRef("pk"))
-            .order_by("-history_date", "-history_id")
-            .annotate(href=KeyTextTransform("href", "source_payload"))
-            .values("href")[:1]
-        )
         return tuple(
             apps.get_model("integrate", "RecordLink")
             .objects.filter(stream=stream)
             .annotate(
-                source_href=Coalesce(KeyTextTransform("href", "metadata"), Subquery(latest), output_field=CharField())
+                source_href=Coalesce(
+                    KeyTextTransform("href", "metadata"),
+                    KeyTextTransform("href", "source_payload"),
+                    output_field=CharField(),
+                )
             )
             .order_by("pk")
         )
@@ -417,11 +412,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         parties.lock_contact(record.target, parsed=parsed)
         target, projection, local_hash = self._local_state(stream, record.external_key)
         if local_hash != record.local_hash:
-            raise SemanticError("local_changed_during_pull", kind=DiscrepancyKind.CONFLICT)
+            raise SemanticError("local_changed_during_pull", kind=SyncFailureKind.CONFLICT)
         if record.tombstone:
             if target is not None and stream.config.get("remote_delete", "retain") == "propagate":
                 parties.filter(pk=target.pk).delete()
-                target, projection, local_hash = None, None, ""
+                target, projection = None, None
         else:
             target = parties.ingest_contact(
                 parsed,
@@ -430,10 +425,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 created_by_id=self.bridge.owner_id,
             )
             projection = contact_projection(parties.project_contact(target))
-            local_hash = canonical_json_sha256(projection)
         return ApplyResult(
             target=target,
-            local_hash=local_hash,
             mapped_payload=projection,
         )
 
@@ -447,9 +440,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         links = tuple(links_query.with_sync_evidence().order_by("pk"))
         states = self._local_states(stream, (link.external_key for link in links), links=links)
         for link in links:
-            target, projection, local_hash = states[link.external_key]
-            if link.applied_base is None or DeepDiff(link.applied_base.mapped_payload, projection):
-                yield LocalChange(link.external_key, projection, local_hash, target=target)
+            target, projection, _ = states[link.external_key]
+            if link.local_changed(projection):
+                yield LocalChange(link.external_key, projection, target=target)
         people_query = (
             apps.get_model("parties", "Person")
             .objects.filter(
@@ -481,7 +474,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             yield LocalChange(
                 person.external_key,
                 projection,
-                canonical_json_sha256(projection),
                 target=person,
             )
 

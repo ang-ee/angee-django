@@ -16,6 +16,7 @@ their owning addons; this addon never imports them.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from collections.abc import Iterable, Mapping
@@ -25,6 +26,7 @@ from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -47,11 +49,13 @@ from rebac import (
 )
 from rebac.mixins import RebacModelBase
 from rebac.models import active_relationship_model
+from simple_history.signals import post_create_historical_record
 from strawberry_django.descriptors import model_property
 
+from angee.base.changesets import current_changeset
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AuditMixin, HistoryMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -74,7 +78,7 @@ from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_is_locked
-from angee.integrate.mixins import SyncFailure, SyncStateMixin
+from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
@@ -83,13 +87,15 @@ from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.states import (
     UNSET,
     ConflictKeep,
-    DiscrepancyKind,
     LinkStatus,
     OutboxState,
     StreamDirection,
     StreamKind,
     StreamPhase,
     StreamState,
+    SyncFailure,
+    SyncFailureKind,
+    SyncFailureStatus,
 )
 from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
@@ -3014,7 +3020,7 @@ class SyncStreamManager(AngeeManager):
             return stream
 
 
-class SyncStream(SyncStateMixin):
+class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     runtime = True
@@ -3061,12 +3067,23 @@ class SyncStream(SyncStateMixin):
 
         return type(self).unscoped_objects.filter(pk=self.pk, phase=StreamPhase.DELTA).exists()
 
+    @property
+    def failure_stream(self) -> SyncStream:
+        return self
+
     def sync_failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
         """Read stream and linked failures through their owning row permissions."""
-        return (
-            *self.failures(open_only=open_only),
-            *(row for link in self.links.all() for row in link.failures(open_only=open_only)),
-        )
+        if open_only:
+            links = getattr(self, "open_failure_links", None)
+            if links is None:
+                links = self.links.with_open_failures()
+        else:
+            links = self.links.only("stream_id", "inbound", "outbox_last_error").order_by("pk")
+        rows = list(self.failures(open_only=open_only))
+        for link in links:
+            link.stream = self
+            rows.extend(link.failures(open_only=open_only))
+        return tuple(rows)
 
     class Meta:
         abstract = True
@@ -3086,27 +3103,44 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
 
     def with_sync_evidence(self) -> Self:
         """Load the protected application projection; state is already on the link."""
-        return self.select_related("applied_base", "parent", "stream").defer("applied_base__source_payload")
+        return self.select_related("applied_base", "parent", "stream").defer(
+            "source_payload", "mapped_payload", "applied_base__source_payload"
+        )
+
+    def with_open_failures(self) -> Self:
+        """Select open-state owners in stable order without their payloads."""
+        return (
+            self.filter(Q(status=LinkStatus.DISCREPANT) | Q(outbox_state__isnull=False))
+            .order_by("pk")
+            .only(
+                "stream_id",
+                "parent_id",
+                "external_key",
+                "status",
+                "inbound",
+                "outbox_state",
+                "outbox_retry_at",
+                "outbox_last_error",
+            )
+        )
 
     def open_failures(self) -> tuple[SyncFailure, ...]:
         """Project state after the caller's actor-scoped link selection."""
         return tuple(
             row
-            for link in self.with_sync_evidence().order_by("pk").iterator(chunk_size=500)
+            for link in self.with_open_failures().select_related("stream").iterator(chunk_size=500)
             for row in link.failures(open_only=True)
         )
 
     def rescan(self, *, limit: int) -> tuple[SyncFailure, ...]:
         """Bound due inbound failures after excluding every conflicted aggregate."""
         if limit < 1:
-            raise ValueError("A discrepancy rescan limit must be positive.")
-        links = (
-            self.filter(status=LinkStatus.DISCREPANT).select_related("stream").defer("source_payload", "mapped_payload")
-        )
+            raise ValueError("A failure rescan limit must be positive.")
+        links = self.with_open_failures().select_related("stream")
         conflicts = {
             link.parent_id or link.pk
             for link in links.iterator(chunk_size=500)
-            if any(row.kind == DiscrepancyKind.CONFLICT for row in link.failures(open_only=True))
+            if any(row.kind == SyncFailureKind.CONFLICT for row in link.failures(open_only=True))
         }
         now = timezone.now()
         due = []
@@ -3116,7 +3150,7 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
             for row in link.failures(open_only=True):
                 if (
                     row.slot is not None
-                    and row.kind != DiscrepancyKind.REMOTE_REJECTED
+                    and row.kind != SyncFailureKind.REMOTE_REJECTED
                     and (row.retry_at is None or row.retry_at <= now)
                 ):
                     due.append(row)
@@ -3184,6 +3218,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                 self._set_target(link, target)
                 if target is None:
                     link.status = LinkStatus.WITHDRAWN
+            link.update_sync_status()
             link.save(
                 update_fields=[
                     "status",
@@ -3209,7 +3244,6 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         source_payload: Any,
         source_hash: str,
         mapped_payload: Any,
-        local_hash: str,
         mapping_version: int = 1,
         dependency_digest: str = "",
         target: Any = UNSET,
@@ -3217,7 +3251,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         origin: str = "remote",
         tombstone: bool = False,
     ) -> Any:
-        """Append applied evidence and advance both bases; the driver owns promotion.
+        """Append applied evidence and pin its base; the driver owns promotion.
 
         Adapters return their evidence to the driver, never promote its link
         themselves. Omit ``target`` to retain its binding; pass ``None`` to clear
@@ -3235,7 +3269,6 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             locked.applied_at = timezone.now()
             if target is not UNSET:
                 self._set_target(locked, target)
-            locked.remote_base_hash, locked.local_base_hash = source_hash, local_hash
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
             if target is None:
                 locked.status = LinkStatus.WITHDRAWN
@@ -3251,18 +3284,31 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                 "applied_at",
                 "target_content_type_id",
                 "target_object_id",
-                "remote_base_hash",
-                "local_base_hash",
                 "remote_version",
                 "origin",
                 "status",
                 "tombstoned_at",
             ]
-            locked.save(update_fields=[*fields, "updated_at"])
-            application = locked.history.latest()
-            # Pin exactly the native snapshot written for this application.
-            locked.applied_base = application
-            locked.save(update_fields=["applied_base", "updated_at"])
+            locked.update_sync_status()
+            application = None
+            context = current_changeset()
+
+            def pin_application(instance: Any, history_instance: Any, **kwargs: Any) -> None:
+                nonlocal application
+                if instance.pk == locked.pk and current_changeset() is context:
+                    application = history_instance
+                    locked.applied_base = history_instance
+                    # This pointer completes the application save, not a new observation.
+                    locked.save_without_historical_record(update_fields=["applied_base"])
+
+            sender = locked.history.model
+            post_create_historical_record.connect(pin_application, sender=sender, weak=False)
+            try:
+                locked.save(update_fields=[*fields, "updated_at"])
+            finally:
+                post_create_historical_record.disconnect(pin_application, sender=sender)
+            if application is None:
+                raise RuntimeError("Application save did not create its historical evidence.")
             for field in [*fields, "applied_base"]:
                 setattr(link, field, getattr(locked, field))
             return application
@@ -3282,8 +3328,8 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         locked = self.lock_if_supported().get(pk=link.pk)
         if target is not UNSET:
             self._set_target(locked, target)
-        if not locked.failures(open_only=True):
-            locked.status = LinkStatus.CURRENT
+        locked.status = LinkStatus.CURRENT
+        locked.update_sync_status()
         locked.save(update_fields=["target_content_type", "target_object_id", "status", "updated_at"])
         for name in ("target_content_type_id", "target_object_id", "status"):
             setattr(link, name, getattr(locked, name))
@@ -3330,7 +3376,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             return link
 
 
-class RecordLink(RecordRefMixin, SyncStateMixin):
+class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, AngeeDataModel):
     """A remote identity retaining observations, application facts and run state.
 
     ``applied_base`` pins this link's own historical application snapshot; an
@@ -3373,8 +3419,6 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
     outbox_retry_at = models.DateTimeField(null=True, blank=True)
     outbox_last_error = models.JSONField(default=dict, blank=True)
     remote_version = models.CharField(max_length=512, blank=True)
-    remote_base_hash = models.CharField(max_length=64, blank=True)
-    local_base_hash = models.CharField(max_length=64, blank=True)
     origin = models.CharField(max_length=16, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_verified_generation = models.PositiveIntegerField(default=0)
@@ -3390,12 +3434,99 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
         return self.external_key
 
     @property
-    def failure_stream(self) -> Any:
+    def failure_stream(self) -> SyncStream:
         return self.stream
 
-    @property
-    def failure_link(self) -> Any:
-        return self
+    def failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
+        rows = list(super().failures(open_only=open_only))
+        if self.outbox_last_error:
+            row = SyncFailure.from_state(self, None, self.outbox_last_error)
+            if not open_only or row.is_open:
+                rows.append(row)
+        return tuple(rows)
+
+    def update_sync_status(self) -> None:
+        """Open failures dominate observation/application status until resolved."""
+        if self.failures(open_only=True):
+            self.status = LinkStatus.DISCREPANT
+        elif self.status == LinkStatus.DISCREPANT:
+            self.status = LinkStatus.CURRENT if self.applied_base_id else LinkStatus.OBSERVED
+
+    def on_sync_state_saved(self, locked: Self) -> None:
+        locked.update_sync_status()
+        fields = ["inbound", "outbox_state", "outbox_retry_at", "outbox_last_error", "status"]
+        locked.save(update_fields=[*fields, "updated_at"])
+        for name in fields:
+            setattr(self, name, getattr(locked, name))
+
+    def record_failure(
+        self,
+        *,
+        kind: SyncFailureKind,
+        code: str,
+        source_hash: str = "",
+        mapping_version: int = 1,
+        details: Mapping[str, Any] | None = None,
+        outbox: bool = False,
+    ) -> SyncFailure:
+        """Retain an inbound slot or the latest refused conditional write."""
+        if not outbox:
+            return super().record_failure(
+                kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
+            )
+        with transaction.atomic():
+            locked = self._lock_sync_state()
+            data = deepcopy(locked.outbox_last_error)
+            identity = dict(kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version)
+            if data.get("status") == SyncFailureStatus.RESOLVED or any(
+                data.get(name) != value for name, value in identity.items()
+            ):
+                if data and data["status"] != SyncFailureStatus.RESOLVED:
+                    locked.resolve_failure(None, conflict=True)
+                data = {}
+            data = locked._failure_data(
+                data, kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
+            )
+            locked.outbox_last_error, locked.outbox_state = data, OutboxState.REFUSED
+            locked.outbox_retry_at = datetime.fromisoformat(data["retry_at"]) if data["retry_at"] else None
+            self.on_sync_state_saved(locked)
+            return SyncFailure.from_state(self, None, data)
+
+    def _transition_failure(self, slot: int | None, *, retry: bool, conflict: bool = False) -> SyncFailure:
+        if slot is not None:
+            return super()._transition_failure(slot, retry=retry, conflict=conflict)
+        with transaction.atomic():
+            locked = self._lock_sync_state()
+            data = locked.outbox_last_error
+            locked._transition_state(data, retry=retry, conflict=conflict)
+            locked.outbox_state = cast(Any, OutboxState.PENDING if retry else None)
+            locked.outbox_retry_at = datetime.fromisoformat(data["retry_at"]) if data["retry_at"] else None
+            self.on_sync_state_saved(locked)
+            return SyncFailure.from_state(self, None, data)
+
+    def local_changed(self, projection: Any) -> bool:
+        """Compare a JSON-native projection with this link's protected applied base."""
+        return self.applied_base is None or bool(
+            DeepDiff(
+                json.loads(canonical_json(self.applied_base.mapped_payload)),
+                json.loads(canonical_json(projection)),
+            )
+        )
+
+    def pin(self) -> None:
+        """Withhold automatic inbound application and write-back."""
+        self._set_pinned(True)
+
+    def unpin(self) -> None:
+        """Resume automatic synchronization on the next cycle."""
+        self._set_pinned(False)
+
+    def _set_pinned(self, pinned: bool) -> None:
+        with transaction.atomic():
+            locked = self._lock_sync_state()
+            locked.pinned = pinned
+            locked.save(update_fields=["pinned", "updated_at"])
+            self.pinned = pinned
 
     @property
     def write_holds(self) -> tuple[SyncFailure, ...]:
@@ -3404,7 +3535,7 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
         return tuple(
             row
             for row in self.failures(open_only=True)
-            if row.kind == DiscrepancyKind.CONFLICT
+            if row.kind == SyncFailureKind.CONFLICT
             or (row.slot is None and row.retry_at is not None and row.retry_at > now)
         )
 
@@ -3426,7 +3557,7 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
         with system_context(reason="integrate.record.resolve_conflict"):
             link = type(self).objects.with_sync_evidence().get(pk=self.pk)
             row = next(row for row in link.failures() if row.slot == slot)
-            if row.kind != DiscrepancyKind.CONFLICT:
+            if row.kind != SyncFailureKind.CONFLICT:
                 raise ValidationError("Conflict resolution requires a linked conflict.")
             if not row.is_open:
                 return row
@@ -3470,11 +3601,9 @@ class RecordLink(RecordRefMixin, SyncStateMixin):
                     if prepared.resync_required:
                         raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
                 elif not push_stream(stream, adapter, external_keys=keys).count:
-                    raise ValidationError(
-                        "The selected local record could not be written; its discrepancy remains open."
-                    )
+                    raise ValidationError("The selected local record could not be written; its failure remains open.")
                 if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                    raise ValidationError("The record could not be synchronized; its discrepancy remains open.")
+                    raise ValidationError("The record could not be synchronized; its failure remains open.")
                 fresh = type(link).objects.get(pk=link.pk)
                 return next(row for row in fresh.failures() if row.slot == slot)
             except Exception:

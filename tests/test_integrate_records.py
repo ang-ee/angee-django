@@ -16,12 +16,12 @@ from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,
-    DiscrepancyKind,
-    DiscrepancyStatus,
     LinkStatus,
     StreamDirection,
     StreamKind,
     StreamPhase,
+    SyncFailureKind,
+    SyncFailureStatus,
 )
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, SyncStream
@@ -45,7 +45,12 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
     """Public, base and related managers keep locks through bound queryset chains."""
 
     link = RecordLink.objects.observe(replica, "person:locked")
-    RecordLink.objects.promote(link, source_payload={}, source_hash="remote", mapped_payload={}, local_hash="local")
+    RecordLink.objects.promote(
+        link,
+        source_payload={},
+        source_hash="remote",
+        mapped_payload={},
+    )
     with transaction.atomic():
         for row in (replica, link):
             model = type(row)
@@ -82,9 +87,8 @@ def test_epoch_retains_links_history_and_quarantine(replica: Any) -> None:
         source_payload={"name": "Ada"},
         source_hash="remote",
         mapped_payload={"name": "Ada"},
-        local_hash="local",
     )
-    discrepancy = link.record_failure(kind=DiscrepancyKind.CONFLICT, code="both_changed", source_hash="new")
+    failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", source_hash="new")
     successor = SyncStream.objects.bump_generation(replica)
     assert successor.generation == replica.generation + 1
     assert successor.phase == StreamPhase.BASELINE
@@ -92,8 +96,8 @@ def test_epoch_retains_links_history_and_quarantine(replica: Any) -> None:
     assert SyncStream.objects.bump_generation(replica).pk == successor.pk
     link.refresh_from_db()
 
-    discrepancy = failure_state(discrepancy)
-    assert link.stream_id == discrepancy.stream.pk == successor.pk
+    failure = failure_state(failure)
+    assert link.stream_id == failure.stream.pk == successor.pk
     assert link.last_verified_generation == replica.generation
     assert link.history.get(history_id=revision.history_id).id == link.pk
     assert RecordLink.objects.observe(successor, "person:1").pk == link.pk
@@ -168,7 +172,7 @@ def test_keep_local_before_first_baseline_preserves_conflict(replica: Any, monke
     replica.direction = StreamDirection.BIDIRECTIONAL
     replica.save(update_fields=["direction"])
     link = RecordLink.objects.observe(replica, "person:deleted", target=replica)
-    conflict = link.record_failure(kind=DiscrepancyKind.CONFLICT, code="both_changed", source_hash="")
+    conflict = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed", source_hash="")
     retained_conflict = next(
         (row for row in SyncStream.objects.get(pk=replica.pk).sync_failures(open_only=False) if row.id == conflict.pk)
     )
@@ -201,14 +205,23 @@ def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any)
     assert link.tombstoned_at == retained_time
     link = RecordLink.objects.observe(replica, link.external_key)
     assert (link.status, link.absence_count, link.tombstoned_at) == (LinkStatus.TOMBSTONE, 0, retained_time)
-    RecordLink.objects.promote(link, source_payload={}, source_hash="remote", mapped_payload={}, local_hash="local")
+    RecordLink.objects.promote(
+        link,
+        source_payload={},
+        source_hash="remote",
+        mapped_payload={},
+    )
     assert (link.status, link.tombstoned_at) == (LinkStatus.CURRENT, None)
 
 
 @pytest.mark.parametrize("operation", ["observe", "promote"])
 def test_explicit_target_withdrawal_differs_from_omitted_target(replica: Any, operation: str) -> None:
     link = RecordLink.objects.observe(replica, "person:1", target=replica)
-    evidence = dict(source_payload={}, source_hash="remote", mapped_payload={}, local_hash="local")
+    evidence = dict(
+        source_payload={},
+        source_hash="remote",
+        mapped_payload={},
+    )
     if operation == "observe":
         RecordLink.objects.observe(replica, link.external_key)
     else:
@@ -278,25 +291,25 @@ def test_retired_epoch_rejects_late_page_before_records(replica: Any) -> None:
     assert not RecordLink.objects.exists()
 
 
-def test_discrepancy_coalescing_rescan_and_resolution_history(replica: Any) -> None:
+def test_failure_coalescing_rescan_and_resolution_history(replica: Any) -> None:
     link = RecordLink.objects.observe(replica, "person:1")
-    first = link.record_failure(kind=DiscrepancyKind.SEMANTIC, code="bad_name", source_hash="one")
+    first = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="bad_name", source_hash="one")
     repeated = link.record_failure(
-        kind=DiscrepancyKind.SEMANTIC, code="bad_name", source_hash="one", details={"attempt": 2}
+        kind=SyncFailureKind.SEMANTIC, code="bad_name", source_hash="one", details={"attempt": 2}
     )
-    future = replica.record_failure(kind=DiscrepancyKind.MISSING_DEPENDENCY, code="missing", source_hash="two")
+    future = replica.record_failure(kind=SyncFailureKind.MISSING_DEPENDENCY, code="missing", source_hash="two")
     assert repeated.pk == first.pk
     first = failure_state(first, retry_at=timezone.now())
     assert [row.pk for row in RecordLink.objects.filter(stream=replica).rescan(limit=100)] == [first.pk]
-    assert first.resolve().status == DiscrepancyStatus.RESOLVED
-    replacement = replica.record_failure(kind=DiscrepancyKind.SEMANTIC, code="bad_name", source_hash="one")
+    assert first.resolve().status == SyncFailureStatus.RESOLVED
+    replacement = replica.record_failure(kind=SyncFailureKind.SEMANTIC, code="bad_name", source_hash="one")
     assert replacement.pk not in (first.pk, future.pk)
     assert any(
         (
             True
             for row in SyncStream.objects.get(pk=replica.pk).sync_failures(open_only=False)
             if row.id == first.pk
-            if row.status == DiscrepancyStatus.RESOLVED
+            if row.status == SyncFailureStatus.RESOLVED
         )
     )
 
@@ -305,23 +318,23 @@ def test_retry_is_due_now_but_preserves_conflict_and_resolved_history_guards(rep
     """Retry advances scheduling only; conflict admission and immutable history survive."""
 
     link = RecordLink.objects.observe(replica, "person:retry")
-    discrepancy = link.record_failure(kind=DiscrepancyKind.SEMANTIC, code="invalid")
+    failure = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
     before = timezone.now()
-    retried = discrepancy.retry()
-    assert retried.status == DiscrepancyStatus.RETRY and retried.retry_at >= before
+    retried = failure.retry()
+    assert retried.status == SyncFailureStatus.RETRY and retried.retry_at >= before
     assert [row.pk for row in RecordLink.objects.filter(stream=replica).rescan(limit=100)] == [retried.pk]
-    conflict = link.record_failure(kind=DiscrepancyKind.CONFLICT, code="both_changed")
+    conflict = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed")
     conflict.retry()
     assert RecordLink.objects.filter(stream=replica).rescan(limit=100) == ()
-    resolved = discrepancy.resolve()
-    with pytest.raises(ValidationError, match="resolved discrepancy"):
+    resolved = failure.resolve()
+    with pytest.raises(ValidationError, match="resolved failure"):
         resolved.retry()
 
 
-def test_discrepancy_rescan_is_bounded_before_materialization(replica: Any) -> None:
+def test_failure_rescan_is_bounded_before_materialization(replica: Any) -> None:
     rows = [
         RecordLink.objects.observe(replica, f"person:{index}").record_failure(
-            kind=DiscrepancyKind.SEMANTIC, code=f"bad_{index}"
+            kind=SyncFailureKind.SEMANTIC, code=f"bad_{index}"
         )
         for index in range(3)
     ]
@@ -336,14 +349,14 @@ def test_rescan_filters_conflicted_aggregates_and_unlinked_failures_before_limit
     parent = RecordLink.objects.observe(replica, "aggregate:conflicted")
     child = RecordLink.objects.observe(replica, "member:conflicted", parent=parent)
     for kind, link, code in (
-        (DiscrepancyKind.CONFLICT, child, "conflict"),
-        (DiscrepancyKind.SEMANTIC, parent, "blocked_parent"),
-        (DiscrepancyKind.SEMANTIC, child, "blocked_child"),
-        (DiscrepancyKind.SEMANTIC, None, "no_identity"),
+        (SyncFailureKind.CONFLICT, child, "conflict"),
+        (SyncFailureKind.SEMANTIC, parent, "blocked_parent"),
+        (SyncFailureKind.SEMANTIC, child, "blocked_child"),
+        (SyncFailureKind.SEMANTIC, None, "no_identity"),
     ):
         (link or replica).record_failure(kind=kind, code=code)
     retryable = RecordLink.objects.observe(replica, "person:retryable").record_failure(
-        kind=DiscrepancyKind.SEMANTIC, code="retryable"
+        kind=SyncFailureKind.SEMANTIC, code="retryable"
     )
     retryable = failure_state(retryable, retry_at=timezone.now())
     assert [row.pk for row in RecordLink.objects.filter(stream=replica).rescan(limit=1)] == [retryable.pk]
@@ -351,8 +364,8 @@ def test_rescan_filters_conflicted_aggregates_and_unlinked_failures_before_limit
 
 def test_quarantine_survives_observation_and_absence_until_last_resolution(replica: Any) -> None:
     link = RecordLink.objects.observe(replica, "person:1")
-    first = link.record_failure(kind=DiscrepancyKind.MISSING_DEPENDENCY, code="missing")
-    second = link.record_failure(kind=DiscrepancyKind.SEMANTIC, code="invalid")
+    first = link.record_failure(kind=SyncFailureKind.MISSING_DEPENDENCY, code="missing")
+    second = link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
     RecordLink.objects.observe(replica, link.external_key, remote_version="changed")
     for _ in range(replica.absence_threshold):
         RecordLink.objects.mark_absent(replica, [link.external_key])
