@@ -375,6 +375,15 @@ class WorkflowRunQuerySet(AngeeQuerySet):
             ids.update(frontier)
         return self.filter(pk__in=ids).order_by("created_at", "pk").distinct()
 
+    def working_on(self, record: Any) -> Any:
+        """Unfinished runs whose subject is ``record`` or that created or changed it.
+
+        Deleting the record cancels these; their own ancestors are not included.
+        """
+        return self.exclude(status__in=RunStatus.terminal_values()).about(
+            record, operations=("created", "changed"), ancestors=False,
+        )
+
     @contextmanager
     def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
         """Lock one run and dispatch once for the outermost hold after commit.
@@ -727,6 +736,18 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                             updated_at=Now(),
                         )
         return count
+
+
+def unfinished_run_merge_guard(record: Any) -> str | None:
+    """Refuse merging away a record an unfinished run works on (an ``ANGEE_MERGE_GUARDS`` entry).
+
+    Retiring the merged record would cancel those runs while their watches move to
+    the record that is kept.
+    """
+    with system_context(reason="workflows.unfinished_run_merge_guard"):
+        if not apps.get_model("workflows", "WorkflowRun").objects.working_on(record).exists():
+            return None
+    return f"Workflow runs still working on {record} must finish or be canceled first."
 
 
 class StepWatchManager(AngeeManager):
