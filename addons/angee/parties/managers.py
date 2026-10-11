@@ -890,12 +890,13 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         assertion a directory card may publish or an inference it does not (see
         :meth:`PartyHandleQuerySet.asserted`); confidence decides whether it awaits
         review. ``is_confirmed`` records a human-strength decision (a connect flow claiming the signed-in user's own
-        handle); it upgrades an existing weaker link to the confirmed self-link.
+        handle); it upgrades an existing undecided link to the confirmed self-link.
         Without it, an undecided link keeps the higher confidence, and an assertion
         replaces an inference's source, so a card that lists a mined number owns it.
         An inference never replaces an assertion's source, so a person's link stays
         published; a stronger inference replaces a weaker one. A dismissed link keeps
-        the human decision.
+        the human decision, ``is_confirmed`` included: only the person's own
+        :meth:`~angee.parties.models.PartyHandle.confirm` reverses a dismissal.
         Resolution only re-runs when the link is new, upgraded, or the handle's owner
         is not already this party, so a re-sync of an unchanged contact does no extra
         work. Source metadata merges onto the existing link so a later importer can
@@ -922,12 +923,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             )
             upgraded = False
             dirty: list[str] = []
-            if not created and is_confirmed and not link.is_confirmed:
+            if not created and is_confirmed and not (link.is_confirmed or link.is_dismissed):
                 link.confidence = confidence
                 link.source = source
                 link.is_confirmed = True
-                link.is_dismissed = False
-                dirty.extend(("confidence", "source", "is_confirmed", "is_dismissed"))
+                dirty.extend(("confidence", "source", "is_confirmed"))
                 upgraded = True
             elif not created and not link.is_confirmed and not link.is_dismissed:
                 # Provenance outranks score: an assertion replaces an inference's
