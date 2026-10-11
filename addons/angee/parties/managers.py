@@ -886,33 +886,57 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         actor: Any,
         confidence: float = 0.4,
     ) -> Any:
-        """Retain an unconfirmed address claim for human identity review.
+        """Retain an unconfirmed address claim for human identity review, as ``actor``.
 
         The evidence record may be a Message, document, or another readable native
         record. This owner deliberately records only that the source claimed the
         handle. Transport authentication remains unknown, independently of any
-        later human confirmation of Party ownership.
+        later human confirmation of Party ownership. ``actor`` must write the party
+        and read the handle and the evidence; a verb whose own gate already
+        authorized the claim uses :meth:`propose_claimed_handle_as_system`.
         """
 
         party.require_access("write", actor)
         handle.require_access("read", actor)
         evidence.require_access("read", actor)
-        return self._propose_claimed_handle_authorized(
-            party, handle, evidence=evidence, actor=actor, confidence=confidence
+        return self._propose_claimed_handle(
+            party, handle, evidence=evidence, confidence=confidence, created_by_id=getattr(actor, "pk", None)
         )
 
-    def _propose_claimed_handle_authorized(
+    def propose_claimed_handle_as_system(
         self,
         party: Any,
         handle: Any,
         *,
         evidence: Any,
-        actor: Any,
+        reason: str,
         confidence: float = 0.4,
     ) -> Any:
-        """Retain a claim after the caller authorized exact Handle and evidence reads."""
+        """Retain the claim for a caller whose own gate authorized it, under its named reason.
 
-        party.require_access("write", actor)
+        For system work such as an access decision admitting its requester: the
+        authority is the calling verb's, so no actor is checked, neither an explicit,
+        pinned nor ambient one, and the decider needs no write on the requester's party.
+        """
+
+        if not reason.strip():
+            raise ValueError("A system claim proposal requires a named reason.")
+        with system_context(reason=reason):
+            return self._propose_claimed_handle(
+                party, handle, evidence=evidence, confidence=confidence, created_by_id=None
+            )
+
+    def _propose_claimed_handle(
+        self,
+        party: Any,
+        handle: Any,
+        *,
+        evidence: Any,
+        confidence: float,
+        created_by_id: Any,
+    ) -> Any:
+        """Record the claim below review confidence with its evidence; callers own its authorization."""
+
         if not 0 < confidence < _REVIEW_CONFIDENCE:
             raise ValidationError(
                 {"confidence": f"Claimed-handle proposals require confidence below {_REVIEW_CONFIDENCE}."}
@@ -945,7 +969,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     "claim": "source_sender",
                     "evidence_refs": refs,
                 },
-                created_by_id=getattr(actor, "pk", None),
+                created_by_id=created_by_id,
             )
 
     def link(
