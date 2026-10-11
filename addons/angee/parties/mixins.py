@@ -75,20 +75,17 @@ class ScoredLinkMixin(models.Model):
         abstract = True
 
     def confirm(self) -> None:
-        """Accept this link at full confidence, then re-resolve any derived owner.
+        """Accept this link, then re-resolve any derived owner.
 
-        Confirmation is the strongest signal, so the link also takes full confidence
-        and the ``manual`` source — a later sync must not out-score a human decision.
+        Confirmation is the person's decision and writes only the review flags. The
+        link keeps its ``source`` and ``confidence``, the producer's facts (a
+        source may own them); a confirmed link already outranks any score.
         """
 
         with transaction.atomic():
-            self.confidence = 1.0
-            self.source = LinkSource.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
             self.is_confirmed = True
             self.is_dismissed = False
-            self.save(
-                update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"],
-            )
+            self.save(update_fields=["is_confirmed", "is_dismissed", "updated_at"])
             self._resolve_link()
 
     def dismiss(self) -> None:

@@ -16,6 +16,7 @@ from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
 from angee.messaging.testing.models import (
+    Address,
     Circle,
     CircleMember,
     Folder,
@@ -27,7 +28,7 @@ from angee.messaging.testing.models import (
     Relationship,
     RelationshipKind,
 )
-from angee.parties.backends import ParsedContact
+from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.connections import ParsedConnection, ingest_connection
 from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
@@ -185,7 +186,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
 def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     composed_tables: None,
 ) -> None:
-    """Social connections confirm one Person and map employment to Relationship."""
+    """Social connections land one Person, unconfirmed but decisive by id, and map employment to Relationship."""
 
     del composed_tables
     with system_context(reason="test connection ingest"):
@@ -218,10 +219,10 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
 
     assert second.pk == first.pk
     assert Person._base_manager.filter(pk=first.pk).count() == 1
-    assert PartyHandle._base_manager.filter(party=first, is_confirmed=True).count() == 2
+    assert PartyHandle._base_manager.filter(party=first, is_confirmed=False, confidence=1.0).count() == 2
     social_handle = Handle._base_manager.get(platform="linkedin")
     social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
-    assert social_handle.party_link_confirmed is True
+    assert (social_handle.party_id, social_handle.party_link_confirmed) == (first.pk, False)
     assert social_link.source == LinkSource.IMPORT
     assert social_link.metadata["provenance"] == "linkedin_takeout"
     acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
@@ -233,8 +234,41 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     assert Relationship._base_manager.count() == 2
 
 
+@pytest.mark.django_db(transaction=True)
+def test_a_name_only_connection_awaits_review_and_reimports_onto_the_same_person(composed_tables: None) -> None:
+    """A name can match a stranger: its link lands for review, and a re-import never mints a second person."""
+
+    del composed_tables
+    with system_context(reason="test name-only connection"):
+        owner = _user("name-only-connection")
+        RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
+        parsed = ParsedConnection(
+            handle=ParsedHandle(
+                platform="facebook",
+                value="Grace Hopper",
+                display_name="Grace Hopper",
+                metadata={"identity_confidence": "name_only"},
+            ),
+            provenance="facebook_takeout",
+        )
+        person = ingest_connection(parsed, created_by_id=owner.pk)
+        link = PartyHandle._base_manager.get(party=person)
+        handle = link.handle
+        assert (link.confidence, link.is_confirmed) == (0.4, False)
+        assert handle.party_id is None
+        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [link.pk]
+        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
+    with actor_context(owner):
+        link.dismiss()
+    with system_context(reason="test name-only connection reimport"):
+        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
+        link.refresh_from_db()
+        assert link.is_dismissed
+        assert Person._base_manager.filter(display_name="Grace Hopper").count() == 1
+
+
 def _reimported_connection(owner: Any) -> tuple[Any, Any, Any]:
-    """A LinkedIn takeout connection's email, confirmed by its import; the re-import repeats it."""
+    """A LinkedIn takeout connection's email, linked by its import; the re-import repeats it."""
 
     RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
     parsed = ParsedConnection(
@@ -600,6 +634,42 @@ def test_moving_links_from_a_handle_already_gone_moves_nothing(composed_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_confirmation_writes_only_the_decision_and_stays_asserted(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A confirmed inference keeps its producer's source and score, is asserted, and leaves review.
+
+    A source that owns the link's score (an Odoo import) can therefore be confirmed.
+    """
+
+    del composed_tables
+    with system_context(reason="test confirm keeps producer"):
+        owner = _user("confirm-producer")
+        party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="ada@example.com", created_by=owner)
+        link = PartyHandle.objects.link(party, handle, confidence=0.4, source=LinkSource.RULE, created_by_id=owner.pk)
+        assert not PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+    saved: list[Any] = []
+    original = PartyHandle.save
+
+    def save(self: Any, *args: Any, **kwargs: Any) -> None:
+        saved.append(kwargs.get("update_fields"))
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(PartyHandle, "save", save)
+    with actor_context(owner):
+        link.confirm()
+    with system_context(reason="test confirm keeps producer read"):
+        link.refresh_from_db()
+        handle.refresh_from_db()
+        assert (link.source, link.confidence, link.is_confirmed) == (LinkSource.RULE, 0.4, True)
+        assert PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+        assert not PartyHandle.objects.to_review().filter(pk=link.pk).exists()
+        assert handle.party_id == party.pk
+    assert saved == [["is_confirmed", "is_dismissed", "updated_at"]]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 
@@ -653,7 +723,8 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         handle.refresh_from_db()
         assert handle.party_id is None
 
-        # A human confirm outranks any score and clears the dismissal.
+        # A human confirm outranks any score and clears the dismissal; the link keeps
+        # its producer's source and score.
         strong.refresh_from_db()
         strong.with_actor(owner).confirm()
         handle.refresh_from_db()
@@ -661,8 +732,7 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         assert handle.party_id == alice.pk
         assert handle.party_link_confirmed is True
         assert strong.is_confirmed and not strong.is_dismissed
-        assert strong.confidence == 1.0
-        assert strong.source == LinkSource.MANUAL
+        assert (strong.source, strong.confidence) == (LinkSource.IMPORT, 0.9)
 
         # Low-confidence, undecided links are exactly the review queue.
         assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [weak.pk]
@@ -1183,6 +1253,40 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert refreshed.title == "Principal Mathematician"
     assert refreshed.notes == "Research lead"
     assert Relationship._base_manager.filter(pk=manual.pk, source=LinkSource.MANUAL).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> None:
+    """A card address updates its matching row and keeps its coordinates and primary flag.
+
+    A new address is created, and only a row the card no longer lists goes: two
+    equal card addresses are two rows, and listing the address once leaves one.
+    """
+
+    del composed_tables
+    home = ParsedAddress(label="home", street="1 Main St", city="Springfield", country="US")
+    work = ParsedAddress(label="work", street="2 Side St", city="Shelbyville", country="US")
+    with system_context(reason="test carddav addresses"):
+        owner = _user("carddav-addresses")
+        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
+        card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
+        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk)
+        assert Address._base_manager.filter(party=person, label="work").count() == 2
+        located = Address._base_manager.get(party=person, label="home")
+        located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
+        located.save(update_fields=["latitude", "longitude", "is_primary", "updated_at"])
+
+        moved = ParsedAddress(label="Home", street="1  MAIN st", city="springfield", country="US")
+        office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
+        Party.objects.ingest_contact(replace(card, addresses=(moved, work, office)), folder=folder,
+                                     created_by_id=owner.pk)
+        rows = list(Address._base_manager.filter(party=person).order_by("pk"))
+
+    kept = next(row for row in rows if row.pk == located.pk)
+    assert (kept.label, kept.street, kept.city) == ("Home", "1  MAIN st", "springfield")
+    assert (kept.latitude, kept.longitude, kept.is_primary) == (39.8, -89.6, True)
+    assert sorted(row.label for row in rows) == ["Home", "office", "work"]
 
 
 @pytest.mark.django_db(transaction=True)
