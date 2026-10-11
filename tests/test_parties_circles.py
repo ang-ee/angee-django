@@ -232,6 +232,79 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     assert Relationship._base_manager.count() == 2
 
 
+def _reimported_connection(owner: Any) -> tuple[Any, Any, Any]:
+    """A LinkedIn takeout connection's email, confirmed by its import; the re-import repeats it."""
+
+    RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
+    parsed = ParsedConnection(
+        handle=ParsedHandle(platform="linkedin", value="Grace Hopper", display_name="Grace Hopper"),
+        email="grace@example.com",
+        provenance="linkedin_takeout",
+    )
+    person = ingest_connection(parsed, created_by_id=owner.pk)
+    email = Handle._base_manager.get(platform=Handle.Platform.EMAIL, value="grace@example.com")
+    return person, email, lambda: ingest_connection(parsed, created_by_id=owner.pk)
+
+
+def _reclaimed_own_handle(owner: Any) -> tuple[Any, Any, Any]:
+    """A connect flow's confirmed self-link; reconnecting claims the same address again."""
+
+    def claim() -> Any:
+        return Handle.objects.claim_own(
+            owner, platform=Handle.Platform.EMAIL, value="hopper@work.example", source=LinkSource.OAUTH
+        )
+
+    handle = claim()
+    return Person.objects.for_user(owner), handle, claim
+
+
+def _confirmed_by_caller(owner: Any) -> tuple[Any, Any, Any]:
+    """An imported suggestion that a caller later confirms (supplier onboarding's shape)."""
+
+    party = Party._base_manager.create(display_name="Supplier", created_by=owner)
+    handle = Handle.objects.upsert(
+        platform=Handle.Platform.EMAIL, value="bills@supplier.example", created_by_id=owner.pk
+    )
+    PartyHandle.objects.link(party, handle, confidence=0.4, source=LinkSource.IMPORT, created_by_id=owner.pk)
+
+    def confirm() -> Any:
+        return PartyHandle.objects.link(
+            party, handle, confidence=1.0, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=owner.pk
+        )
+
+    return party, handle, confirm
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("arrange", [_reimported_connection, _reclaimed_own_handle, _confirmed_by_caller])
+def test_a_confirming_caller_never_reverses_a_dismissal(composed_tables: None, arrange: Any) -> None:
+    """A re-import, a reconnect or a confirming caller keeps a person's dismissal; only their confirm lifts it."""
+
+    del composed_tables
+    owner = _user(f"dismissal-{arrange.__name__.strip('_')}")
+    with system_context(reason="test dismissal arrange"):
+        party, handle, relink = arrange(owner)
+        link = PartyHandle._base_manager.get(party=party, handle=handle)
+    with actor_context(owner):
+        link.dismiss()
+    with system_context(reason="test dismissal relink"):
+        dismissed = PartyHandle._base_manager.get(pk=link.pk)
+        relink()
+        link.refresh_from_db()
+        handle.refresh_from_db()
+    assert (link.is_dismissed, link.is_confirmed) == (True, False)
+    assert (link.source, link.confidence) == (dismissed.source, dismissed.confidence)
+    assert handle.party_id != party.pk
+
+    with actor_context(owner):
+        link.confirm()
+    with system_context(reason="test dismissal confirm"):
+        link.refresh_from_db()
+        handle.refresh_from_db()
+    assert (link.is_dismissed, link.is_confirmed) == (False, True)
+    assert (handle.party_id, handle.party_link_confirmed) == (party.pk, True)
+
+
 @pytest.mark.django_db(transaction=True)
 def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
     """Circle composes HierarchyMixin: subtree/ancestors read off the path index."""
