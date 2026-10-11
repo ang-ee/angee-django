@@ -48,7 +48,9 @@ type. Email and phone contact points come only from the person's
 added, and confirmed suggestions. Unreviewed suggestions such as mined
 signature phones or display-name matches stay inside Angee and are never
 written to a card. Extraction fetches and pre-stores avatars through storage's
-idempotent `File.objects.ingest_bytes` before the page transaction. Apply only
+idempotent `File.objects.ingest_image` before the page transaction; a photo
+storage refuses (not a raster image, or over `ANGEE_STORAGE_IMAGE_MAX_BYTES`)
+quarantines its card while the rest of the page lands. Apply only
 validates and links the prepared File under the row lock; it performs database
 work only.
 Local comparisons use the stored hash without reading avatar bytes, and revisions
@@ -57,6 +59,13 @@ does not affect hashes. The remote and local bases are separate because domain
 fields may normalize values. Transport metadata, unmapped ORG department units,
 and other vCard properties remain outside the comparison. Conditional writes
 preserve those unmapped properties in the retained vCard.
+
+Only the person's own `avatar` is projected. A handle carries the picture its
+own network shows (a messenger profile picture), which live sessions report
+through `Handle.objects.fill_avatars`. A party without its own photo displays
+the picture of its strongest handle the viewer can read
+(`Party.objects.display_avatar`); that fallback is derived for reading and is
+never stored on the party or written to a card.
 
 Each cycle compares local projections with their last applied bases. Remote-only
 edits use the existing ingest verb; local-only edits use a conditional PUT with

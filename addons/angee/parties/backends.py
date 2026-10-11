@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from django.apps import apps
 from django.db.models import CharField, Exists, OuterRef, Q, Subquery, Value
@@ -39,6 +39,29 @@ class ParsedPhoto:
     uri: str = ""
     mime: str = ""
     content_hash: str = ""
+
+
+class ReportedHandle(Protocol):
+    """A handle as a source reports it, with the picture its network shows.
+
+    Read-only properties, so a frozen adapter DTO (``messaging``'s
+    ``ParsedHandle``) satisfies the protocol without parties importing it.
+    """
+
+    @property
+    def platform(self) -> str: ...
+
+    @property
+    def value(self) -> str: ...
+
+    @property
+    def external_id(self) -> str: ...
+
+    @property
+    def display_name(self) -> str: ...
+
+    @property
+    def photo(self) -> ParsedPhoto | None: ...
 
 
 @dataclass(frozen=True)

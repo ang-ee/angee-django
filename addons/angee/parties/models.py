@@ -82,8 +82,9 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="+",
+        related_name="party_avatars",
     )
+    """The party's own photo (a directory card's ``PHOTO``); readers of the party may read it."""
     handle_count = models.PositiveIntegerField(default=0, db_index=True)
     merged_into = models.ForeignKey(
         "self",
@@ -533,6 +534,19 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     )
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
+
+    avatar = models.ForeignKey(
+        "storage.File",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="handle_avatars",
+    )
+    """The picture the handle's own network shows for it (a messenger profile photo).
+
+    Written only by :meth:`HandleManager.set_avatar`; readers of the handle may read it.
+    """
 
     objects = HandleManager()
 

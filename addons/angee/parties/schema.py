@@ -8,6 +8,7 @@ contact is created as a person or an organisation and deleted through the party
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any, cast
 
@@ -15,6 +16,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import transaction
+from django.db.models import Prefetch
 from rebac import system_context
 from strawberry import auto
 
@@ -34,6 +36,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.mixins import LinkSource
+from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Party = apps.get_model("parties", "Party")
@@ -75,6 +78,12 @@ _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 )
 
 
+def _display_avatar_prefetch(index: int) -> Callable[[strawberry.Info], Prefetch]:
+    """Select one of the prefetches :meth:`PartyManager.display_avatar` reads for a page of parties."""
+
+    return lambda info: Party.objects.display_avatar_prefetches(session_user(info))[index]
+
+
 @strawberry_django.type(Party)
 class PartyType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a party (the unified contact)."""
@@ -84,8 +93,18 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     handle_count: int | None
     first_met_note: str | None
     introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
+    avatar: FileType | None = actor_scoped_to_one("avatar")
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(
+        only=["avatar_id"],
+        prefetch_related=[_display_avatar_prefetch(index) for index in range(3)],
+    )
+    def display_avatar(self, info: strawberry.Info) -> FileType | None:
+        """Return the picture the party shows: its own photo, else its strongest handle's picture."""
+
+        return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
 
     @strawberry.field
     def concrete_kind(self) -> RelationshipKind.PartyKind | None:
@@ -153,6 +172,7 @@ class HandleType(AngeeNode):
     updated_at: auto
 
     party: PartyType | None = actor_scoped_to_one("party")
+    avatar: FileType | None = actor_scoped_to_one("avatar")
 
     @strawberry_django.field(only=["owner_id"])
     def owner(self) -> strawberry.ID | None:

@@ -43,6 +43,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
+from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 _NS = {
     "d": "DAV:",
@@ -555,7 +556,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
                     remote_version=etag,
                 )
                 continue
-            contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
+            try:
+                contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
+            except (UploadTooLarge, UploadTypeRefused):
+                # A photo storage refuses to render (an SVG, an oversized image)
+                # quarantines its card rather than syncing it without the photo,
+                # which a later write-back would then strip from the card.
+                contacts[href] = _quarantined(
+                    href,
+                    {"href": href, "source_digest": canonical_json_sha256(data), "error": "unsupported_photo"},
+                    remote_version=etag,
+                )
         if set(contacts) != set(hrefs):
             raise CardDavError("The CardDAV multiget omitted a requested resource.")
         return contacts

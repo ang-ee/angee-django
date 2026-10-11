@@ -1,5 +1,18 @@
 // @rebac_package: parties
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
+
+// A party's own photo and a handle's network picture are readable by whoever
+// reads the party (as any of its kinds) or the handle. The reverse paths are
+// live-backed by Party.avatar and Handle.avatar, so replacing a picture removes
+// its read reach, and none of them grants access to the drive.
+definition storage/file {
+    relation avatar_party: parties/party // rebac:field=party_avatars
+    relation avatar_person: parties/person // rebac:field=party_avatars__person
+    relation avatar_organization: parties/organization // rebac:field=party_avatars__organization
+    relation avatar_handle: parties/handle // rebac:field=handle_avatars
+
+    permission read = avatar_party->read + avatar_person->read + avatar_organization->read + avatar_handle->read
+}
 
 // A member's colleagues include the active people whose identity they read:
 // every record owner's identity arm on parties/person (thread followers, task

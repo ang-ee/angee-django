@@ -48,11 +48,13 @@ class LiveChannelSession(LiveSession):
     """Live worker session that owns queued message media resolution and landing."""
 
     def _handle(self, kind: str, payload: Any) -> bool:
-        """Land messaging batches and conversation names; ignore other events.
+        """Land messaging batches, conversation names and handle pictures; ignore other events.
 
         ``chat_titles`` carries ``{conversation id: name}`` for conversations the
         source lists (joined groups), naming their untitled threads even when no
-        new message arrives in them.
+        new message arrives in them. ``handle_avatars`` carries
+        :class:`~angee.messaging.backends.ParsedHandle` rows whose ``photo`` holds the picture the network
+        shows for them, or ``None`` when it shows none; parties sets each on its handle.
         """
 
         if kind == "messages":
@@ -65,6 +67,12 @@ class LiveChannelSession(LiveSession):
             except Exception:
                 # Best-effort naming must never end the live session.
                 logger.exception("Naming chats failed for channel %s.", self.bridge.pk)
+        if kind == "handle_avatars":
+            try:
+                apps.get_model("parties", "Handle").objects.fill_avatars(payload, created_by_id=self.bridge.owner_id)
+            except Exception:
+                # Best-effort pictures must never end the live session.
+                logger.exception("Storing handle pictures failed for channel %s.", self.bridge.pk)
         return self._still_wanted()
 
     def _ingest(self, batch: list[tuple[Any, Any]]) -> bool:

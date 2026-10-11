@@ -803,6 +803,23 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             folder_id=folder_id,
         )
 
+    def ingest_image(self, content: bytes, *, filename: str, owner_id: Any = None) -> Any:
+        """Ingest an image a server renders inline (a contact photo, an avatar) as :meth:`ingest_bytes`.
+
+        The bytes must be a raster type in ``ANGEE_STORAGE_IMAGE_TYPES`` (an SVG can
+        carry script) within ``ANGEE_STORAGE_IMAGE_MAX_BYTES``. The type is sniffed
+        from the bytes alone, as :func:`detect_mime` sniffs them at finalize, never
+        taken from the caller's filename. Raises :class:`exceptions.UploadTooLarge`
+        or :class:`exceptions.UploadTypeRefused` before anything is stored.
+        """
+
+        if len(content) > int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES):
+            raise exceptions.UploadTooLarge("The image is larger than the image size cap.")
+        mime = detect_mime(content[:MIME_SNIFF_BYTES])
+        if mime not in settings.ANGEE_STORAGE_IMAGE_TYPES:
+            raise exceptions.UploadTypeRefused(f"{mime} is not an accepted image type.")
+        return self.ingest_bytes(content, filename=filename, owner_id=owner_id)
+
     def ingest_stream(
         self,
         reader: BinaryIO,

@@ -7,6 +7,7 @@ persistence, without replacing the ingest owner or the three-way classifier.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -74,6 +75,7 @@ from angee.parties_integrate_carddav.backend import (
 )
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, make_integration
+from tests.test_storage import PNG_BYTES
 
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
@@ -1899,7 +1901,8 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     backend = Backend.objects.create(slug="avatar-double", label="Avatar double", backend_class="local")
     drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
     mime = MimeType.objects.create(mime_type="image/png", category="image", label="PNG")
-    digest = hashlib.sha256(b"ABC").hexdigest()
+    encoded = base64.b64encode(PNG_BYTES).decode()
+    digest = hashlib.sha256(PNG_BYTES).hexdigest()
     phases: list[str] = []
 
     def ingest_bytes(
@@ -1912,7 +1915,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     ) -> Any:
         del kwargs
         assert not connection.in_atomic_block
-        assert content == b"ABC"
+        assert content == PNG_BYTES
         phases.append("extract")
         stored, _ = manager.get_or_create(
             drive=drive,
@@ -1945,7 +1948,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
     monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
-    replica.server.store(_HREF, _card().replace("END:VCARD", "PHOTO;ENCODING=b;TYPE=PNG:QUJD\r\nEND:VCARD"))
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{encoded}\r\nEND:VCARD"))
     person, link = replica.baseline()
     stored = File.objects.get(content_hash=digest)
     assert phases == ["extract", "apply"]
@@ -1957,8 +1960,8 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     for revision in revisions:
         assert revision.source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
         assert revision.mapped_payload["photo"] == {"hash": digest, "mime": "image/png"}
-        assert "QUJD" not in json.dumps(revision.source_payload)
-        assert "QUJD" not in json.dumps(revision.mapped_payload)
+        assert encoded not in json.dumps(revision.source_payload)
+        assert encoded not in json.dumps(revision.mapped_payload)
 
 
 @pytest.mark.parametrize("page_bound", [1, 100])
@@ -1982,6 +1985,21 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
     assert link.status == LinkStatus.DISCREPANT
     assert link.external_key == link.metadata["href"] == duplicate_href
     assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+def test_a_card_whose_photo_is_no_image_waits_in_quarantine_and_the_rest_land(replica: Replica) -> None:
+    """Syncing it without the photo would let a later write-back strip the photo from the card."""
+
+    script = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>').decode()
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=SVG:{script}\r\nEND:VCARD"))
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    result = replica.pull()
+
+    assert set(Person.objects.values_list("source_uid", flat=True)) == {"grace"}
+    discrepancy = SyncDiscrepancy.objects.get(pk=result.discrepancy_ids[0])
+    assert (discrepancy.kind, discrepancy.code) == (DiscrepancyKind.SEMANTIC, "unsupported_photo")
+    assert not File.objects.filter(mime_type__mime_type="image/svg+xml").exists()
 
 
 def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Replica) -> None:

@@ -956,6 +956,22 @@ def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_image_takes_raster_bytes_and_refuses_script_or_oversized_content(drive: Any, settings: Any) -> None:
+    """An image a server renders inline is typed by its bytes, never by the filename it arrives under."""
+
+    with system_context(reason="test storage ingest image"):
+        image = File.objects.ingest_image(PNG_BYTES, filename="avatar.png", owner_id=drive.alice.pk)
+        assert (image.upload_state, image.mime_type.mime_type) == (UploadState.READY, "image/png")
+        script = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+        for refused in (script, b"%PDF-1.4 not a picture"):
+            with pytest.raises(exceptions.UploadTypeRefused):
+                File.objects.ingest_image(refused, filename="avatar.png", owner_id=drive.alice.pk)
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+        with pytest.raises(exceptions.UploadTooLarge):
+            File.objects.ingest_image(PNG_BYTES, filename="avatar.png", owner_id=drive.alice.pk)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
     """The factory creates for a drive writer and denies an unrelated user."""
 

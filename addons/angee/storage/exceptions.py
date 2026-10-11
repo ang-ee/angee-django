@@ -57,3 +57,10 @@ class UploadTooLarge(UploadError):
 
     status_code = 413
     code = "too_large"
+
+
+class UploadTypeRefused(UploadError):
+    """The content is not a type the verb accepts (an image verb refusing a non-image)."""
+
+    status_code = 415
+    code = "unsupported_type"
