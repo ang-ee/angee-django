@@ -35,6 +35,11 @@ name = "record_link_history_state"
 app_label = "integrate"
 module = "runtime_migrations.record_link_history_state"
 
+[[migrations]]
+name = "fold_record_sync_history"
+app_label = "integrate"
+module = "runtime_migrations.fold_record_sync_history"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

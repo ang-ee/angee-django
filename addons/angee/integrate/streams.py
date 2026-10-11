@@ -19,6 +19,8 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
+import jsonpatch
+from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -139,7 +141,7 @@ class RecordChange:
     """Remote observation and the adapter's current local mapped projection.
 
     Hashes describe snapshots on their respective sides, never timestamps. A
-    missing local target has local_hash="". Remote deletion uses tombstone=True
+    missing local target has projection=None. Remote deletion uses tombstone=True
     and source_hash="".
     """
 
@@ -154,6 +156,10 @@ class RecordChange:
     dependency_digest: str = ""
     tombstone: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    mapped_payload: Any = UNSET
+    """The remote projection in the same domain shape as the local projection."""
+    failure: SemanticError | None = None
+    """An adapter's refusal when the source cannot produce a mapped projection."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +184,7 @@ class ApplyResult:
 
     target: Any = UNSET
     local_hash: str = ""
-    mapped_payload: Any = None
+    mapped_payload: Any = UNSET
     count: int = 1
     dependency_digest: str = ""
     mapping_version: int = 1
@@ -241,24 +247,32 @@ class ChangeKind(StrEnum):
 
 def classify_change(
     *,
-    remote_hash: str,
-    local_hash: str,
-    remote_base_hash: str,
-    local_base_hash: str,
+    base: Any,
+    local: Any,
+    remote: Any,
     tombstone: bool = False,
     mapping_changed: bool = False,
 ) -> ChangeKind:
-    """Compare both sides independently, retaining delete-versus-edit conflicts."""
-
-    remote_changed = remote_hash != remote_base_hash or mapping_changed
-    local_changed = local_hash != local_base_hash
+    """Compare nested mapped facts; concurrent divergent edits require a choice."""
+    local_changed = bool(DeepDiff(base, local))
+    remote_changed = bool(DeepDiff(base, remote)) or mapping_changed
     if local_changed and (remote_changed or tombstone):
+        if not tombstone and not mapping_changed and not DeepDiff(local, remote):
+            return ChangeKind.APPLY
         return ChangeKind.CONFLICT
     if remote_changed:
         return ChangeKind.APPLY
     if local_changed:
         return ChangeKind.WRITE_BACK
     return ChangeKind.UNCHANGED
+
+
+def _check_write_precondition(link: Any, expected: dict[str, Any]) -> None:
+    """Fence database reflection with native JSON Patch tests, beside the remote fence."""
+    try:
+        jsonpatch.JsonPatch([{"op": "test", "path": "", "value": expected}]).apply(link.sync_precondition)
+    except jsonpatch.JsonPatchTestFailed as error:
+        raise RuntimeError("Record bases changed during write-back; reconcile before retrying.") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,20 +310,10 @@ def _resolve_applied(stream: Any, record: Any) -> None:
     # event identity. A healthy event cannot resolve another event's failure.
     if stream.kind != StreamKind.RECORD_REPLICA:
         return
-    manager = _manager("SyncDiscrepancy")
-    rows = manager.unresolved().filter(
-        stream=stream,
-        link__external_key=record.external_key,
-    )
-    for discrepancy in rows.exclude(kind=DiscrepancyKind.CONFLICT):
-        manager.resolve(discrepancy)
-
-
-def _retry_at(stream: Any, attempts: int) -> datetime:
-    cap = timedelta(days=1)
-    if stream.reconcile_interval and stream.reconcile_interval > timedelta(0):
-        cap = min(cap, stream.reconcile_interval)
-    return timezone.now() + min(timedelta(minutes=2 ** min(max(0, attempts - 1), 11)), cap)
+    link = _manager("RecordLink").get(stream=stream, external_key=record.external_key)
+    for failure in link.failures(open_only=True):
+        if failure.kind != DiscrepancyKind.CONFLICT:
+            failure.resolve()
 
 
 def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None) -> Any:
@@ -317,27 +321,14 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
     details = dict(error.details)
     if replica:
         details["external_key"] = record.external_key
-    manager = _manager("SyncDiscrepancy")
-    with transaction.atomic():
-        row = manager.record(
-            stream,
-            link=link,
-            kind=error.kind,
-            code=error.code,
-            source_hash=record.source_hash if replica else "",
-            mapping_version=record.mapping_version if replica else 1,
-            details=details,
-        )
-        if row.kind != DiscrepancyKind.CONFLICT:
-            row.retry_at = _retry_at(stream, row.attempts)
-            row.save(update_fields=["retry_at", "updated_at"])
-            if link is not None:
-                # Older failed source versions must not bypass this identity's
-                # backoff when its newly read payload also fails semantically.
-                manager.unresolved().filter(link=link).exclude(kind=DiscrepancyKind.CONFLICT).update(
-                    retry_at=row.retry_at
-                )
-        return row
+    return (link if link is not None else stream).record_failure(
+        kind=error.kind,
+        code=error.code,
+        source_hash=record.source_hash if replica else "",
+        mapping_version=record.mapping_version if replica else 1,
+        details=details,
+        outbox=isinstance(error, RemoteRejected),
+    )
 
 
 def reset_stream(stream: Any, *, cursor: dict[str, Any]) -> PageResult:
@@ -357,19 +348,32 @@ def _baseline_adoption(stream: Any) -> bool:
     )
 
 
-def _decision(link: Any, record: RecordChange, *, revision: Any, adopting: bool) -> ChangeKind:
-    if adopting and revision is None and record.target is not None and not record.tombstone:
+def _decision(record: RecordChange, *, base: Any, adopting: bool) -> ChangeKind:
+    if adopting and base is None and record.target is not None and not record.tombstone:
         return ChangeKind.APPLY
+    if record.mapped_payload is UNSET and not record.tombstone:
+        raise AdapterContractError("Replica observations must include their remote mapped_payload.")
+    mapping_changed = base is None or (
+        base.mapping_version != record.mapping_version or base.dependency_digest != record.dependency_digest
+    )
+    remote = None if record.tombstone else record.mapped_payload
+    # The transport response is authoritative echo evidence even when mapping
+    # normalizes the value the remote stored. It never substitutes for a base.
+    if (
+        base is not None
+        and base.origin == "local"
+        and base.source_hash == record.source_hash
+        and base.remote_version == record.remote_version
+    ):
+        remote = base.mapped_payload
+    elif base is not None and record.tombstone and base.tombstoned_at is not None:
+        remote = base.mapped_payload
     return classify_change(
-        remote_hash=record.source_hash,
-        local_hash=record.local_hash,
-        remote_base_hash=link.remote_base_hash,
-        local_base_hash=link.local_base_hash,
+        base=base.mapped_payload if base is not None else None,
+        local=record.projection,
+        remote=remote,
         tombstone=record.tombstone,
-        mapping_changed=revision is None
-        or (
-            revision.mapping_version != record.mapping_version or revision.dependency_digest != record.dependency_digest
-        ),
+        mapping_changed=mapping_changed,
     )
 
 
@@ -386,31 +390,7 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
         target=outcome.target,
         remote_version=record.remote_version,
         origin=origin,
-    )
-    if record.tombstone:
-        manager.tombstone(link)
-
-
-def retain_remote_source(link: Any, record: RecordChange, *, revision: Any, target: Any = UNSET) -> None:
-    """Keep ``record``'s source as the link's remote base while its local side stays as applied.
-
-    The comparison hash cannot see every remote edit (an unmapped label, a
-    respelled value), so a source read without being applied still becomes what
-    the next write-back starts from, rather than something it reverts. The local
-    hash and ``revision``'s mapped payload and mapping facts stay; an identical
-    source reuses the revision.
-    """
-    _manager("RecordLink").promote(
-        link,
-        source_payload=record.source_payload,
-        source_hash=record.source_hash,
-        mapped_payload=revision.mapped_payload,
-        local_hash=link.local_base_hash,
-        mapping_version=revision.mapping_version,
-        dependency_digest=revision.dependency_digest,
-        target=target,
-        remote_version=record.remote_version,
-        origin=link.origin or "remote",
+        tombstone=record.tombstone,
     )
 
 
@@ -428,9 +408,8 @@ def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult) -> 
         mapping_version=record.mapping_version,
         dependency_digest=record.dependency_digest,
         origin="local",
+        tombstone=result.tombstone,
     )
-    if result.tombstone:
-        _manager("RecordLink").tombstone(link)
 
 
 def _extract_page(adapter: BridgeImpl, stream: Any, page_bound: int, *, deadline: float | None) -> StreamPage:
@@ -502,7 +481,7 @@ def _apply_page(
         ).with_sync_evidence()
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
-    written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
+    written: dict[str, tuple[dict[str, Any], WriteBackResult | SemanticError]] = {}
     held: set[str] = set()
     if evidence_rows is not None and stream.writes_back:
         evidence = {link.external_key: link for link in evidence_rows}
@@ -513,15 +492,16 @@ def _apply_page(
                 link is not None
                 and record.external_key not in force_apply
                 and not link.write_holds
+                and not link.pinned
+                and record.failure is None
                 and _decision(
-                    link,
                     record,
-                    revision=next(iter(link.latest_revisions), None),
+                    base=link.applied_base,
                     adopting=adopting,
                 )
                 == ChangeKind.WRITE_BACK
             ):
-                bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
+                bases = link.sync_precondition
                 result: WriteBackResult | SemanticError
                 try:
                     result = adapter.write_back(link, record.projection, expected_version=link.remote_version)
@@ -529,7 +509,7 @@ def _apply_page(
                     result = error
                 written[record.external_key] = (bases, result)
     count = 0
-    discrepancies: list[int] = []
+    discrepancies: list[str] = []
     applied: list[ApplyResult] = []
     with changeset(fresh=True, activity="pull", origin=stream), transaction.atomic():
         current_changeset(record=True)
@@ -564,21 +544,28 @@ def _apply_page(
                         link = links.observe(
                             locked,
                             record.external_key,
+                            source_payload=record.source_payload,
+                            source_hash=record.source_hash,
+                            remote_version=record.remote_version,
                             metadata=record.metadata or None,
                         )
+                        if record.failure is not None:
+                            raise record.failure
                         conflicts = [
                             row.pk
                             for row in (observed.write_holds if observed is not None else ())
                             if row.kind == DiscrepancyKind.CONFLICT
                         ]
+                        if link.pinned and record.external_key not in force_apply:
+                            continue
                         if conflicts:
                             discrepancies.extend(conflicts)
                             continue
-                        revision = next(iter(observed.latest_revisions), None) if observed is not None else None
+                        revision = observed.applied_base if observed is not None else None
                         decision = (
                             ChangeKind.APPLY
                             if record.external_key in force_apply
-                            else _decision(link, record, revision=revision, adopting=adopting)
+                            else _decision(record, base=revision, adopting=adopting)
                         )
                         if decision == ChangeKind.UNCHANGED and record.external_key in reapply:
                             decision = ChangeKind.APPLY
@@ -586,12 +573,8 @@ def _apply_page(
                             raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
                         if decision == ChangeKind.UNCHANGED:
                             assert revision is not None
-                            retain_remote_source(
-                                link,
-                                record,
-                                revision=revision,
-                                target=record.target if record.target is not None else UNSET,
-                            )
+                            if record.target is not None:
+                                links.revalidate(link, target=record.target)
                             if record.tombstone:
                                 links.tombstone(link)
                             else:
@@ -613,22 +596,24 @@ def _apply_page(
                             if write is None:
                                 raise RuntimeError("A conditional write result is missing.")
                             bases, result = write
-                            if bases != (link.remote_base_hash, link.local_base_hash, link.remote_version):
-                                raise RuntimeError("Record bases changed during extraction; retry the page.")
+                            _check_write_precondition(observed, bases)
                             if isinstance(result, SemanticError):
                                 raise result
                             _reflect_write(link, record, result)
                             _resolve_applied(locked, record)
                             count += 1
                             continue
+                    application_base = link.applied_base_id if link is not None else None
                     outcome = adapter.apply_record(locked, record)
                     if not isinstance(outcome, ApplyResult):
                         raise AdapterContractError("apply_record must return ApplyResult.")
                     if link is not None:
-                        if _manager("RecordRevision").latest_for(link).first() != revision:
+                        if links.get(pk=link.pk).applied_base_id != application_base:
                             raise AdapterContractError(
                                 "Adapters return ApplyResult; only the driver promotes the primary link."
                             )
+                        if outcome.mapped_payload is UNSET:
+                            raise AdapterContractError("Replica ApplyResult must include its applied mapped_payload.")
                         _promote(link, record, outcome, origin="remote")
                     _resolve_applied(locked, record)
                 applied.append(outcome)
@@ -639,6 +624,9 @@ def _apply_page(
                     link = _manager("RecordLink").observe(
                         locked,
                         record.external_key,
+                        source_payload=record.source_payload,
+                        source_hash=record.source_hash,
+                        remote_version=record.remote_version,
                         metadata=record.metadata or None,
                     )
                 if isinstance(error, SemanticError):
@@ -696,8 +684,8 @@ def push_stream(
     if not stream.writes_back:
         return PageResult(stream, exhausted=True)
     count = 0
-    discrepancies: list[int] = []
-    with system_context(reason="integrate.stream.push"):
+    discrepancies: list[str] = []
+    with changeset(fresh=True, activity="push", origin=stream), system_context(reason="integrate.stream.push"):
         if _baseline_adoption(stream):
             return PageResult(stream, exhausted=True)
         links = _manager("RecordLink")
@@ -712,13 +700,20 @@ def push_stream(
                 # The batch loaded its links before the writes ahead of this one; a
                 # concurrent push or conflict resolution may have moved this link since.
                 link = links.filter(pk=link.pk).with_sync_evidence().get()
-                if link.write_holds or candidate.local_hash == link.local_base_hash:
+                if (
+                    link.pinned
+                    or link.write_holds
+                    or (
+                        link.applied_base is not None
+                        and not DeepDiff(link.applied_base.mapped_payload, candidate.projection)
+                    )
+                ):
                     continue
-                revision = next(iter(link.latest_revisions), None)
+                revision = link.applied_base
             record = RecordChange(
                 candidate.external_key,
                 None,
-                link.remote_base_hash,
+                link.source_hash,
                 candidate.local_hash,
                 link.remote_version,
                 candidate.projection,
@@ -726,7 +721,7 @@ def push_stream(
                 candidate.mapping_version,
                 dependency_digest=revision.dependency_digest if revision is not None else "",
             )
-            bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
+            bases = link.sync_precondition
             try:
                 result = adapter.write_back(link, candidate.projection, expected_version=link.remote_version)
             except RemoteRejected as error:
@@ -736,8 +731,7 @@ def push_stream(
                 current_changeset(record=True)
                 locked_stream = _manager("SyncStream").lock_current(stream)
                 locked = links.lock_if_supported().get(pk=link.pk)
-                if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:
-                    raise RuntimeError("Record bases changed during write-back; reconcile before retrying.")
+                _check_write_precondition(locked, bases)
                 _reflect_write(locked, record, result)
                 # The write the remote once refused has now landed.
                 _resolve_applied(locked_stream, record)
@@ -745,15 +739,16 @@ def push_stream(
         if external_keys is None:
             # A due refusal whose record has nothing left to write (deleted or
             # reverted locally) has nothing to retry, and no rescan reads it.
-            refusals = _manager("SyncDiscrepancy")
-            for refusal in (
-                refusals.unresolved()
-                .due()
-                .filter(stream=stream, kind=DiscrepancyKind.REMOTE_REJECTED, link__isnull=False)
-                .select_related("link")
-            ):
-                if refusal.link.external_key not in candidates:
-                    refusals.resolve(refusal)
+            for link in links.filter(stream=stream, outbox_state__isnull=False):
+                if (
+                    link.external_key not in candidates
+                    and link.outbox_last_error
+                    and (link.outbox_retry_at is None or link.outbox_retry_at <= timezone.now())
+                ):
+                    for refusal in link.failures(open_only=True):
+                        if refusal.slot is None and refusal.kind != DiscrepancyKind.CONFLICT:
+                            refusal.resolve()
+
     return PageResult(stream, count, True, tuple(discrepancies))
 
 
@@ -779,7 +774,7 @@ def preview_push(stream: Any, adapter: BridgeImpl) -> PushPreview:
         writes: list[str] = []
         held: list[str] = []
         for candidate, link in _push_candidates(stream, adapter, None):
-            (held if link is not None and link.write_holds else writes).append(candidate.external_key)
+            (held if link is not None and (link.pinned or link.write_holds) else writes).append(candidate.external_key)
         return PushPreview(tuple(writes), tuple(held))
 
 
@@ -808,7 +803,11 @@ def _push_candidates(
         }
         for candidate in batch:
             link = known.get(candidate.external_key)
-            if link is None or candidate.local_hash != link.local_base_hash:
+            if (
+                link is None
+                or link.applied_base is None
+                or DeepDiff(link.applied_base.mapped_payload, candidate.projection)
+            ):
                 yield candidate, link
 
 
@@ -848,7 +847,7 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
         raise ValueError("page_bound must be positive.")
     if stream.kind != StreamKind.RECORD_REPLICA or stream.reconcile_interval is None:
         return 0
-    with system_context(reason="integrate.stream.reconcile"):
+    with changeset(fresh=True, activity="pull", origin=stream), system_context(reason="integrate.stream.reconcile"):
         manager = _manager("SyncStream")
         identity_reads = adapter.supports_identity_reads
         with transaction.atomic():
@@ -976,15 +975,15 @@ def begin_stream_cycle(
         raise RuntimeError("Stream rescan must run outside a database transaction.")
     if page_bound < 1:
         raise ValueError("page_bound must be positive.")
-    with system_context(reason="integrate.stream.cycle"):
+    with changeset(fresh=True, activity="pull", origin=stream), system_context(reason="integrate.stream.cycle"):
         manager = _manager("SyncStream")
-        discrepancies = _manager("SyncDiscrepancy")
+        links_manager = _manager("RecordLink")
         identity_reads = adapter is not None and adapter.supports_identity_reads
         with transaction.atomic():
             stream = manager.lock_current(stream)
             if stream.kind == StreamKind.EVENT_FEED:
                 return stream
-            due = discrepancies.rescan(stream, limit=page_bound)
+            due = links_manager.filter(stream=stream).rescan(limit=page_bound)
             retention = stream.tombstone_retention
             retry = False
             if retention and (stream.last_advanced_at is None or stream.last_advanced_at + retention < timezone.now()):
@@ -1002,9 +1001,7 @@ def begin_stream_cycle(
             if due and not identity_reads:
                 retry = True
                 for row in due:
-                    row.details = {**row.details, "rescan": "baseline", "reason": "read_keys_unavailable"}
-                    row.retry_at = _retry_at(stream, row.attempts)
-                    row.save(update_fields=["details", "retry_at", "updated_at"])
+                    row.link.defer_failure(row, details={"rescan": "baseline", "reason": "read_keys_unavailable"})
             if retry:
                 manager.filter(pk=stream.pk).update(resync_required=True)
                 stream.resync_required = True
@@ -1012,7 +1009,7 @@ def begin_stream_cycle(
                 return stream
             links = (
                 _manager("RecordLink")
-                .filter(stream=stream, pk__in=[row.link_id for row in due])
+                .filter(stream=stream, pk__in=[row.link_pk for row in due])
                 .select_related("parent")
                 .order_by("external_key")
             )

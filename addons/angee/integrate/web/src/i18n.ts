@@ -13,6 +13,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "streams.openDiscrepancies": "Open discrepancies",
   "streams.links": "Links",
   "streams.openLinks": "Open links",
+  "streams.history": "History",
   "streams.resync": "Resync",
   "streams.resyncConfirm.title": "Resync this stream?",
   "streams.resyncConfirm.body":

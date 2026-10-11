@@ -1486,31 +1486,38 @@ and current contracts before applying a historical example to a new deployment.
 protocol. Backends declare independently ordered stream partitions; domain
 managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
-replicas retain a remote and local comparison base on each link.
-Replica hashes come from adapters; event feeds deduplicate through domain
+replicas pin their own applied link history row as the comparison base.
+Adapters provide comparable local and remote mapped projections; upstream
+`DeepDiff` compares each with that base. `canonical_json_sha256` is the sole
+source-hash owner; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
   one transaction. Semantic, field-validation and record-level database data
-  failures use savepoints and the existing discrepancy owner so later records
+  failures use savepoints and the link/stream inbound state owner so later records
   continue. Domain write owners truncate source display text to model-field limits;
   identifiers stay lossless or are refused, never silently truncated.
   Infrastructure failures roll back the page. Conditional remote writes happen
   outside database transactions and are
   reflected only after their response; no cross-system atomicity is implied.
-- **Compare both sides with their last applied bases.** Unchanged pairs do
+- **Compare both mapped sides with their pinned applied base.** Unchanged pairs do
   nothing, remote-only changes apply, and local-only changes may write back with
-  the expected remote version. Both changed, including a remote tombstone against
-  a local edit, is an unresolved conflict: never silently choose a winner. The
+  the expected remote version. Divergent changes on both sides, including a remote
+  tombstone against a local edit, are unresolved conflicts: never silently choose a winner. The
   adapter locks and revalidates its local projection before applying. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
-  on its next pull.
+  on its next pull. Native JSON Patch `test` preconditions also fence database
+  reflection; they do not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload, mapping version and dependency digest in `ApplyResult`; the driver
-  alone promotes the primary link. Mapping or dependency changes count as remote
-  changes. Intermediate adapter promotion is refused and rolled back. Explicit
+  alone promotes the primary link and pins the history row written for that
+  application. Observation saves the source on the link without changing that
+  protected pointer. History is the observation log; inbound state retains
+  simultaneous and closed failures, and refused writes retain link outbox state.
+  Unlinked event failures belong to the stream and its history. Mapping or
+  dependency changes count as remote changes. Intermediate adapter promotion is refused and rolled back. Explicit
   `target=None` withdraws a binding; omission preserves it.
 - **Prepare the entire page before singleton application.** The optional
   `prepare_page` hook acquires compound identities and targets in canonical order
@@ -1520,7 +1527,7 @@ validated at the driver boundary.
   transaction as the corresponding link status. Absence hooks run only for actual
   status transitions, never repeated observations of an already-unavailable row.
 - **A cursor belongs to an epoch.** An invalid/expired cursor or explicit resync
-  request creates the next baseline generation. Retain links and revision
+  request creates the next baseline generation. Retain links and native link
   history; reverify links through their generation marker. A stale peer beyond
   tombstone retention requires a baseline. Complete inventory sweeps count
   absences before confirming tombstones and preserve existing quarantine.
@@ -1536,13 +1543,13 @@ validated at the driver boundary.
   `parent` is a root link in the same stream. Enumerate aggregate keys only:
   children cannot independently become absent, and child retries read and
   reapply the parent's key. The aggregate adapter owns successful child evidence
-  and discrepancy resolution; a successful parent alone does not resolve them.
+  and inbound resolution; a successful parent alone does not resolve them.
 - **Quarantine is not a work queue.** Stream-cycle rescan re-reads due replica
   identities through `BridgeImpl.read_keys` when `supports_identity_reads` is
   declared, including tombstones for missing remote keys. It composes the same
   transactional apply path while preserving the cursor. Only adapters without
   this operation fall back to a baseline, with that fallback recorded in
-  discrepancy details. Event feeds skip rescan. Semantic failures back off
+  inbound details. Event feeds skip rescan. Semantic failures back off
   between attempts; conflicts await explicit resolution and never auto-retry.
   The shared driver owns budgets, repeated-page detection and partition
   concurrency.

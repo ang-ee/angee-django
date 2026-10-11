@@ -1,3 +1,4 @@
+import type { DocumentType } from "@angee/gql/console";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
@@ -5,6 +6,7 @@ import {
   Button,
   Code,
   ListView,
+  RowsListView,
   NavLink,
   defineRowAction,
   jsonObjectFromUnknown,
@@ -24,11 +26,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, type ReactElement } from "react";
 
 import { useIntegrateT } from "./i18n";
-import { IntegrationSyncStream } from "./documents";
+import { IntegrationRecordLinkHistory, IntegrationSyncStream } from "./documents";
 
 export const INTEGRATION_STREAMS_TAB_ID = "integrate.streams";
 export const SYNC_STREAM_MODEL = "integrate.SyncStream";
-export const SYNC_DISCREPANCY_MODEL = "integrate.SyncDiscrepancy";
 export const RECORD_LINK_MODEL = "integrate.RecordLink";
 
 interface StreamRow extends StringIdRow {
@@ -38,10 +39,12 @@ interface StreamRow extends StringIdRow {
   resync_required?: boolean;
 }
 
-interface DiscrepancyRow extends StringIdRow {
-  kind?: string;
-  is_open?: boolean;
-}
+type DiscrepancyRow = NonNullable<NonNullable<DocumentType<
+  typeof IntegrationSyncStream
+>["sync_streams_by_pk"]>["failures"]>[number];
+type HistoryRow = NonNullable<DocumentType<
+  typeof IntegrationRecordLinkHistory
+>["record_links_by_pk"]>["history"][number] & StringIdRow;
 
 interface LinkRow extends StringIdRow {
   model_label?: string;
@@ -52,9 +55,10 @@ export const INTEGRATION_STREAM_SEARCH_KEYS = {
   integration: "syncIntegration",
   stream: "syncStream",
   view: "syncView",
+  link: "syncLink",
 } as const;
 
-type StreamView = "streams" | "discrepancies" | "links";
+type StreamView = "streams" | "discrepancies" | "links" | "history";
 
 /** The saved-record tab reads its declared, backend-annotated presence field. */
 export function integrationHasStreams(record: Row): boolean {
@@ -71,20 +75,30 @@ export function IntegrationStreamsPane(): ReactElement {
   const navigate = useNavigate();
   const streamId = routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.integration) === integrationId
     ? routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.stream) : undefined;
+  const linkId = routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.link);
   const requestedView = routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.view);
-  const view: StreamView = streamId && (requestedView === "discrepancies" || requestedView === "links")
+  const view: StreamView = streamId && (requestedView === "discrepancies" || requestedView === "links" || (requestedView === "history" && linkId))
     ? requestedView : "streams";
-  const streamRead = useAuthoredQuery(IntegrationSyncStream, { id: streamId ?? "" }, {
+  const streamRead = useAuthoredQuery(IntegrationSyncStream, { id: streamId ?? "", includeFailures: view === "discrepancies" }, {
     dataProviderName,
     enabled: view !== "streams",
-    models: [SYNC_STREAM_MODEL],
+    models: [SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
+  const historyRead = useAuthoredQuery(IntegrationRecordLinkHistory, { id: linkId ?? "" }, {
+    dataProviderName,
+    enabled: view === "history",
+    models: [RECORD_LINK_MODEL],
+  });
+  const historyRows = useMemo(() => (historyRead.data?.record_links_by_pk?.history ?? []).map((row) => ({
+    ...row, id: String(row.history_id),
+  })), [historyRead.data]);
   const stream = streamRead.data?.sync_streams_by_pk;
-  const show = useCallback((nextView: StreamView, id?: string): void => {
+  const show = useCallback((nextView: StreamView, id?: string, link?: string): void => {
     void navigate({ to: ".", search: updateRouteSearch({
       [INTEGRATION_STREAM_SEARCH_KEYS.integration]: id ? integrationId : undefined,
       [INTEGRATION_STREAM_SEARCH_KEYS.stream]: id,
       [INTEGRATION_STREAM_SEARCH_KEYS.view]: id ? nextView : undefined,
+      [INTEGRATION_STREAM_SEARCH_KEYS.link]: link,
     }) });
   }, [integrationId, navigate]);
   const [resync] = useActionResultMutation<ActionFieldName>("resyncSyncStream", {
@@ -93,11 +107,11 @@ export function IntegrationStreamsPane(): ReactElement {
   });
   const [resolve] = useActionResultMutation<ActionFieldName>("resolveSyncDiscrepancy", {
     dataProviderName,
-    invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
+    invalidateModels: [SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
   const [retry] = useActionResultMutation<ActionFieldName>("retrySyncDiscrepancy", {
     dataProviderName,
-    invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL],
+    invalidateModels: [SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
   const streamColumns = useMemo<readonly ListColumn<StreamRow>[]>(() => [
     { field: "key" },
@@ -193,6 +207,9 @@ export function IntegrationStreamsPane(): ReactElement {
     { field: "status" },
     { field: "origin" },
     { field: "remote_version" },
+    { field: "applied_at" },
+    { field: "pinned" },
+    { field: "outbox_state" },
     { field: "last_seen_at" },
     {
       field: "record_id",
@@ -209,6 +226,22 @@ export function IntegrationStreamsPane(): ReactElement {
       },
     },
   ], [recordHref, t]);
+  const historyColumns = useMemo<readonly ListColumn<HistoryRow>[]>(() => [
+    { field: "history_date" },
+    { field: "history_type" },
+    { field: "source_hash" },
+    { field: "remote_version" },
+    { field: "mapping_version" },
+    { field: "applied_at" },
+    { field: "source_payload", sortable: false },
+    { field: "mapped_payload", sortable: false },
+  ], []);
+  const linkActions = useMemo<readonly RowActionDeclaration<LinkRow>[]>(() => [
+    defineRowAction<LinkRow>({
+      kind: "page", id: "history", label: t("streams.history"), variant: "ghost",
+      pendingPolicy: "disable-actions", onSelect: (row) => show("history", streamId, row.id),
+    }),
+  ], [show, streamId, t]);
   if (view === "streams") {
     return (
       <ListView<StreamRow>
@@ -234,16 +267,26 @@ export function IntegrationStreamsPane(): ReactElement {
     </span> : null}
   </>;
   return view === "discrepancies" ? (
-    <ListView<DiscrepancyRow>
+    <RowsListView<DiscrepancyRow>
       key={`discrepancies:${streamId}`}
-      resource={SYNC_DISCREPANCY_MODEL}
+      rows={stream?.failures ?? []}
+      fetching={streamRead.isFetching}
+      error={streamRead.error}
       presentation="embedded"
       scope="local"
-      baseFilter={{ stream: { exact: streamId }, is_open: { exact: true } }}
-      order={{ created_at: "DESC" }}
-      fields={["is_open"]}
       columns={discrepancyColumns}
       rowActions={discrepancyActions}
+      toolbarActions={toolbar}
+    />
+  ) : view === "history" ? (
+    <RowsListView<HistoryRow>
+      key={`history:${linkId}`}
+      rows={historyRows}
+      fetching={historyRead.isFetching}
+      error={historyRead.error}
+      presentation="embedded"
+      scope="local"
+      columns={historyColumns}
       toolbarActions={toolbar}
     />
   ) : (
@@ -256,6 +299,7 @@ export function IntegrationStreamsPane(): ReactElement {
       order={{ external_key: "ASC" }}
       fields={["model_label"]}
       columns={linkColumns}
+      rowActions={linkActions}
       toolbarActions={toolbar}
     />
   );

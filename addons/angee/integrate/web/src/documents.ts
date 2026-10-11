@@ -68,11 +68,27 @@ export const RotateWebhookSecret = graphql(`
 
 /** Route search keeps identity only; its label comes from the retained stream. */
 export const IntegrationSyncStream = graphql(`
-  query IntegrationSyncStream($id: String!) {
+  query IntegrationSyncStream($id: String!, $includeFailures: Boolean!) {
     sync_streams_by_pk(id: $id) {
       id
       key
       partition
+      failures @include(if: $includeFailures) {
+        id kind code status is_open attempts retry_at created_at
+      }
+    }
+  }
+`);
+
+/** Native observations are read through the actor-authorized link. */
+export const IntegrationRecordLinkHistory = graphql(`
+  query IntegrationRecordLinkHistory($id: String!) {
+    record_links_by_pk(id: $id) {
+      id
+      history {
+        history_id history_date history_type source_hash remote_version
+        mapping_version dependency_digest applied_at source_payload mapped_payload
+      }
     }
   }
 `);

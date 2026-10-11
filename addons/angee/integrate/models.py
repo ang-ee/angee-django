@@ -52,7 +52,7 @@ from strawberry_django.descriptors import model_property
 
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, HistoryMixin
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -76,6 +76,7 @@ from angee.integrate.fields import DiscrepancyOpenField
 from angee.integrate.impl import IntegrationImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_is_locked
+from angee.integrate.mixins import SyncFailure, SyncStateMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
@@ -92,7 +93,7 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, retain_remote_source, sync_bridge
+from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
@@ -2940,11 +2941,12 @@ class SyncStreamManager(AngeeManager):
                 absence_threshold=latest.absence_threshold,
                 tombstone_retention=latest.tombstone_retention,
                 config=deepcopy(latest.config),
+                inbound=deepcopy(latest.inbound),
             )
-            for model_name in ("RecordLink", "SyncDiscrepancy"):
-                apps.get_model("integrate", model_name).objects.filter(stream=latest).update(
-                    stream=successor,
-                )
+            apps.get_model("integrate", "RecordLink").objects.filter(stream=latest).update(stream=successor)
+            if latest.inbound:
+                latest.inbound = []
+                latest.save(update_fields=["inbound", "updated_at"])
             return successor
 
     def request_resync(self, stream: Any) -> Any:
@@ -3001,7 +3003,7 @@ class SyncStreamManager(AngeeManager):
             return stream
 
 
-class SyncStream(AuditMixin, AngeeDataModel):
+class SyncStream(SyncStateMixin):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     runtime = True
@@ -3056,6 +3058,13 @@ class SyncStream(AuditMixin, AngeeDataModel):
             .exists()
         )
 
+    def sync_failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
+        """Read stream and linked failures through their owning row permissions."""
+        return (
+            *self.failures(open_only=open_only),
+            *(row for link in self.links.all() for row in link.failures(open_only=open_only)),
+        )
+
     class Meta:
         abstract = True
         base_manager_name = "unscoped_objects"
@@ -3073,32 +3082,44 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
     """Load comparison evidence for a bounded collection of replica identities."""
 
     def with_sync_evidence(self) -> Self:
-        """Prefetch each link's latest revision and the open rows holding its writes.
+        """Load the protected application projection; state is already on the link."""
+        return self.select_related("applied_base", "parent", "stream").defer("applied_base__source_payload")
 
-        ``write_holds`` (:meth:`SyncDiscrepancyQuerySet.holding_writes`) are its
-        open conflicts and its refused writes still awaiting their retry time.
-        The driver reloads under stream and link locks before applying. Empty
-        lists represent identities without revisions or holds. The revision's
-        ``source_payload`` (a whole remote record, photo and all) is deferred: the
-        driver decides from the mapped side, and promotion re-reads the source.
-        """
-
-        revisions = apps.get_model("integrate", "RecordRevision").objects
-        discrepancies = apps.get_model("integrate", "SyncDiscrepancy").objects
-        return self.prefetch_related(
-            Prefetch(
-                "revisions",
-                queryset=revisions.filter(
-                    pk=Subquery(revisions.latest_for(OuterRef("link_id")).values("pk"))
-                ).defer("source_payload"),
-                to_attr="latest_revisions",
-            ),
-            Prefetch(
-                "discrepancies",
-                queryset=discrepancies.holding_writes().order_by("pk"),
-                to_attr="write_holds",
-            ),
+    def open_failures(self) -> tuple[SyncFailure, ...]:
+        """Project state after the caller's actor-scoped link selection."""
+        return tuple(
+            row
+            for link in self.with_sync_evidence().order_by("pk").iterator(chunk_size=500)
+            for row in link.failures(open_only=True)
         )
+
+    def rescan(self, *, limit: int) -> tuple[SyncFailure, ...]:
+        """Bound due inbound failures after excluding every conflicted aggregate."""
+        if limit < 1:
+            raise ValueError("A discrepancy rescan limit must be positive.")
+        links = (
+            self.filter(status=LinkStatus.DISCREPANT).select_related("stream").defer("source_payload", "mapped_payload")
+        )
+        conflicts = {
+            link.parent_id or link.pk
+            for link in links.iterator(chunk_size=500)
+            if any(row.kind == DiscrepancyKind.CONFLICT for row in link.failures(open_only=True))
+        }
+        now = timezone.now()
+        due = []
+        for link in links.iterator(chunk_size=500):
+            if (link.parent_id or link.pk) in conflicts:
+                continue
+            for row in link.failures(open_only=True):
+                if (
+                    row.slot is not None
+                    and row.kind != DiscrepancyKind.REMOTE_REJECTED
+                    and (row.retry_at is None or row.retry_at <= now)
+                ):
+                    due.append(row)
+                    if len(due) == limit:
+                        return tuple(due)
+        return tuple(due)
 
 
 class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type: ignore[misc]
@@ -3110,6 +3131,8 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         external_key: str,
         *,
         remote_version: str | None = None,
+        source_payload: Any = UNSET,
+        source_hash: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         parent: Any = UNSET,
         target: Any = UNSET,
@@ -3142,8 +3165,13 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                 and link.status != LinkStatus.DISCREPANT
             ):
                 link.status = LinkStatus.OBSERVED
-            # The stored version belongs to the last applied change. Observation
-            # cannot turn a failed write-back into applied evidence.
+            if remote_version is not None:
+                link.remote_version = remote_version
+            if source_payload is not UNSET:
+                link.source_payload = source_payload
+            if source_hash is not None:
+                link.source_hash = source_hash
+            # The application facts and protected base never change here.
             link.last_seen_at = timezone.now()
             link.last_verified_generation = stream.generation
             link.absence_count = 0
@@ -3156,6 +3184,9 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             link.save(
                 update_fields=[
                     "status",
+                    "source_payload",
+                    "source_hash",
+                    "remote_version",
                     "last_seen_at",
                     "last_verified_generation",
                     "absence_count",
@@ -3181,6 +3212,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         target: Any = UNSET,
         remote_version: str = "",
         origin: str = "remote",
+        tombstone: bool = False,
     ) -> Any:
         """Append applied evidence and advance both bases; the driver owns promotion.
 
@@ -3191,33 +3223,29 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
 
         with system_context(reason="integrate.record.promote"), transaction.atomic():
             locked = self.filter(pk=link.pk).lock_if_supported().get()
-            revisions = apps.get_model("integrate", "RecordRevision").objects
-            previous = revisions.latest_for(locked).first()
-            if mapped_payload is None:
+            previous = locked.applied_base
+            if mapped_payload is UNSET:
                 mapped_payload = previous.mapped_payload if previous is not None else {}
-            facts = dict(
-                source_payload={} if source_payload is None else source_payload,
-                source_hash=source_hash,
-                mapping_version=mapping_version,
-                mapped_payload=mapped_payload,
-                dependency_digest=dependency_digest,
-            )
-            if (
-                previous is not None
-                and previous.applied_at is not None
-                and all(getattr(previous, field) == value for field, value in facts.items())
-            ):
-                revision = previous
-            else:
-                revision = revisions.append(locked, **facts, applied_at=timezone.now())
+            locked.source_payload = {} if source_payload is None else source_payload
+            locked.source_hash, locked.mapped_payload = source_hash, mapped_payload
+            locked.mapping_version, locked.dependency_digest = mapping_version, dependency_digest
+            locked.applied_at = timezone.now()
             if target is not UNSET:
                 self._set_target(locked, target)
             locked.remote_base_hash, locked.local_base_hash = source_hash, local_hash
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
             if target is None:
                 locked.status = LinkStatus.WITHDRAWN
-            locked.tombstoned_at = None
+            locked.tombstoned_at = timezone.now() if tombstone else None
+            if tombstone:
+                locked.status = LinkStatus.TOMBSTONE
             fields = [
+                "source_payload",
+                "source_hash",
+                "mapped_payload",
+                "mapping_version",
+                "dependency_digest",
+                "applied_at",
                 "target_content_type_id",
                 "target_object_id",
                 "remote_base_hash",
@@ -3228,9 +3256,13 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
                 "tombstoned_at",
             ]
             locked.save(update_fields=[*fields, "updated_at"])
-            for field in fields:
+            application = locked.history.latest()
+            # Pin exactly the native snapshot written for this application.
+            locked.applied_base = application
+            locked.save(update_fields=["applied_base", "updated_at"])
+            for field in [*fields, "applied_base"]:
                 setattr(link, field, getattr(locked, field))
-            return revision
+            return application
 
     def _set_target(self, link: Any, target: models.Model | None) -> None:
         if target is None:
@@ -3241,6 +3273,18 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             # Provenance names any applied row, a plain domain sink included.
             link.target_content_type, object_id = generic_pointer_target(target)
             link.target_object_id = str(object_id)
+
+    def revalidate(self, link: Any, *, target: Any = UNSET) -> Any:
+        """Restore a verified identity without advancing its application base."""
+        locked = self.lock_if_supported().get(pk=link.pk)
+        if target is not UNSET:
+            self._set_target(locked, target)
+        if not locked.failures(open_only=True):
+            locked.status = LinkStatus.CURRENT
+        locked.save(update_fields=["target_content_type", "target_object_id", "status", "updated_at"])
+        for name in ("target_content_type_id", "target_object_id", "status"):
+            setattr(link, name, getattr(locked, name))
+        return locked
 
     def mark_absent(self, stream: Any, keys: Iterable[str]) -> int:
         """Count a bounded batch of missing keys, retaining tombstones.
@@ -3283,7 +3327,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             return link
 
 
-class RecordLink(RecordRefMixin, AuditMixin, HistoryMixin, AngeeDataModel):
+class RecordLink(RecordRefMixin, SyncStateMixin):
     """A remote identity retaining observations, application facts and run state.
 
     ``applied_base`` pins this link's own historical application snapshot; an
@@ -3314,7 +3358,7 @@ class RecordLink(RecordRefMixin, AuditMixin, HistoryMixin, AngeeDataModel):
     status = StateField(choices_enum=LinkStatus, default=LinkStatus.OBSERVED)
     source_payload = models.JSONField(default=dict, blank=True)
     source_hash = models.CharField(max_length=64, blank=True)
-    mapped_payload = models.JSONField(default=dict, blank=True)
+    mapped_payload = models.JSONField(default=dict, blank=True, null=True)
     mapping_version = models.PositiveIntegerField(default=1)
     dependency_digest = models.CharField(max_length=64, blank=True)
     applied_at = models.DateTimeField(null=True, blank=True)
@@ -3322,7 +3366,6 @@ class RecordLink(RecordRefMixin, AuditMixin, HistoryMixin, AngeeDataModel):
         "integrate.HistoricalRecordLink", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     pinned = models.BooleanField(default=False)
-    inbound = models.JSONField(default=list, blank=True)
     outbox_state = StateField(choices_enum=OutboxState, null=True, blank=True)
     outbox_retry_at = models.DateTimeField(null=True, blank=True)
     outbox_last_error = models.JSONField(default=dict, blank=True)
@@ -3342,6 +3385,108 @@ class RecordLink(RecordRefMixin, AuditMixin, HistoryMixin, AngeeDataModel):
         """Label this remote identity by its external key."""
 
         return self.external_key
+
+    @property
+    def failure_stream(self) -> Any:
+        return self.stream
+
+    @property
+    def failure_link(self) -> Any:
+        return self
+
+    @property
+    def write_holds(self) -> tuple[SyncFailure, ...]:
+        """Conflicts hold indefinitely; an outbox refusal holds until due."""
+        now = timezone.now()
+        return tuple(
+            row
+            for row in self.failures(open_only=True)
+            if row.kind == DiscrepancyKind.CONFLICT
+            or (row.slot is None and row.retry_at is not None and row.retry_at > now)
+        )
+
+    @property
+    def sync_precondition(self) -> dict[str, Any]:
+        """The retained state fenced across an external conditional write."""
+        return {
+            "applied_base": self.applied_base_id,
+            "source_hash": self.source_hash,
+            "remote_version": self.remote_version,
+        }
+
+    def resolve_conflict(self, slot: int | None, *, keep: ConflictKeep) -> SyncFailure:
+        """Fresh-read the chosen side, retaining transport's version fence."""
+        if keep not in ConflictKeep.values:
+            raise ValidationError("Choose remote or local changes.")
+        if connection.in_atomic_block:
+            raise RuntimeError("Conflict resolution must run outside a database transaction.")
+        with system_context(reason="integrate.record.resolve_conflict"):
+            link = type(self).objects.with_sync_evidence().get(pk=self.pk)
+            row = next(row for row in link.failures() if row.slot == slot)
+            if row.kind != DiscrepancyKind.CONFLICT:
+                raise ValidationError("Conflict resolution requires a linked conflict.")
+            if not row.is_open:
+                return row
+            stream = link.stream
+            owner = link.parent if link.parent is not None else link
+            adapter = stream.integration.concrete_capability().backend
+            keys = frozenset((owner.external_key,))
+            resolved = False
+            try:
+                if not adapter.supports_identity_reads:
+                    raise ValidationError("Conflict resolution requires an adapter with identity reads.")
+                if stream.resync_required:
+                    raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
+                if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
+                    raise ValidationError("Keeping local changes requires a completed writable baseline.")
+                base = owner.sync_precondition
+                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
+                with transaction.atomic():
+                    type(stream).objects.lock_current(stream)
+                    locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
+                    current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
+                    current = next(row for row in current_link.failures() if row.slot == slot)
+                    if not current.is_open:
+                        return current
+                    if locked.sync_precondition != base:
+                        raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
+                    if remote is not None:
+                        type(locked).objects.observe(
+                            stream,
+                            locked.external_key,
+                            source_payload=remote.source_payload,
+                            source_hash=remote.source_hash,
+                            remote_version=remote.remote_version,
+                        )
+                    current_link.resolve_failure(slot, conflict=True)
+                resolved = True
+                if keep == ConflictKeep.REMOTE:
+                    prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
+                    if prepared.resync_required:
+                        raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
+                elif not push_stream(stream, adapter, external_keys=keys).count:
+                    raise ValidationError(
+                        "The selected local record could not be written; its discrepancy remains open."
+                    )
+                if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
+                    raise ValidationError("The record could not be synchronized; its discrepancy remains open.")
+                fresh = type(link).objects.get(pk=link.pk)
+                return next(row for row in fresh.failures() if row.slot == slot)
+            except Exception:
+                if resolved:
+                    fresh = type(link).objects.get(pk=link.pk)
+                    if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
+                        fresh.record_failure(
+                            kind=row.kind,
+                            code=row.code,
+                            source_hash=row.source_hash,
+                            mapping_version=row.mapping_version,
+                            details=row.details,
+                            outbox=slot is None,
+                        )
+                raise
+            finally:
+                adapter.close()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Retain the integration's native SubjectRef when the identity is saved."""
@@ -3370,35 +3515,7 @@ class RecordRevisionQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):
 
 
 class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):  # type: ignore[misc]
-    """Allocate revision numbers while holding the stable identity lock."""
-
-    def append(
-        self,
-        link: Any,
-        *,
-        source_payload: Any,
-        source_hash: str,
-        mapping_version: int,
-        mapped_payload: Any = None,
-        dependency_digest: str = "",
-        applied_at: datetime | None = None,
-    ) -> Any:
-        """Append one revision; numbering and prior come from retained rows."""
-
-        with system_context(reason="integrate.revision.append"), transaction.atomic():
-            locked = type(link).objects.filter(pk=link.pk).lock_if_supported().get()
-            prior = self.latest_for(locked).first()
-            return self.create(
-                link=locked,
-                number=1 if prior is None else prior.number + 1,
-                prior=prior,
-                source_payload={} if source_payload is None else source_payload,
-                source_hash=source_hash,
-                mapping_version=mapping_version,
-                mapped_payload={} if mapped_payload is None else mapped_payload,
-                dependency_digest=dependency_digest,
-                applied_at=applied_at,
-            )
+    """Legacy revision rows retained solely as fold inputs until retirement."""
 
 
 class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
@@ -3428,257 +3545,16 @@ class RecordRevision(AppendOnlyModel, AuditMixin, AngeeDataModel):
         constraints = (models.UniqueConstraint(fields=("link", "number"), name="uniq_record_revision_number"),)
 
 
-class SyncDiscrepancyQuerySet(AngeeQuerySet[Any]):
-    """Read scopes for retained record quarantine."""
-
-    def unresolved(self) -> Self:
-        """Return open quarantine, including requested retries."""
-        return self.filter(is_open=True)
-
-    def due(self) -> Self:
-        """Return the rows whose retry time has come, or that set none."""
-        return self.filter(Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now()))
-
-    def holding_writes(self) -> Self:
-        """Return the open rows that hold their link's write-back.
-
-        A conflict holds until someone resolves it; a refused write holds until
-        its retry time, when the next push asks the remote once more.
-        """
-        return self.unresolved().filter(
-            Q(kind=DiscrepancyKind.CONFLICT)
-            | Q(kind=DiscrepancyKind.REMOTE_REJECTED, retry_at__gt=timezone.now())
-        )
+class SyncDiscrepancyQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):
+    """Read-only legacy quarantine, retained for the declared fold."""
 
 
 class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)):  # type: ignore[misc]
-    """Coalesce unresolved record failures and expose due rescan candidates."""
-
-    def record(
-        self,
-        stream: Any,
-        *,
-        kind: DiscrepancyKind,
-        code: str,
-        source_hash: str = "",
-        mapping_version: int = 1,
-        details: Mapping[str, Any] | None = None,
-        link: Any = None,
-        retry_at: datetime | None = None,
-    ) -> Any:
-        """Refresh an open source-version failure, retaining resolved history."""
-
-        with system_context(reason="integrate.discrepancy.record"), transaction.atomic():
-            stream = type(stream).objects.lock_current(stream)
-            if link is not None:
-                locked_link = type(link).objects.filter(pk=link.pk).lock_if_supported().get()
-                if locked_link.stream_id != stream.pk:
-                    raise ValidationError("A discrepancy link must belong to its stream.")
-            # Keyed by link too: two new records share an empty source hash, and one
-            # row for both would move between them and reset each one's backoff.
-            row, _ = self.unresolved().get_or_create(
-                stream=stream,
-                link=link,
-                kind=kind,
-                code=code,
-                source_hash=source_hash,
-                mapping_version=mapping_version,
-                defaults={"status": DiscrepancyStatus.OPEN},
-            )
-            row.details = {**row.details, **dict(details or {})}
-            row.status, row.resolved_at = DiscrepancyStatus.OPEN, None
-            row.retry_at = None if kind == DiscrepancyKind.CONFLICT else retry_at
-            row.attempts += 1
-            row.save(
-                update_fields=["link", "details", "status", "retry_at", "resolved_at", "attempts", "updated_at"],
-            )
-            if link is not None:
-                type(link).objects.filter(pk=link.pk).update(status=LinkStatus.DISCREPANT)
-                link.status = LinkStatus.DISCREPANT
-            return row
-
-    def resolve(self, discrepancy: Any) -> Any:
-        """Resolve non-conflict quarantine; conflicts require an explicit choice."""
-        return self._mark_resolved(discrepancy)
-
-    def resolve_conflict(self, discrepancy: Any, *, keep: ConflictKeep) -> Any:
-        """Keep a chosen side after a fresh read, preserving conditional remote writes.
-
-        Keeping the local side retains the fresh read as the remote base
-        (:func:`~angee.integrate.streams.retain_remote_source`), so the write
-        starts from the remote as it is now. Transport stays outside transactions.
-        A failed apply/write retains open quarantine; a newer remote version can
-        reject the local choice again.
-        """
-        if keep not in ConflictKeep.values:
-            raise ValidationError("Choose remote or local changes.")
-        if connection.in_atomic_block:
-            raise RuntimeError("Conflict resolution must run outside a database transaction.")
-        with system_context(reason="integrate.discrepancy.resolve_conflict"):
-            row = self.get(pk=discrepancy.pk)
-            if row.kind != DiscrepancyKind.CONFLICT or row.link_id is None:
-                raise ValidationError("Conflict resolution requires a linked conflict.")
-            if not row.is_open:
-                return row
-            stream = row.stream
-            link = row.link
-            parent = link.parent
-            owner = parent if parent is not None else link
-            integration = stream.integration
-            adapter = integration.concrete_capability().backend
-            keys = frozenset((owner.external_key,))
-            resolved = False
-            try:
-                if stream.kind != StreamKind.RECORD_REPLICA:
-                    raise ValidationError("Conflict resolution requires a replica stream.")
-                if not adapter.supports_identity_reads:
-                    raise ValidationError("Conflict resolution requires an adapter with identity reads.")
-                if stream.resync_required:
-                    raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                if keep == ConflictKeep.LOCAL and not stream.writes_back:
-                    raise ValidationError("A pull-only stream cannot keep local changes remotely.")
-                if keep == ConflictKeep.LOCAL and not stream.has_completed_baseline():
-                    raise ValidationError("Complete the stream baseline before resolving its conflict.")
-                bases = (owner.remote_base_hash, owner.local_base_hash, owner.remote_version)
-                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
-                with transaction.atomic():
-                    type(stream).objects.lock_current(stream)
-                    locked = type(owner).objects.filter(pk=owner.pk).lock_if_supported().get()
-                    current = self.filter(pk=row.pk).lock_if_supported().get()
-                    if not current.is_open:
-                        return current
-                    if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:
-                        raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                    if remote is not None and remote.tombstone:
-                        # A deleted remote has no source to keep; the last one read stays the base.
-                        locked.remote_base_hash, locked.remote_version = remote.source_hash, remote.remote_version
-                        locked.save(update_fields=["remote_base_hash", "remote_version", "updated_at"])
-                    elif remote is not None:
-                        # The local side is written onto the remote as read now, so a
-                        # remote edit the conflict's hash could not see survives it.
-                        revisions = apps.get_model("integrate", "RecordRevision").objects
-                        retain_remote_source(locked, remote, revision=revisions.latest_for(locked).first())
-                    self._mark_resolved(current, conflict=True)
-                resolved = True
-                if keep == ConflictKeep.REMOTE:
-                    prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
-                    if prepared.resync_required:
-                        raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                else:
-                    pushed = push_stream(stream, adapter, external_keys=keys)
-                    if not pushed.count:
-                        raise ValidationError(
-                            "The selected local record could not be written; its discrepancy remains open."
-                        )
-                if self.unresolved().filter(link_id__in=(link.pk, owner.pk)).exists():
-                    raise ValidationError("The record could not be synchronized; its discrepancy remains open.")
-                return self.get(pk=row.pk)
-            except Exception:
-                # An interruption between status change and remote application
-                # must never silently turn the chosen side into synchronized data.
-                if resolved:
-                    # The driver may already have retained a newer provider or
-                    # semantic refusal. Preserve that evidence instead of adding
-                    # the obsolete conflict alongside it. Reload the link so a
-                    # racing epoch reset cannot strand quarantine on its predecessor.
-                    current_link = type(link).objects.get(pk=link.pk)
-                    current_stream = current_link.stream
-                    with transaction.atomic():
-                        type(current_stream).objects.lock_current(current_stream)
-                        if not self.unresolved().filter(link_id__in=(link.pk, owner.pk)).exists():
-                            self.record(
-                                current_stream,
-                                link=current_link,
-                                kind=row.kind,
-                                code=row.code,
-                                source_hash=row.source_hash,
-                                mapping_version=row.mapping_version,
-                                details=row.details,
-                            )
-                raise
-            finally:
-                adapter.close()
-
-    def _mark_resolved(self, discrepancy: Any, *, conflict: bool = False) -> Any:
-        """Close one retained failure and restore a link with no remaining quarantine."""
-
-        with system_context(reason="integrate.discrepancy.resolve"), transaction.atomic():
-            link = discrepancy.link
-            if link is not None:
-                link = type(link).objects.filter(pk=link.pk).lock_if_supported().get()
-            row = self.filter(pk=discrepancy.pk).lock_if_supported().get()
-            if row.kind == DiscrepancyKind.CONFLICT and not conflict:
-                raise ValidationError("A conflict requires keeping remote or local changes.")
-            if row.status != DiscrepancyStatus.RESOLVED:
-                row.status, row.resolved_at, row.retry_at = DiscrepancyStatus.RESOLVED, timezone.now(), None
-                row.save(update_fields=["status", "resolved_at", "retry_at", "updated_at"])
-                row.refresh_from_db(fields=["is_open"])
-            if (
-                link is not None
-                and link.status == LinkStatus.DISCREPANT
-                and not self.unresolved().filter(link=link).exists()
-            ):
-                link.status = (
-                    LinkStatus.CURRENT if link.remote_base_hash and link.local_base_hash else LinkStatus.OBSERVED
-                )
-                link.save(update_fields=["status", "updated_at"])
-            return row
-
-    def retry(self, discrepancy: Any) -> Any:
-        """Make unresolved quarantine due now without bypassing conflict policy.
-
-        Resolved history cannot be reopened: a later observation may already own
-        the unresolved source-version identity. Conflicts still require explicit
-        resolution before the normal rescan owner will apply their records.
-        """
-
-        with system_context(reason="integrate.discrepancy.retry"), transaction.atomic():
-            row = self.filter(pk=discrepancy.pk).lock_if_supported().get()
-            if row.status == DiscrepancyStatus.RESOLVED:
-                raise ValidationError("A resolved discrepancy cannot be retried.")
-            row.status, row.retry_at = DiscrepancyStatus.RETRY, timezone.now()
-            row.save(update_fields=["status", "retry_at", "updated_at"])
-            return row
-
-    def rescan(self, stream: Any, *, limit: int | None = None) -> tuple[Any, ...]:
-        """Return bounded due identities whose aggregate has no open conflict.
-
-        Eligibility is filtered before the limit so parked conflicts cannot
-        starve later retryable identities. Unlinked failures have no rescan key.
-        """
-
-        if limit is not None and limit < 1:
-            raise ValueError("A discrepancy rescan limit must be positive.")
-        with system_context(reason="integrate.discrepancy.rescan"):
-            unresolved = self.unresolved().filter(
-                stream=stream,
-                link__isnull=False,
-            )
-            conflicts = (
-                unresolved.filter(kind=DiscrepancyKind.CONFLICT)
-                .annotate(aggregate=Coalesce("link__parent_id", "link_id"))
-                .values("aggregate")
-            )
-            # A refused write is the push's to retry: re-reading the remote cannot
-            # clear it, and a local record the remote never stored has nothing to read.
-            rows = (
-                unresolved.alias(aggregate=Coalesce("link__parent_id", "link_id"))
-                .exclude(aggregate__in=conflicts)
-                .exclude(kind=DiscrepancyKind.REMOTE_REJECTED)
-                .due()
-                .order_by("pk")
-            )
-            return tuple(rows if limit is None else rows[:limit])
+    """Legacy discrepancy rows retained solely as fold inputs until retirement."""
 
 
 class SyncDiscrepancy(AuditMixin, AngeeDataModel):
-    """A per-source-version failure, revisited by the owner that can clear it.
-
-    The adapter's rescan re-reads a failed observation; a conflict waits for
-    :meth:`SyncDiscrepancyManager.resolve_conflict`; a refused write
-    (``remote_rejected``) is the push's to retry once due, and a full push closes
-    it when its record has nothing left to write.
-    """
+    """Legacy per-source-version failures retained only until store retirement."""
 
     runtime = True
     sqid_prefix = "sdc_"

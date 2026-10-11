@@ -9,9 +9,9 @@ existing capability overrides remain valid.
 |---|---|
 | Connection, cadence, queue admission and run telemetry | [Integration and Bridge](models.py) |
 | Stream identity, opaque cursor, baseline generation and reconciliation policy | [SyncStream and its manager](models.py) |
-| External identity, last-synced remote/local hashes and retained tombstones | [RecordLink and its manager](models.py) |
-| Immutable observed and applied evidence | [RecordRevision and its manager](models.py) |
-| Record quarantine and due rescan candidates | [SyncDiscrepancy and its manager](models.py) |
+| External identity, observed source, protected applied base and retained tombstones | [RecordLink and its manager](models.py) |
+| Observed and applied snapshots | Native `RecordLink.history`, attributed by changeset |
+| Inbound quarantine, outbox refusal and due retry policy | Link/stream state in [the shared state owner](mixins.py) |
 | Bounded page, conditional push and inventory execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
 | Concurrent nested JSON edits | [merge_json_state](models.py) |
 | Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed); `manage.py preview_push <integration>` lists what a push would write ([`preview_push`](streams.py)) |
@@ -30,10 +30,16 @@ Mount's existing cursor cleanup and Feed's declared backend contract, as well as
 the first-generation messaging seeds; its presence does not authorize a second
 cursor writer for an adopted stream.
 
-Record replicas compare each side with its last applied base. An unchanged pair
+Record replicas use upstream `DeepDiff` to compare the pinned mapped projection
+with the current local and remote mapped projections. The domain adapter supplies
+both comparable shapes in `RecordChange`; source hashes use only
+`canonical_json_sha256` and identify observations and write-back echoes.
+Observation saves source evidence and never advances `applied_base`. Promotion
+pins the link's own native history row written for that application. An unchanged pair
 does nothing; a remote-only change applies locally; a local-only change can be
-conditionally written back by a push-capable adapter. Concurrent edits and
-remote deletion versus a local edit remain open conflicts. A write-back returns
+conditionally written back by a push-capable adapter. Divergent concurrent edits and
+remote deletion versus a local edit remain open conflicts. Identical edits on both
+sides are already converged. A write-back returns
 the authoritative remote version and content hash; retaining those facts with
 the local projection identifies its later echo without relying on timestamps.
 The adapter owns locking and validating the local projection before applying it.
@@ -44,11 +50,11 @@ retains the link's deletion and local origin. [Directory](../parties/README.md)
 composes this protocol for bidirectional CardDAV contacts.
 
 Before a two-way replica completes its first baseline, an adapter's identity
-match between a live remote record and an existing local row with no link revision
+match between a live remote record and an existing local row with no applied link history
 is adopted with remote wins.
-The driver applies the remote projection and records its version and both applied
-bases without a conflict or write-back. Each identity can be adopted across
-baseline pages and cursor resets; retained revisions still use ordinary
+The driver applies the remote projection and records its version and pins the applied
+projection without a conflict or write-back. Each identity can be adopted across
+baseline pages and cursor resets; retained application bases still use ordinary
 three-way comparison. `push_stream` suppresses local pushes only until that first
 baseline completes. Local-only rows can then be created remotely, including
 during the same sync call that completes the baseline. Before upgrading pull-only
@@ -62,13 +68,14 @@ primary link. `apply_record` returns one result for one record. An adapter promo
 record savepoints; it and the visibility hooks perform database work only.
 
 The driver extracts outside a transaction, then commits each page's database
-effects, discrepancies and cursor together. Each record has a savepoint. A
+effects, inbound/outbox state and cursor together. Each record has a savepoint. A
 declared semantic refusal, field validation failure or record-level `DataError`
 quarantines that record; infrastructure failures roll back the page and propagate.
 `finish_page` composes domain batch relationships
 after successful rows are visible, before the cursor commits; messaging uses its
 existing quotation owner here. External writes occur before their database
-reflection and use the remote version precondition. If the process loses the
+reflection and use the remote version precondition. Native JSON Patch `test`
+preconditions fence reflection against changes to retained link state. If the process loses the
 response, the next observation must reconcile that uncertainty; this protocol
 does not promise an atomic commit across two systems.
 
@@ -87,11 +94,11 @@ cycle when applicable. These functions contain no workflow runtime dependency.
 held back, writing nothing. Before resuming an integration paused for a mapping
 change, every stream should preview no writes.
 
-The Streams tab keeps its drill-down in route search state. Its open discrepancy
-view uses the backend `is_open` filter and offers explicit remote/local choices
-for conflicts.
+The Streams tab keeps its drill-down in route search state. It reads failures
+from stream/link state, offers explicit remote/local choices for conflicts, and
+reads bounded observation/application history beneath the authorized link.
 
-At cycle start, due non-conflict replica discrepancies with links are re-read
+At cycle start, due non-conflict replica inbound failures are re-read
 through `read_keys(stream, keys)` when the adapter declares
 `supports_identity_reads`. It
 returns one `RecordChange` for every requested external key, including a remote
@@ -110,8 +117,8 @@ Semantic quarantine increments `attempts` and sets an exponential retry delay
 starting at one minute, capped by the smaller of a positive reconciliation
 interval or 24 hours. A zero interval means continuous inventory reconciliation,
 so it retains the 24-hour retry cap. A refused write holds its link's write-back
-until `retry_at`, on every write path (`SyncDiscrepancyQuerySet.holding_writes`);
-each refused link keeps its own row, and a later write that lands resolves it.
+until `retry_at`, on every write path (`RecordLink.write_holds`);
+each refused link keeps its outbox state, and a later write that lands resolves it.
 A full push (no `external_keys`) also closes a due refusal whose link has nothing
 left to write, because its record was deleted or reverted locally: nothing would
 retry it, and no rescan reads it.
@@ -121,9 +128,9 @@ requires `keep="remote"` (re-read and apply remotely owned facts) or `keep="loca
 (re-read the remote, retain its source as the base, then conditionally write the
 local projection onto it).
 Plain `resolve` refuses conflicts. A newer remote edit may reject the chosen
-local write again and retain fresh quarantine.
+local write again and retain fresh outbox state.
 An invalid/expired cursor or `resync_required` creates a new baseline generation,
-carrying existing links and quarantine forward while retaining revision history.
+carrying existing links and quarantine forward while retaining link history.
 
 Inventory sweeps read and apply newly enumerated identities before incrementing
 absence counts. Each `reconcile_stream(..., page_bound=100)` call commits one
@@ -139,8 +146,8 @@ tombstone at the declared threshold. `on_absent` runs once per status transition
 `on_revalidated` runs after each successful unchanged observation. Both share the
 status transaction so domain visibility changes roll back with the link.
 
-`RecordRevision` retention is unbounded by design. Each substantive application
-retains full source and mapped payloads; deployments must budget storage for
+Native link history retention is unbounded by design. Every observation retains
+source evidence; every application retains source and mapped payloads; deployments must budget storage for
 this growing history. No automatic pruning is performed.
 
 A compound link declares one immutable root `parent` in the same stream. Children
@@ -149,3 +156,17 @@ evidence and discrepancy resolution remain with the aggregate adapter. Sweeps
 never delete domain rows or overwrite an open conflict. A peer beyond its
 tombstone retention period must reverify a baseline. Link observation and
 promotion preserve an omitted target; explicit `target=None` clears its binding.
+
+Inbound state retains several simultaneous failure identities and closed evidence.
+Event failures without a link live on `SyncStream.inbound`, with native stream
+history. A pinned link withholds automatic application and push; an explicit
+remote conflict choice can apply it. Outbox refusals retain retry/error evidence,
+and replaced or closed outbox states remain in link history.
+
+The declared `integrate/fold_record_sync_history` migration converts the legacy
+revision log in link/number order, preserves all failure identities and original
+legacy audit stamps, and pins the last applied historical row. It does not invent
+historical remote versions. Its reverse rebuilds the legacy tables and documents
+the state distinctions their schema cannot express. The legacy models/tables
+remain conversion inputs until their separate retirement; runtime readers and
+writers use link/stream history and state.

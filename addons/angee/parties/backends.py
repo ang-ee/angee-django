@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, timedelta
 from typing import Any
 
+from deepdiff import DeepDiff
 from django.apps import apps
 from django.db.models import CharField, Exists, OuterRef, Q, Subquery, Value
 from django.db.models.fields.json import KeyTextTransform
@@ -225,13 +226,8 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         )
 
     def _source_payload(self, link: Any) -> dict[str, Any]:
-        revision = (
-            apps.get_model("integrate", "RecordRevision")
-            .objects.filter(applied_at__isnull=False)
-            .latest_for(link)
-            .first()
-        )
-        return dict(revision.source_payload) if revision is not None else {}
+        observation = link.history.first()
+        return dict(observation.source_payload) if observation is not None else {}
 
     def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched media and take the stored form before the driver's page transaction begins."""
@@ -239,14 +235,14 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         return apps.get_model("parties", "Party").objects.prepare_contact(parsed, created_by_id=self.bridge.owner_id)
 
     def _links(self, stream: Any) -> tuple[Any, ...]:
-        """Read locators in one query, including locally pushed revision evidence."""
+        """Read locators in one query, including locally pushed history evidence."""
 
         latest = (
-            apps.get_model("integrate", "RecordRevision")
-            .objects.filter(applied_at__isnull=False)
-            .latest_for(OuterRef("pk"))
+            apps.get_model("integrate", "RecordLink")
+            .history.filter(id=OuterRef("pk"))
+            .order_by("-history_date", "-history_id")
             .annotate(href=KeyTextTransform("href", "source_payload"))
-            .values("href")
+            .values("href")[:1]
         )
         return tuple(
             apps.get_model("integrate", "RecordLink")
@@ -352,7 +348,9 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 occupied[key] = href
             key = self._claim_key(key, href, occupied=occupied)
             if isinstance(parsed, RecordChange):
-                record = replace(parsed, external_key=key, metadata=metadata)
+                record = replace(
+                    parsed, external_key=key, metadata=metadata, failure=SemanticError(parsed.source_payload["error"])
+                )
             elif parsed is None:
                 record = RecordChange(key, {"href": href}, "", tombstone=True, metadata=metadata)
             else:
@@ -361,6 +359,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                     key,
                     {"href": href, "raw_vcard": parsed.raw_vcard, "contact": observed},
                     canonical_json_sha256(observed),
+                    mapped_payload=observed,
                     remote_version=parsed.etag,
                     metadata=metadata,
                 )
@@ -444,11 +443,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         links_query = stream_links
         if keys is not None:
             links_query = links_query.filter(external_key__in=keys)
-        links = tuple(links_query.order_by("pk"))
+        links = tuple(links_query.with_sync_evidence().order_by("pk"))
         states = self._local_states(stream, (link.external_key for link in links), links=links)
         for link in links:
             target, projection, local_hash = states[link.external_key]
-            if local_hash != link.local_base_hash:
+            if link.applied_base is None or DeepDiff(link.applied_base.mapped_payload, projection):
                 yield LocalChange(link.external_key, projection, local_hash, target=target)
         people_query = (
             apps.get_model("parties", "Person")
