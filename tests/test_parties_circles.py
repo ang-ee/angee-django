@@ -409,6 +409,85 @@ def test_relationship_records_untracked_relatives(composed_tables: None) -> None
     assert {first.other_name, second.other_name} == {"Rosa K.", "Vera M."}
 
 
+def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tuple[Any, list[Any]]:
+    """One handle claimed by one new party per ``(confidence, is_confirmed)``; return it and the links."""
+
+    handle = Handle._base_manager.create(platform="email", value=value, created_by=owner)
+    claims = []
+    for index, (confidence, is_confirmed) in enumerate(links):
+        party = Party._base_manager.create(display_name=f"Party {index}", created_by=owner)
+        claims.append(
+            PartyHandle.objects.link(
+                party,
+                handle,
+                confidence=confidence,
+                source=LinkSource.CARDDAV,
+                is_confirmed=is_confirmed,
+                created_by_id=owner.pk,
+            )
+        )
+    return handle, claims
+
+
+def _in_link_order(links: list[Any]) -> list[Any]:
+    """Return ``links`` in the order the model ranks equal links."""
+
+    return list(PartyHandle._base_manager.filter(pk__in=[link.pk for link in links]).order_by("sqid"))
+
+
+def _name(link: Any, name: str) -> None:
+    party = link.party
+    party.display_name = name
+    party.save(update_fields=["display_name", "updated_at"])
+
+
+def _resolved_owner(handle: Any) -> Any:
+    PartyHandle.objects.resolve(handle)
+    handle.refresh_from_db()
+    return handle.party_id
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("nameless", ["Unknown", "+1 415 555 2671"])
+def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: None, nameless: str) -> None:
+    """A nameless duplicate card first in order loses an equal tie; a bare number is no name either."""
+
+    del composed_tables
+    with system_context(reason="test real-name tie"):
+        owner = _user(f"tie-{nameless.strip('+').replace(' ', '')}")
+        handle, links = _contested_handle(owner, "ada@example.com", (1.0, False), (1.0, False))
+        first, second = _in_link_order(links)
+        _name(first, nameless)
+        _name(second, "Ada Lovelace")
+        assert _resolved_owner(handle) == second.party_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_tables: None) -> None:
+    del composed_tables
+    with system_context(reason="test real-name rank"):
+        owner = _user("tie-rank")
+        handle, (confirmed, named) = _contested_handle(owner, "confirmed@example.com", (1.0, True), (1.0, False))
+        _name(confirmed, "Unknown")
+        _name(named, "Ada Lovelace")
+        assert _resolved_owner(handle) == confirmed.party_id
+
+        handle, (stronger, named) = _contested_handle(owner, "stronger@example.com", (1.0, False), (0.9, False))
+        _name(stronger, "Unknown")
+        _name(named, "Ada Lovelace")
+        assert _resolved_owner(handle) == stronger.party_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None:
+    del composed_tables
+    with system_context(reason="test nameless tie"):
+        handle, links = _contested_handle(_user("tie-nameless"), "nobody@example.com", (1.0, False), (1.0, False))
+        for link in links:
+            _name(link, "Unknown")
+        assert _resolved_owner(handle) == _in_link_order(links)[0].party_id
+
+
 @pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
