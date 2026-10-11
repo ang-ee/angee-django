@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -462,6 +464,53 @@ def test_party_handle_display_name_projects_only_readable_components(composed_ta
     assert fully_readable == [
         {"id": link.sqid, "display_name": "Readable counterparty — contact@example.com"}
     ]
+
+
+def test_party_handle_evidence_reads_every_pairs_claims_in_one_query(composed_tables: None) -> None:
+    """A pair two sources claim lists once, with both claims' evidence, and the page reads claims once."""
+
+    admin = _platform_admin("party-handle-evidence-admin")
+    with system_context(reason="test.parties.party_handle_evidence.seed"):
+        party = messaging_models.Party.objects.create(display_name="Evidence counterparty", created_by_id=admin.pk)
+        records = [
+            messaging_models.Party.objects.create(display_name=f"Evidence {index}", created_by_id=admin.pk)
+            for index in range(3)
+        ]
+        handles = [
+            Handle.objects.create(
+                platform="email", value=value, normalized_value=value, created_by_id=admin.pk,
+            )
+            for value in ("two-claims@example.com", "one-claim@example.com")
+        ]
+        claims = ((handles[0], "email_match", 0.4, records[1]), (handles[0], "carddav", 1.0, records[0]),
+                  (handles[1], "manual", 0.4, records[2]))
+        for handle, source, confidence, record in claims:
+            PartyHandle.objects.link(
+                party,
+                handle,
+                confidence=confidence,
+                source=source,
+                metadata={"evidence_refs": [{"model": "parties.Party", "id": str(record.sqid)}]},
+                created_by_id=admin.pk,
+            )
+        two_claims, one_claim = (PartyHandle.objects.get(handle=handle) for handle in handles)
+
+    query = "query Evidence { party_handles { id evidence_refs { model id } evidence_truncated } }"
+    with CaptureQueriesContext(connection) as queries:
+        rows = _data(execute_schema(_schema("public"), query, user=admin))["party_handles"]
+
+    def evidence(*indexes: int) -> list[dict[str, str]]:
+        return [{"model": "parties.Party", "id": records[index].sqid} for index in indexes]
+
+    assert sorted(rows, key=lambda row: row["id"]) == sorted(
+        [
+            {"id": two_claims.sqid, "evidence_refs": evidence(0, 1), "evidence_truncated": False},
+            {"id": one_claim.sqid, "evidence_refs": evidence(2), "evidence_truncated": False},
+        ],
+        key=lambda row: row["id"],
+    )
+    claim_table = PartyHandle._meta.get_field("claims").related_model._meta.db_table
+    assert sum(claim_table in query["sql"] for query in queries.captured_queries) == 1
 
 
 def _schema(name: str) -> Any:
