@@ -560,6 +560,46 @@ def test_moving_a_handles_only_link_leaves_it_unowned(composed_tables: None) -> 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_folded_link_keeps_the_source_link_would_keep(composed_tables: None) -> None:
+    """A card's assertion folded with an import stays the card's, so the card keeps publishing the number."""
+
+    del composed_tables
+    with system_context(reason="test move links source"):
+        owner = _user("move-links-source")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324872@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421937", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        PartyHandle.objects.link(party, alias, confidence=0.9, source=LinkSource.CARDDAV, created_by_id=owner.pk)
+        PartyHandle.objects.link(party, phone, confidence=1.0, source=LinkSource.IMPORT, created_by_id=owner.pk)
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        link = PartyHandle._base_manager.get(handle=phone, party=party)
+        assert (link.source, link.confidence) == (LinkSource.CARDDAV, 1.0)
+        assert PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_links_from_a_handle_already_gone_moves_nothing(composed_tables: None) -> None:
+    """A second resolver run racing the first finds its alias merged away and leaves the survivor alone."""
+
+    del composed_tables
+    with system_context(reason="test move links gone"):
+        owner = _user("move-links-gone")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324873@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421938", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        PartyHandle.objects.link(party, phone, source=LinkSource.IMPORT, created_by_id=owner.pk)
+        Handle._base_manager.filter(pk=alias.pk).delete()
+
+        PartyHandle.objects.move_links(alias, phone)
+
+        phone.refresh_from_db()
+    assert phone.party_id == party.pk
+    assert PartyHandle._base_manager.filter(handle=phone).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 

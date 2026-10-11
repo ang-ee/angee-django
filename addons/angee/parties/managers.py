@@ -632,20 +632,24 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         For a handle that turned out to be another's spelling (a resolved alias). A
         party not yet linked to ``to_handle`` takes its link as it is. A party
         linked to both keeps one link folding the two: confirmed if either was,
-        dismissed if either was and it is not confirmed, the higher confidence, and
-        both links' metadata, with the kept link's keys winning except
-        ``evidence_refs``, which joins both lists in order without repeats. Runs
-        under the identity lock order, then re-resolves both handles, which
-        recounts the parties each gains or loses: ``from_handle`` is left unlinked
-        and so unowned.
+        dismissed if either was and it is not confirmed, the higher confidence, the
+        source :meth:`link` would keep (a confirmation's, then an assertion's over
+        an inference's, then the stronger score's), and both links' metadata, with
+        the kept link's keys winning except ``evidence_refs``, which joins both
+        lists in order without repeats. Runs under the identity lock order, then
+        re-resolves both handles, which recounts the parties each gains or loses:
+        ``from_handle`` is left unlinked and so unowned. A handle a concurrent move
+        already removed leaves nothing to move.
         """
 
         rows = self.model._base_manager
         with transaction.atomic():
-            self.lock_identity_rows(
+            handles, _parties = self.lock_identity_rows(
                 party_ids=rows.filter(handle_id=from_handle.pk).values_list("party_id", flat=True),
                 handle_ids=(from_handle.pk, to_handle.pk),
             )
+            if from_handle.pk not in handles or to_handle.pk not in handles:
+                return
             for row in rows.filter(handle_id=from_handle.pk).order_by("pk"):
                 kept = rows.filter(handle_id=to_handle.pk, party_id=row.party_id).first()
                 if kept is None:
@@ -660,10 +664,14 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                         refs.append(ref)
                 if refs:
                     metadata["evidence_refs"] = refs
+                strongest = max(
+                    (kept, row), key=lambda link: (link.is_confirmed, link.source in ASSERTING_SOURCES, link.confidence)
+                )
                 folded = {
                     "is_confirmed": confirmed,
                     "is_dismissed": not confirmed and (kept.is_dismissed or row.is_dismissed),
                     "confidence": max(kept.confidence, row.confidence),
+                    "source": strongest.source,
                     "metadata": metadata,
                 }
                 dirty = [name for name, value in folded.items() if getattr(kept, name) != value]
