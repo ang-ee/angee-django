@@ -143,7 +143,7 @@ const operator = defineBaseAddon({
     server: Server,
   },
   // The first console-shell drawer adopter: a non-modal bottom drawer streaming
-  // a chosen service/workspace's logs. Sticky across navigation (mounted once
+  // a chosen service's logs. Sticky across navigation (mounted once
   // above the router outlet) and not route-scoped — it picks its own target.
   containers: {
     "shell#drawers-bottom": {

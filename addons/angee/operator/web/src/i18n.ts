@@ -35,10 +35,9 @@ export const enOperatorMessages: Record<string, string> = {
 
   // Logs drawer (console-shell drawer adopter).
   "logs.target.label": "Log source",
-  "logs.target.placeholder": "Select a service or workspace…",
+  "logs.target.placeholder": "Select a service…",
   "logs.target.empty.title": "No log source selected",
-  "logs.target.empty.description":
-    "Pick a service or workspace to stream its logs.",
+  "logs.target.empty.description": "Pick a service to stream its logs.",
 
   // Transport / connection states.
   "transport.unknownError": "Unknown operator error.",
@@ -110,7 +109,6 @@ export const enOperatorMessages: Record<string, string> = {
   "workspaces.detail.overview": "Overview",
   "workspaces.detail.expiresAt": "Expires",
   "workspaces.detail.mcp": "Playwright MCP",
-  "workspaces.detail.logs": "Logs",
   "workspaceSources.title": "Sources",
   "workspaceSources.empty": "No sources.",
   "workspaceSources.column.slot": "Slot",

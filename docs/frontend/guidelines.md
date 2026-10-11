@@ -790,7 +790,7 @@ shared UI copy through an addon bundle.
   within the max wait, so declare each read's `models` from the owners its
   resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
-  daemon's `onWorkspaceStatusChange`/`onServiceLogs`) over its own subscriptions.
+  daemon's `onWorkspaceStatusChange`) over its own subscriptions.
   A timed `setInterval` is only ever for non-data UI motion (a carousel) or
   rotating a short-lived credential before it expires — never to re-read a
   resolver hoping it changed. If a foreign system publishes no change
