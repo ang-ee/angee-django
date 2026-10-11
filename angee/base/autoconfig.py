@@ -7,7 +7,9 @@ from typing import Any
 
 SETTINGS = {
     "ANGEE_IMPL_REGISTRIES": [],
-    "ANGEE_HOOKS": [],
+    "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],
+    # Dotted callables that refuse merging away one record (MergeableMixin.validate_merge).
+    "ANGEE_MERGE_GUARDS": [],
     "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": True,
     "REBAC_BACKEND": "local",
     "REBAC_LOCAL_BACKEND_STORAGE": "registry",

@@ -167,6 +167,7 @@ def test_installed_hook_owners_declare_their_settings() -> None:
         "ANGEE_WORK_MERGE_CONTRIBUTORS",
         "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS",
         "ANGEE_PARTIES_SIGNING_PROVIDERS",
+        "ANGEE_MERGE_GUARDS",
     } <= set(settings.ANGEE_HOOKS)
     assert check_hooks() == []
 
