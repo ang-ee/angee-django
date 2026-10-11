@@ -193,8 +193,8 @@ export function GroupedListBody<TRow extends Row>({
         else delete next[id];
       }
       return next;
-    });
-  }, [setRowSelection]);
+    }, (id) => table.getCoreRowModel().rowsById[id]?.original);
+  }, [setRowSelection, table]);
   const selectedCount = loadedRowIds.filter((id) => rowSelection[id]).length;
 
   return (
