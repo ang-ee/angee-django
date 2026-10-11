@@ -21,3 +21,8 @@ module = "runtime_migrations.owner_column"
 name = "shared_reader_cleanup"
 app_label = "spaces"
 module = "runtime_migrations.shared_reader_cleanup"
+
+[[migrations]]
+name = "membership_decisions"
+app_label = "spaces"
+module = "runtime_migrations.membership_decisions"

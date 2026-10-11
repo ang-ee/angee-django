@@ -53,7 +53,7 @@ from angee.integrate.streams import (
     sync_bridge,
 )
 from angee.integrate.testing.models import RecordLink, SyncStream
-from angee.messaging.testing.models import Directory, Folder, Handle, Party, PartyHandle, Person, RelationshipKind
+from angee.messaging.testing.models import Directory, Folder, Handle, Party, Person, RelationshipKind
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -62,8 +62,6 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
-from angee.parties.managers import Signing
-from angee.parties.mixins import LinkSource
 from angee.parties_integrate_carddav import backend as carddav_backend
 from angee.parties_integrate_carddav.backend import (
     _DAV_RESPONSE_CAP,
@@ -1194,52 +1192,6 @@ def test_successful_own_write_is_applied_on_next_pull(replica: Replica) -> None:
     assert len([request for request in replica.server.requests if request[0] == "PUT"]) == 1
 
 
-def test_signature_suggestion_is_written_only_after_a_person_confirms_it(replica: Replica) -> None:
-    person, link = replica.baseline()
-    bases = link.applied_base.source_hash, canonical_json_sha256(link.applied_base.mapped_payload), link.remote_version
-    with system_context(reason="test signature suggestion"):
-        created = PartyHandle.objects._reconcile_signatures(
-            [Signing("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
-        )
-    assert created == 1
-    replica.server.requests.clear()
-
-    assert push_stream(replica.stream, replica.backend).count == 0
-    link.refresh_from_db()
-    assert (
-        link.applied_base.source_hash,
-        canonical_json_sha256(link.applied_base.mapped_payload),
-        link.remote_version,
-    ) == bases
-    assert not [request for request in replica.server.requests if request[0] == "PUT"]
-
-    suggestion = PartyHandle.objects.select_related("handle").get(party=person, source=LinkSource.RULE)
-    with system_context(reason="test confirmed suggestion"):
-        PartyHandle.objects.link(person, suggestion.handle, source=LinkSource.MANUAL, is_confirmed=True)
-
-    assert push_stream(replica.stream, replica.backend).count == 1
-    assert "+14155552671" in replica.server.cards[_HREF][0]
-
-
-def test_a_card_that_lists_a_mined_number_owns_it(replica: Replica) -> None:
-    """The card's assertion replaces the undecided guess, so withdrawing guesses leaves it."""
-
-    person, _link = replica.baseline()
-    with system_context(reason="test mined number"):
-        PartyHandle.objects._reconcile_signatures(
-            [Signing("ada-signature", "Ada Lovelace\nM: +1 415 555 2671", "ada", person.pk, person.created_by_id)]
-        )
-    replica.server.store(_HREF, _card().replace("END:VCARD", "TEL;type=CELL:+14155552671\r\nEND:VCARD"))
-    replica.pull()
-
-    with system_context(reason="test mined number read"):
-        owned = PartyHandle.objects.select_related("handle").get(party=person, handle__value="+14155552671")
-        assert (owned.source, owned.confidence) == (LinkSource.CARDDAV, 1.0)
-        assert owned.handle.party_id == person.pk
-        assert PartyHandle.objects._reconcile_signatures([]) == 0
-        assert PartyHandle.objects.filter(pk=owned.pk).exists()
-
-
 def test_removing_one_line_of_a_shared_group_keeps_its_other_properties(replica: Replica) -> None:
     """A vCard group may hold several properties; only Apple's X-AB companions leave with a line."""
 
@@ -1258,7 +1210,8 @@ def test_removing_one_line_of_a_shared_group_keeps_its_other_properties(replica:
     )
     person, _link = replica.baseline()
     with system_context(reason="test shared group edit"):
-        PartyHandle.objects.filter(party=person, handle__value__in=("+14155550100", "+14155550199")).delete()
+        for row in person.statements.filter(handle__value__in=("+14155550100", "+14155550199")):
+            row.with_actor(person.created_by).dismiss()
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1284,70 +1237,13 @@ def test_removing_a_line_takes_its_own_label_when_labels_are_equal(replica: Repl
     )
     person, _link = replica.baseline()
     with system_context(reason="test equal labels"):
-        PartyHandle.objects.filter(party=person, handle__value="+14155550199").delete()
+        for row in person.statements.filter(handle__value="+14155550199"):
+            row.with_actor(person.created_by).dismiss()
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
     assert [(line.group, line.value) for line in card.tel_list] == [("item1", "+14155552671")]
     assert [(line.group, line.value) for line in card.contents["x-ablabel"]] == [("item1", "Other")]
-
-
-@pytest.mark.parametrize(
-    ("first", "then", "kept"),
-    [
-        ((LinkSource.EMAIL_MATCH, 1.0), (LinkSource.CARDDAV, 1.0), LinkSource.CARDDAV),
-        ((LinkSource.RULE, 0.4), (LinkSource.EMAIL_MATCH, 1.0), LinkSource.EMAIL_MATCH),
-        ((LinkSource.MANUAL, 0.4), (LinkSource.EMAIL_MATCH, 1.0), LinkSource.MANUAL),
-        ((LinkSource.MANUAL, 0.4), (LinkSource.CARDDAV, 1.0), LinkSource.MANUAL),
-        ((LinkSource.EMAIL_MATCH, 1.0), (LinkSource.RULE, 0.4), LinkSource.EMAIL_MATCH),
-    ],
-)
-def test_an_undecided_link_keeps_the_strongest_provenance(
-    replica: Replica, first: tuple[LinkSource, float], then: tuple[LinkSource, float], kept: LinkSource
-) -> None:
-    """An assertion replaces an inference's source; an inference never unpublishes an assertion."""
-
-    person, _link = replica.baseline()
-    with system_context(reason="test link provenance"):
-        handle = Handle.objects.upsert(platform="phone", value="+14155552671", created_by_id=person.created_by_id)
-        for source, confidence in (first, then):
-            PartyHandle.objects.link(
-                person, handle, confidence=confidence, source=source, created_by_id=person.created_by_id
-            )
-        link = PartyHandle.objects.select_related("handle").get(party=person, handle=handle)
-    assert (link.source, link.confidence) == (kept, 1.0)
-    assert link.handle.party_id == person.pk
-
-
-@pytest.mark.parametrize(
-    ("source", "confirmed", "written"),
-    [
-        (LinkSource.MANUAL, False, True),
-        (LinkSource.RULE, True, True),
-        (LinkSource.RULE, False, False),
-        (LinkSource.EMAIL_MATCH, False, False),
-        (LinkSource.LLM, False, False),
-        (LinkSource.IMPORT, False, False),
-        (LinkSource.COMMUNITY, False, False),
-    ],
-)
-def test_only_asserted_contact_points_are_written_to_the_card(
-    replica: Replica, source: LinkSource, confirmed: bool, written: bool
-) -> None:
-    person, _link = replica.baseline()
-    with system_context(reason="test contact point provenance"):
-        handle = Handle.objects.upsert(platform="email", value="ada@example.test", created_by_id=person.created_by_id)
-        PartyHandle.objects.link(
-            person,
-            handle,
-            confidence=0.3,
-            source=source,
-            is_confirmed=confirmed,
-            created_by_id=person.created_by_id,
-        )
-
-    assert push_stream(replica.stream, replica.backend).count == int(written)
-    assert ("ada@example.test" in replica.server.cards[_HREF][0]) is written
 
 
 def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) -> None:
@@ -1370,11 +1266,10 @@ def test_contact_point_edit_rewrites_only_the_changed_lines(replica: Replica) ->
     )
     person, _link = replica.baseline()
     with system_context(reason="test contact point edit"):
-        PartyHandle.objects.filter(party=person, handle__value="+14155550100").delete()
+        for row in person.statements.filter(handle__value="+14155550100"):
+            row.with_actor(person.created_by).dismiss()
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
-        PartyHandle.objects.link(
-            person, handle, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=person.created_by_id
-        )
+        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])
@@ -1406,9 +1301,7 @@ def test_a_number_listed_twice_keeps_both_lines_when_another_number_changes(repl
     person, _link = replica.baseline()
     with system_context(reason="test duplicate lines"):
         handle = Handle.objects.upsert(platform="phone", value="+14155550199", created_by_id=person.created_by_id)
-        PartyHandle.objects.link(
-            person, handle, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=person.created_by_id
-        )
+        person.with_actor(person.created_by).confirm(aspect="handle", handle=handle, values={})
     assert push_stream(replica.stream, replica.backend).count == 1
 
     card = vobject.readOne(replica.server.cards[_HREF][0])

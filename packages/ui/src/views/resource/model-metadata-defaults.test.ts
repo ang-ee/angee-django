@@ -910,7 +910,7 @@ describe("relation column read expansion", () => {
 
   test("an object-list column without a related resource stays a value column", () => {
     const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
-      testDataResource("parties.PartyHandle"));
+      testDataResource("parties.PartyStatement"));
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "evidence_refs" }], handle);
     expect(column?.field).toBe("evidence_refs");
     expect(column && "relationList" in column).toBe(false);
@@ -918,7 +918,7 @@ describe("relation column read expansion", () => {
 
   test("an object-list subline without a relation representation fails during resolution", () => {
     const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
-      testDataResource("parties.PartyHandle"));
+      testDataResource("parties.PartyStatement"));
     const schema = schemaFieldMetadataFromDataResources([handle.resource]);
     expect(() => columnsWithMetadataDefaults<Row>(
       [{ field: "label", subline: "evidence_refs" }],

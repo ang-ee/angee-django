@@ -2,7 +2,7 @@
 
 A directory backend parses a source into neutral ``ParsedContact`` rows; these
 managers turn one into a ``Party`` (a ``Person``) and its ``Handle`` /
-``PartyHandle`` / ``Address`` rows. A contact is keyed by its source UID within
+``PartyStatement`` / ``Address`` rows. A contact is keyed by its source UID within
 its folder (the idempotent ``(folder, source_uid)`` upsert), handles dedupe on
 ``(platform, value)``, and ``handle_count`` plus the resolved ``Handle.party`` are
 maintained here in the same transaction — so every directory source shares one
@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import chain, combinations
-from typing import Any, NamedTuple, Self, cast
+from typing import Any, NamedTuple, Self
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -36,23 +36,35 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context, current_actor, system_context
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    current_actor,
+    system_context,
+    to_object_ref,
+    write_relationships,
+)
+from rebac.actors import is_sudo, to_subject_ref
 
+from angee.base.actors import actor_user_id
 from angee.base.identity import public_id_for
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
+from angee.base.managers import StatementManager
+from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind
+from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.querysets import StatementQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.parties.mixins import ASSERTING_SOURCES, LinkSource, ScoredLinkMixin
+from angee.parties.mixins import LinkSource
 from angee.storage.models import UploadState
 
 # An undecided link below this confidence is a suggestion awaiting review.
 _REVIEW_CONFIDENCE = 0.5
-_AWAITING_REVIEW = Q(is_confirmed=False, is_dismissed=False, confidence__lt=_REVIEW_CONFIDENCE)
+_UNSCOPED = object()
 
 
 class Signing(NamedTuple):
@@ -223,6 +235,17 @@ class HandleQuerySet(AngeeQuerySet):
             output_field=TextField(),
         )
 
+    def resolved_confidence_expression(self) -> Any:
+        rows = (
+            apps.get_model("parties", "Party")
+            .objects.handle_statements(
+                actor=self.actor() or current_actor(),
+            )
+            .canonical()
+            .filter(subject_id=OuterRef("party_id"), handle_id=OuterRef("pk"))
+        )
+        return Subquery(rows.values("confidence")[:1])
+
     def owned_by(self, user: Any) -> Self:
         """Return the handles this user controls — the ``owner`` column, no joins."""
 
@@ -257,7 +280,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             platform=self.model.Platform.for_value(value),
             value=value,
             display_name=display_name,
-            source=cast(LinkSource, LinkSource.MANUAL),
+            asserted_by=user,
             metadata={"user_id": str(user.pk)},
         )
 
@@ -411,7 +434,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         stamp independent evidence on one handle (a message importer's identity
         confidence, the connections owner's provenance), and a whole-dict write
         from one would silently erase the others' — the same merge rule
-        :meth:`PartyHandleManager.link` applies to link metadata.
+        :meth:`PartyManager.assert_handle` applies to link metadata.
         """
 
         merged = fields.get("metadata")
@@ -430,7 +453,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         *,
         platform: str,
         value: str,
-        source: LinkSource,
+        asserted_by: Any = None,
         display_name: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> Any:
@@ -439,7 +462,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         The one verb the connect flows (OIDC login, CardDAV/OAuth connect) call for
         the signed-in user's own address. It writes BOTH facts the model separates:
         the **control** fact (:attr:`Handle.owner` — this user sends/syncs as the
-        address) and the **identity** fact (a confirmed :class:`PartyHandle` to the
+        address) and the **identity** fact (a confirmed :class:`PartyStatement` to the
         user's own :class:`~angee.parties.models.Person`, so the address resolves to
         them). Directory *contacts'* handles get neither. Idempotent.
 
@@ -450,8 +473,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         """
 
         person_model = apps.get_model("parties", "Person")
-        party_handle_model = apps.get_model("parties", "PartyHandle")
-        link_owner = party_handle_model.objects
+        link_owner = apps.get_model("parties", "Party").objects
         with system_context(reason="parties.handle.claim_own"), transaction.atomic():
             handle = self.upsert(
                 platform=platform,
@@ -473,930 +495,185 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             handle = handles[handle.pk]
             person = parties[person.pk]
             if handle.owner_id is not None and handle.owner_id != user.pk:
-                link_owner.link(
+                link_owner.assert_handle(
                     person,
                     handle,
                     confidence=0.3,
-                    source=source,
-                    is_confirmed=False,
-                    created_by_id=user.pk,
+                    asserted_by=asserted_by or user,
                 )
                 return handle
             if handle.owner_id is None:
                 handle.owner = user
                 handle.save(update_fields=["owner", "updated_at"])
-            link_owner.link(
+            link_owner.assert_handle(
                 person,
                 handle,
                 confidence=1.0,
-                source=source,
-                is_confirmed=True,
-                created_by_id=user.pk,
+                asserted_by=asserted_by or user,
             )
         return handle
 
-
-class _PartyHandleWriteFreeze(models.QuerySet[Any]):
-    """Cover native instance, bulk and collector writes at the carrier cutover."""
-
-    def _insert(self, *args: Any, **kwargs: Any) -> Any:
-        self.model.require_legacy_write(self.db)
-        return super()._insert(*args, **kwargs)
-
-    def _update(self, *args: Any, **kwargs: Any) -> Any:
-        self.model.require_legacy_write(self.db)
-        return super()._update(*args, **kwargs)
-
-    def update(self, **kwargs: Any) -> int:
-        self.model.require_legacy_write(self.db)
-        return super().update(**kwargs)
-
-    def bulk_create(self, *args: Any, **kwargs: Any) -> Any:
-        self.model.require_legacy_write(self.db)
-        return super().bulk_create(*args, **kwargs)
-
-    def delete(self) -> Any:
-        self.model.require_legacy_write(self.db)
-        return super().delete()
-
-    def _raw_delete(self, using: str) -> int:
-        self.model.require_legacy_write(using)
-        return super()._raw_delete(using)
-
-
-class FrozenPartyHandleQuerySet(_PartyHandleWriteFreeze, AngeeUnscopedQuerySet):
-    """Unfiltered native base-manager reads with the same cutover write guard."""
-
-
-class FrozenPartyHandleManager(AngeeUnscopedManager.from_queryset(FrozenPartyHandleQuerySet)):  # type: ignore[misc]
-    """Keep native relation/collector reads unfiltered while freezing their writes."""
-
-
-class PartyHandleQuerySet(_PartyHandleWriteFreeze, AngeeQuerySet):
-    """Require association mutations to pass through the resolution owner."""
-
-    def to_review(self) -> Self:
-        """Keep the suggestions awaiting review: undecided links below review confidence.
-
-        The review queue shows exactly these, and none of them decides who owns its
-        handle (see :meth:`decisive`).
-        """
-
-        return self.filter(_AWAITING_REVIEW)
-
-    def decisive(self) -> Self:
-        """Keep the links that may decide their handle's owner.
-
-        A dismissed link is the durable anti-link, and a suggestion awaiting review is
-        only a guess until someone confirms it.
-        """
-
-        return self.filter(is_dismissed=False).exclude(_AWAITING_REVIEW)
-
-    def winner(self) -> Any | None:
-        """Return the :meth:`decisive` link that decides its handle's owner, or ``None``.
-
-        The model's ordering ranks them: a human-confirmed link first, then the
-        strongest score. Among the links tied on both, a party with a real name
-        (:attr:`~angee.parties.models.Party.has_real_name`) wins over the import
-        placeholder or a bare number, so a nameless duplicate card never names the
-        sender; otherwise the first in order wins.
-        """
-
-        links = list(self.decisive().select_related("party").order_by(*self.model._meta.ordering))
-        if not links:
-            return None
-        first = links[0]
-        rank = (first.is_confirmed, first.confidence)
-        tied = (link for link in links if (link.is_confirmed, link.confidence) == rank)
-        return next((link for link in tied if link.party.has_real_name), first)
-
-    def asserted(self) -> Self:
-        """Keep links a directory card or a person asserted, never an unreviewed inference.
-
-        A ``carddav`` link restates its own card and a ``manual`` link was added by
-        a person; any other source is an inference no card publishes until a
-        human confirms it. A dismissed link is the durable anti-link and asserts nothing.
-        """
-
-        return self.filter(is_dismissed=False).filter(Q(is_confirmed=True) | Q(source__in=ASSERTING_SOURCES))
-
-    def readable_party_name_expression(self, *, actor: Any) -> Any:
-        """Return the linked Party label only when ``actor`` can read it."""
-
-        if actor is None:
-            return Value("", output_field=TextField())
-        party_model = apps.get_model("parties", "Party")
-        return (
-            party_model.objects.with_actor(actor)
-            .filter(pk=OuterRef("party_id"))
-            .readable_scalar_subquery(
-                "display_name",
-                actor=actor,
-                default="",
-                output_field=TextField(),
-            )
-        )
-
-    def readable_handle_value_expression(self, *, actor: Any) -> Any:
-        """Return the linked Handle value only when ``actor`` can read it."""
-
-        if actor is None:
-            return Value("", output_field=TextField())
-        handle_model = apps.get_model("parties", "Handle")
-        return (
-            handle_model.objects.with_actor(actor)
-            .filter(pk=OuterRef("handle_id"))
-            .readable_scalar_subquery(
-                "value",
-                actor=actor,
-                default="",
-                output_field=TextField(),
-            )
-        )
-
-    def update(self, **kwargs: Any) -> int:
-        """Keep association transitions on the owner that resolves handles."""
-
-        raise TypeError("Party-handle transitions must use link(), confirm(), dismiss(), or delete().")
-
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
-        """Require new associations to run the manager's resolution bookkeeping."""
-
-        raise TypeError("Party-handle links must be created through PartyHandleManager.link().")
-
-
-class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # type: ignore[misc]
-    """Owns the confidence link between a party and a handle, and the resolution."""
-
-    def lock_identity_rows(
-        self,
-        *,
-        party_ids: Iterable[int],
-        handle_ids: Iterable[int],
-    ) -> tuple[dict[int, Any], dict[int, Any]]:
-        """Lock identity rows in the total Handle, Party, PartyHandle order."""
-
-        handle_model = self.model._meta.get_field("handle").remote_field.model
-        party_model = self.model._meta.get_field("party").remote_field.model
-        ordered_handle_ids = sorted(set(handle_ids))
-        ordered_party_ids = sorted(set(party_ids))
-        with system_context(reason="parties.party_handle.lock_identity_rows"):
-            handles = {
-                row.pk: row
-                for row in handle_model.objects.filter(pk__in=ordered_handle_ids).order_by("pk").lock_if_supported()
-            }
-            ordered_party_ids = sorted(
-                set(ordered_party_ids)
-                .union(row.party_id for row in handles.values() if row.party_id is not None)
-                .union(self.filter(handle_id__in=ordered_handle_ids).values_list("party_id", flat=True))
-            )
-            parties = {
-                row.pk: row
-                for row in party_model.objects.filter(pk__in=ordered_party_ids).order_by("pk").lock_if_supported()
-            }
-            list(
-                self.filter(party_id__in=ordered_party_ids, handle_id__in=ordered_handle_ids)
-                .order_by("pk")
-                .lock_if_supported()
-            )
-        return handles, parties
-
-    def _transition(self, link: Any, *, action: str, actor: Any) -> None:
-        """Apply a confirmation transition under the canonical identity lock set."""
-
-        if action not in {"confirm", "dismiss"}:
-            raise ValueError("Unknown PartyHandle transition.")
-        if actor is None:
-            raise PermissionDenied("write access to the party-handle link is required")
-        with transaction.atomic():
-            self.lock_identity_rows(
-                party_ids=(link.party_id,),
-                handle_ids=(link.handle_id,),
-            )
-            locked = self.with_actor(actor).with_action("write").get(pk=link.pk)
-            if not locked.has_access("write"):
-                raise PermissionDenied("write access to the party-handle link is required")
-            with system_context(reason=f"parties.party_handle.{action}"):
-                getattr(ScoredLinkMixin, action)(locked)
-            for field in ("confidence", "source", "is_confirmed", "is_dismissed", "updated_at"):
-                setattr(link, field, getattr(locked, field))
-
-    def propose_manual_contact(
-        self,
-        party: Any,
-        *,
-        platform: str,
-        value: str,
-        label: str = "",
-        actor: Any,
-    ) -> Any:
-        """Add one unconfirmed manual contact claim without asserting sender identity.
-
-        Handles are globally deduplicated on their native ``(platform, value)``
-        identity, while the Party association remains a reviewable ``PartyHandle``.
-        Reusing a global Handle therefore requires read access and never refreshes
-        its display fields. Repeating a dismissed Party association returns that
-        durable anti-link unchanged; confirmation remains the explicit human action.
-        """
-
-        party.require_access("write", actor)
-        handle_model = apps.get_model("parties", "Handle")
-        allowed_platforms = {
-            str(handle_model.Platform.EMAIL),
-            str(handle_model.Platform.PHONE),
-        }
-        normalized_platform = str(platform or "").strip().lower()
-        normalized_label = " ".join(str(label or "").split()).strip()
-        contact_value = str(value or "").strip()
-        if normalized_platform not in allowed_platforms:
-            raise ValidationError({"platform": "Choose email or phone."})
-        if not contact_value:
-            raise ValidationError({"value": "Enter an email address or phone number."})
-        if normalized_platform == str(handle_model.Platform.EMAIL):
-            try:
-                validate_email(contact_value)
-            except ValidationError as exc:
-                raise ValidationError({"value": exc.messages}) from exc
-        else:
-            try:
-                number = parse(contact_value, None)
-            except NumberParseException as exc:
-                raise ValidationError(
-                    {"value": "Enter a valid international phone number including country code."}
-                ) from exc
-            if not is_possible_number(number) or not is_valid_number(number):
-                raise ValidationError({"value": "Enter a valid international phone number including country code."})
-
-        candidate = handle_model(
-            platform=normalized_platform,
-            value=contact_value,
-            normalized_value=handle_model.normalize_value(normalized_platform, contact_value),
-            label=normalized_label,
-            created_by_id=getattr(actor, "pk", None),
-        )
-        candidate.full_clean(validate_unique=False, validate_constraints=False)
-
-        with transaction.atomic(), actor_context(actor):
-            handle_owner = handle_model.objects
-            handle = (
-                handle_owner.sudo(reason="parties.party_handle.propose_manual_contact.handle")
-                .lock_if_supported()
-                .filter(platform=normalized_platform, value=contact_value)
-                .first()
-            )
-            if handle is None:
-                handle_owner.check_create()
-                with system_context(reason="parties.party_handle.propose_manual_contact.handle"):
-                    handle = handle_owner.upsert(
-                        platform=normalized_platform,
-                        value=contact_value,
-                        created_by_id=getattr(actor, "pk", None),
-                    )
-            handles, parties = self.lock_identity_rows(
-                party_ids=(party.pk,),
-                handle_ids=(handle.pk,),
-            )
-            handle = handles[handle.pk]
-            locked_party = parties[party.pk]
-            locked_party.require_access("write", actor)
-            if not handle.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Denied: cannot add this contact point.")
-            if normalized_label and not handle.label and handle.has_access("write"):
-                handle.label = normalized_label
-                handle.save(update_fields=("label", "updated_at"))
-
-            existing = (
-                self.sudo(reason="parties.party_handle.propose_manual_contact.lookup")
-                .lock_if_supported()
-                .filter(party_id=locked_party.pk, handle_id=handle.pk)
-                .first()
-            )
-            if existing is not None:
-                if not existing.with_actor(actor).has_access("read"):
-                    raise PermissionDenied("Denied: cannot add this contact point.")
-                return existing
-
-            verified_link_actor = self.check_create()
-            with system_context(reason="parties.party_handle.propose_manual_contact.link"):
-                link = self.link(
-                    locked_party,
-                    handle,
-                    confidence=0.4,
-                    source=cast(LinkSource, LinkSource.MANUAL),
-                    is_confirmed=False,
-                    created_by_id=getattr(actor, "pk", None),
-                )
-            if not link.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Denied: cannot read the contact association.")
-            return link.with_actor(verified_link_actor)
-
-    def has_confirmed_association(self, handle: Any, *, actor: Any) -> bool:
-        """Return whether this readable Handle has any confirmed owner, without disclosing it."""
-
-        if actor is None:
-            raise PermissionDenied("an actor is required to assess a party-handle association")
-        handle.require_access("read", actor)
-        with system_context(reason="parties.party_handle.has_confirmed_association"):
-            return self.filter(
-                handle_id=handle.pk,
-                is_confirmed=True,
-                is_dismissed=False,
-            ).exists()
-
-    def assess_claimed_handle(self, party: Any, handle: Any, *, actor: Any) -> HandleAssociationAssessment:
-        """Assess a claimed Handle without disclosing inaccessible Party associations."""
-
-        if actor is None:
-            raise PermissionDenied("an actor is required to assess a party-handle association")
-        party.require_access("read", actor)
-        handle.require_access("read", actor)
-        visible = read_scoped_queryset(self.model, actor)
-        readable = tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
-        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
-
-    def _assess_claimed_handle_authorized(
-        self,
-        *,
-        party: Any,
-        handle: Any,
-        readable_links: tuple[Any, ...],
-    ) -> HandleAssociationAssessment:
-        """Assess one exact Handle after its caller authorized Party and evidence reads."""
-
-        if any(link.handle_id != handle.pk for link in readable_links):
-            raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
-        with system_context(reason="parties.party_handle.assess_claimed_handle"):
-            authoritative = tuple(
-                self.filter(handle_id=handle.pk).only("party_id", "is_confirmed", "is_dismissed").order_by("pk")
-            )
-        same = tuple(link for link in authoritative if link.party_id == party.pk)
-        if any(link.is_dismissed for link in same):
-            status = HandleAssociationStatus.SAME_DISMISSED
-        elif any(link.is_confirmed and not link.is_dismissed and link.party_id != party.pk for link in authoritative):
-            status = HandleAssociationStatus.CONFIRMED_OTHER
-        elif any(link.is_confirmed and not link.is_dismissed for link in same):
-            status = HandleAssociationStatus.SAME_CONFIRMED
-        elif any(not link.is_dismissed for link in same):
-            status = HandleAssociationStatus.WEAK_SAME
-        else:
-            status = HandleAssociationStatus.UNKNOWN
-        readable_ids = {link.pk for link in readable_links}
-        conflict_ids = {
-            link.pk
-            for link in authoritative
-            if (
-                (link.party_id == party.pk and link.is_dismissed)
-                or (link.party_id != party.pk and link.is_confirmed and not link.is_dismissed)
-            )
-        }
-        return HandleAssociationAssessment(
-            status=status,
-            readable_links=readable_links,
-            conflict_evidence_readable=conflict_ids.issubset(readable_ids),
-        )
-
-    def propose_claimed_handle(
-        self,
-        party: Any,
-        handle: Any,
-        *,
-        evidence: Any,
-        actor: Any,
-        confidence: float = 0.4,
-    ) -> Any:
-        """Retain an unconfirmed address claim for human identity review.
-
-        The evidence record may be a Message, document, or another readable native
-        record. This owner deliberately records only that the source claimed the
-        handle. Transport authentication remains unknown, independently of any
-        later human confirmation of Party ownership.
-        """
-
-        party.require_access("write", actor)
-        handle.require_access("read", actor)
-        evidence.require_access("read", actor)
-        return self._propose_claimed_handle_authorized(
-            party, handle, evidence=evidence, actor=actor, confidence=confidence
-        )
-
-    def _propose_claimed_handle_authorized(
-        self,
-        party: Any,
-        handle: Any,
-        *,
-        evidence: Any,
-        actor: Any,
-        confidence: float = 0.4,
-    ) -> Any:
-        """Retain a claim after the caller authorized exact Handle and evidence reads."""
-
-        party.require_access("write", actor)
-        if not 0 < confidence < _REVIEW_CONFIDENCE:
-            raise ValidationError(
-                {"confidence": f"Claimed-handle proposals require confidence below {_REVIEW_CONFIDENCE}."}
-            )
-        evidence_model = generic_pointer_model(type(evidence))
-        evidence_ref = {
-            "model": evidence_model._meta.label,
-            "id": public_id_for(evidence_model, evidence.pk),
-        }
-        with system_context(reason="parties.party_handle.propose_claimed_handle"), transaction.atomic():
-            handles, parties = self.lock_identity_rows(
-                party_ids=(party.pk,),
-                handle_ids=(handle.pk,),
-            )
-            locked_handle = handles[handle.pk]
-            locked_party = parties[party.pk]
-            existing = self.filter(party=locked_party, handle=locked_handle).first()
-            # Record references keep their own key: ``evidence`` describes a rule
-            # suggestion's evidence, and a claim may land on such a row.
-            refs = list((existing.metadata or {}).get("evidence_refs", ())) if existing is not None else []
-            if evidence_ref not in refs:
-                refs.append(evidence_ref)
-            return self.link(
-                locked_party,
-                locked_handle,
-                confidence=confidence,
-                source=cast(LinkSource, LinkSource.EMAIL_MATCH),
-                is_confirmed=False,
-                metadata={
-                    "claim": "source_sender",
-                    "evidence_refs": refs,
-                },
-                created_by_id=getattr(actor, "pk", None),
-            )
-
-    def link(
-        self,
-        party: Any,
-        handle: Any,
-        *,
-        confidence: float = 1.0,
-        source: LinkSource,
-        is_confirmed: bool = False,
-        metadata: dict[str, Any] | None = None,
-        created_by_id: Any = None,
-    ) -> Any:
-        """Link ``handle`` to ``party`` with ``confidence``, then resolve the handle's owner.
-
-        Every caller declares ``source``: provenance decides whether the link is an
-        assertion a directory card may publish or an inference it does not (see
-        :meth:`PartyHandleQuerySet.asserted`); confidence decides whether it awaits
-        review. ``is_confirmed`` records a human-strength decision (a connect flow claiming the signed-in user's own
-        handle); it upgrades an existing undecided link to the confirmed self-link.
-        Without it, an undecided link keeps the higher confidence, and an assertion
-        replaces an inference's source, so a card that lists a mined number owns it.
-        An inference never replaces an assertion's source, so a person's link stays
-        published; a stronger inference replaces a weaker one. A dismissed link keeps
-        the human decision, ``is_confirmed`` included: only the person's own
-        :meth:`~angee.parties.models.PartyHandle.confirm` reverses a dismissal.
-        Resolution only re-runs when the link is new, upgraded, or the handle's owner
-        is not already this party, so a re-sync of an unchanged contact does no extra
-        work. Source metadata merges onto the existing link so a later importer can
-        add provenance without erasing prior evidence.
-        """
-
-        with transaction.atomic():
-            handles, parties = self.lock_identity_rows(
-                party_ids=(party.pk,),
-                handle_ids=(handle.pk,),
-            )
-            handle = handles[handle.pk]
-            party = parties[party.pk]
-            link, created = self.get_or_create(
-                party=party,
-                handle=handle,
-                defaults={
-                    "confidence": confidence,
-                    "source": source,
-                    "is_confirmed": is_confirmed,
-                    "metadata": metadata or {},
-                    "created_by_id": created_by_id,
-                },
-            )
-            upgraded = False
-            dirty: list[str] = []
-            if not created and is_confirmed and not (link.is_confirmed or link.is_dismissed):
-                link.confidence = confidence
-                link.source = source
-                link.is_confirmed = True
-                dirty.extend(("confidence", "source", "is_confirmed"))
-                upgraded = True
-            elif not created and not link.is_confirmed and not link.is_dismissed:
-                # Provenance outranks score: an assertion replaces an inference's
-                # source (a card that now lists a mined number owns it), and an
-                # inference never replaces an assertion's. A human decision stays.
-                if link.source not in ASSERTING_SOURCES and (
-                    source in ASSERTING_SOURCES or confidence > link.confidence
-                ):
-                    link.source = source
-                    dirty.append("source")
-                if confidence > link.confidence:
-                    link.confidence = confidence
-                    dirty.append("confidence")
-                upgraded = bool(dirty)
-            merged_metadata = {**(link.metadata or {}), **(metadata or {})}
-            if merged_metadata != link.metadata:
-                link.metadata = merged_metadata
-                dirty.append("metadata")
-            if dirty:
-                link.save(update_fields=[*dict.fromkeys(dirty), "updated_at"])
-            if created or upgraded or handle.party_id != party.pk:
-                link._resolve_link()
-            return link
-
     def resolve(self, handle: Any) -> None:
-        """Materialise ``handle.party`` and its confirmed state from the winning link.
-
-        :meth:`PartyHandleQuerySet.winner` applies the contacts rule: a
-        human-confirmed link wins, then the strongest score, then a party with a
-        real name. Only a :meth:`~PartyHandleQuerySet.decisive` link competes, so a
-        suggestion awaiting review never decides who sent a message. A handle with
-        no decisive link is left unowned. A demotion (a dismissed winner) recounts
-        the previous owner too, so its ``handle_count`` never goes stale.
-        """
-
-        with transaction.atomic():
-            handles, _parties = self.lock_identity_rows(
-                party_ids=(),
-                handle_ids=(handle.pk,),
+        """Materialize the applied, eligible cross-party winner and both counters."""
+        handle_id = handle.pk if isinstance(handle, models.Model) else handle
+        owner = apps.get_model("parties", "Party").objects
+        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
+            handles, parties = owner.lock_identity_rows(party_ids=(), handle_ids=(handle_id,))
+            handle = handles[handle_id]
+            candidates = list(owner.handle_statements().canonical().filter(handle=handle).select_related("subject"))
+            ordered = sorted(
+                candidates,
+                key=lambda row: (
+                    *row.sort_key()[:2],
+                    not row.subject.has_real_name,
+                    *row.sort_key()[2:],
+                ),
             )
-            handle = handles[handle.pk]
-            previous_pk = handle.party_id
-            winner = self.filter(handle=handle).winner()
-            resolved = winner.party if winner else None
-            resolved_pk = resolved.pk if resolved else None
-            is_confirmed = bool(winner and winner.is_confirmed)
-            dirty = []
-            if handle.party_id != resolved_pk:
-                handle.party_id = resolved_pk
-                dirty.append("party")
-            if handle.party_link_confirmed != is_confirmed:
-                handle.party_link_confirmed = is_confirmed
-                dirty.append("party_link_confirmed")
-            if dirty:
-                handle.save(update_fields=[*dirty, "updated_at"])
-            if resolved is not None:
-                self.recount(resolved)
-            if previous_pk is not None and previous_pk != resolved_pk:
-                party_model = apps.get_model("parties", "Party")
-                previous = party_model.objects.filter(pk=previous_pk).first()
-                if previous is not None:
-                    self.recount(previous)
+            winner = ordered[0] if ordered else None
+            previous = handle.party_id
+            resolved = winner.subject_id if winner else None
+            confirmed = bool(winner and winner.is_confirmed)
+            if handle.party_id != resolved or handle.party_link_confirmed != confirmed:
+                handle.party_id, handle.party_link_confirmed = resolved, confirmed
+                handle.save(update_fields=("party", "party_link_confirmed", "updated_at"))
+            for pk in sorted({value for value in (previous, resolved) if value is not None}):
+                self.recount(parties[pk])
             handle._party_links_resolved()
 
     def recount(self, party: Any) -> None:
-        """Refresh ``party.handle_count`` from the handles resolved onto it (write only on change).
-
-        Idempotent, so it doubles as the repair pass for the drift the counter
-        signals cannot see (``bulk_create`` / ``QuerySet.update`` skip signals).
-        """
-
-        handle_model = apps.get_model("parties", "Handle")
-        count = handle_model.objects.filter(party_id=party.pk).count()
+        count = self.filter(party=party).count()
         if party.handle_count != count:
             party.handle_count = count
-            party.save(update_fields=["handle_count", "updated_at"])
+            party.save(update_fields=("handle_count", "updated_at"))
 
     def resolve_stale_owners(self) -> int:
-        """Re-resolve handles whose stored owner holds no decisive link to them.
-
-        ``Handle.party`` is materialised, so a resolution rule change leaves handles
-        owned the old way, such as through a suggestion that now awaits review. The
-        repair is idempotent and finds nothing in steady state.
-        """
-
-        handle_model = apps.get_model("parties", "Handle")
-        decisive = self.filter(handle_id=OuterRef("pk"), party_id=OuterRef("party_id")).decisive()
-        stale = handle_model.objects.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
+        owner = apps.get_model("parties", "Party").objects
+        decisive = (
+            owner.handle_statements().canonical().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
+        )
+        stale = self.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
         repaired = 0
         for handle in stale.iterator():
             self.resolve(handle)
             repaired += 1
         return repaired
 
-    def suggest_for(self, handle: Any) -> Any:
-        """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
 
-        Three branches, none confirming its link and none duplicating an existing
-        pair: indexed normalized twins contribute distinct candidate parties (the
-        first at ``1.0``, which decides the owner, competing parties at ``0.3`` for review);
-        otherwise an email whose non-generic domain matches a tracked
-        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
-        otherwise no-op. Both branches stay inside ``handle.created_by``'s audit
-        partition, and public mailbox-provider domains never imply organization
-        membership. Returns the strongest created/existing link, or ``None``.
-        """
+class PartyStatementQuerySet(StatementQuerySet):
+    """Party handle scopes; serving callers explicitly authorize both endpoints."""
 
-        if handle.party_id is not None:
-            return None
-        if handle.created_by_id is None:
-            return None
-        handle_model = apps.get_model("parties", "Handle")
-        twins = (
-            handle_model.objects.filter(
-                platform=handle.platform,
-                normalized_value=handle.normalized_value,
-                party__isnull=False,
-                created_by_id=handle.created_by_id,
-                party__created_by_id=handle.created_by_id,
+    def handles(self) -> Any:
+        return self.current().filter(aspect="handle")
+
+    def members(self) -> Any:
+        """One strongest current stance per subject/member, including weak claims."""
+        representative = (
+            self.model._base_manager.handles()
+            .filter(
+                subject_id=OuterRef("subject_id"),
+                handle_id=OuterRef("handle_id"),
+                status=self.model.Status.ASSERTED,
             )
-            .exclude(pk=handle.pk)
-            .select_related("party")
-            .order_by("sqid")
+            .order_by("-applied", *self.model.trust_ordering)
+            .values("pk")[:1]
         )
-        strongest = None
-        seen_parties: set[Any] = set()
-        for candidate in twins:
-            if candidate.party_id in seen_parties:
-                continue
-            seen_parties.add(candidate.party_id)
-            link = self.link(
-                candidate.party,
-                handle,
-                confidence=1.0 if strongest is None else 0.3,
-                source=cast(LinkSource, LinkSource.EMAIL_MATCH),
-                created_by_id=handle.created_by_id,
+        return self.filter(pk=Subquery(representative))
+
+    def to_review(self) -> Any:
+        decision = self.model._base_manager.handles().filter(
+            subject_id=OuterRef("subject_id"),
+            handle_id=OuterRef("handle_id"),
+            status=self.model.Status.ASSERTED,
+            rank=self.model.Rank.PREFERRED,
+        )
+        return (
+            self.handles()
+            .members()
+            .filter(
+                status=self.model.Status.ASSERTED,
+                rank=self.model.Rank.NORMAL,
+                snak=self.model.Snak.VALUE,
+                confidence__lt=_REVIEW_CONFIDENCE,
             )
-            if strongest is None:
-                strongest = link
-        if strongest is not None:
-            return strongest
-        if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
-            domain = handle.normalized_value.rsplit("@", 1)[1]
-            organization_model = apps.get_model("parties", "Organization")
-            org = (
-                organization_model.objects.filter(
-                    created_by_id=handle.created_by_id,
-                    domain__iexact=domain,
-                ).first()
-                if domain and domain not in GENERIC_EMAIL_DOMAINS
-                else None
-            )
-            if org is not None:
-                return self.link(
-                    org,
-                    handle,
-                    confidence=0.4,
-                    source=cast(LinkSource, LinkSource.RULE),
-                    created_by_id=handle.created_by_id,
-                )
-        return None
+            .exclude(Exists(decision))
+        )
 
-    def reconcile_suggestions(self) -> int:
-        """Reconcile the evidence-backed suggestions with every registered evidence provider.
-
-        Display-name evidence is parties' own. Downstream addons contribute the rest
-        as dotted callables, so parties reads no other addon's models:
-
-        - ``ANGEE_PARTIES_SHARED_SENDER_PROVIDERS`` callables return handle ids whose
-          display names are no evidence (list and notification senders).
-        - ``ANGEE_PARTIES_SIGNING_PROVIDERS`` callables yield :class:`Signing` rows.
-          Each yields all of its evidence, since a signature suggestion the signings
-          no longer support is withdrawn. With no provider registered there is no
-          signature evidence to judge, and the signature suggestions stay.
-
-        A provider that raises does so before its pass writes anything. The verb
-        runs as named system work: complete evidence spans every owner's mail,
-        whatever the caller may read. Returns the suggestions created plus those
-        withdrawn.
-        """
-
-        with system_context(reason="parties.reconcile_suggestions"):
-            shared = frozenset(
-                chain.from_iterable(provider() for provider in resolve_hooks("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS"))
-            )
-            changed = self._reconcile_display_names(shared)
-            if providers := resolve_hooks("ANGEE_PARTIES_SIGNING_PROVIDERS"):
-                changed += self._reconcile_signatures(chain.from_iterable(provider() for provider in providers))
-        return changed
-
-    def _reconcile_signatures(self, signings: Iterable[Signing]) -> int:
-        """Reconcile weak party-to-phone suggestions with every signature in the owners' mail.
-
-        Each :class:`Signing` is neutral evidence that one sender signed with one
-        fragment. This manager owns phone extraction, Handle creation, link
-        provenance, owner partition and the durable-pair check. A number is a
-        person's own only while that one person (or one unresolved address) signs
-        with it in the owner's mail: forwards, company switchboards and conference
-        bridges repeat a number under several people, and none of them owns it.
-        Each such number of a resolved sender is one ``0.3`` suggestion recording
-        its fragment; an undecided suggestion the evidence no longer supports is
-        withdrawn, so ``signings`` must be complete. An existing pair, including a
-        dismissed anti-link, is never changed.
-
-        A signer is the resolved party, or the address while it is unresolved: one
-        person writing from a resolved and an unresolved address counts twice until
-        the second resolves, and people resolved onto one shared card count once.
-        """
-
-        handle_model = apps.get_model("parties", "Handle")
-        party_model = apps.get_model("parties", "Party")
-        numbers: dict[str, tuple[str, ...]] = {}
-        signers: defaultdict[tuple[Any, str], set[Any]] = defaultdict(set)
-        evidence: dict[tuple[Any, Any, str], str] = {}
-        for signing in signings:
-            if signing.owner_id is None:
-                continue
-            if signing.fragment_hash not in numbers:
-                numbers[signing.fragment_hash] = self._signature_phone_values(signing.text, handle_model=handle_model)
-            signer = ("party", signing.party_id) if signing.party_id is not None else ("handle", signing.sender_id)
-            for value in numbers[signing.fragment_hash]:
-                signers[signing.owner_id, value].add(signer)
-                if signing.party_id is not None:
-                    evidence.setdefault((signing.owner_id, signing.party_id, value), signing.fragment_hash)
-        # Support stays inside the owner partition: another owner's mail never
-        # proposes, or keeps, a suggestion in this owner's review queue.
-        supported = {key for key in evidence if len(signers[key[0], key[2]]) == 1}
-        party_ids = {party_id for _owner_id, party_id, _value in supported}
-        existing = set(
-            self.filter(handle__platform=handle_model.Platform.PHONE, party_id__in=party_ids).values_list(
-                "party_id", "handle__normalized_value"
+    def asserted(self) -> Any:
+        """Publish eligible applied directory/person assertions or confirmations."""
+        return (
+            self.canonical()
+            .filter(aspect="handle")
+            .filter(
+                Q(rank=self.model.Rank.PREFERRED) | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
-        parties = party_model.objects.in_bulk(party_ids)
-        created = 0
-        ordered = sorted(evidence.items(), key=lambda item: (item[0][2], str(item[0][1])))
-        for key, fragment_hash in ordered:
-            owner_id, party_id, value = key
-            party = parties.get(party_id)
-            if (
-                key not in supported
-                or (party_id, value) in existing
-                or party is None
-                or party.created_by_id != owner_id
-            ):
-                continue
-            handle = handle_model.objects.upsert(
-                platform=handle_model.Platform.PHONE,
-                value=value,
-                created_by_id=owner_id,
-            )
-            if handle.created_by_id != owner_id:
-                # Handles are globally unique by source identity. Evidence owned by
-                # one directory must never attach another owner's pre-existing row.
-                continue
-            created += self._suggest(
-                party,
-                handle,
-                confidence=0.3,
-                metadata={"evidence": {"kind": "signature_phone", "fragment_hash": fragment_hash}},
-                created_by_id=owner_id,
-            )
-        withdrawn = self._withdraw_unsupported(
-            "signature_phone", supported, ("created_by_id", "party_id", "handle__normalized_value")
+
+    def readable(self, actor: Any) -> Any:
+        """Serving projection only; shadow tables have no independent read grants."""
+        return self.handles().filter(
+            subject_id__in=Subquery(read_scoped_queryset(apps.get_model("parties", "Party"), actor).values("pk")),
+            handle_id__in=Subquery(read_scoped_queryset(apps.get_model("parties", "Handle"), actor).values("pk")),
         )
-        return created + withdrawn
 
-    def _reconcile_display_names(self, shared: frozenset[Any]) -> int:
-        """Reconcile weak identity links with the full display names pooled per audit owner.
 
-        A resolved handle supplies evidence only to a handle on another platform,
-        and only for a party that bears the same full name itself. A one-word name
-        (a first name, a brand) identifies nobody, and a party named otherwise, such
-        as a nameless card holding several people's numbers, is not that person.
-        ``shared`` handles are addresses several people speak through: their display
-        names name whoever spoke last and are no evidence. Each distinct candidate
-        party of an unresolved handle receives one ``0.4`` rule link. A suggestion is
-        withdrawn only when its names no longer support it, not when its handle
-        later gains an owner; existing pairs, including dismissed links, remain
-        untouched.
-        """
+class PartyStatementManager(StatementManager.from_queryset(PartyStatementQuerySet)):  # type: ignore[misc]
+    """Compose statement writes with the shared Handle, Party lock order."""
 
-        handle_model = apps.get_model("parties", "Handle")
-        supported: set[tuple[Any, Any]] = set()
-        created = 0
-        owner_ids = (
-            handle_model.objects.exclude(created_by_id=None)
-            .exclude(display_name="")
-            .values_list("created_by_id", flat=True)
-            # Clear the model's default ordering: its columns silently join the
-            # DISTINCT, yielding one "distinct owner" PER HANDLE — the pass then
-            # repeats its full per-owner sweep tens of thousands of times.
-            .order_by()
-            .distinct()
-        )
-        for owner_id in owner_ids:
-            handles = tuple(
-                handle_model.objects.filter(created_by_id=owner_id)
-                .exclude(display_name="")
-                .select_related("party")
-                .order_by("sqid")
-            )
-            # The durable-pair check reads once per owner, not once per pair:
-            # steady state re-proposes tens of thousands of existing links, and a
-            # get_or_create probe for each is the pass's dominant cost.
-            existing_pairs = set(self.filter(handle__created_by_id=owner_id).values_list("party_id", "handle_id"))
-            pools: defaultdict[str, list[Any]] = defaultdict(list)
-            for handle in handles:
-                normalized_name = handle_model.normalize_display_name(handle.display_name)
-                if " " in normalized_name and handle.pk not in shared:
-                    pools[normalized_name].append(handle)
-
-            for handle in handles:
-                if handle.pk in shared:
-                    continue
-                normalized_name = handle_model.normalize_display_name(handle.display_name)
-                seen_parties: set[Any] = set()
-                for candidate in pools.get(normalized_name, ()):
-                    if (
-                        candidate.party_id is None
-                        or candidate.party.created_by_id != owner_id
-                        or handle_model.normalize_display_name(candidate.party.display_name) != normalized_name
-                        or candidate.platform == handle.platform
-                        or candidate.party_id in seen_parties
-                    ):
-                        continue
-                    seen_parties.add(candidate.party_id)
-                    supported.add((candidate.party_id, handle.pk))
-                    if handle.party_id is not None or (candidate.party_id, handle.pk) in existing_pairs:
-                        continue
-                    existing_pairs.add((candidate.party_id, handle.pk))
-                    created += self._suggest(
-                        candidate.party,
-                        handle,
-                        confidence=0.4,
-                        metadata={
-                            "evidence": {
-                                "kind": "display_name",
-                                "normalized_display_name": normalized_name,
-                                "source_handle": str(candidate.sqid),
-                            }
-                        },
-                        created_by_id=owner_id,
-                    )
-        return created + self._withdraw_unsupported("display_name", supported, ("party_id", "handle_id"))
-
-    def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, ...]], key: tuple[str, ...]) -> int:
-        """Delete the undecided rule suggestions of ``kind`` whose ``key`` values no evidence supports now.
-
-        Confirmed links and dismissed anti-links are human decisions and stay. The
-        delete re-reads its rows locked under the same filter, so a suggestion a
-        person confirms, or a card upgrades, during the pass is no longer pending
-        and stays. A suggestion never decided its handle's owner, so withdrawing
-        one leaves the owner as it was.
-        """
-
-        pending = self.to_review().filter(source=LinkSource.RULE, metadata__evidence__kind=kind)
-        stale = [pk for pk, *pair in pending.values_list("pk", *key) if tuple(pair) not in supported]
-        if not stale:
-            return 0
-        with transaction.atomic():
-            locked = list(pending.filter(pk__in=stale).lock_if_supported().values_list("pk", flat=True))
-            pending.filter(pk__in=locked).delete()
-        return len(locked)
-
-    def _suggest(
-        self,
-        party: Any,
-        handle: Any,
-        *,
-        confidence: float,
-        metadata: dict[str, Any],
-        created_by_id: Any,
-    ) -> int:
-        """Create one rule link awaiting review, or skip its durable existing pair.
-
-        A suggestion never decides its handle's owner, so creating one resolves nothing.
-        """
-
-        with transaction.atomic():
-            handles, parties = self.lock_identity_rows(
-                party_ids=(party.pk,),
-                handle_ids=(handle.pk,),
-            )
-            locked_handle = handles[handle.pk]
-            locked_party = parties[party.pk]
-            _, created = self.get_or_create(
-                party_id=locked_party.pk,
-                handle_id=locked_handle.pk,
-                defaults={
-                    "confidence": confidence,
-                    "source": LinkSource.RULE,
-                    "metadata": metadata,
-                    "created_by_id": created_by_id,
-                },
-            )
-            return int(created)
-
-    @staticmethod
-    def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
-        """Return deterministic canonical phone values mined from signature text.
-
-        libphonenumber's matcher finds only valid numbers written with their country
-        code. A digit run without one, such as a ticket or comment id, names no
-        number and is never mined.
-        """
-
-        return tuple(
-            sorted(
-                {
-                    handle_model.normalize_value(handle_model.Platform.PHONE, match.raw_string)
-                    for match in PhoneNumberMatcher(text or "", None)
+    def set(self, **kwargs: Any) -> Any:
+        party = self.instance or self.model.statement_subject_model._base_manager.get(
+            **{
+                name: value
+                for name, value in kwargs.items()
+                if name
+                not in {
+                    "aspect",
+                    "values",
+                    "asserted_by",
+                    "link",
+                    "evidence",
+                    "confidence",
+                    "rank",
+                    "snak",
+                    "basis_hash",
+                    *self.model.statement_aspects[kwargs["aspect"]].members,
                 }
-            )
+            }
         )
+        handle = kwargs.get("handle")
+        with transaction.atomic():
+            owner = apps.get_model("parties", "Party").objects
+            handle_ids = set(owner.handle_statements().filter(subject=party).values_list("handle_id", flat=True))
+            if handle is not None:
+                handle_ids.add(handle.pk if isinstance(handle, models.Model) else handle)
+            owner.lock_identity_rows(party_ids=(party.pk,), handle_ids=handle_ids)
+            return super().set(**kwargs)
+
+    def _transition(self, status: str, **kwargs: Any) -> int:
+        rows = self.get_queryset().filter(asserted_by=str(to_subject_ref(kwargs["asserted_by"])))
+        if kwargs.get("subjects") is not None:
+            rows = rows.filter(subject__in=kwargs["subjects"])
+        with transaction.atomic():
+            owner = apps.get_model("parties", "Party").objects
+            party_ids = set(rows.values_list("subject_id", flat=True))
+            owner.lock_identity_rows(
+                party_ids=party_ids,
+                handle_ids=owner.handle_statements()
+                .filter(subject_id__in=party_ids)
+                .values_list("handle_id", flat=True),
+            )
+            return super()._transition(status, **kwargs)
+
+    def resolve(self, *, subject: Any = None) -> None:
+        subject = subject if subject is not None else self.instance
+        if subject is None:
+            raise ValidationError("Survivorship requires one subject.")
+        with transaction.atomic():
+            owner = apps.get_model("parties", "Party").objects
+            owner.lock_identity_rows(
+                party_ids=(subject.pk,),
+                handle_ids=owner.handle_statements().filter(subject=subject).values_list("handle_id", flat=True),
+            )
+            super().resolve(subject=subject)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1585,9 +862,13 @@ class PartyQuerySet(AngeeQuerySet):
     def to_review(self) -> Self:
         """Return canonical parties with an undecided low-confidence handle link."""
 
-        party_handle_model = apps.get_model("parties", "PartyHandle")
         visible_review_link = (
-            party_handle_model.objects.all().scoped_for_aggregate().to_review().filter(party_id=OuterRef("pk"))
+            apps.get_model("parties", "Party")
+            .objects.handle_statements(
+                actor=self.actor() or current_actor(),
+            )
+            .to_review()
+            .filter(subject_id=OuterRef("pk"))
         )
         return (
             self.canonical()
@@ -1744,17 +1025,654 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     :meth:`for_user` lives here.
     """
 
+    def handle_statements(self, *, actor: Any = _UNSCOPED) -> Any:
+        rows = apps.get_model("parties", "Party").statements.handles()
+        return rows if actor is _UNSCOPED else rows.readable(actor)
+
+    @staticmethod
+    def rule_source(key: str) -> Any:
+        with system_context(reason="parties.rule"):
+            return apps.get_model("provenance", "Rule").objects.for_key(f"parties.{key}")
+
+    @transaction.atomic
+    def assert_handle(
+        self,
+        party: Any,
+        handle: Any,
+        *,
+        asserted_by: Any,
+        confidence: float = 1.0,
+        evidence: Iterable[Any] = (),
+        link: Any = None,
+    ) -> Any:
+        """Assert normal handle facts from native supporting records, preserving person decisions."""
+        source = to_subject_ref(asserted_by)
+        subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
+        origins = list(evidence)
+        self._admit_handle_source(subject, handle, source, origins)
+        refs = [
+            {
+                "model": generic_pointer_model(type(row))._meta.label,
+                "id": public_id_for(generic_pointer_model(type(row)), row.pk),
+            }
+            for row in origins
+        ]
+        existing = subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
+        if existing is not None and existing.rank == existing.Rank.PREFERRED:
+            subject.statements.asserting_source(asserted_by)
+            subject.require_statement_write(source)
+            return existing
+        return subject.statements.set(
+            aspect="handle",
+            handle=handle,
+            values={},
+            asserted_by=asserted_by,
+            confidence=confidence,
+            evidence=refs,
+            link=link,
+        )
+
+    @staticmethod
+    def _admit_handle_source(party: Any, handle: Any, source: Any, origins: Iterable[Any] = ()) -> None:
+        """Trusted producers grant their subject, member and owned supporting facts."""
+        if is_sudo() and source.subject_type != "auth/user":
+            write_relationships(
+                [
+                    RelationshipTuple(resource=to_object_ref(row), relation="statement_source", subject=source)
+                    for row in (party, handle, *origins)
+                ]
+            )
+
+    def lock_identity_rows(
+        self,
+        *,
+        party_ids: Iterable[int],
+        handle_ids: Iterable[int],
+    ) -> tuple[dict[int, Any], dict[int, Any]]:
+        """Lock Handles, then every competing Party, then retained statements."""
+        with system_context(reason="parties.identity.lock"):
+            handles = {
+                row.pk: row
+                for row in apps.get_model("parties", "Handle")
+                .objects.filter(
+                    pk__in=sorted(set(handle_ids)),
+                )
+                .order_by("pk")
+                .lock_if_supported()
+            }
+            ids = set(party_ids) | {row.party_id for row in handles.values() if row.party_id is not None}
+            ids.update(self.handle_statements().filter(handle_id__in=handles).values_list("subject_id", flat=True))
+            parties = {
+                row.pk: row
+                for row in apps.get_model("parties", "Party")
+                .objects.filter(
+                    pk__in=sorted(ids),
+                )
+                .order_by("pk")
+                .lock_if_supported()
+            }
+            list(
+                self.handle_statements()
+                .filter(subject_id__in=ids, handle_id__in=handles)
+                .order_by("pk")
+                .lock_if_supported()
+            )
+        return handles, parties
+
+    def propose_manual_contact(
+        self,
+        party: Any,
+        *,
+        platform: str,
+        value: str,
+        label: str = "",
+        actor: Any,
+    ) -> Any:
+        """Add one unconfirmed manual contact claim without asserting sender identity.
+
+        Handles are globally deduplicated on their native ``(platform, value)``
+        identity, while the Party association remains a reviewable ``PartyStatement``.
+        Reusing a global Handle therefore requires read access and never refreshes
+        its display fields. Repeating a dismissed Party association returns that
+        durable anti-link unchanged; confirmation remains the explicit human action.
+        """
+
+        party.require_access("write", actor)
+        handle_model = apps.get_model("parties", "Handle")
+        allowed_platforms = {
+            str(handle_model.Platform.EMAIL),
+            str(handle_model.Platform.PHONE),
+        }
+        normalized_platform = str(platform or "").strip().lower()
+        normalized_label = " ".join(str(label or "").split()).strip()
+        contact_value = str(value or "").strip()
+        if normalized_platform not in allowed_platforms:
+            raise ValidationError({"platform": "Choose email or phone."})
+        if not contact_value:
+            raise ValidationError({"value": "Enter an email address or phone number."})
+        if normalized_platform == str(handle_model.Platform.EMAIL):
+            try:
+                validate_email(contact_value)
+            except ValidationError as exc:
+                raise ValidationError({"value": exc.messages}) from exc
+        else:
+            try:
+                number = parse(contact_value, None)
+            except NumberParseException as exc:
+                raise ValidationError(
+                    {"value": "Enter a valid international phone number including country code."}
+                ) from exc
+            if not is_possible_number(number) or not is_valid_number(number):
+                raise ValidationError({"value": "Enter a valid international phone number including country code."})
+
+        candidate = handle_model(
+            platform=normalized_platform,
+            value=contact_value,
+            normalized_value=handle_model.normalize_value(normalized_platform, contact_value),
+            label=normalized_label,
+            created_by_id=actor_user_id(actor),
+        )
+        candidate.full_clean(validate_unique=False, validate_constraints=False)
+
+        with transaction.atomic(), actor_context(actor):
+            handle_owner = handle_model.objects
+            handle = (
+                handle_owner.sudo(reason="parties.statement.propose_manual_contact.handle")
+                .lock_if_supported()
+                .filter(platform=normalized_platform, value=contact_value)
+                .first()
+            )
+            if handle is None:
+                handle_owner.check_create()
+                with system_context(reason="parties.statement.propose_manual_contact.handle"):
+                    handle = handle_owner.upsert(
+                        platform=normalized_platform,
+                        value=contact_value,
+                        created_by_id=actor_user_id(actor),
+                    )
+            handles, parties = self.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
+            locked_party = parties[party.pk]
+            locked_party.require_access("write", actor)
+            if not handle.with_actor(actor).has_access("read"):
+                raise PermissionDenied("Denied: cannot add this contact point.")
+            if normalized_label and not handle.label and handle.has_access("write"):
+                handle.label = normalized_label
+                handle.save(update_fields=("label", "updated_at"))
+
+            existing = self.handle_statements().filter(subject=locked_party, handle=handle).members().first()
+            if existing is not None:
+                return existing.with_actor(actor)
+            return self.assert_handle(locked_party, handle, asserted_by=actor, confidence=0.4).with_actor(actor)
+
+    def has_confirmed_association(self, handle: Any, *, actor: Any) -> bool:
+        """Return whether this readable Handle has any confirmed owner, without disclosing it."""
+
+        if actor is None:
+            raise PermissionDenied("an actor is required to assess a party-handle association")
+        handle.require_access("read", actor)
+        with system_context(reason="parties.statement.has_confirmed_association"):
+            return (
+                self.handle_statements()
+                .members()
+                .filter(
+                    handle_id=handle.pk,
+                    rank="preferred",
+                    snak="value",
+                    status="asserted",
+                )
+                .exists()
+            )
+
+    def assess_claimed_handle(self, party: Any, handle: Any, *, actor: Any) -> HandleAssociationAssessment:
+        """Assess a claimed Handle without disclosing inaccessible Party associations."""
+
+        if actor is None:
+            raise PermissionDenied("an actor is required to assess a party-handle association")
+        party.require_access("read", actor)
+        handle.require_access("read", actor)
+        visible = self.handle_statements().readable(actor).members()
+        readable = tuple(visible.filter(handle_id=handle.pk).select_related("subject").order_by("pk"))
+        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
+
+    def _assess_claimed_handle_authorized(
+        self,
+        *,
+        party: Any,
+        handle: Any,
+        readable_links: tuple[Any, ...],
+    ) -> HandleAssociationAssessment:
+        """Assess one exact Handle after its caller authorized Party and evidence reads."""
+
+        if any(link.handle_id != handle.pk for link in readable_links):
+            raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
+        with system_context(reason="parties.statement.assess_claimed_handle"):
+            authoritative = tuple(
+                self.handle_statements().filter(handle_id=handle.pk, status="asserted").members().order_by("pk")
+            )
+        same = tuple(link for link in authoritative if link.subject_id == party.pk)
+        if any(link.is_dismissed for link in same):
+            status = HandleAssociationStatus.SAME_DISMISSED
+        elif any(link.is_confirmed and not link.is_dismissed and link.subject_id != party.pk for link in authoritative):
+            status = HandleAssociationStatus.CONFIRMED_OTHER
+        elif any(link.is_confirmed and not link.is_dismissed for link in same):
+            status = HandleAssociationStatus.SAME_CONFIRMED
+        elif any(not link.is_dismissed for link in same):
+            status = HandleAssociationStatus.WEAK_SAME
+        else:
+            status = HandleAssociationStatus.UNKNOWN
+        readable_ids = {link.pk for link in readable_links}
+        conflict_ids = {
+            link.pk
+            for link in authoritative
+            if (
+                (link.subject_id == party.pk and link.is_dismissed)
+                or (link.subject_id != party.pk and link.is_confirmed and not link.is_dismissed)
+            )
+        }
+        return HandleAssociationAssessment(
+            status=status,
+            readable_links=readable_links,
+            conflict_evidence_readable=conflict_ids.issubset(readable_ids),
+        )
+
+    def propose_claimed_handle(
+        self,
+        party: Any,
+        handle: Any,
+        *,
+        evidence: Any,
+        actor: Any,
+        confidence: float = 0.4,
+    ) -> Any:
+        """Retain an unconfirmed address claim for human identity review.
+
+        The evidence record may be a Message, document, or another readable native
+        record. This owner deliberately records only that the source claimed the
+        handle. Transport authentication remains unknown, independently of any
+        later human confirmation of Party ownership.
+        """
+
+        party.require_access("write", actor)
+        handle.require_access("read", actor)
+        evidence.require_access("read", actor)
+        return self._propose_claimed_handle_authorized(
+            party, handle, evidence=evidence, actor=actor, confidence=confidence
+        )
+
+    def _propose_claimed_handle_authorized(
+        self,
+        party: Any,
+        handle: Any,
+        *,
+        evidence: Any,
+        actor: Any,
+        confidence: float = 0.4,
+    ) -> Any:
+        """Retain a claim after the caller authorized exact Handle and evidence reads."""
+
+        party.require_access("write", actor)
+        if not 0 < confidence < _REVIEW_CONFIDENCE:
+            raise ValidationError(
+                {"confidence": f"Claimed-handle proposals require confidence below {_REVIEW_CONFIDENCE}."}
+            )
+        evidence_model = generic_pointer_model(type(evidence))
+        evidence_ref = {
+            "model": evidence_model._meta.label,
+            "id": public_id_for(evidence_model, evidence.pk),
+        }
+        with system_context(reason="parties.statement.propose_claimed_handle"), transaction.atomic():
+            handles, parties = self.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+            )
+            locked_handle = handles[handle.pk]
+            locked_party = parties[party.pk]
+            source = self.rule_source("source_sender")
+            write_relationships(
+                [RelationshipTuple(resource=to_object_ref(evidence), relation="reader", subject=to_subject_ref(source))]
+            )
+            existing = (
+                self.handle_statements()
+                .filter(
+                    subject=locked_party,
+                    handle=locked_handle,
+                    asserted_by=str(to_subject_ref(source)),
+                )
+                .first()
+            )
+            refs = list(existing.evidence) if existing is not None else []
+            if evidence_ref not in refs:
+                refs.append(evidence_ref)
+            self._admit_handle_source(locked_party, locked_handle, to_subject_ref(source))
+            return locked_party.statements.set(
+                aspect="handle",
+                handle=locked_handle,
+                values={},
+                asserted_by=source,
+                confidence=confidence,
+                evidence=refs,
+            )
+
+    def suggest_for(self, handle: Any) -> Any:
+        """Propose a party for a freshly-seen, unresolved ``handle`` (the EMAIL_MATCH producer).
+
+        Three branches, none confirming its link and none duplicating an existing
+        pair: indexed normalized twins contribute distinct candidate parties (the
+        first at ``1.0``, which decides the owner, competing parties at ``0.3`` for review);
+        otherwise an email whose non-generic domain matches a tracked
+        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
+        otherwise no-op. Both branches stay inside ``handle.created_by``'s audit
+        partition, and public mailbox-provider domains never imply organization
+        membership. Returns the strongest created/existing link, or ``None``.
+        """
+
+        if handle.party_id is not None:
+            return None
+        if handle.created_by_id is None:
+            return None
+        handle_model = apps.get_model("parties", "Handle")
+        twins = (
+            handle_model.objects.filter(
+                platform=handle.platform,
+                normalized_value=handle.normalized_value,
+                party__isnull=False,
+                created_by_id=handle.created_by_id,
+                party__created_by_id=handle.created_by_id,
+            )
+            .exclude(pk=handle.pk)
+            .select_related("party")
+            .order_by("sqid")
+        )
+        strongest = None
+        seen_parties: set[Any] = set()
+        for candidate in twins:
+            if candidate.party_id in seen_parties:
+                continue
+            seen_parties.add(candidate.party_id)
+            link = self.assert_handle(
+                candidate.party,
+                handle,
+                confidence=1.0 if strongest is None else 0.3,
+                asserted_by=self.rule_source("normalized_twin"),
+                evidence=[candidate],
+            )
+            if strongest is None:
+                strongest = link
+        if strongest is not None:
+            return strongest
+        if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
+            domain = handle.normalized_value.rsplit("@", 1)[1]
+            organization_model = apps.get_model("parties", "Organization")
+            org = (
+                organization_model.objects.filter(
+                    created_by_id=handle.created_by_id,
+                    domain__iexact=domain,
+                ).first()
+                if domain and domain not in GENERIC_EMAIL_DOMAINS
+                else None
+            )
+            if org is not None:
+                return self.assert_handle(
+                    org,
+                    handle,
+                    confidence=0.4,
+                    asserted_by=self.rule_source("email_domain"),
+                    evidence=[handle],
+                )
+        return None
+
+    def resolve_handle_statements(self) -> None:
+        """Reapply retained statements, including rows folded before cutover."""
+        party_model = apps.get_model("parties", "Party")
+        ids = self.handle_statements().order_by("subject_id").values_list("subject_id", flat=True).distinct()
+        for pk in ids.iterator():
+            party_model._base_manager.get(pk=pk).statements.resolve()
+
+    def reconcile_suggestions(self) -> int:
+        """Reconcile the evidence-backed suggestions with every registered evidence provider.
+
+        Display-name evidence is parties' own. Downstream addons contribute the rest
+        as dotted callables, so parties reads no other addon's models:
+
+        - ``ANGEE_PARTIES_SHARED_SENDER_PROVIDERS`` callables return handle ids whose
+          display names are no evidence (list and notification senders).
+        - ``ANGEE_PARTIES_SIGNING_PROVIDERS`` callables yield :class:`Signing` rows.
+          Each yields all of its evidence, since a signature suggestion the signings
+          no longer support is withdrawn. With no provider registered there is no
+          signature evidence to judge, and the signature suggestions stay.
+
+        A provider that raises does so before its pass writes anything. The verb
+        runs as named system work: complete evidence spans every owner's mail,
+        whatever the caller may read. Returns the suggestions created plus those
+        withdrawn.
+        """
+
+        with system_context(reason="parties.reconcile_suggestions"):
+            shared = frozenset(
+                chain.from_iterable(provider() for provider in resolve_hooks("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS"))
+            )
+            changed = self._reconcile_display_names(shared)
+            if providers := resolve_hooks("ANGEE_PARTIES_SIGNING_PROVIDERS"):
+                changed += self._reconcile_signatures(chain.from_iterable(provider() for provider in providers))
+        return changed
+
+    def _reconcile_signatures(self, signings: Iterable[Signing]) -> int:
+        """Reconcile weak party-to-phone suggestions with every signature in the owners' mail.
+
+        Each :class:`Signing` is neutral evidence that one sender signed with one
+        fragment. This manager owns phone extraction, Handle creation, link
+        provenance, owner partition and the durable-pair check. A number is a
+        person's own only while that one person (or one unresolved address) signs
+        with it in the owner's mail: forwards, company switchboards and conference
+        bridges repeat a number under several people, and none of them owns it.
+        Each such number of a resolved sender is one ``0.3`` suggestion recording
+        its fragment; an undecided suggestion the evidence no longer supports is
+        withdrawn, so ``signings`` must be complete. An existing pair, including a
+        dismissed anti-link, is never changed.
+
+        A signer is the resolved party, or the address while it is unresolved: one
+        person writing from a resolved and an unresolved address counts twice until
+        the second resolves, and people resolved onto one shared card count once.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        party_model = apps.get_model("parties", "Party")
+        numbers: dict[str, tuple[str, ...]] = {}
+        signers: defaultdict[tuple[Any, str], set[Any]] = defaultdict(set)
+        evidence: dict[tuple[Any, Any, str], Any] = {}
+        for signing in signings:
+            if signing.owner_id is None:
+                continue
+            if signing.fragment_hash not in numbers:
+                numbers[signing.fragment_hash] = self._signature_phone_values(signing.text, handle_model=handle_model)
+            signer = ("party", signing.party_id) if signing.party_id is not None else ("handle", signing.sender_id)
+            for value in numbers[signing.fragment_hash]:
+                signers[signing.owner_id, value].add(signer)
+                if signing.party_id is not None:
+                    evidence.setdefault((signing.owner_id, signing.party_id, value), signing.sender_id)
+        # Support stays inside the owner partition: another owner's mail never
+        # proposes, or keeps, a suggestion in this owner's review queue.
+        supported = {key for key in evidence if len(signers[key[0], key[2]]) == 1}
+        party_ids = {party_id for _owner_id, party_id, _value in supported}
+        existing = set(
+            self.handle_statements()
+            .filter(status="asserted", handle__platform=handle_model.Platform.PHONE, subject_id__in=party_ids)
+            .values_list("subject_id", "handle__normalized_value")
+        )
+        parties = party_model.objects.in_bulk(party_ids)
+        created = 0
+        ordered = sorted(evidence.items(), key=lambda item: (item[0][2], str(item[0][1])))
+        for key, sender_id in ordered:
+            owner_id, party_id, value = key
+            party = parties.get(party_id)
+            if (
+                key not in supported
+                or (party_id, value) in existing
+                or party is None
+                or party.created_by_id != owner_id
+            ):
+                continue
+            handle = handle_model.objects.upsert(
+                platform=handle_model.Platform.PHONE,
+                value=value,
+                created_by_id=owner_id,
+            )
+            if handle.created_by_id != owner_id:
+                # Handles are globally unique by source identity. Evidence owned by
+                # one directory must never attach another owner's pre-existing row.
+                continue
+            created += self._suggest(
+                party,
+                handle,
+                confidence=0.3,
+                kind="signature_phone",
+                evidence=[handle_model._base_manager.get(pk=sender_id)],
+            )
+        withdrawn = self._withdraw_unsupported(
+            "signature_phone", supported, ("created_by_id", "subject_id", "handle__normalized_value")
+        )
+        return created + withdrawn
+
+    def _reconcile_display_names(self, shared: frozenset[Any]) -> int:
+        """Reconcile weak identity links with the full display names pooled per audit owner.
+
+        A resolved handle supplies evidence only to a handle on another platform,
+        and only for a party that bears the same full name itself. A one-word name
+        (a first name, a brand) identifies nobody, and a party named otherwise, such
+        as a nameless card holding several people's numbers, is not that person.
+        ``shared`` handles are addresses several people speak through: their display
+        names name whoever spoke last and are no evidence. Each distinct candidate
+        party of an unresolved handle receives one ``0.4`` rule link. A suggestion is
+        withdrawn only when its names no longer support it, not when its handle
+        later gains an owner; existing pairs, including dismissed links, remain
+        untouched.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        supported: set[tuple[Any, Any]] = set()
+        created = 0
+        owner_ids = (
+            handle_model.objects.exclude(created_by_id=None)
+            .exclude(display_name="")
+            .values_list("created_by_id", flat=True)
+            # Clear the model's default ordering: its columns silently join the
+            # DISTINCT, yielding one "distinct owner" PER HANDLE — the pass then
+            # repeats its full per-owner sweep tens of thousands of times.
+            .order_by()
+            .distinct()
+        )
+        for owner_id in owner_ids:
+            handles = tuple(
+                handle_model.objects.filter(created_by_id=owner_id)
+                .exclude(display_name="")
+                .select_related("party")
+                .order_by("sqid")
+            )
+            # The durable-pair check reads once per owner, not once per pair:
+            # steady state re-proposes tens of thousands of existing links, and a
+            # get_or_create probe for each is the pass's dominant cost.
+            existing_pairs = set(
+                self.handle_statements()
+                .filter(status="asserted", handle__created_by_id=owner_id)
+                .values_list("subject_id", "handle_id")
+            )
+            pools: defaultdict[str, list[Any]] = defaultdict(list)
+            for handle in handles:
+                normalized_name = handle_model.normalize_display_name(handle.display_name)
+                if " " in normalized_name and handle.pk not in shared:
+                    pools[normalized_name].append(handle)
+
+            for handle in handles:
+                if handle.pk in shared:
+                    continue
+                normalized_name = handle_model.normalize_display_name(handle.display_name)
+                seen_parties: set[Any] = set()
+                for candidate in pools.get(normalized_name, ()):
+                    if (
+                        candidate.party_id is None
+                        or candidate.party.created_by_id != owner_id
+                        or handle_model.normalize_display_name(candidate.party.display_name) != normalized_name
+                        or candidate.platform == handle.platform
+                        or candidate.party_id in seen_parties
+                    ):
+                        continue
+                    seen_parties.add(candidate.party_id)
+                    supported.add((candidate.party_id, handle.pk))
+                    if handle.party_id is not None or (candidate.party_id, handle.pk) in existing_pairs:
+                        continue
+                    existing_pairs.add((candidate.party_id, handle.pk))
+                    created += self._suggest(
+                        candidate.party,
+                        handle,
+                        confidence=0.4,
+                        kind="display_name",
+                        evidence=[candidate],
+                    )
+        return created + self._withdraw_unsupported("display_name", supported, ("subject_id", "handle_id"))
+
+    def _withdraw_unsupported(self, kind: str, supported: set[tuple[Any, ...]], key: tuple[str, ...]) -> int:
+        source = self.rule_source(kind)
+        rows = self.handle_statements().filter(asserted_by=str(to_subject_ref(source)))
+        keys = [
+            {"subject": row.subject, "aspect": "handle", "handle": row.handle}
+            for row in rows.select_related("subject", "handle")
+            if tuple(
+                row.handle.created_by_id
+                if name == "created_by_id"
+                else row.handle.normalized_value
+                if name == "handle__normalized_value"
+                else row.subject_id
+                if name == "subject_id"
+                else row.handle_id
+                for name in key
+            )
+            in supported
+        ]
+        return rows.model.objects.withdraw_unsupported(source, keys)
+
+    def _suggest(self, party: Any, handle: Any, *, confidence: float, kind: str, evidence: list[Any]) -> int:
+        source = self.rule_source(kind)
+        existing = (
+            self.handle_statements()
+            .filter(subject=party, handle=handle, asserted_by=str(to_subject_ref(source)))
+            .first()
+        )
+        self.assert_handle(party, handle, asserted_by=source, confidence=confidence, evidence=evidence)
+        return int(existing is None or existing.status != "asserted")
+
+    @staticmethod
+    def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
+        """Return deterministic canonical phone values mined from signature text.
+
+        libphonenumber's matcher finds only valid numbers written with their country
+        code. A digit run without one, such as a ticket or comment id, names no
+        number and is never mined.
+        """
+
+        return tuple(
+            sorted(
+                {
+                    handle_model.normalize_value(handle_model.Platform.PHONE, match.raw_string)
+                    for match in PhoneNumberMatcher(text or "", None)
+                }
+            )
+        )
+
     def identity_basis(self, party_id: str, *, actor: Any, lock: bool = False) -> IdentityBasis:
         """Read one Party's identity under ``actor``'s read authorization.
 
-        ``current`` projects only the Address and PartyHandle rows ``actor`` can
+        ``current`` projects only the Address and PartyStatement rows ``actor`` can
         read (a link to an unreadable Handle stays hidden) and is what reviewers
         see. ``complete`` projects every row, read under a system context, so
         :attr:`IdentityBasis.facts_hash` is actor-independent: a reviewer who
         cannot read a private handle compares the same basis the workflow actor
         froze, while a concurrent change to that handle still invalidates the
         review. ``lock`` locks the complete row set in the shared Handle, Party,
-        PartyHandle order, then the Party's addresses.
+        PartyStatement order, then the Party's addresses.
         """
 
         party = self.with_actor(actor).from_public_id(party_id)
@@ -1763,9 +1681,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         party.require_access("read", actor)
         reason = "parties.party.identity_basis"
         address_owner = apps.get_model("parties", "Address").objects
-        link_owner = apps.get_model("parties", "PartyHandle").objects
+        link_owner = apps.get_model("parties", "Party").objects
         addresses = address_owner.system_context(reason=reason).filter(party=party)
-        links = link_owner.system_context(reason=reason).filter(party=party)
+        links = link_owner.handle_statements().filter(subject=party)
         if lock:
             _handles, locked_parties = link_owner.lock_identity_rows(
                 party_ids=(party.pk,),
@@ -1774,12 +1692,13 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             party = locked_parties[party.pk].with_actor(actor)
             addresses = addresses.lock_if_supported()
         address_rows = list(addresses.order_by("is_primary", "sqid"))
-        link_rows = list(links.select_related("handle").order_by("sqid"))
+        link_rows = list(links.select_related("handle").order_by("pk"))
         readable_addresses = set(address_owner.with_actor(actor).filter(party=party).values_list("pk", flat=True))
         readable_handles = apps.get_model("parties", "Handle").objects.with_actor(actor).scoped().values("pk")
         readable_links = set(
-            link_owner.with_actor(actor)
-            .filter(party=party, handle_id__in=Subquery(readable_handles))
+            link_owner.handle_statements(actor=actor)
+            .members()
+            .filter(subject=party, handle_id__in=Subquery(readable_handles))
             .values_list("pk", flat=True)
         )
         return IdentityBasis(
@@ -1788,7 +1707,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 [row for row in address_rows if row.pk in readable_addresses],
                 [link for link in link_rows if link.pk in readable_links],
             ),
-            complete=party.identity_values(address_rows, link_rows),
+            complete=party.identity_values(address_rows, link_rows, include_evidence=True),
         )
 
     def identity_snapshot(self, party_id: str, *, actor: Any, lock: bool = False) -> tuple[Any, dict[str, Any]]:
@@ -1861,14 +1780,9 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     label=proposed["address"]["label"],
                 )
             if choices["handle_action"] != "keep":
-                link = (
-                    apps.get_model("parties", "PartyHandle")
-                    .objects.with_actor(actor)
-                    .lock_if_supported()
-                    .from_public_id(proposed["handle"]["party_handle_id"])
-                )
-                if link is None or link.party_id != party.pk:
-                    raise ValidationError({"handle_action": "The proposed PartyHandle changed during review."})
+                link = self.handle_statements(actor=actor).from_public_id(proposed["handle"]["statement_id"])
+                if link is None or link.subject_id != party.pk:
+                    raise ValidationError({"handle_action": "The proposed statement changed during review."})
                 getattr(link.with_actor(actor), choices["handle_action"])()
                 results["handle_result"] = f"{choices['handle_action']}ed"
             outcome = "applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged"
@@ -2070,15 +1984,15 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     ) -> None:
         """Lock the mapped contact aggregate before a caller rechecks its base.
 
-        Follow the shared Handle, Party, PartyHandle order before locking the
+        Follow the shared Handle, Party, PartyStatement order before locking the
         Person child and its mapped collections. The parent row lock also fences
         inserts through its foreign keys while the page transaction is open.
         """
 
-        associations = apps.get_model("parties", "PartyHandle").objects
+        associations = apps.get_model("parties", "Party").objects
         handles = apps.get_model("parties", "Handle").objects
         handle_ids = (
-            set(associations.filter(party_id=person.pk).values_list("handle_id", flat=True))
+            set(associations.handle_statements().filter(subject_id=person.pk).values_list("handle_id", flat=True))
             if person is not None
             else set()
         )
@@ -2147,12 +2061,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         platforms = apps.get_model("parties", "Handle").Platform
         handles: dict[Any, dict[str, list[tuple[str, str, bool]]]] = defaultdict(lambda: defaultdict(list))
         for row in (
-            apps.get_model("parties", "PartyHandle")
-            .objects.asserted()
-            .filter(party_id__in=ids, handle__platform__in=(platforms.EMAIL, platforms.PHONE))
-            .values("party_id", "handle__platform", "handle__value", "handle__label", "handle__is_preferred")
+            self.handle_statements()
+            .asserted()
+            .filter(subject_id__in=ids, handle__platform__in=(platforms.EMAIL, platforms.PHONE))
+            .values("subject_id", "handle__platform", "handle__value", "handle__label", "handle__is_preferred")
         ):
-            handles[row["party_id"]][row["handle__platform"]].append(
+            handles[row["subject_id"]][row["handle__platform"]].append(
                 (row["handle__value"], row["handle__label"], row["handle__is_preferred"])
             )
         addresses: dict[Any, list[ParsedAddress]] = defaultdict(list)
@@ -2285,11 +2199,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         if not parsed.uid:
             return None
+        if folder.directory_id is None:
+            raise ValidationError("Contact ingestion requires an identified directory source.")
         parsed = self.prepare_contact(parsed, created_by_id=created_by_id)
 
         person_model = apps.get_model("parties", "Person")
         handle_model = apps.get_model("parties", "Handle")
-        party_handle_model = apps.get_model("parties", "PartyHandle")
         address_model = apps.get_model("parties", "Address")
         relationship_model = apps.get_model("parties", "Relationship")
         relationship_kind_model = apps.get_model("parties", "RelationshipKind")
@@ -2365,23 +2280,17 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     raise ValidationError("Another contact already has this directory source identity.") from exc
                 raise
 
+            source = folder.directory.integration_ptr
             for handle in handles:
-                party_handle_model.objects.link(
+                self.assert_handle(
                     person,
                     handle,
-                    confidence=1.0,
-                    source=LinkSource.CARDDAV,
-                    created_by_id=created_by_id,
+                    asserted_by=source,
+                    evidence=[apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)],
                 )
-            # Retire only this source's vanished, undecided associations. Shared
-            # Handle rows and links established by another source retain their own
-            # lifecycle, and a person's confirmation or dismissal outlives the card.
-            party_handle_model.objects.filter(
-                party_id=person.pk,
-                source=LinkSource.CARDDAV,
-                is_confirmed=False,
-                is_dismissed=False,
-            ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
+            person.statements.withdraw_unsupported(
+                source, [{"subject": person, "aspect": "handle", "handle": handle} for handle in handles]
+            )
 
             # Addresses carry no stable id, so mirror the parsed set wholesale —
             # idempotent because the result is exactly the source's.

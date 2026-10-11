@@ -15,6 +15,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from rebac import system_context
 from strawberry import auto
 
@@ -33,14 +34,13 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
 from angee.integrate.schema import BridgeTypeMixin
-from angee.parties.mixins import LinkSource
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Party = apps.get_model("parties", "Party")
 Person = apps.get_model("parties", "Person")
 Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
-PartyHandle = apps.get_model("parties", "PartyHandle")
+PartyStatement = apps.get_model("parties", "PartyStatement")
 Address = apps.get_model("parties", "Address")
 Directory = apps.get_model("parties", "Directory")
 Folder = apps.get_model("parties", "Folder")
@@ -94,7 +94,11 @@ class PartyType(AuthoredRefMixin, AngeeNode):
         return Party.concrete_kind.fget(self)
 
     handles: list["HandleType"]
-    party_handles: list["PartyHandleType"]
+
+    @strawberry_django.field(only=["id"])
+    def statements(self, info: strawberry.Info) -> list["PartyStatementType"]:
+        return list(cast(Any, self).statements.readable(session_user(info)))
+
     addresses: list["AddressType"]
     circle_members: list["CircleMemberType"]
     relationships: list["PartyRelationshipType"]
@@ -160,73 +164,60 @@ class HandleType(AngeeNode):
 
         return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
-    @strawberry_django.field(only=["party_id"], prefetch_related="party_links")
+    @strawberry_django.field(
+        only=["party_id"],
+        annotate={
+            "_resolved_confidence": lambda info: Handle.objects.with_actor(
+                session_user(info)
+            ).resolved_confidence_expression()
+        },
+    )
     def confidence(self) -> float | None:
-        """Confidence of the link that resolved this handle's owner (null if unowned).
-
-        The rule lives on the model; the prefetch keeps it a single query per page.
-        """
-
-        return cast("Any", self).resolved_confidence
+        """Batch the subject-authorized resolution confidence."""
+        return cast(Any, self).resolved_confidence
 
 
 @strawberry.type
-class PartyHandleEvidenceType:
-    """One actor-readable native record supporting a handle association claim."""
+class StatementEvidenceType:
+    """One independently readable origin."""
 
     model: str
     id: strawberry.ID
 
 
-@strawberry_django.type(PartyHandle)
-class PartyHandleType(AngeeNode):
-    """GraphQL projection of a confidence-bearing party↔handle link."""
+@strawberry_django.type(PartyStatement)
+class PartyStatementType(AngeeNode):
+    """Subject-authorized handle assertion; the member retains its read gate."""
 
-    @strawberry_django.field(
-        only=["party_id", "handle_id"],
-        annotate={
-            "_readable_party_name": lambda info: PartyHandle.objects.readable_party_name_expression(
-                actor=session_user(info),
-            ),
-            "_readable_handle_value": lambda info: PartyHandle.objects.readable_handle_value_expression(
-                actor=session_user(info),
-            ),
-        },
-    )
-    def display_name(self) -> str:
-        """Return the readable Party and Handle components for this association."""
-
-        label = " — ".join(
-            value
-            for value in (
-                str(getattr(self, "_readable_party_name", "") or "").strip(),
-                str(getattr(self, "_readable_handle_value", "") or "").strip(),
-            )
-            if value
-        )
-        return label or "Contact association"
-
-    party: PartyType | None
-    handle: HandleType | None
+    subject: PartyType | None = actor_scoped_to_one("subject")
+    handle: HandleType | None = actor_scoped_to_one("handle")
     confidence: auto
-    source: auto
-    is_confirmed: auto
-    is_dismissed: auto
+    asserted_by: auto
+    source_kind: auto
+    rank: auto
+    snak: auto
+    status: auto
+    applied: auto
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["metadata"])
-    def evidence_refs(self, info: strawberry.Info) -> list["PartyHandleEvidenceType"]:
-        """Return at most twenty actor-readable records supporting this claim."""
+    @strawberry_django.field(only=["rank", "snak"])
+    def is_confirmed(self) -> bool:
+        return bool(cast(Any, self).is_confirmed)
 
-        page = cast(Any, self).evidence_page(session_user(info))
-        return [PartyHandleEvidenceType(model=item.model, id=item.id) for item in page.items]
+    @strawberry_django.field(only=["rank", "snak"])
+    def is_dismissed(self) -> bool:
+        return bool(cast(Any, self).is_dismissed)
 
-    @strawberry_django.field(only=["metadata"])
+    @strawberry_django.field(only=["subject_id", "evidence"])
+    def evidence_refs(self, info: strawberry.Info) -> list[StatementEvidenceType]:
+        refs, _truncated = cast(Any, self).readable_evidence(session_user(info))
+        return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id)) for ref in refs]
+
+    @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence_truncated(self, info: strawberry.Info) -> bool:
-        """Return whether more retained evidence exists beyond the bounded projection."""
-
-        return bool(cast(Any, self).evidence_page(session_user(info)).truncated)
+        _refs, truncated = cast(Any, self).readable_evidence(session_user(info))
+        return bool(truncated)
 
 
 @strawberry_django.type(Address)
@@ -295,7 +286,8 @@ class CircleMemberType(AngeeNode):
     circle: CircleType | None
     party: PartyType | None
     confidence: auto
-    source: auto
+    is_confirmed: auto
+    is_dismissed: auto
     created_at: auto
 
 
@@ -450,7 +442,7 @@ class PartiesIdentityMutation:
 
         actor = session_user(info)
         party = authorized_action_target(info, Party, party_id, "write")
-        link = PartyHandle.objects.propose_manual_contact(
+        link = Party.objects.propose_manual_contact(
             party,
             platform=platform,
             value=value,
@@ -465,30 +457,28 @@ class PartiesIdentityMutation:
         return ActionResult(ok=True, message="Contact is available in Identity for review.", id=link.sqid)
 
     @strawberry.mutation
-    def confirm_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
+    def confirm_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
         """Confirm a party↔handle link (the review queue's accept)."""
 
         link = require_instance_for_id(
-            PartyHandle,
+            PartyStatement,
             id,
-            queryset=PartyHandle.objects.all(),
+            queryset=Party.objects.handle_statements(actor=session_user(info)),
             not_found="party handle link not found",
         )
-        link.confirm()
-        return cast(PartyHandleType, link)
+        return cast(PartyStatementType, link.with_actor(session_user(info)).confirm())
 
     @strawberry.mutation
-    def dismiss_party_handle(self, info: strawberry.Info, id: strawberry.ID) -> PartyHandleType:
+    def dismiss_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
         """Dismiss a party↔handle link — the durable anti-link (the review queue's reject)."""
 
         link = require_instance_for_id(
-            PartyHandle,
+            PartyStatement,
             id,
-            queryset=PartyHandle.objects.all(),
+            queryset=Party.objects.handle_statements(actor=session_user(info)),
             not_found="party handle link not found",
         )
-        link.dismiss()
-        return cast(PartyHandleType, link)
+        return cast(PartyStatementType, link.with_actor(session_user(info)).dismiss())
 
     @strawberry.mutation
     def merge_parties(
@@ -583,7 +573,7 @@ class PartiesDirectoryMutation:
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),
-                    source=LinkSource.CARDDAV,
+                    asserted_by=directory.integration_ptr,
                     display_name=name,
                 )
         return cast(DirectoryType, directory)
@@ -768,7 +758,7 @@ _HANDLE_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     groupable=["party", "party__display_name"],
     # Handle identity and its resolved Party projection are maintained by
-    # ingestion, connection, and PartyHandle owners, never generic CRUD.
+    # ingestion, connection, and PartyStatement owners, never generic CRUD.
     insert=False,
     update=False,
     delete=False,
@@ -807,32 +797,35 @@ _ADDRESS_RESOURCE = hasura_model_resource(
     field_id_decode={"party": public_pk_decoder(Party)},
     write_backend=AngeeHasuraWriteBackend(Address, public_id_fields=("party",)),
 )
-_PARTY_HANDLE_RESOURCE = hasura_model_resource(
-    PartyHandleType,
-    model=PartyHandle,
-    name="party_handles",
+_PARTY_STATEMENT_RESOURCE = hasura_model_resource(
+    PartyStatementType,
+    model=PartyStatement,
+    name="party_statements",
     filterable=[
         "id",
-        "party",
+        "subject",
         "handle",
         "confidence",
-        "source",
-        "is_confirmed",
-        "is_dismissed",
+        "asserted_by",
+        "source_kind",
+        "rank",
+        "snak",
+        "status",
+        "applied",
         "created_at",
+        "to_review",
     ],
-    sortable=["confidence", "source", "created_at", "updated_at"],
+    filter_expressions={
+        "to_review": Exists(Party.statements.to_review().filter(pk=OuterRef("pk"))),
+    },
+    sortable=["confidence", "rank", "created_at", "updated_at"],
     aggregatable=["id", "confidence"],
-    groupable=["source", "party", "party__display_name"],
-    # Links are written by syncs/suggesters (system context) and changed only
-    # through the confirm/dismiss mutations — never generic CRUD.
+    groupable=["handle", "handle__value", "subject", "subject__display_name", "source_kind"],
     insert=False,
     update=False,
     delete=False,
-    field_id_decode={
-        "party": public_pk_decoder(Party),
-        "handle": public_pk_decoder(Handle),
-    },
+    field_id_decode={"subject": public_pk_decoder(Party), "handle": public_pk_decoder(Handle)},
+    get_queryset=lambda info: Party.objects.handle_statements(actor=session_user(info)).members(),
 )
 _CIRCLE_RESOURCE = hasura_model_resource(
     CircleType,
@@ -852,12 +845,12 @@ _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
     CircleMemberType,
     model=CircleMember,
     name="circle_members",
-    filterable=["id", "circle", "party", "source", "confidence", "created_at"],
+    filterable=["id", "circle", "party", "confidence", "created_at"],
     sortable=["circle", "confidence", "created_at"],
     aggregatable=["id"],
-    groupable=["circle", "circle__name", "party", "party__display_name", "source"],
-    # A human adds a membership by naming the pair; confidence/source are
-    # server-owned (manual/1.0 defaults; suggesters write elevated).
+    groupable=["circle", "circle__name", "party", "party__display_name"],
+    # A human names the membership pair; its score and decision flags are
+    # server-owned.
     insertable=["circle", "party"],
     update=False,
     field_id_decode={
@@ -968,7 +961,7 @@ _RESOURCE_TYPES = [
     *_PERSON_RESOURCE.types,
     *_ORGANIZATION_RESOURCE.types,
     *_HANDLE_RESOURCE.types,
-    *_PARTY_HANDLE_RESOURCE.types,
+    *_PARTY_STATEMENT_RESOURCE.types,
     *_ADDRESS_RESOURCE.types,
     *_CIRCLE_RESOURCE.types,
     *_CIRCLE_MEMBER_RESOURCE.types,
@@ -987,7 +980,7 @@ _PARTIES_SCHEMA_BUCKET = {
         _PERSON_RESOURCE.query,
         _ORGANIZATION_RESOURCE.query,
         _HANDLE_RESOURCE.query,
-        _PARTY_HANDLE_RESOURCE.query,
+        _PARTY_STATEMENT_RESOURCE.query,
         _ADDRESS_RESOURCE.query,
         _CIRCLE_RESOURCE.query,
         _CIRCLE_MEMBER_RESOURCE.query,
@@ -1004,7 +997,7 @@ _PARTIES_SCHEMA_BUCKET = {
         _PERSON_RESOURCE.mutation,
         _ORGANIZATION_RESOURCE.mutation,
         _HANDLE_RESOURCE.mutation,
-        _PARTY_HANDLE_RESOURCE.mutation,
+        _PARTY_STATEMENT_RESOURCE.mutation,
         _ADDRESS_RESOURCE.mutation,
         _CIRCLE_RESOURCE.mutation,
         _CIRCLE_MEMBER_RESOURCE.mutation,
@@ -1019,7 +1012,7 @@ _PARTIES_SCHEMA_BUCKET = {
         PersonType,
         OrganizationType,
         HandleType,
-        PartyHandleType,
+        PartyStatementType,
         AddressType,
         CircleType,
         CircleMemberType,

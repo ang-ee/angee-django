@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -14,23 +13,22 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.messaging.backends import ParsedHandle
 from angee.messaging.testing.models import (
     Circle,
     CircleMember,
+    Directory,
     Folder,
     Handle,
     Organization,
     Party,
-    PartyHandle,
     Person,
     Relationship,
     RelationshipKind,
 )
 from angee.parties.backends import ParsedContact
-from angee.parties.connections import ParsedConnection, ingest_connection
 from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from tests.conftest import make_integration
 from tests.test_messaging import _grant
 
 User = get_user_model()
@@ -55,20 +53,20 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
 
     with actor_context(owner):
         with pytest.raises(ValidationError):
-            PartyHandle.objects.propose_manual_contact(
+            Party.objects.propose_manual_contact(
                 party,
                 platform="email",
                 value="not-an-email",
                 actor=owner,
             )
         with pytest.raises(ValidationError):
-            PartyHandle.objects.propose_manual_contact(
+            Party.objects.propose_manual_contact(
                 party,
                 platform="phone",
                 value="123",
                 actor=owner,
             )
-        link = PartyHandle.objects.propose_manual_contact(
+        link = Party.objects.propose_manual_contact(
             party,
             platform="email",
             value="contact@example.test",
@@ -76,7 +74,7 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
             actor=owner,
         )
         link.dismiss()
-        repeated = PartyHandle.objects.propose_manual_contact(
+        repeated = Party.objects.propose_manual_contact(
             party,
             platform="email",
             value="contact@example.test",
@@ -87,7 +85,7 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     repeated.refresh_from_db()
     repeated.handle.refresh_from_db()
     assert repeated.pk == link.pk
-    assert repeated.source == LinkSource.MANUAL
+    assert repeated.source_kind == "person"
     assert not repeated.is_confirmed
     assert repeated.is_dismissed
     assert repeated.handle.label == "Contact"
@@ -115,13 +113,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
             label="Authoritative label",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            confirmed_party,
-            shared,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
+        confirmed_party.with_actor(owner).confirm(aspect="handle", handle=shared, values={})
         reader_handle = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="reader-shared@example.test",
@@ -137,7 +129,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     _grant(reader_handle, "reader", reader)
 
     with actor_context(owner):
-        proposed = PartyHandle.objects.propose_manual_contact(
+        proposed = Party.objects.propose_manual_contact(
             target,
             platform="email",
             value="shared@example.test",
@@ -145,7 +137,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
             actor=owner,
         )
         with pytest.raises(PermissionDenied, match="cannot add this contact point"):
-            PartyHandle.objects.propose_manual_contact(
+            Party.objects.propose_manual_contact(
                 target,
                 platform="phone",
                 value=hidden.value,
@@ -154,7 +146,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     with actor_context(reader):
         assert reader_handle.with_actor(reader).has_access("read")
         assert not reader_handle.has_access("write")
-        reader_proposed = PartyHandle.objects.propose_manual_contact(
+        reader_proposed = Party.objects.propose_manual_contact(
             reader_target,
             platform="email",
             value="reader-shared@example.test",
@@ -169,141 +161,16 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     assert shared.label == "Authoritative label"
     assert shared.party_id == confirmed_party.pk
     assert shared.party_link_confirmed
-    assert proposed.party_id == target.pk
+    assert proposed.subject_id == target.pk
     assert not proposed.is_confirmed
     assert not proposed.is_dismissed
     assert reader_handle.label == "Shared read-only label"
     # A manual claim awaits review, so it does not decide the shared handle's owner.
     assert reader_handle.party_id is None
     assert not reader_handle.party_link_confirmed
-    assert reader_proposed.party_id == reader_target.pk
+    assert reader_proposed.subject_id == reader_target.pk
     assert not reader_proposed.is_confirmed
     assert not reader_proposed.is_dismissed
-
-
-@pytest.mark.django_db(transaction=True)
-def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
-    composed_tables: None,
-) -> None:
-    """Social connections confirm one Person and map employment to Relationship."""
-
-    del composed_tables
-    with system_context(reason="test connection ingest"):
-        owner = _user("connection-owner")
-        RelationshipKind._base_manager.create(
-            slug="acquaintance",
-            name="Acquaintance",
-        )
-        RelationshipKind._base_manager.create(
-            slug="employee",
-            name="Employee",
-            inverse_name="Employer",
-            other_party_kind="organization",
-        )
-        parsed = ParsedConnection(
-            handle=ParsedHandle(
-                platform="linkedin",
-                value="Ada Lovelace",
-                external_id="https://linkedin.example/ada",
-                display_name="Ada Lovelace",
-            ),
-            email="ada@example.com",
-            organization="Analytical Engines",
-            title="Programmer",
-            connected_at=date(2026, 1, 2),
-            provenance="linkedin_takeout",
-        )
-        first = ingest_connection(parsed, created_by_id=owner.pk)
-        second = ingest_connection(parsed, created_by_id=owner.pk)
-
-    assert second.pk == first.pk
-    assert Person._base_manager.filter(pk=first.pk).count() == 1
-    assert PartyHandle._base_manager.filter(party=first, is_confirmed=True).count() == 2
-    social_handle = Handle._base_manager.get(platform="linkedin")
-    social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
-    assert social_handle.party_link_confirmed is True
-    assert social_link.source == LinkSource.IMPORT
-    assert social_link.metadata["provenance"] == "linkedin_takeout"
-    acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
-    employment = Relationship._base_manager.get(kind__slug="employee")
-    assert acquaintance.other_party_id == first.pk
-    assert acquaintance.started_at == date(2026, 1, 2)
-    assert employment.other_name == "Analytical Engines"
-    assert employment.title == "Programmer"
-    assert Relationship._base_manager.count() == 2
-
-
-def _reimported_connection(owner: Any) -> tuple[Any, Any, Any]:
-    """A LinkedIn takeout connection's email, confirmed by its import; the re-import repeats it."""
-
-    RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
-    parsed = ParsedConnection(
-        handle=ParsedHandle(platform="linkedin", value="Grace Hopper", display_name="Grace Hopper"),
-        email="grace@example.com",
-        provenance="linkedin_takeout",
-    )
-    person = ingest_connection(parsed, created_by_id=owner.pk)
-    email = Handle._base_manager.get(platform=Handle.Platform.EMAIL, value="grace@example.com")
-    return person, email, lambda: ingest_connection(parsed, created_by_id=owner.pk)
-
-
-def _reclaimed_own_handle(owner: Any) -> tuple[Any, Any, Any]:
-    """A connect flow's confirmed self-link; reconnecting claims the same address again."""
-
-    def claim() -> Any:
-        return Handle.objects.claim_own(
-            owner, platform=Handle.Platform.EMAIL, value="hopper@work.example", source=LinkSource.OAUTH
-        )
-
-    handle = claim()
-    return Person.objects.for_user(owner), handle, claim
-
-
-def _confirmed_by_caller(owner: Any) -> tuple[Any, Any, Any]:
-    """An imported suggestion that a caller later confirms (supplier onboarding's shape)."""
-
-    party = Party._base_manager.create(display_name="Supplier", created_by=owner)
-    handle = Handle.objects.upsert(
-        platform=Handle.Platform.EMAIL, value="bills@supplier.example", created_by_id=owner.pk
-    )
-    PartyHandle.objects.link(party, handle, confidence=0.4, source=LinkSource.IMPORT, created_by_id=owner.pk)
-
-    def confirm() -> Any:
-        return PartyHandle.objects.link(
-            party, handle, confidence=1.0, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=owner.pk
-        )
-
-    return party, handle, confirm
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("arrange", [_reimported_connection, _reclaimed_own_handle, _confirmed_by_caller])
-def test_a_confirming_caller_never_reverses_a_dismissal(composed_tables: None, arrange: Any) -> None:
-    """A re-import, a reconnect or a confirming caller keeps a person's dismissal; only their confirm lifts it."""
-
-    del composed_tables
-    owner = _user(f"dismissal-{arrange.__name__.strip('_')}")
-    with system_context(reason="test dismissal arrange"):
-        party, handle, relink = arrange(owner)
-        link = PartyHandle._base_manager.get(party=party, handle=handle)
-    with actor_context(owner):
-        link.dismiss()
-    with system_context(reason="test dismissal relink"):
-        dismissed = PartyHandle._base_manager.get(pk=link.pk)
-        relink()
-        link.refresh_from_db()
-        handle.refresh_from_db()
-    assert (link.is_dismissed, link.is_confirmed) == (True, False)
-    assert (link.source, link.confidence) == (dismissed.source, dismissed.confidence)
-    assert handle.party_id != party.pk
-
-    with actor_context(owner):
-        link.confirm()
-    with system_context(reason="test dismissal confirm"):
-        link.refresh_from_db()
-        handle.refresh_from_db()
-    assert (link.is_dismissed, link.is_confirmed) == (False, True)
-    assert (handle.party_id, handle.party_link_confirmed) == (party.pk, True)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -418,13 +285,10 @@ def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tup
     for index, (confidence, is_confirmed) in enumerate(links):
         party = Party._base_manager.create(display_name=f"Party {index}", created_by=owner)
         claims.append(
-            PartyHandle.objects.link(
-                party,
-                handle,
-                confidence=confidence,
-                source=LinkSource.CARDDAV,
-                is_confirmed=is_confirmed,
-                created_by_id=owner.pk,
+            (
+                party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+                if is_confirmed
+                else Party.objects.assert_handle(party, handle, asserted_by=owner, confidence=confidence)
             )
         )
     return handle, claims
@@ -433,17 +297,19 @@ def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tup
 def _in_link_order(links: list[Any]) -> list[Any]:
     """Return ``links`` in the order the model ranks equal links."""
 
-    return list(PartyHandle._base_manager.filter(pk__in=[link.pk for link in links]).order_by("sqid"))
+    return list(
+        Party.statements.filter(pk__in=[link.pk for link in links]).order_by(*Party.statements.model.trust_ordering)
+    )
 
 
 def _name(link: Any, name: str) -> None:
-    party = link.party
+    party = link.subject
     party.display_name = name
     party.save(update_fields=["display_name", "updated_at"])
 
 
 def _resolved_owner(handle: Any) -> Any:
-    PartyHandle.objects.resolve(handle)
+    Handle.objects.resolve(handle)
     handle.refresh_from_db()
     return handle.party_id
 
@@ -460,7 +326,7 @@ def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: No
         first, second = _in_link_order(links)
         _name(first, nameless)
         _name(second, "Ada Lovelace")
-        assert _resolved_owner(handle) == second.party_id
+        assert _resolved_owner(handle) == second.subject_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -471,12 +337,12 @@ def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_
         handle, (confirmed, named) = _contested_handle(owner, "confirmed@example.com", (1.0, True), (1.0, False))
         _name(confirmed, "Unknown")
         _name(named, "Ada Lovelace")
-        assert _resolved_owner(handle) == confirmed.party_id
+        assert _resolved_owner(handle) == confirmed.subject_id
 
         handle, (stronger, named) = _contested_handle(owner, "stronger@example.com", (1.0, False), (0.9, False))
         _name(stronger, "Unknown")
         _name(named, "Ada Lovelace")
-        assert _resolved_owner(handle) == stronger.party_id
+        assert _resolved_owner(handle) == stronger.subject_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -486,7 +352,7 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
         handle, links = _contested_handle(_user("tie-nameless"), "nobody@example.com", (1.0, False), (1.0, False))
         for link in links:
             _name(link, "Unknown")
-        assert _resolved_owner(handle) == _in_link_order(links)[0].party_id
+        assert _resolved_owner(handle) == _in_link_order(links)[0].subject_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -499,20 +365,8 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
         alicia = Party._base_manager.create(display_name="Alicia", created_by=owner)
         handle = Handle._base_manager.create(platform="email", value="a@example.com", created_by=owner)
-        strong = PartyHandle.objects.link(
-            alice,
-            handle,
-            confidence=0.9,
-            source=LinkSource.IMPORT,
-            created_by_id=owner.pk,
-        )
-        weak = PartyHandle.objects.link(
-            alicia,
-            handle,
-            confidence=0.4,
-            source=LinkSource.LLM,
-            created_by_id=owner.pk,
-        )
+        strong = Party.objects.assert_handle(alice, handle, asserted_by=owner, confidence=0.9)
+        weak = Party.objects.assert_handle(alicia, handle, asserted_by=owner, confidence=0.4)
 
         handle.refresh_from_db()
         alice.refresh_from_db()
@@ -533,50 +387,23 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
 
         # A re-sync re-linking the dismissed pair must not resurrect it: the
         # dismissed row already exists, so resolution still ignores it.
-        PartyHandle.objects.link(
-            alice,
-            handle,
-            confidence=0.95,
-            source=LinkSource.IMPORT,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, handle, asserted_by=owner, confidence=0.95)
         handle.refresh_from_db()
         assert handle.party_id is None
 
         # A human confirm outranks any score and clears the dismissal.
         strong.refresh_from_db()
-        strong.with_actor(owner).confirm()
+        strong = strong.with_actor(owner).confirm()
         handle.refresh_from_db()
         strong.refresh_from_db()
         assert handle.party_id == alice.pk
         assert handle.party_link_confirmed is True
         assert strong.is_confirmed and not strong.is_dismissed
         assert strong.confidence == 1.0
-        assert strong.source == LinkSource.MANUAL
+        assert strong.source_kind == "person"
 
         # Low-confidence, undecided links are exactly the review queue.
-        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [weak.pk]
-
-        with pytest.raises(TypeError, match="transitions must use"):
-            PartyHandle.objects.filter(pk=weak.pk).update(confidence=0.8)
-        weak.confidence = 0.8
-        with pytest.raises(TypeError, match="transitions must use"):
-            PartyHandle.objects.bulk_update([weak], ["confidence"])
-        with pytest.raises(TypeError, match="must be created through"):
-            PartyHandle.objects.bulk_create(
-                [
-                    PartyHandle(
-                        party=alice,
-                        handle=handle,
-                        confidence=0.5,
-                        source=LinkSource.IMPORT,
-                        created_by_id=owner.pk,
-                    )
-                ]
-            )
-        weak.refresh_from_db()
-        assert weak.confidence == 0.4
-        assert PartyHandle.objects.filter(handle=handle).count() == 2
+        assert list(Party.statements.to_review().values_list("pk", flat=True)) == [weak.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -597,7 +424,7 @@ def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None,
 
 @pytest.mark.django_db(transaction=True)
 def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> None:
-    """Handle.claim_own sets the owner (control) and a confirmed self-link (identity)."""
+    """Handle.claim_own sets the owner (control) and a normal person statement (identity)."""
 
     del composed_tables
     with system_context(reason="test claim_own"):
@@ -606,13 +433,13 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
             user,
             platform=Handle.Platform.EMAIL,
             value="nils@work.example",
-            source=LinkSource.OAUTH,
+            asserted_by=user,
         )
         again = Handle.objects.claim_own(
             user,
             platform=Handle.Platform.EMAIL,
             value="nils@work.example",
-            source=LinkSource.OAUTH,
+            asserted_by=user,
         )
 
         handle.refresh_from_db()
@@ -621,10 +448,10 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
         assert set(Handle.objects.owned_by(user).values_list("pk", flat=True)) == {handle.pk}
         person = Person.objects.for_user(user)
         assert handle.party_id == person.pk
-        assert handle.party_link_confirmed is True
-        link = PartyHandle.objects.get(handle=handle, party=person)
-        assert link.is_confirmed and link.source == LinkSource.OAUTH and link.confidence == 1.0
-        assert PartyHandle.objects.filter(handle=handle, party=person).count() == 1
+        assert handle.party_link_confirmed is False
+        link = Party.statements.get(handle=handle, subject=person)
+        assert not link.is_confirmed and link.source_kind == "person" and link.confidence == 1.0
+        assert Party.statements.filter(handle=handle, subject=person).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -639,28 +466,28 @@ def test_claim_own_records_a_contested_identity_without_reassigning_control(comp
             first_user,
             platform=Handle.Platform.EMAIL,
             value="shared@example.com",
-            source=LinkSource.OAUTH,
+            asserted_by=first_user,
         )
         contested = Handle.objects.claim_own(
             competing_user,
             platform=Handle.Platform.EMAIL,
             value="shared@example.com",
-            source=LinkSource.OAUTH,
+            asserted_by=competing_user,
         )
 
         first_person = Person.objects.for_user(first_user)
         competing_person = Person.objects.for_user(competing_user)
-        first_link = PartyHandle.objects.get(handle=handle, party=first_person)
-        competing_link = PartyHandle.objects.get(handle=handle, party=competing_person)
+        first_link = Party.statements.get(handle=handle, subject=first_person)
+        competing_link = Party.statements.get(handle=handle, subject=competing_person)
 
     contested.refresh_from_db()
     assert contested.pk == handle.pk
     assert contested.owner_id == first_user.pk
     assert contested.party_id == first_person.pk
-    assert first_link.is_confirmed and first_link.confidence == 1.0
+    assert not first_link.is_confirmed and first_link.confidence == 1.0
     assert not competing_link.is_confirmed
     assert competing_link.confidence == 0.3
-    assert competing_link.source == LinkSource.OAUTH
+    assert competing_link.source_kind == "person"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -694,21 +521,15 @@ def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: N
         owner = _user("iris")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
         resolved = Handle._base_manager.create(platform="email", value="a.lice@gmail.com", created_by=owner)
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            confidence=1.0,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
         fresh = Handle._base_manager.create(platform="email", value="alice+news@gmail.com", created_by=owner)
-        link = PartyHandle.objects.suggest_for(fresh)
+        link = Party.objects.suggest_for(fresh)
 
     assert link is not None
     fresh.refresh_from_db()
     assert fresh.party_id == alice.pk
-    assert link.source == LinkSource.EMAIL_MATCH
+    assert link.source_kind == "rule"
     assert not link.is_confirmed
     assert link.confidence == 1.0
 
@@ -732,24 +553,14 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
             value="a.lice+other@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            alicia,
-            competing_twin,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
+        Party.objects.assert_handle(alicia, competing_twin, asserted_by=owner, confidence=1.0)
 
         resolved.refresh_from_db()
-        result = PartyHandle.objects.suggest_for(resolved)
+        result = Party.objects.suggest_for(resolved)
 
     assert result is None
-    assert list(PartyHandle._base_manager.filter(handle=resolved).values_list("party_id", flat=True)) == [alice.pk]
+    assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -765,30 +576,26 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
         unknown = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="alice+unknown@gmail.com",
             created_by=owner,
         )
-        dismissed = PartyHandle.objects.suggest_for(unknown)
+        dismissed = Party.objects.suggest_for(unknown)
         assert dismissed is not None
-        dismissed.with_actor(owner).dismiss()
+        dismissed = dismissed.with_actor(owner).dismiss()
 
-        repeated = PartyHandle.objects.suggest_for(unknown)
+        repeated = Party.objects.suggest_for(unknown)
 
     dismissed.refresh_from_db()
     unknown.refresh_from_db()
-    assert repeated is not None and repeated.pk == dismissed.pk
+    assert repeated is not None
+    assert repeated.subject_id == dismissed.subject_id
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert unknown.party_id is None
-    assert PartyHandle._base_manager.filter(party=alice, handle=unknown).count() == 1
+    assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -810,34 +617,24 @@ def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None)
             value="al.ice+home@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            first,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            alicia,
-            second,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, first, asserted_by=owner, confidence=1.0)
+        Party.objects.assert_handle(alicia, second, asserted_by=owner, confidence=1.0)
         fresh = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="alice+new@gmail.com",
             created_by=owner,
         )
 
-        winner = PartyHandle.objects.suggest_for(fresh)
-        links = list(PartyHandle.objects.filter(handle=fresh).order_by("party_id"))
+        winner = Party.objects.suggest_for(fresh)
+        links = list(Party.statements.filter(handle=fresh).order_by("subject_id"))
 
     assert winner is not None
-    by_party = {link.party_id: link for link in links}
+    by_party = {link.subject_id: link for link in links}
     assert set(by_party) == {alice.pk, alicia.pk}
     assert by_party[alice.pk].confidence == 1.0
     assert by_party[alicia.pk].confidence == 0.3
     assert all(not link.is_confirmed for link in links)
-    assert all(link.source == LinkSource.EMAIL_MATCH for link in links)
+    assert all(link.source_kind == "rule" for link in links)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -849,13 +646,13 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None
         owner = _user("omar")
         acme = Organization._base_manager.create(display_name="Acme", domain="acme.com", created_by=owner)
         handle = Handle._base_manager.create(platform="email", value="bob@acme.com", created_by=owner)
-        link = PartyHandle.objects.suggest_for(handle)
+        link = Party.objects.suggest_for(handle)
 
     assert link is not None
-    assert link.party_id == acme.pk
+    assert link.subject_id == acme.pk
     assert link.confidence == 0.4
     assert not link.is_confirmed
-    assert link.source == LinkSource.RULE
+    assert link.source_kind == "rule"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -866,7 +663,7 @@ def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
     with system_context(reason="test suggest noop"):
         owner = _user("nadia")
         handle = Handle._base_manager.create(platform="email", value="stranger@nowhere.example", created_by=owner)
-        link = PartyHandle.objects.suggest_for(handle)
+        link = Party.objects.suggest_for(handle)
 
     assert link is None
     handle.refresh_from_db()
@@ -1012,7 +809,10 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     del composed_tables
     with system_context(reason="test carddav employment"):
         owner = _user("carddav")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        directory = make_integration(
+            owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
+        )
+        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
         employee = RelationshipKind._base_manager.create(
             slug="employee",
             name="Employee",
@@ -1076,98 +876,22 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_card_dropping_a_value_keeps_a_persons_decision_on_it(composed_tables: None) -> None:
-    """Only an undecided card link goes with its value; a dismissal or a confirmation stays."""
-
-    del composed_tables
-    emails = tuple((value, "", False) for value in ("kept@example.com", "dismissed@example.com",
-                                                    "confirmed@example.com", "dropped@example.com"))
-    with system_context(reason="test carddav decisions"):
-        owner = _user("carddav-decisions")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
-        RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
-        card = ParsedContact(uid="contact-3", display_name="Ada Lovelace", emails=emails)
-        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk)
-        rows = PartyHandle._base_manager.filter(party=person).select_related("handle")
-        links = {link.handle.value: link for link in rows}
-        PartyHandle.objects.link(
-            person, links["confirmed@example.com"].handle, source=LinkSource.CARDDAV, is_confirmed=True,
-            created_by_id=owner.pk,
-        )
-    with actor_context(owner):
-        links["dismissed@example.com"].dismiss()
-    with system_context(reason="test carddav drops values"):
-        Party.objects.ingest_contact(replace(card, emails=emails[:1]), folder=folder, created_by_id=owner.pk)
-        remaining = {
-            value: (source, is_confirmed, is_dismissed)
-            for value, source, is_confirmed, is_dismissed in PartyHandle._base_manager.filter(party=person).values_list(
-                "handle__value", "source", "is_confirmed", "is_dismissed"
-            )
-        }
-
-    assert remaining == {
-        "kept@example.com": (LinkSource.CARDDAV, False, False),
-        "dismissed@example.com": (LinkSource.CARDDAV, False, True),
-        "confirmed@example.com": (LinkSource.CARDDAV, True, False),
-    }
-
-
-@pytest.mark.django_db(transaction=True)
 def test_ingest_contact_requires_employee_relationship_kind(composed_tables: None) -> None:
     """Employment sync fails clearly and atomically when its master kind is missing."""
 
     del composed_tables
     with system_context(reason="test carddav missing kind"):
         owner = _user("missing-kind")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        directory = make_integration(
+            owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
+        )
+        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
         parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
             Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
 
     assert not Person._base_manager.filter(source_uid="contact-2").exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_counter_signals_reresolve_on_direct_link_delete(composed_tables: None) -> None:
-    """The PartyHandle post_delete receiver re-resolves and recounts a raw link delete.
-
-    A raw ``delete()`` (or a queryset/cascade delete) bypasses ``dismiss()``, so the
-    resolved owner and its ``handle_count`` would drift without the signal.
-    """
-
-    del composed_tables
-    with system_context(reason="test counters"):
-        owner = _user("sam")
-        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
-        bob = Party._base_manager.create(display_name="Bob", created_by=owner)
-        handle = Handle._base_manager.create(platform="email", value="a@example.com", created_by=owner)
-        strong = PartyHandle.objects.link(
-            alice,
-            handle,
-            confidence=0.9,
-            source=LinkSource.IMPORT,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            bob,
-            handle,
-            confidence=0.6,
-            source=LinkSource.LLM,
-            created_by_id=owner.pk,
-        )
-        alice.refresh_from_db()
-        assert alice.handle_count == 1
-
-        # Deleting the winning link demotes the handle to the next candidate and
-        # recounts BOTH parties — with no dismiss() call to drive it.
-        strong.delete()
-        handle.refresh_from_db()
-        alice.refresh_from_db()
-        bob.refresh_from_db()
-        assert handle.party_id == bob.pk
-        assert alice.handle_count == 0
-        assert bob.handle_count == 1
 
 
 def test_seed_vocabulary_matches_model_contract() -> None:

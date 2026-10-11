@@ -1075,12 +1075,13 @@ class Survivorship(StrEnum):
         priority = (
             aspect.precedence.index(row.source_kind) if row.source_kind in aspect.precedence else len(aspect.precedence)
         )
-        tie = (priority, -row.confidence, row.asserted_by, row.pk)
+        rank, *trust = row.sort_key()
+        tie = (rank, priority, *trust)
         if self == self.HIGHEST_TRUST:
-            return (-row.confidence, priority, row.asserted_by, row.pk)
+            return row.sort_key()
         if self == self.MOST_COMPLETE:
             complete = sum(row._meta.get_field(name).value_from_object(row) not in (None, "") for name in aspect.fields)
-            return (-complete, *tie)
+            return (rank, -complete, priority, *trust)
         return tie
 
 
@@ -1093,7 +1094,8 @@ class RecentSurvivorship:
     def sort_key(self, aspect: Aspect, row: Any) -> tuple[Any, ...]:
         value = row._meta.get_field(self.date_field).value_from_object(row)
         recency = value.timestamp() if isinstance(value, datetime) else value.toordinal() if value else 0
-        return (value is None, -recency, *Survivorship.SOURCE_PRIORITY.sort_key(aspect, row))
+        rank, *tie = Survivorship.SOURCE_PRIORITY.sort_key(aspect, row)
+        return (rank, value is None, -recency, *tie)
 
 
 @dataclass(frozen=True)
@@ -1327,6 +1329,19 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
             error("A member cannot also be a value column.", "E041")
         return errors
 
+    trust_ordering: ClassVar[tuple[str, ...]] = ("-rank", "-confidence", "-updated_at", "-pk")
+
+    def sort_key(self) -> tuple[Any, ...]:
+        """Best rank, confidence, recency and identity first, including collisions."""
+
+        values = {
+            "rank": self.rank == self.Rank.PREFERRED,
+            "confidence": self.confidence,
+            "updated_at": self.updated_at.timestamp(),
+            "pk": self.pk,
+        }
+        return tuple(-values[name.removeprefix("-")] for name in self.trust_ordering)
+
     def same_values(self, other: Statement, names: Iterable[str]) -> bool:
         return all(
             self._meta.get_field(name).value_from_object(self) == self._meta.get_field(name).value_from_object(other)
@@ -1386,6 +1401,8 @@ class StatementRecords(HistoricalRecords):
     An inherited parent declaration uses the parent's table through the shared pk.
     ``excluded_fields`` excludes copied subject fields, as in simple-history.
     ``link=False`` omits the optional RecordLink FK; the default includes it.
+    Native ``bases``, ``history_manager`` and ``historical_queryset`` compose
+    domain row behavior and member locking without another generator.
     """
 
     def __init__(
@@ -1395,16 +1412,18 @@ class StatementRecords(HistoricalRecords):
         sqid_prefix: str = "",
         excluded_fields: Sequence[str] = (),
         link: bool = True,
+        bases: Sequence[type[models.Model]] = (Statement,),
+        history_manager: type[StatementManager] = StatementManager,
+        historical_queryset: type[StatementQuerySet] = StatementQuerySet,
     ) -> None:
         super().__init__(
             inherit=True,
-            bases=(Statement,),
-            history_manager=StatementManager,
-            historical_queryset=StatementQuerySet,
+            bases=bases,
+            history_manager=history_manager,
+            historical_queryset=historical_queryset,
             excluded_fields=excluded_fields,
             custom_model_name=lambda name: f"{name}Statement",
         )
-        self.bases = (Statement,)
         self.aspects = dict(aspects)
         self.sqid_prefix = sqid_prefix
         self.link = link
@@ -1492,6 +1511,8 @@ class StatementRecords(HistoricalRecords):
             "statement_subject_model": model,
             "statement_aspects": self.aspects_for(model),
             "statement_link": self.link,
+            "objects": self.history_manager(),
+            "_angee_base": self.history_manager(),
             "subject": models.ForeignKey(model, on_delete=models.PROTECT, related_name="+"),
             "aspect": models.CharField(max_length=64, choices={name: name for name in sorted(self.aspects_for(model))}),
             **(

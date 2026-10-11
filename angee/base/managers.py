@@ -88,6 +88,14 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             statement.refresh_from_db()
             return statement
 
+    def asserting_source(self, asserted_by: Any = None) -> SubjectRef:
+        """Resolve the asserting principal and require its actor or trusted delegation."""
+        requester = instance_actor(self.instance) if self.instance is not None else current_actor()
+        source = to_subject_ref(asserted_by if asserted_by is not None else requester)
+        if source != requester and not is_sudo():
+            raise PermissionDenied("Only the source may change its statement stance.")
+        return source
+
     def _admit(
         self,
         subject: Any,
@@ -103,10 +111,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         snak: str | None,
         basis_hash: str,
     ) -> tuple[SubjectRef, dict[str, Any], dict[str, Any]]:
-        requester = instance_actor(self.instance) if self.instance is not None else current_actor()
-        source = to_subject_ref(asserted_by if asserted_by is not None else requester)
-        if source != requester and not is_sudo():
-            raise PermissionDenied("Only the source may assert its statements.")
+        source = self.asserting_source(asserted_by)
         kind = self.model.source_kind_for(source)
         rank = self.model.Rank.NORMAL if rank is None else rank
         snak = self.model.Snak.VALUE if snak is None else snak
@@ -145,10 +150,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         supported: Sequence[Mapping[str, Any]] | None = None,
         changeset: Any = None,
     ) -> int:
-        source = to_subject_ref(asserted_by)
-        requester = instance_actor(self.instance) if self.instance is not None else current_actor()
-        if source != requester and not is_sudo():
-            raise PermissionDenied("Only the source may change its statement stance.")
+        source = self.asserting_source(asserted_by)
         rows = self.model._base_manager.filter(asserted_by=str(source), superseded__isnull=True)
         if (bound := self.instance) is not None:
             rows = rows.filter(subject=bound)
@@ -230,7 +232,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 asserted = [row for row in candidates if row.status == self.model.Status.ASSERTED]
                 preferred = sorted(
                     (row for row in asserted if row.rank == self.model.Rank.PREFERRED),
-                    key=lambda row: (row.snak != self.model.Snak.NO_VALUE, row.asserted_by, row.pk),
+                    key=lambda row: row.sort_key(),
                 )
                 normal = subject.statement_candidates(
                     key[0],
@@ -295,7 +297,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 key.update(target)
                 kept = self.model._base_manager.filter(**key).exclude(pk=row.pk).first()
                 if kept is not None:
-                    winner = max((kept, row), key=lambda item: (item.confidence, item.updated_at, item.pk))
+                    winner = min((kept, row), key=lambda item: item.sort_key())
                     loser = row if winner is kept else kept
                     loser.superseded = winner
                     loser.applied = False

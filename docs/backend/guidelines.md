@@ -1074,7 +1074,7 @@ and current contracts before applying a historical example to a new deployment.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.
-- **`ScoredLinkMixin` is the scored-suggestion shape, not a permission owner.**
+- **`MembershipDecisionMixin` owns plain roster decisions, not provenance.**
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
@@ -1207,7 +1207,7 @@ and current contracts before applying a historical example to a new deployment.
   Other relation columns name rows by `<addon>.<xref>` (a list or
   comma-separated string for many-to-many). Content types are never ledger rows,
   so a foreign key or many-to-many to `contenttypes.ContentType` takes Django
-  model labels instead (`applies_to: [parties.PartyHandle, parties.Person]`),
+  model labels instead (`applies_to: [parties.Handle, parties.Person]`),
   resolved by [`ModelLabelField.get_model`](../../angee/base/fields.py); an
   unknown label fails its row. Row hashes cover the seed's labels, never
   content-type ids, so a seed hashes the same in every database.
@@ -1822,6 +1822,8 @@ REBAC resource or ORM read policy. Use the subject-bound `instance.statements`
 accessor after reading the subject; serving surfaces own gated-field redaction.
 Writes use the asserting source's native REBAC write scope on the subject. Merge
 collisions remain retained as superseded rows outside the current per-aspect key.
+The Statement owner ranks collisions and highest-trust resolution by preferred
+rank, confidence, update time and primary key, in that order.
 Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
 refuses missing or unknown classifications. Statements retain the assertion-time
 classification across source edits and deletion. The explicit link option owns

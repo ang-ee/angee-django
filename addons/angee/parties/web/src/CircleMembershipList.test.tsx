@@ -61,7 +61,6 @@ describe("CircleMembershipList", () => {
     const columns = mocks.listProps?.columns as Array<{ field: string }>;
     expect(columns.map((column) => column.field)).toEqual([
       "circle.name",
-      "source",
       "confidence",
     ]);
     const [remove] = mocks.listProps?.rowActions as Array<{

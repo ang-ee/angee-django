@@ -17,7 +17,6 @@ from angee.workflows.testing.drivers import decide, load_workflow, run_until, st
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
 Handle = apps.get_model("parties", "Handle")
-PartyHandle = apps.get_model("parties", "PartyHandle")
 MergeVeto = apps.get_model("parties", "MergeVeto")
 Decision = apps.get_model("decisions", "Decision")
 StepRun = apps.get_model("workflows", "StepRun")
@@ -79,13 +78,15 @@ class PartyWorkflowTests(TransactionTestCase):
         party = self.party()
         with actor_context(self.reviewer):
             handle = Handle.objects.create(platform="email", value="reviewed@example.test")
-            link = PartyHandle.objects.create(party=party, handle=handle, source="manual")
+            link = party.with_actor(self.reviewer).statements.set(
+                aspect="handle", handle=handle, values={}, confidence=0.4
+            )
         run = self.run_identity(
             party,
             proposed={
                 "name": "Reviewed name",
                 "address": {"street": "17 Sample Lane", "city": "Example"},
-                "handle": {"party_handle_id": public_id_of(link), "evidence": "Confirmed by directory owner"},
+                "handle": {"statement_id": public_id_of(link), "evidence": "Confirmed by directory owner"},
             },
         )
         traces = system_queryset(StepAttempt).filter(step_run__run=run).values_list("stacktrace", flat=True)
@@ -110,7 +111,7 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual(
             (address.street, address.label, address.created_by_id), ("17 Sample Lane", "Primary", self.admin.pk)
         )
-        self.assertTrue(system_queryset(PartyHandle).get(pk=link.pk).is_confirmed)
+        self.assertTrue(Party.statements.filter(subject=party, handle=handle, rank="preferred", snak="value").exists())
         self.assertEqual(run.output["context"], {"source": "directory"})
 
     def test_matching_identity_skips_admission(self):
@@ -222,7 +223,8 @@ class PartyWorkflowTests(TransactionTestCase):
         run_until(run)
         self.assertEqual((run.status, run.outcome), ("succeeded", "done"))
         self.assertEqual(
-            [item["outcome"] for item in run.output], ["merge_left", "kept_separate", "skipped", "merge_right"],
+            [item["outcome"] for item in run.output],
+            ["merge_left", "kept_separate", "skipped", "merge_right"],
         )
         self.assertEqual(system_queryset(Party).get(pk=pairs[0][1].pk).merged_into_id, pairs[0][0].pk)
         self.assertEqual(system_queryset(Party).get(pk=pairs[3][0].pk).merged_into_id, pairs[3][1].pk)

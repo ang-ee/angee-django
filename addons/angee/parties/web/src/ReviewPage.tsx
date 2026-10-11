@@ -3,10 +3,10 @@ import { useAuthoredQuery } from "@angee/refine";
 import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Tag, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
 import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
-import { usePartyHandleRowActions } from "./party-handle-row-actions";
+import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
 type SuggestionRow = StringIdRow & {
-  source?: string;
+  source_kind?: string;
   evidence_refs?: Array<{ model: string; id: string }>;
   evidence_truncated?: boolean;
 };
@@ -20,26 +20,20 @@ export function ReviewPage(): React.ReactElement {
   const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();
   const counts = useAuthoredQuery(PartyReviewCounts, undefined, {
-    models: ["parties.PartyHandle"],
+    models: ["parties.PartyStatement"],
   });
   const duplicates = useAuthoredQuery(DuplicatePartyCandidates, { limit: 50 }, {
     models: ["parties.Party", "parties.Handle", "parties.MergeVeto"],
   });
-  const rowActions = usePartyHandleRowActions<SuggestionRow>("all");
+  const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
 
   const columns = React.useMemo<readonly ListColumn<SuggestionRow>[]>(
     () => [
       { field: "handle.value", header: t("review.handle") },
       { field: "handle.platform", header: t("review.platform") },
-      { field: "party.display_name", header: t("review.party") },
+      { field: "subject.display_name", header: t("review.party") },
       { field: "confidence" },
-      {
-        field: "source",
-        header: t("identity.claim"),
-        render: (row) => row.source === "EMAIL_MATCH"
-          ? t("identity.senderClaim")
-          : String(row.source ?? ""),
-      },
+      { field: "source_kind", header: t("identity.claim") },
       {
         field: "evidence_refs",
         header: t("identity.evidence"),
@@ -53,7 +47,7 @@ export function ReviewPage(): React.ReactElement {
     ],
     [recordHref, t],
   );
-  const handleCount = counts.data?.party_handles_aggregate.aggregate?.count ?? 0;
+  const handleCount = counts.data?.party_statements_aggregate.aggregate?.count ?? 0;
   const duplicateCandidates = duplicates.data?.duplicate_party_candidates ?? [];
 
   return (
@@ -72,22 +66,20 @@ export function ReviewPage(): React.ReactElement {
             {counts.error ? <ErrorBanner description={t("review.error")} /> : null}
             <p className="mb-3 text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
             <ListView<SuggestionRow>
-              resource="parties.PartyHandle"
+              resource="parties.PartyStatement"
               fields={[
                 "id",
                 "handle.value",
                 "handle.platform",
-                "party.display_name",
+                "subject.display_name",
                 "confidence",
-                "source",
+                "source_kind",
                 "evidence_refs.model",
                 "evidence_refs.id",
                 "evidence_truncated",
               ]}
               baseFilter={{
-                is_confirmed: { exact: false },
-                is_dismissed: { exact: false },
-                confidence: { lt: 0.5 },
+                to_review: { exact: true },
               }}
               columns={columns}
               rowActions={rowActions}

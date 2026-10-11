@@ -313,13 +313,14 @@ that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
 The Handle's owner records the **control** fact (who may act through it), while
-**PartyHandle** records the **identity** fact (which Party it reaches); neither
-fact implies the other. A **suggestion** is an undecided PartyHandle below 0.5
-confidence: it awaits review and never decides which Party the Handle reaches.
-A PartyHandle is **asserted** when a directory card restates it, a person added
-it, or a human confirmed it; any other source makes it an **inference** (an
-inferred link), which no card publishes. Provenance and confidence are separate:
-an inference at full confidence may decide the owner yet stays off the card.
+**PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
+member); neither fact implies the other. A **suggestion** is an asserted
+normal statement below 0.5 confidence: it awaits review and never decides which
+Party the Handle reaches. A person's preferred value confirms membership; a
+preferred no-value dismisses it durably. Applied directory/person statements
+and confirmations publish to a card. Other sources remain inferences even at
+full confidence. Reads follow Party authorization, with separate Handle and
+evidence gates.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

@@ -72,7 +72,7 @@ def register(server: FastMCP) -> None:
                 "memberships, and typed relationships.",
             ),
             GraphQLTool(
-                operation="party_handles",
+                operation="party_statements",
                 name="list_review_queue",
                 fields=_IDENTITY_DECISION,
                 limit_arg="limit",
@@ -84,22 +84,22 @@ def register(server: FastMCP) -> None:
                     }
                 },
                 description="List low-confidence undecided party-handle identity claims for human "
-                "review. Claim ids are phl_ sqids used by the confirm/dismiss tools.",
+                "review. Claim ids are pst_ sqids used by the confirm/dismiss tools.",
             ),
             GraphQLTool(
-                operation="confirm_party_handle",
-                name="confirm_party_handle",
+                operation="confirm_party_statement",
+                name="confirm_party_statement",
                 fields=_IDENTITY_DECISION,
                 id_arg="id",
-                description="Confirm one review claim by phl_ sqid when the handle truly belongs to "
+                description="Confirm one review claim by pst_ sqid when the handle truly belongs to "
                 "the proposed party; confirmation becomes the strongest identity signal.",
             ),
             GraphQLTool(
-                operation="dismiss_party_handle",
-                name="dismiss_party_handle",
+                operation="dismiss_party_statement",
+                name="dismiss_party_statement",
                 fields=_IDENTITY_DECISION,
                 id_arg="id",
-                description="Dismiss one review claim by phl_ sqid when the proposed identity is wrong; "
+                description="Dismiss one review claim by pst_ sqid when the proposed identity is wrong; "
                 "the durable anti-link prevents the same claim being suggested again.",
             ),
             GraphQLTool(

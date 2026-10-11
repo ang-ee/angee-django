@@ -142,7 +142,6 @@ class TieQuerySet(AngeeQuerySet[Any]):
         circle_model = apps.get_model("parties", "Circle")
         circle_member_model = apps.get_model("parties", "CircleMember")
         handle_model = apps.get_model("parties", "Handle")
-        party_handle_model = apps.get_model("parties", "PartyHandle")
         cadence_model = apps.get_model("nexus", "Cadence")
         nodes: dict[str, dict[str, Any]] = {}
         edges: list[dict[str, Any]] = []
@@ -424,33 +423,34 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "model": "parties.CircleMember",
                             "record_id": edge_id,
                             "confidence": float(membership.confidence),
-                            "source": str(membership.source),
                         },
                     }
                 )
 
         if "identity" in selected_lenses:
-            party_handles = list(
-                party_handle_model.objects.filter(
-                    party_id__in=party_ids,
-                    is_dismissed=False,
+            statements = list(
+                party_model.objects.handle_statements(actor=current_actor())
+                .members()
+                .filter(
+                    subject_id__in=party_ids,
+                    status="asserted",
+                    snak="value",
                 )
-                .scoped()
-                .order_by("-is_confirmed", "-confidence", "sqid")[: edge_limit + 1]
+                .order_by(*apps.get_model("parties", "PartyStatement").trust_ordering)[: edge_limit + 1]
             )
-            if len(party_handles) > edge_limit:
-                party_handles = party_handles[:edge_limit]
+            if len(statements) > edge_limit:
+                statements = statements[:edge_limit]
                 truncated = True
-            handle_ids = {link.handle_id for link in party_handles}
+            handle_ids = {link.handle_id for link in statements}
             handles = {
                 handle.pk: handle
                 for handle in handle_model.objects.filter(pk__in=handle_ids)
                 .scoped()
                 .order_by("platform", "normalized_value", "sqid")
             }
-            for link in party_handles:
+            for link in statements:
                 handle = handles.get(link.handle_id)
-                if link.party_id not in parties or handle is None:
+                if link.subject_id not in parties or handle is None:
                     continue
                 node_id = public_id(handle)
                 if node_id not in nodes:
@@ -468,7 +468,7 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "record_id": node_id,
                             "platform": str(handle.platform),
                             "confirmed": bool(handle.party_link_confirmed),
-                            "resolved": handle.party_id == link.party_id,
+                            "resolved": handle.party_id == link.subject_id,
                         },
                     }
                 edge_id = public_id(link)
@@ -481,17 +481,17 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 edges.append(
                     {
                         "id": edge_id,
-                        "source": public_id(parties[link.party_id]),
+                        "source": public_id(parties[link.subject_id]),
                         "target": node_id,
                         "kind": "identity",
                         "meta": {
-                            "model": "parties.PartyHandle",
+                            "model": "parties.PartyStatement",
                             "record_id": edge_id,
                             "handle_id": node_id,
                             "confidence": float(link.confidence),
-                            "source": str(link.source),
+                            "source": str(link.asserted_by),
                             "is_confirmed": bool(link.is_confirmed),
-                            "is_resolved": handle.party_id == link.party_id,
+                            "is_resolved": handle.party_id == link.subject_id,
                         },
                     }
                 )

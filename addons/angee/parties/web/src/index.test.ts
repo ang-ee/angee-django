@@ -25,8 +25,8 @@ describe("parties addon manifest", () => {
       "parties.relationships.record",
       "parties.handles",
       "parties.handles.record",
-      "parties.handle-links",
-      "parties.handle-links.record",
+      "parties.statements",
+      "parties.statements.record",
       "parties.review",
       "parties.merge",
       "parties.directories",
@@ -66,8 +66,8 @@ describe("parties addon manifest", () => {
     expect(routeHref("parties.records.record", { id: "party 1" })).toBe(
       "/parties/records/party%201",
     );
-    expect(routeHref("parties.handle-links.record", { id: "association 1" })).toBe(
-      "/parties/handle-links/association%201",
+    expect(routeHref("parties.statements.record", { id: "association 1" })).toBe(
+      "/parties/statements/association%201",
     );
     expect(routeHref("parties.merge", { left: "left/1", right: "right 2" }))
       .toBe("/parties/merge/left%2F1/right%202");

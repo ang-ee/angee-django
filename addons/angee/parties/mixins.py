@@ -1,28 +1,21 @@
-"""Shared parties primitives: the confidence-bearing, human-reviewable link.
-
-A :class:`ScoredLinkMixin` is a proposed edge that a sync, a rule, or a human can
-suggest weakly and a human can later confirm or dismiss — the shape shared by
-:class:`~angee.parties.models.PartyHandle` (a party↔handle identity claim),
-:class:`~angee.parties.models.CircleMember` (a party's circle membership), and the
-spaces addon's roster membership. Extracting it once means one :class:`LinkSource`
-enum instead of a per-model copy, so the GraphQL enum name no longer collides.
-"""
+"""Roster decisions and parties-specific statement row behavior."""
 
 from __future__ import annotations
 
+from typing import Any
+
+from django.apps import apps
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from angee.base.fields import StateField
+from angee.base.actors import instance_actor
+from angee.base.identity import EvidenceReference, instance_from_public_id
+from angee.base.mixins import Statement
+from angee.base.scoping import read_scoped_queryset
 
 
 class LinkSource(models.TextChoices):
-    """Where a scored link came from — the one provenance vocabulary for every link.
-
-    A single enum shared by every :class:`ScoredLinkMixin` consumer: the class name
-    projects as a global GraphQL enum name, so one class keeps that name unique
-    instead of forcing a distinct per-model enum.
-    """
+    """Legacy Relationship vocabulary; retires with its phase-4 cutover."""
 
     MANUAL = "manual", "Manual"
     IMPORT = "import", "Import"
@@ -34,81 +27,67 @@ class LinkSource(models.TextChoices):
     RULE = "rule", "Rule"
 
 
-ASSERTING_SOURCES = frozenset({LinkSource.CARDDAV, LinkSource.MANUAL})
-"""Sources that assert a link: a directory card restating itself, or a person adding it.
+class MembershipDecisionMixin(models.Model):
+    """Plain roster decisions, independent of assertion provenance."""
 
-Every other source is an inference, which no card publishes until a human confirms it.
-"""
-
-
-class ScoredLinkMixin(models.Model):
-    """A confidence-bearing link between two rows, reviewable by a human.
-
-    Carries the score (``confidence`` in ``0..1``), its ``source``, and the two
-    review flags (``is_confirmed`` / ``is_dismissed``). :meth:`confirm` and
-    :meth:`dismiss` are plain flag-flips followed by a re-resolve hook — they carry
-    **no** REBAC awareness. A subclass whose confirm/dismiss must gate the actor or
-    cascade a derived pointer overrides them and calls ``super()`` (see
-    :class:`~angee.parties.models.PartyHandle`). Consumers also compose
-    :class:`~angee.base.mixins.AuditMixin`; the transition saves include its
-    ``updated_at`` field.
-    """
-
-    confidence = models.FloatField(
-        default=1.0,
-        validators=(MinValueValidator(0.0), MaxValueValidator(1.0)),
-    )
-    """How strong the link is, ``0`` (weak guess) to ``1`` (certain)."""
-
-    source = StateField(choices_enum=LinkSource, default=LinkSource.MANUAL)
-    """Where the link came from (a sync, a rule, an email match, a human)."""
-
+    confidence = models.FloatField(default=1.0, validators=(MinValueValidator(0), MaxValueValidator(1)))
     is_confirmed = models.BooleanField(default=False)
-    """Whether a human accepted the link — the strongest resolution signal."""
-
     is_dismissed = models.BooleanField(default=False)
-    """Whether a human rejected the link — the durable anti-link that survives re-suggestion."""
 
     class Meta:
-        """Django model options for scored-link abstract inheritance."""
-
         abstract = True
 
     def confirm(self) -> None:
-        """Accept this link at full confidence, then re-resolve any derived owner.
-
-        Confirmation is the strongest signal, so the link also takes full confidence
-        and the ``manual`` source — a later sync must not out-score a human decision.
-        """
-
         with transaction.atomic():
             self.confidence = 1.0
-            self.source = LinkSource.MANUAL  # type: ignore[assignment]  # TextChoices member unmodeled without django-stubs
-            self.is_confirmed = True
-            self.is_dismissed = False
-            self.save(
-                update_fields=["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"],
-            )
-            self._resolve_link()
+            self.is_confirmed, self.is_dismissed = True, False
+            self.save(update_fields=("confidence", "is_confirmed", "is_dismissed", "updated_at"))
 
     def dismiss(self) -> None:
-        """Reject this link — the durable anti-link — then re-resolve any derived owner.
-
-        A dismissed link survives as a row so the same match is never re-proposed
-        (suggesters key on the pair and skip an existing link); resolution ignores it.
-        """
-
         with transaction.atomic():
-            self.is_dismissed = True
-            self.is_confirmed = False
-            self.save(update_fields=["is_dismissed", "is_confirmed", "updated_at"])
-            self._resolve_link()
+            self.is_confirmed, self.is_dismissed = False, True
+            self.save(update_fields=("is_confirmed", "is_dismissed", "updated_at"))
 
-    def _resolve_link(self) -> None:
-        """Re-derive any owner pointer this link feeds, after a review decision.
 
-        The default is a no-op — a link whose confirm/dismiss materialises a derived
-        pointer (``PartyHandle`` → ``Handle.party``) overrides this to re-run it.
-        """
+class PartyStatementMixin(Statement):
+    """Handle review verbs on the retained assertion, admitted by its Party."""
 
-        _ = self
+    handle: Any
+
+    class Meta:
+        abstract = True
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.rank == self.Rank.PREFERRED and self.snak == self.Snak.VALUE
+
+    @property
+    def is_dismissed(self) -> bool:
+        return self.rank == self.Rank.PREFERRED and self.snak == self.Snak.NO_VALUE
+
+    def confirm(self) -> Any:
+        return self.subject.with_actor(instance_actor(self)).confirm(
+            aspect=self.aspect,
+            handle=self.handle,
+            values={},
+            evidence=[ref.model_dump(mode="json") for ref in self.readable_evidence(instance_actor(self))[0]],
+        )
+
+    def dismiss(self) -> Any:
+        return self.subject.with_actor(instance_actor(self)).dismiss(
+            aspect=self.aspect,
+            handle=self.handle,
+            evidence=[ref.model_dump(mode="json") for ref in self.readable_evidence(instance_actor(self))[0]],
+        )
+
+    def readable_evidence(self, actor: Any, *, limit: int = 20) -> tuple[list[EvidenceReference], bool]:
+        """Bound inspection and output; each origin retains its own read gate."""
+        self.subject.require_access("read", actor)
+        bounded = max(1, min(int(limit), 20))
+        visible = []
+        for value in self.evidence[: bounded + 1]:
+            ref = EvidenceReference.model_validate(value)
+            model = apps.get_model(ref.model)
+            if instance_from_public_id(model, ref.id, queryset=read_scoped_queryset(model, actor)) is not None:
+                visible.append(ref)
+        return visible[:bounded], len(self.evidence) > bounded

@@ -29,7 +29,6 @@ from angee.graphql.deletion import DeletePreview
 from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing.models import Channel
-from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
 from tests.chatterdemo.models import ChatterDoc
@@ -190,8 +189,12 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     # team and intake's configuration; the authored delete root previews the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
-        "display_name", "team", "intake_queue", "intake_trigger",
-        "intake_field_map", "intake_requester_domains",
+        "display_name",
+        "team",
+        "intake_queue",
+        "intake_trigger",
+        "intake_field_map",
+        "intake_requester_domains",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "delete_channel"
@@ -490,13 +493,7 @@ def test_message_sender_and_participant_expose_resolved_party(composed_tables: N
             display_name="Ada Envelope",
             created_by_id=admin.pk,
         )
-        messaging_models.PartyHandle.objects.link(
-            party,
-            handle,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=admin.pk,
-        )
+        party.with_actor(admin).confirm(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
         messaging_models.Participant.objects.create(
@@ -558,13 +555,7 @@ def test_inbox_sender_redacts_party_without_party_read(composed_tables: None) ->
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        messaging_models.PartyHandle.objects.link(
-            party,
-            handle,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
+        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(message, "reader", reader)
@@ -767,13 +758,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        messaging_models.PartyHandle.objects.link(
-            party,
-            handle,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
+        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(doc, "reader", reader)
@@ -871,7 +856,9 @@ def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables:
     _thread, message = _seed_thread_and_message(admin)
     with system_context(reason="test.messaging.parts.groups"):
         other = messaging_models.Message.objects.create(
-            thread=message.thread, preview="Other", created_by_id=admin.pk,
+            thread=message.thread,
+            preview="Other",
+            created_by_id=admin.pk,
         )
         for target, role in ((message, "body"), (message, "quoted"), (other, "body")):
             messaging_models.Part.objects.create(message=target, role=role, created_by_id=admin.pk)
@@ -882,9 +869,14 @@ def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables:
         }
     """
     with CaptureQueriesContext(connection) as queries:
-        data = _data(execute_schema(
-            _schema(), document, {"where": {"message": {"_eq": message.sqid}}}, request=_request(admin),
-        ))
+        data = _data(
+            execute_schema(
+                _schema(),
+                document,
+                {"where": {"message": {"_eq": message.sqid}}},
+                request=_request(admin),
+            )
+        )
     assert {row["key"]["role"]: row["aggregate"]["count"] for row in data["parts_groups"]} == {"BODY": 1, "QUOTED": 1}
     assert data["totalCount"] == 2
     table = messaging_models.Part._meta.db_table
@@ -2187,8 +2179,11 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
         expected = {}
         for index in range(25):
             message = messaging_models.Message.objects.create(
-                thread=attachment.thread, direction="internal", message_type="comment",
-                created_by=admin, sender=sender,
+                thread=attachment.thread,
+                direction="internal",
+                message_type="comment",
+                created_by=admin,
+                sender=sender,
             )
             tracked = index % 2 == 0
             if tracked:
@@ -2206,9 +2201,14 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
     counts = []
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
-            payload = _data(execute_schema(
-                schema, query, {"id": ticket.sqid, "limit": size}, request=_request(admin),
-            ))["record_thread"]
+            payload = _data(
+                execute_schema(
+                    schema,
+                    query,
+                    {"id": ticket.sqid, "limit": size},
+                    request=_request(admin),
+                )
+            )["record_thread"]
         assert len(payload["messages"]) == size
         for message in payload["messages"]:
             assert message["can_edit"] == message["can_delete"] == expected[message["id"]]
@@ -2635,28 +2635,34 @@ def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(comp
 
     poster = User.objects.create_user(username="msg-suggest-plain-poster")
     assignee = User.objects.create_user(
-        username="msg-suggest-plain-assignee", email="assignee@example.com", first_name="Avery",
+        username="msg-suggest-plain-assignee",
+        email="assignee@example.com",
+        first_name="Avery",
     )
     former = User.objects.create_user(username="msg-suggest-plain-former", is_active=False)
     with actor_context(poster):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 910", assigned_user=assignee)
         ticket.message_post("Hello.", recipient_user_ids=(former.pk,))
 
-    suggestions = _data(execute_schema(
-        _schema(),
-        """query($model: String!, $id: ID!) {
+    suggestions = _data(
+        execute_schema(
+            _schema(),
+            """query($model: String!, $id: ID!) {
           record_thread(input: {model_label: $model, record_id: $id}) {
             suggested_recipients { source user { display_name username email is_active } }
           }
         }""",
-        {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-        request=_request(poster),
-    ))["record_thread"]["suggested_recipients"]
+            {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
+            request=_request(poster),
+        )
+    )["record_thread"]["suggested_recipients"]
 
-    assert suggestions == [{
-        "source": "assigned_user",
-        "user": {"display_name": "Avery", "username": None, "email": None, "is_active": None},
-    }]
+    assert suggestions == [
+        {
+            "source": "assigned_user",
+            "user": {"display_name": "Avery", "username": None, "email": None, "is_active": None},
+        }
+    ]
 
 
 def test_record_chatter_reports_author_delivery_errors(composed_tables: None) -> None:
@@ -3001,25 +3007,29 @@ def test_record_chatter_activity_lifecycle(composed_tables: None) -> None:
         ],
     }
 
-    ungated = _data(execute_schema(
-        schema,
-        """mutation Log($id: ID!) {
+    ungated = _data(
+        execute_schema(
+            schema,
+            """mutation Log($id: ID!) {
           log_record_activity(input: {
             model_label: "messaging.ThreadedTicket", record_id: $id, activity_type: "call",
             occurred_on: "2025-12-31", note: "  Agreed next steps."
           }) { error_code activity { activity_type summary } }
         }""",
-        {"id": ticket.sqid}, request=_request(admin),
-    ))["log_record_activity"]
+            {"id": ticket.sqid},
+            request=_request(admin),
+        )
+    )["log_record_activity"]
     assert ungated == {"error_code": None, "activity": {"activity_type": "call", "summary": "Agreed next steps."}}
 
     with system_context(reason="tests.messaging.logged_exchange"):
         record = ChatterDoc.objects.create(title="Exchange record")
         reader = get_user_model().objects.create_user(username="exchange-reader")
         write_relationships([RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(reader))])
-    logged = _data(execute_schema(
-        schema,
-        """
+    logged = _data(
+        execute_schema(
+            schema,
+            """
         mutation Log($model: String!, $id: ID!) {
           log_record_activity(input: {
             model_label: $model, record_id: $id, activity_type: "call",
@@ -3031,39 +3041,48 @@ def test_record_chatter_activity_lifecycle(composed_tables: None) -> None:
           }
         }
         """,
-        {"model": "chatterdemo.ChatterDoc", "id": record.sqid},
-        request=_request(admin),
-    ))["log_record_activity"]
+            {"model": "chatterdemo.ChatterDoc", "id": record.sqid},
+            request=_request(admin),
+        )
+    )["log_record_activity"]
     assert logged == {
         "error_code": None,
         "activity": {
-            "status": "DONE", "due_date": "2025-12-31", "note": "Agreed next steps.",
+            "status": "DONE",
+            "due_date": "2025-12-31",
+            "note": "Agreed next steps.",
             "created_by": {"username": "msg-activity-admin"},
         },
         "thread": {"message_count": 1},
     }
-    readable = _data(execute_schema(
-        schema,
-        """query Activities($id: ID!) {
+    readable = _data(
+        execute_schema(
+            schema,
+            """query Activities($id: ID!) {
           record_thread(input: {model_label: "chatterdemo.ChatterDoc", record_id: $id}) {
             error_code activities { note status } activity_types { key name }
           }
         }""",
-        {"id": record.sqid}, request=_request(reader),
-    ))["record_thread"]
+            {"id": record.sqid},
+            request=_request(reader),
+        )
+    )["record_thread"]
     assert readable["error_code"] is None
     assert readable["activities"] == [{"note": "Agreed next steps.", "status": "DONE"}]
     assert {item["key"] for item in readable["activity_types"]} == {"call", "todo"}
-    denied = _data(execute_schema(
-        schema,
-        """mutation Log($id: ID!) {
+    denied = _data(
+        execute_schema(
+            schema,
+            """mutation Log($id: ID!) {
           log_record_activity(input: {
             model_label: "chatterdemo.ChatterDoc", record_id: $id,
             activity_type: "call", occurred_on: "2025-12-31", note: "No write access."
           }) { error_code activity { id } }
         }""",
-        {"id": record.sqid}, request=_request(reader),
-    ))["log_record_activity"]
+            {"id": record.sqid},
+            request=_request(reader),
+        )
+    )["log_record_activity"]
     assert denied["error_code"] == "PERMISSION_DENIED"
     assert denied["activity"] is None
     with actor_context(admin):
@@ -3084,17 +3103,26 @@ def test_activity_catalog_writes_require_admin(composed_tables: None) -> None:
     admin = _platform_admin("activity-catalog-admin")
     plain = User.objects.create_user(username="activity-catalog-reader")
     schema = _schema()
-    inserted = _data(execute_schema(schema, """mutation {
+    inserted = _data(
+        execute_schema(
+            schema,
+            """mutation {
       insert_activity_types_one(object: {key: "meeting", name: "Meeting"}) { id key }
-    }""", request=_request(admin)))["insert_activity_types_one"]
+    }""",
+            request=_request(admin),
+        )
+    )["insert_activity_types_one"]
     assert inserted["key"] == "meeting"
     catalog = messaging_schema.ActivityType
     for user in (plain, AnonymousUser()):
         for mutation, variables in (
             ('mutation { insert_activity_types_one(object: {key: "forbidden", name: "Forbidden"}) { id } }', {}),
-            ('mutation($id: String!) { update_activity_types_by_pk('
-             'pk_columns: {id: $id}, _set: {name: "Changed"}) { id } }', {"id": inserted["id"]}),
-            ('mutation($id: String!) { delete_activity_types_by_pk(id: $id) { id } }', {"id": inserted["id"]}),
+            (
+                "mutation($id: String!) { update_activity_types_by_pk("
+                'pk_columns: {id: $id}, _set: {name: "Changed"}) { id } }',
+                {"id": inserted["id"]},
+            ),
+            ("mutation($id: String!) { delete_activity_types_by_pk(id: $id) { id } }", {"id": inserted["id"]}),
         ):
             result = execute_schema(schema, mutation, variables, request=_request(user))
             assert result.errors or all(value is None for value in (result.data or {}).values())
@@ -3120,8 +3148,11 @@ def test_record_activity_window_search_and_identity_query_budget(composed_tables
     }"""
 
     def read(search: str = "", limit: int = 50) -> list[Any]:
-        payload = _data(execute_schema(schema, query, {"id": record.sqid, "search": search, "limit": limit},
-            request=_request(reader)))["record_thread"]
+        payload = _data(
+            execute_schema(
+                schema, query, {"id": record.sqid, "search": search, "limit": limit}, request=_request(reader)
+            )
+        )["record_thread"]
         assert payload["error_code"] is None
         return payload["activities"]
 
@@ -3152,10 +3183,18 @@ def test_record_activity_window_search_and_identity_query_budget(composed_tables
             message.save(update_fields=("sent_at",))
     with actor_context(reader):
         manager = messaging_models.ThreadActivity.objects
-        assert manager.for_record_window(record, role="chatter", search="", limit=50,
-            messages=[first, last], message_count=3, bounded=False) == []
-        assert manager.for_record_window(record, role="chatter", search="", limit=50,
-            messages=[], message_count=3, bounded=True) == []
+        assert (
+            manager.for_record_window(
+                record, role="chatter", search="", limit=50, messages=[first, last], message_count=3, bounded=False
+            )
+            == []
+        )
+        assert (
+            manager.for_record_window(
+                record, role="chatter", search="", limit=50, messages=[], message_count=3, bounded=True
+            )
+            == []
+        )
 
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])

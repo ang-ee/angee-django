@@ -26,7 +26,6 @@ from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
-from angee.parties.mixins import LinkSource
 from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
@@ -57,8 +56,16 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
     }
 
     def file_task(
-        self, *, queue: Any, title: str, body: str, party: Any, client_creation_key: str,
-        due_date: Any = None, estimate: float | None = None, importance: str = "normal",
+        self,
+        *,
+        queue: Any,
+        title: str,
+        body: str,
+        party: Any,
+        client_creation_key: str,
+        due_date: Any = None,
+        estimate: float | None = None,
+        importance: str = "normal",
     ) -> Any:
         """File an actor-owned task and its need atomically, replaying the whole request."""
 
@@ -76,7 +83,9 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
 
         def insert() -> Any:
             task = task_model.objects.create(
-                **values, created_by_id=scope, client_creation_key=client_creation_key,
+                **values,
+                created_by_id=scope,
+                client_creation_key=client_creation_key,
                 creation_fingerprint=fingerprint,
             )
             self.capture(target=task, party=party, body=body, importance=importance)
@@ -84,7 +93,10 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
 
         with transaction.atomic():
             task, _created = task_model.objects.with_actor(actor).replay_or_insert(
-                scope, client_creation_key, fingerprint, insert,
+                scope,
+                client_creation_key,
+                fingerprint,
+                insert,
             )
             return task
 
@@ -290,8 +302,8 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
         if sender is None:
             return None
         if sender.party_id is None:
-            party_handle_model = apps.get_model("parties", "PartyHandle")
-            party_handle_model.objects.suggest_for(sender)
+            party_model = apps.get_model("parties", "Party")
+            party_model.objects.suggest_for(sender)
             sender.refresh_from_db(fields=("party", "party_link_confirmed"))
         return sender.party_id if sender.party_link_confirmed else None
 
@@ -366,8 +378,12 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
     claimed_name = models.TextField(blank=True, default="", editable=False)
     claimed_email = models.TextField(blank=True, default="", editable=False)
     access_decision = models.ForeignKey(
-        "decisions.Decision", null=True, blank=True, editable=False,
-        on_delete=models.PROTECT, related_name="access_needs",
+        "decisions.Decision",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.PROTECT,
+        related_name="access_needs",
     )
     admitted_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -659,8 +675,11 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
         with system_context(reason="intake.need.link_requester"):
             party = apps.get_model("parties", "Party").objects.for_user(user)
             handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
-            apps.get_model("parties", "PartyHandle").objects.link(
-                party, handle, source=LinkSource.EMAIL_MATCH, is_confirmed=False
+            apps.get_model("parties", "Party").objects.assert_handle(
+                party,
+                handle,
+                asserted_by=apps.get_model("parties", "Party").objects.rule_source("source_sender"),
+                evidence=[handle],
             )
             self.party = party
         return user
@@ -678,16 +697,21 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
             raise ValidationError({"action": "This need has no access question; create a new access request."})
         # Both entrypoints lock the decision first, then its asking owner.
         with actor_context(actor), transaction.atomic():
-            decision = apps.get_model("decisions", "Decision").objects.sudo(
-                reason="intake.answer.lock",
-            ).locked_get(pk=self.access_decision_id)
+            decision = (
+                apps.get_model("decisions", "Decision")
+                .objects.sudo(
+                    reason="intake.answer.lock",
+                )
+                .locked_get(pk=self.access_decision_id)
+            )
             locked = type(self).objects.sudo(reason="intake.answer.need").locked_get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.access_decision_id != decision.pk:
                 raise ValidationError({"revision": "The access question has changed; reload it."})
-            if (not locked.with_actor(actor).has_access("write")
-                    or not locked.target.with_actor(actor).has_access("share")):
+            if not locked.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
+                "share"
+            ):
                 raise PermissionDenied("Deciding request access requires need write and target share.")
             if not decision.is_open:
                 if decision.verdict == [action]:
@@ -858,9 +882,13 @@ def task_requester_rows(task: str = "pk") -> models.QuerySet[Any]:
     ``task`` names the outer query's column holding the task id.
     """
 
-    return apps.get_model("intake", "Need")._base_manager.filter(
-        task_id=models.OuterRef(task),
-    ).order_by("created_at", "pk")
+    return (
+        apps.get_model("intake", "Need")
+        ._base_manager.filter(
+            task_id=models.OuterRef(task),
+        )
+        .order_by("created_at", "pk")
+    )
 
 
 def task_requester_name() -> models.Subquery:
@@ -868,11 +896,15 @@ def task_requester_name() -> models.Subquery:
 
     blank = models.Value("", output_field=models.TextField())
     return models.Subquery(
-        task_requester_rows().annotate(name=Coalesce(
-            NullIf(models.F("party__display_name"), blank),
-            NullIf(models.F("claimed_name"), blank),
-            output_field=models.TextField(),
-        )).values("name")[:1],
+        task_requester_rows()
+        .annotate(
+            name=Coalesce(
+                NullIf(models.F("party__display_name"), blank),
+                NullIf(models.F("claimed_name"), blank),
+                output_field=models.TextField(),
+            )
+        )
+        .values("name")[:1],
         output_field=models.TextField(null=True),
     )
 
@@ -896,10 +928,14 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     if user_id is None:
         return models.Value(False, output_field=models.BooleanField())
     # Uncorrelated, so the database evaluates it once from the viewer's own requests.
-    filed = apps.get_model("intake", "Need")._base_manager.filter(
-        party__person__user=user_id,
-        pk=models.Subquery(task_requester_rows("task_id").values("pk")[:1]),
-    ).values("task_id")
+    filed = (
+        apps.get_model("intake", "Need")
+        ._base_manager.filter(
+            party__person__user=user_id,
+            pk=models.Subquery(task_requester_rows("task_id").values("pk")[:1]),
+        )
+        .values("task_id")
+    )
     return models.Case(
         models.When(pk__in=filed, then=models.Value(True)),
         default=models.Value(False),

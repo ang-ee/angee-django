@@ -25,7 +25,7 @@ class ProposedHandle(BaseModel):
     """An existing association whose confirmation is being reviewed."""
 
     model_config = ConfigDict(extra="forbid")
-    party_handle_id: str = ""
+    statement_id: str = ""
     evidence: str = ""
 
 
@@ -93,20 +93,29 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         records = [identity.party]
         alternatives = []
         if proposed.name and proposed.name != identity.current["name"]:
-            alternatives.append({"key": "name", "label": "Use the proposed name", "outcome": "applied",
-                "actions": {party_id: {"fields": {"display_name": {}}}}})
+            alternatives.append(
+                {
+                    "key": "name",
+                    "label": "Use the proposed name",
+                    "outcome": "applied",
+                    "actions": {party_id: {"fields": {"display_name": {}}}},
+                }
+            )
         if any(getattr(proposed.address, name) for name in apps.get_model("parties", "Address").objects.components):
             alternatives.append({"key": "address", "label": "Add the proposed address", "outcome": "applied"})
-        if proposed.handle.party_handle_id:
-            link = ctx.load(apps.get_model("parties", "PartyHandle"), proposed.handle.party_handle_id)
-            records.append(link)
-            alternatives.append({"key": "handle", "label": "Confirm the proposed handle", "outcome": "applied",
-                "actions": {public_id_of(link): {"fields": {"is_confirmed": {}}}}})
-        alternatives.extend([
-            {"key": "keep", "label": "Keep what is on the record", "outcome": "unchanged"},
-            {"key": "reject", "label": "Reject the proposal", "outcome": "rejected"},
-            {"key": "escalate", "label": "Escalate the review", "outcome": "escalated"},
-        ])
+        if proposed.handle.statement_id:
+            statement = identity.party.statements.readable(ctx.actor).from_public_id(proposed.handle.statement_id)
+            if statement is None:
+                raise ValidationError("The proposed handle assertion is not readable on this Party.")
+            records.append(statement.handle)
+            alternatives.append({"key": "handle", "label": "Confirm the proposed handle", "outcome": "applied"})
+        alternatives.extend(
+            [
+                {"key": "keep", "label": "Keep what is on the record", "outcome": "unchanged"},
+                {"key": "reject", "label": "Reject the proposal", "outcome": "rejected"},
+                {"key": "escalate", "label": "Escalate the review", "outcome": "escalated"},
+            ]
+        )
         return ctx.ask(
             DecisionRequest(
                 kind="review-party-identity",
@@ -128,7 +137,7 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
                             + tuple(
                                 DecisionRecordReference(model=model, id=row[key])
                                 for row in identity.current["handles"]
-                                for model, key in (("parties.PartyHandle", "id"), ("parties.Handle", "handle_id"))
+                                for model, key in (("parties.Handle", "handle_id"),)
                             ),
                         ),
                         DecisionFact(
@@ -159,9 +168,11 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         outcome, ctx.identity_results = party.apply_identity(
             expected_facts_hash=ctx.state["facts_hash"],
             proposed=IdentityProposal.model_validate(ctx.state["proposed"]).model_dump(),
-            choices={"name_action": "replace" if "name" in changes else "keep",
-                     "address_action": "add" if "address" in changes else "keep",
-                     "handle_action": "confirm" if "handle" in changes else "keep"},
+            choices={
+                "name_action": "replace" if "name" in changes else "keep",
+                "address_action": "add" if "address" in changes else "keep",
+                "handle_action": "confirm" if "handle" in changes else "keep",
+            },
         )
         if outcome == "conflict":
             raise ValidationError("The party identity changed during review; reload and review its current facts.")
@@ -169,14 +180,12 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         if "address" in changes:
             for address in addresses.exclude(pk__in=existing_addresses):
                 ctx.record(address, operation="created")
-        if "handle" in changes:
-            ctx.record(ctx.load(apps.get_model("parties", "PartyHandle"),
-                                ctx.state["proposed"]["handle"]["party_handle_id"]), operation="changed")
         return outcome
 
     def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Settlement:
-        return ctx.done({"party_id": ctx.input.party_id, "context": ctx.input.context,
-                         **ctx.identity_results}, outcome=outcome)
+        return ctx.done(
+            {"party_id": ctx.input.party_id, "context": ctx.input.context, **ctx.identity_results}, outcome=outcome
+        )
 
 
 class DuplicatePair(BaseModel):

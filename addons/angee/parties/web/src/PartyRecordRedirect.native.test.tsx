@@ -9,13 +9,13 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({ data: {
     parties_by_pk: { id: "party-1", concrete_kind: query.kind },
-    party_handles_by_pk: { id: "handle-1", party: { id: "party-1" } },
+    party_statements_by_pk: { id: "handle-1", subject: { id: "party-1" } },
   }, isFetching: false, error: null }),
 }));
 
 import parties from "./index";
 import { PartyRecordRedirect } from "./PartyRecordRedirect";
-import { PartyHandleRedirect } from "./PartyHandleRedirect";
+import { PartyStatementRedirect } from "./PartyStatementRedirect";
 
 afterEach(cleanup);
 
@@ -34,7 +34,7 @@ function renderRedirects() {
     routeTree: root.addChildren([
       createRoute({ getParentRoute: () => root, path: "/start", component: () => <div>Start</div> }),
       route("parties.records.record", PartyRecordRedirect),
-      route("parties.handle-links.record", PartyHandleRedirect),
+      route("parties.statements.record", PartyStatementRedirect),
       route("parties.people.record", () => <div>Person</div>),
       route("parties.organizations.record", () => <div>Organization</div>),
     ]),
@@ -65,12 +65,12 @@ test("the handle-to-party redirect chain keeps the trail and identity selection"
   query.kind = "PERSON";
   const router = renderRedirects();
   await router.navigate({
-    href: routeHref("parties.handle-links.record", { id: "handle-1" }, { view: "all" }),
+    href: routeHref("parties.statements.record", { id: "handle-1" }, { view: "all" }),
     state: { breadcrumbTrail: trail },
   });
   await waitFor(() => expect(router.state.location.pathname).toBe(routeHref("parties.people.record", { id: "party-1" })));
   expect(router.state.location.state.breadcrumbTrail).toEqual(trail);
-  expect(router.state.location.search).toEqual({ view: "all", recordTab: "identity", partyHandle: "handle-1" });
+  expect(router.state.location.search).toEqual({ view: "all", recordTab: "identity", partyStatement: "handle-1" });
   router.history.back();
   await waitFor(() => expect(router.state.location.pathname).toBe("/start"));
 });

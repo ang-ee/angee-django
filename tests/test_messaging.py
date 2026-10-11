@@ -69,7 +69,6 @@ from angee.messaging.testing.models import (
     Part,
     Participant,
     Party,
-    PartyHandle,
     Person,
     Reaction,
     Thread,
@@ -79,8 +78,6 @@ from angee.messaging.testing.models import (
     ThreadNotification,
     TrackingValue,
 )
-from angee.parties.managers import HandleAssociationStatus
-from angee.parties.mixins import LinkSource
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -545,15 +542,15 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     assert reaction.handle.value == "reactor@example.com"
     assert reaction.handle.owner_id == user.pk
     person = Person._base_manager.get(user=user)
-    link = PartyHandle._base_manager.get(handle=reaction.handle, party=person)
+    link = Party.statements.get(handle=reaction.handle, subject=person)
     assert link.confidence == 1.0
-    assert link.source == LinkSource.MANUAL
-    assert link.is_confirmed
+    assert link.source_kind == "person"
+    assert not link.is_confirmed
 
     with system_context(reason="test threaded model reaction remove"):
         ticket.message_reaction(message, reaction="👍", user=user)
     assert not Reaction._base_manager.filter(message=message).exists()
-    assert PartyHandle._base_manager.filter(handle=reaction.handle, party=person).count() == 1
+    assert Party.statements.filter(handle=reaction.handle, subject=person).count() == 1
 
     with system_context(reason="test threaded model reaction guard"):
         with pytest.raises(ValueError, match="Message does not belong to this record thread."):
@@ -1885,25 +1882,20 @@ def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> 
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
     sender = _ingest_sender(
         channel=channel,
         external_id="normalized-sender-1",
         value="alice+inbound@gmail.com",
     )
-    link = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+    link = Party.statements.filter(handle=sender, subject=alice).first()
 
     assert link is not None
     sender.refresh_from_db()
     assert sender.party_id == alice.pk
     assert link.confidence == 1.0
-    assert link.source == LinkSource.EMAIL_MATCH
+    assert link.source_kind == "rule"
     assert not link.is_confirmed
 
 
@@ -1918,115 +1910,7 @@ def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> 
     )
 
     assert sender.party_id is None
-    assert not PartyHandle._base_manager.filter(handle=sender).exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmation(channel: Any) -> None:
-    """Repeated source claims retain evidence while human identity state remains authoritative."""
-
-    with system_context(reason="test claimed sender proposal fixtures"):
-        owner = channel.owner
-        party = Party._base_manager.create(display_name="Document sender", created_by=owner)
-        handle = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="contact@example.test",
-            created_by=owner,
-        )
-        messages = [
-            Message._base_manager.create(
-                channel=channel,
-                external_id=f"sender-evidence-{index}",
-                direction="inbound",
-                status="synced",
-                message_type="email",
-                sender=handle,
-                created_by=owner,
-            )
-            for index in range(1, 22)
-        ]
-        link = PartyHandle.objects.link(
-            party,
-            handle,
-            confidence=1.0,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
-        foreign_owner = get_user_model().objects.create_user(
-            username="foreign-sender-evidence",
-            email="foreign-sender-evidence@example.test",
-        )
-        foreign_party = Party._base_manager.create(display_name="Private evidence", created_by=foreign_owner)
-        link.metadata = {"evidence_refs": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]}
-        link.save(update_fields=("metadata", "updated_at"))
-
-    for message in messages:
-        PartyHandle.objects.propose_claimed_handle(
-            party,
-            handle,
-            evidence=message,
-            actor=owner,
-        )
-
-    link.refresh_from_db()
-    assert link.is_confirmed
-    assert not link.is_dismissed
-    assert link.confidence == 1.0
-    assert link.source == LinkSource.MANUAL
-    assert link.metadata["evidence_refs"] == [
-        {"model": "messaging.Party", "id": str(foreign_party.sqid)},
-        *({"model": "messaging.Message", "id": str(message.sqid)} for message in messages),
-    ]
-    page = link.evidence_page(owner, limit=100)
-    assert len(page.items) == 20
-    assert page.truncated
-    assert [(item.model, item.id) for item in page.items] == [
-        ("messaging.Message", str(message.sqid)) for message in messages[:20]
-    ]
-    assert all(item.id != str(foreign_party.sqid) for item in page.items)
-    assert link.evidence_page(None).items == ()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_claimed_sender_assessment_reports_hidden_confirmed_other_without_disclosure(channel: Any) -> None:
-    """A private conflicting owner blocks association without revealing its identity."""
-
-    actor = channel.owner
-    foreign = get_user_model().objects.create_user(
-        username="foreign-handle-owner",
-        email="foreign-handle-owner@example.test",
-    )
-    with system_context(reason="test hidden sender association fixtures"):
-        candidate = Party._base_manager.create(display_name="Candidate counterparty", created_by=actor)
-        other = Party._base_manager.create(display_name="Private counterparty", created_by=foreign)
-        handle = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="private-owner@example.test",
-            created_by=actor,
-        )
-        PartyHandle._base_manager.create(
-            party=other,
-            handle=handle,
-            confidence=1.0,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by=foreign,
-        )
-        visible = PartyHandle._base_manager.create(
-            party=candidate,
-            handle=handle,
-            confidence=0.4,
-            source=LinkSource.EMAIL_MATCH,
-            created_by=actor,
-        )
-
-    assessment = PartyHandle.objects.assess_claimed_handle(candidate, handle, actor=actor)
-
-    assert PartyHandle.objects.has_confirmed_association(handle, actor=actor)
-    assert assessment.status is HandleAssociationStatus.CONFIRMED_OTHER
-    assert assessment.readable_links == (visible,)
-    assert not assessment.conflict_evidence_readable
+    assert not Party.statements.filter(handle=sender).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2039,7 +1923,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
         value="alice+late@gmail.com",
     )
     assert sender.party_id is None
-    assert not PartyHandle._base_manager.filter(handle=sender).exists()
+    assert not Party.statements.filter(handle=sender).exists()
 
     with system_context(reason="test ingest late sender evidence"):
         owner = channel.owner
@@ -2049,12 +1933,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
     retried = _ingest_sender(
         channel=channel,
@@ -2065,7 +1944,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
     retried.refresh_from_db()
     assert retried.pk == sender.pk
     assert retried.party_id == alice.pk
-    assert PartyHandle._base_manager.filter(handle=retried, party=alice).count() == 1
+    assert Party.statements.filter(handle=retried, subject=alice).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2080,22 +1959,17 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
     sender = _ingest_sender(
         channel=channel,
         external_id="dismissed-sender-1",
         value="alice+dismissed@gmail.com",
     )
-    dismissed = PartyHandle._base_manager.filter(handle=sender, party=alice).first()
+    dismissed = Party.statements.filter(handle=sender, subject=alice).first()
     assert dismissed is not None
     with actor_context(owner):
-        dismissed.dismiss()
+        dismissed = dismissed.dismiss()
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
 
@@ -2110,7 +1984,7 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert sender.party_id is None
-    assert PartyHandle._base_manager.filter(handle=sender, party=alice).count() == 1
+    assert Party.statements.filter(handle=sender, subject=alice).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2130,13 +2004,13 @@ def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
         external_id="organization-sender-1",
         value="bob@acme.example",
     )
-    link = PartyHandle._base_manager.filter(handle=sender, party=acme).first()
+    link = Party.statements.filter(handle=sender, subject=acme).first()
 
     assert link is not None
     sender.refresh_from_db()
     assert sender.party_id is None
     assert link.confidence == 0.4
-    assert link.source == LinkSource.RULE
+    assert link.source_kind == "rule"
     assert not link.is_confirmed
 
 
@@ -2187,7 +2061,7 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
         lambda callback: callbacks.append(callback),
     )
     monkeypatch.setattr(
-        type(PartyHandle.objects),
+        type(Party.objects),
         "suggest_for",
         lambda manager, handle: suggested.append(handle.pk),
     )
@@ -2230,7 +2104,7 @@ def test_ingest_contains_suggestion_failures_and_continues_batch(
         if handle.value == "fail@example.com":
             raise RuntimeError("directory unavailable")
 
-    monkeypatch.setattr(type(PartyHandle.objects), "suggest_for", suggest)
+    monkeypatch.setattr(type(Party.objects), "suggest_for", suggest)
     messages = [
         ParsedMessage(
             external_id=f"suggest-failure-{index}",

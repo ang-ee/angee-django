@@ -4,7 +4,7 @@ Parties are the people and organisations a project keeps track of. A party is
 reached through one or more :class:`Handle` rows (an email address, a phone
 number, a social handle) — the same handle that messaging uses as a participant,
 so this addon is the contacts foundation the messaging addon builds on. The link
-between a party and a handle is itself confidence-bearing (:class:`PartyHandle`)
+between a party and a handle is a confidence-bearing member statement
 so a sync can record an uncertain match as a weak candidate instead of guessing.
 
 ``Party`` is a multi-table-inheritance parent; the concrete kind is the child
@@ -23,14 +23,13 @@ is a typed, directed party↔party edge whose vocabulary
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import connections, models, transaction
-from django.db.migrations.recorder import MigrationRecorder
+from django.db import models, transaction
 from phonenumbers import (
     NumberParseException,
     PhoneNumberFormat,
@@ -39,7 +38,7 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, actor_context, current_actor
+from rebac import PermissionDenied, actor_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.actors import instance_actor
@@ -62,14 +61,15 @@ from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
+    _REVIEW_CONFIDENCE,
     CircleManager,
-    FrozenPartyHandleManager,
     HandleManager,
     MergeVetoManager,
-    PartyHandleManager,
     PartyManager,
+    PartyStatementManager,
+    PartyStatementQuerySet,
 )
-from angee.parties.mixins import LinkSource, ScoredLinkMixin
+from angee.parties.mixins import LinkSource, MembershipDecisionMixin, PartyStatementMixin
 from angee.tags.models import TaggedModel
 
 
@@ -94,6 +94,9 @@ class Party(StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             ),
         },
         sqid_prefix="pst_",
+        bases=(PartyStatementMixin,),
+        history_manager=PartyStatementManager,
+        historical_queryset=PartyStatementQuerySet,
     )
     display_name = models.TextField()
     notes = models.TextField(blank=True, default="")
@@ -173,6 +176,31 @@ class Party(StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             ),
         )
 
+    def statement_candidates(self, aspect: str, candidates: Any) -> Any:
+        if aspect == "handle":
+            return [row for row in candidates if row.confidence >= _REVIEW_CONFIDENCE]
+        return super().statement_candidates(aspect, candidates)
+
+    def apply_resolved(
+        self,
+        *,
+        aspect: str,
+        member: Mapping[str, Any],
+        values: Mapping[str, Any],
+        statement: Any | None,
+        expected_revision: int | None = None,
+    ) -> None:
+        if aspect == "handle":
+            apps.get_model("parties", "Handle").objects.resolve(member["handle"])
+            return
+        super().apply_resolved(
+            aspect=aspect,
+            member=member,
+            values=values,
+            statement=statement,
+            expected_revision=expected_revision,
+        )
+
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
 
@@ -188,7 +216,7 @@ class Party(StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         The import placeholder and letterless names (a phone number or other
         handle spelling promoted into the name slot) do not count. When links tie,
         a handle resolves to a party that passes
-        (:meth:`~angee.parties.managers.PartyHandleQuerySet.winner`).
+        (:meth:`~angee.parties.managers.HandleManager.resolve`).
         """
 
         name = (self.display_name or "").strip()
@@ -314,10 +342,12 @@ class Party(StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             proposed_key = addresses.identity_key(address)
             if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
                 return True
-        link_id = proposed["handle"]["party_handle_id"]
+        link_id = proposed["handle"]["statement_id"]
         return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"] for row in current["handles"]))
 
-    def identity_values(self, addresses: list[Any], links: list[Any]) -> dict[str, Any]:
+    def identity_values(
+        self, addresses: list[Any], links: list[Any], *, include_evidence: bool = False
+    ) -> dict[str, Any]:
         """Project the exact native identity facts used by expected-state checks."""
 
         return {
@@ -338,6 +368,12 @@ class Party(StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
                     "platform": str(link.handle.platform),
                     "value": link.handle.value,
                     "confidence": link.confidence,
+                    "asserted_by": link.asserted_by,
+                    "rank": link.rank,
+                    "snak": link.snak,
+                    "status": link.status,
+                    "applied": link.applied,
+                    **({"evidence": link.evidence} if include_evidence else {}),
                     "is_confirmed": link.is_confirmed,
                     "is_dismissed": link.is_dismissed,
                 }
@@ -490,7 +526,7 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
-    idempotent. ``party`` is the resolved owner the :class:`PartyHandle` manager
+    idempotent. ``party`` is the resolved owner the Handle manager
     materialises; it is null until a handle is linked, so a handle synced for an
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
@@ -543,7 +579,7 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     """The user who controls this address — sends, posts, or syncs as it.
 
     The **control** fact, distinct from the **identity** fact (``party`` — who the
-    address reaches, resolved from :class:`PartyHandle`). A shared team inbox or a
+    address reaches, resolved from member statements). A shared team inbox or a
     service account may carry an ``owner`` without resolving to that user's party,
     and an ex-address may reach a person's party without anyone controlling it.
     """
@@ -645,155 +681,21 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
 
     @property
     def resolved_confidence(self) -> float | None:
-        """Confidence of the link that resolved this handle's owner.
-
-        ``party`` is materialised from the winning :class:`PartyHandle` (see
-        :meth:`PartyHandleManager.resolve`) and ``(party, handle)`` is unique, so
-        the link matching the resolved ``party`` is that winner — its score is the
-        resolution confidence. ``None`` when the handle is unowned or, under
-        actor-scoped loading, the resolving link is not readable by the actor.
-        """
-
+        """Confidence of the subject-authorized applied owner assertion."""
         if self.party_id is None:
             return None
-        for link in self.party_links.all():
-            if link.party_id == self.party_id:
-                return link.confidence
-        return None
-
-
-@dataclass(frozen=True, slots=True)
-class PartyHandleEvidence:
-    """One actor-readable native record supporting a handle claim."""
-
-    model: str
-    id: str
-
-
-@dataclass(frozen=True, slots=True)
-class PartyHandleEvidencePage:
-    """Bounded actor-scoped projection of retained handle evidence."""
-
-    items: tuple[PartyHandleEvidence, ...]
-    truncated: bool
-
-
-class PartyHandle(ScoredLinkMixin, AuditMixin, AngeeDataModel):
-    """A confidence-bearing link between a party and one of its handles.
-
-    A handle may carry several scored candidate parties (:class:`ScoredLinkMixin`),
-    so a sync can surface an uncertain match as a weak link (a conflicting claim is
-    recorded at ``0.3`` confidence) instead of silently reassigning. The resolved
-    owner is the winning decisive link (:meth:`~angee.parties.managers.PartyHandleQuerySet.winner`:
-    confirmed, then highest confidence, then a party with a real name) — the value
-    the manager materialises onto :attr:`Handle.party`.
-    """
-
-    runtime = True
-
-    sqid_prefix = "phl_"
-    party = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="party_handles",
-    )
-    handle = models.ForeignKey(
-        "parties.Handle",
-        on_delete=models.CASCADE,
-        related_name="party_links",
-    )
-    metadata = models.JSONField(blank=True, default=dict)
-
-    objects = PartyHandleManager()
-    _angee_base = FrozenPartyHandleManager()
-
-    @classmethod
-    def require_legacy_write(cls, using: str) -> None:
-        """The completed native migration is the carrier's write-cutover fact.
-
-        Old producers may write before the fold. Once it is recorded, instance,
-        queryset and collector writes fail, including elevated bookkeeping. The
-        retained rows serve the readers until their statement cutover.
-        """
-
-        recorder = MigrationRecorder(connections[using])
-        if (
-            recorder.has_table()
-            and recorder.migration_qs.filter(app="parties", name__endswith="_fold_party_handle_statements").exists()
-        ):
-            raise ValidationError("PartyHandle is frozen after its statement fold; write Party statements instead.")
-
-    class Meta:
-        """Django model options for the party-handle link source model."""
-
-        abstract = True
-        base_manager_name = "_angee_base"
-        ordering = ("-is_confirmed", "-confidence", "sqid")
-        rebac_resource_type = "parties/party_handle"
-        constraints = (
-            models.UniqueConstraint(
-                fields=("party", "handle"),
-                name="uq_party_handle",
-            ),
+        if "_resolved_confidence" in self.__dict__:
+            return cast(float | None, self.__dict__["_resolved_confidence"])
+        row = (
+            apps.get_model("parties", "Party")
+            .objects.handle_statements(
+                actor=instance_actor(self),
+            )
+            .canonical()
+            .filter(subject_id=self.party_id, handle_id=self.pk)
+            .first()
         )
-
-    def __str__(self) -> str:
-        """Return a readable link description for Django displays."""
-
-        return f"{self.party_id}↔{self.handle_id} ({self.confidence})"
-
-    def evidence_page(self, actor: Any, *, limit: int = 20) -> PartyHandleEvidencePage:
-        """Return a hard-bounded actor-readable projection of retained evidence."""
-
-        if actor is None:
-            return PartyHandleEvidencePage((), False)
-        bounded = max(1, min(int(limit), 20))
-        from angee.base.identity import instance_from_public_id
-        from angee.base.scoping import read_scoped_queryset
-
-        refs = list((self.metadata or {}).get("evidence_refs", ()))
-        visible: list[PartyHandleEvidence] = []
-        for ref in refs[: bounded + 1]:
-            if not isinstance(ref, Mapping):
-                continue
-            try:
-                model = apps.get_model(str(ref.get("model") or ""))
-            except LookupError, ValueError:
-                continue
-            public_id = str(ref.get("id") or "")
-            queryset = read_scoped_queryset(model, actor)
-            if public_id and instance_from_public_id(model, public_id, queryset=queryset) is not None:
-                visible.append(PartyHandleEvidence(model=model._meta.label, id=public_id))
-        return PartyHandleEvidencePage(tuple(visible[:bounded]), len(refs) > bounded)
-
-    def confirm(self) -> None:
-        """Human-confirm this link, then re-resolve the handle's owner.
-
-        Overrides the plain :meth:`ScoredLinkMixin.confirm` to add the two facts a
-        contacts confirmation carries that the generic mixin must not: the actor must
-        hold ``write`` on the link, and the resolution cascade (the handle's owner
-        pointer, both parties' counts) is server-owned bookkeeping that runs elevated.
-        """
-
-        actor = self.actor() or current_actor()
-        type(self).objects._transition(self, action="confirm", actor=actor)
-
-    def dismiss(self) -> None:
-        """Dismiss this link — the durable anti-link — then re-resolve the handle.
-
-        Gated and elevated like :meth:`confirm`; the mixin flips the flags and calls
-        :meth:`_resolve_link`, which demotes the handle to its next candidate or to
-        unowned.
-        """
-
-        actor = self.actor() or current_actor()
-        type(self).objects._transition(self, action="dismiss", actor=actor)
-
-    def _resolve_link(self) -> None:
-        """Re-materialise :attr:`Handle.party` from this handle's surviving links."""
-
-        handle = self.handle
-        type(self).objects.resolve(handle)
+        return row.confidence if row is not None else None
 
 
 class AddressManager(AngeeManager):
@@ -1120,12 +1022,12 @@ class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
         return self.name
 
 
-class CircleMember(ScoredLinkMixin, AuditMixin, AngeeDataModel):
-    """A party's membership of one circle, scored like a :class:`PartyHandle` link.
+class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
+    """A party's reviewable membership of one circle.
 
-    Membership is a :class:`ScoredLinkMixin` so a suggester (community detection, an
+    Membership is a plain decision row so a suggester (community detection, an
     org-domain rule, an LLM) can propose a weak membership for review instead of
-    silently filing people; a human decision writes ``manual`` at full confidence.
+    silently filing people; a human decision records acceptance at full confidence.
     One row per ``(circle, party)`` — re-suggesting an existing membership updates
     the row rather than duplicating it.
     """

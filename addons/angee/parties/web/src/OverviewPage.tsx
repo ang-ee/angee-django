@@ -19,7 +19,7 @@ export function OverviewPage(): React.ReactElement {
       "parties.Person",
       "parties.Organization",
       "parties.Handle",
-      "parties.PartyHandle",
+      "parties.PartyStatement",
       "parties.MergeVeto",
     ],
   });

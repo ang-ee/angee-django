@@ -5,7 +5,7 @@ name = "angee.parties"
 description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
 category = "Data"
-depends_on = ["angee.graphql", "angee.iam", "angee.integrate", "angee.storage", "angee.tags"]
+depends_on = ["angee.provenance", "angee.graphql", "angee.iam", "angee.integrate", "angee.storage", "angee.tags"]
 dependencies = [
   "django-countries>=9,<10",
   "phonenumbers>=9.0",
@@ -26,7 +26,17 @@ module = "runtime_migrations.party_statement_schema"
 name = "fold_party_handle_statements"
 app_label = "parties"
 module = "runtime_migrations.fold_party_handle_statements"
-# retire_party_handle follows only after the producer and reader cutovers.
+compatible_source_sha256 = ["255a3dcc212430ce674ab1f39a62641e11cfaacab58ad35b3f1fd9b38b93621b"]
+
+[[migrations]]
+name = "circle_member_decisions"
+app_label = "parties"
+module = "runtime_migrations.circle_member_decisions"
+
+[[migrations]]
+name = "retire_party_handle"
+app_label = "parties"
+module = "runtime_migrations.retire_party_handle"
 
 [resources]
 install = [

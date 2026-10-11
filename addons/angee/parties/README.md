@@ -44,7 +44,7 @@ local from synchronized folders.
 both directions. It includes names, notes, dates, email/phone contact points,
 postal addresses, the source employment edge and the avatar content hash and MIME
 type. Email and phone contact points come only from the person's
-[asserted links](managers.py): those the card itself carries, those a person
+[applied handle statements](managers.py): those the card itself carries, those a person
 added, and confirmed suggestions. Unreviewed suggestions such as mined
 signature phones or display-name matches stay inside Angee and are never
 written to a card. Extraction fetches and pre-stores avatars through storage's
@@ -107,3 +107,38 @@ driver and ingest against a deterministic DAV server double.
 The public GraphQL `ContactFolderType.ctag` field was removed when collection
 progress moved to `SyncStream`; clients must remove it from their selections.
 The repository's addon, package and example web sources have no remaining reads.
+
+
+Handle producers use `Party.statements`: each persisted source owns its assertion
+on a Party and typed Handle member. `PartyManager.assert_handle` admits a normal
+statement; the generated manager composes the shared Handle, Party lock order.
+Rules have persisted `provenance.Rule` identities. Social exporters must supply
+their owning IMPORT Integration as `asserted_by`; a text provenance label cannot
+identify a source. An authenticated person's own handle entry is a normal PERSON
+statement and preserves control ownership, including contested 0.3 claims.
+
+Confirm and dismiss write preferred PERSON statements without rewriting the
+producer. A confirmation survives withdrawal by a directory, so write-back can
+republish it; dismiss makes removal stick. Survivorship excludes normal claims
+below the review threshold. The cross-party winner favors preferred rank, then
+confidence, a real-name tie-break, and the shared recency/identity order.
+Resolution and both Party counters update in that transaction.
+
+Review and Identity project one current stance per Party/Handle member through
+Party authorization; the Party's statements accessor retains all independent
+sources. Handles and bounded origin evidence retain their own read gates.
+Statement IDs use `pst_`; the retired `phl_` resource and routes are gone.
+Circle and spaces memberships are plain acceptance/rejection rows, not statement
+sources; their source labels retire while scores and decisions remain.
+
+Upgrade order is `party_statement_schema` → `fold_party_handle_statements` →
+`circle_member_decisions` → `retire_party_handle`. Spaces separately declares
+`membership_decisions`. Retirement refuses missing fold evidence and migrates
+retained workflow references to statement IDs and subject concern records.
+Pre-cutover frozen identity hashes require fresh review. Migration reversals do
+not recreate discarded carrier metadata or roster source labels.
+
+Trusted matchers grant their persisted source explicit reads of the supporting
+Party/Handle records before assertion admission. Claimed-sender origins must
+admit the RULE principal on their native reader relation; messaging declares
+that source type. Human decisions cite only bounded origins the person can read.

@@ -210,7 +210,7 @@ def _carry_readers(apps, db, row, party):
     """Copy grant data, never inspect schema permissions or evaluate a policy."""
     model = apps.get_model(app_settings.REBAC_RELATIONSHIP_MODEL)
     rows = _rows(apps, app_settings.REBAC_RELATIONSHIP_MODEL, db)
-    carrier_id = str(getattr(row, resource_id_attr(live_apps.get_model("parties", "PartyHandle"))))
+    carrier_id = str(row.pk)  # Frozen carrier resource identity: its integer primary key.
     party_id = str(getattr(party, resource_id_attr(live_apps.get_model("parties", "Party"))))
     grants = list(rows.filter(resource_type="parties/party_handle", resource_id=carrier_id,
                              relation__in=("owner", "editor", "reader")).order_by("pk"))

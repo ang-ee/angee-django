@@ -2,7 +2,7 @@
 
 Adapters emit :class:`ParsedConnection` values and never write parties rows.
 This owner upserts the account handle, materializes a Person behind its
-confirmed PartyHandle, records the account owner's acquaintance edge, and maps
+normal PartyStatement, records the account owner's acquaintance edge, and maps
 an optional employer onto parties' existing ``employee`` Relationship shape.
 
 Organization names in social exports are free text, not stable organization
@@ -22,7 +22,9 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import system_context
+from rebac.actors import to_subject_ref
 
+from angee.base.mixins import SourceKind, StatementSourceMixin
 from angee.parties.mixins import LinkSource
 
 
@@ -67,7 +69,9 @@ class ParsedConnection:
     provenance: str = ""
 
 
-def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, created_by_id: Any) -> list[Any]:
+def ingest_connections(
+    parsed_connections: Iterable[ParsedConnection], *, created_by_id: Any, asserted_by: Any
+) -> list[Any]:
     """Idempotently land parsed connections and return their Person rows.
 
     The batch entry point: the source user, its anchor Party, and each required
@@ -76,6 +80,8 @@ def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, create
     record still lands in its own transaction, so one bad record fails alone.
     """
 
+    if StatementSourceMixin.kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
+        raise ValidationError("Connection exports require an identified IMPORT integration.")
     party_model = apps.get_model("parties", "Party")
     kind_model = apps.get_model("parties", "RelationshipKind")
     user_model = apps.get_model(settings.AUTH_USER_MODEL)
@@ -90,6 +96,7 @@ def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, create
                 kind_model=kind_model,
                 kinds=kinds,
                 created_by_id=created_by_id,
+                asserted_by=asserted_by,
             )
             for parsed in parsed_connections
         ]
@@ -99,10 +106,11 @@ def ingest_connection(
     parsed: ParsedConnection,
     *,
     created_by_id: Any,
+    asserted_by: Any,
 ) -> Any:
     """Idempotently land one parsed connection and return its Person."""
 
-    return ingest_connections([parsed], created_by_id=created_by_id)[0]
+    return ingest_connections([parsed], created_by_id=created_by_id, asserted_by=asserted_by)[0]
 
 
 def _ingest_one_connection(
@@ -112,19 +120,19 @@ def _ingest_one_connection(
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
+    asserted_by: Any,
 ) -> Any:
     """Land one parsed connection and return its Person.
 
     The source account's user is the relationship anchor. The imported person
-    becomes its ``acquaintance`` from ``connected_at`` onward; the handle link is
-    confirmed with generic ``import`` provenance plus the adapter's precise
-    label in metadata. Optional email and employment facts compose the same
-    Handle/PartyHandle/Relationship owners.
+    becomes its ``acquaintance`` from ``connected_at`` onward; normal handle
+    assertions name the supplied IMPORT integration. Optional email and
+    employment facts compose the same Handle/PartyStatement/Relationship owners.
     """
 
     handle_model = apps.get_model("parties", "Handle")
     person_model = apps.get_model("parties", "Person")
-    party_handle_model = apps.get_model("parties", "PartyHandle")
+    parties = apps.get_model("parties", "Party").objects
     relationship_model = apps.get_model("parties", "Relationship")
     provenance = str(parsed.provenance or "social_takeout")
     link_metadata = {"provenance": provenance}
@@ -147,14 +155,12 @@ def _ingest_one_connection(
             person_model=person_model,
             created_by_id=created_by_id,
         )
-        party_handle_model.objects.link(
+        parties.assert_handle(
             person,
             handle,
             confidence=1.0,
-            source=LinkSource.IMPORT,
-            is_confirmed=True,
-            metadata=link_metadata,
-            created_by_id=created_by_id,
+            asserted_by=asserted_by,
+            evidence=[handle],
         )
         if parsed.email:
             email = handle_model.objects.upsert(
@@ -163,14 +169,12 @@ def _ingest_one_connection(
                 display_name=person.display_name,
                 created_by_id=created_by_id,
             )
-            party_handle_model.objects.link(
+            parties.assert_handle(
                 person,
                 email,
                 confidence=1.0,
-                source=LinkSource.IMPORT,
-                is_confirmed=True,
-                metadata=link_metadata,
-                created_by_id=created_by_id,
+                asserted_by=asserted_by,
+                evidence=[handle],
             )
         _land_acquaintance(
             owner_party,

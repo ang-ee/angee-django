@@ -29,7 +29,6 @@ from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
-from angee.parties.mixins import LinkSource
 
 SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 logger = logging.getLogger(__name__)
@@ -175,7 +174,11 @@ class OidcIdentityResolver:
         _require_login_enabled(oauth_client)
 
     def resolve(
-        self, *, sub: str, email: str | None, claims: dict[str, Any],
+        self,
+        *,
+        sub: str,
+        email: str | None,
+        claims: dict[str, Any],
     ) -> AbstractBaseUser:
         """Return the user for one verified OIDC identity, or fail closed."""
 
@@ -294,7 +297,11 @@ class OidcIdentityResolver:
 
 
 def resolve(
-    oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any],
+    oauth_client: Any,
+    *,
+    sub: str,
+    email: str | None,
+    claims: dict[str, Any],
 ) -> AbstractBaseUser:
     """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
 
@@ -310,7 +317,7 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
 
     OIDC first login is the earliest Person-establishing path: the parties owner
     ``Handle.objects.claim_own`` writes both the control fact (``Handle.owner``) and
-    the confirmed identity link to ``Person.objects.for_user(user)`` — so the login
+    the normal person identity statement for ``Person.objects.for_user(user)`` — so the login
     address resolves to the user's own party.
     """
 
@@ -319,7 +326,7 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
         user,
         platform=handle_model.Platform.EMAIL,
         value=email,
-        source=LinkSource.OAUTH,
+        asserted_by=user,
         display_name=str(claims.get("name") or "").strip(),
     )
 

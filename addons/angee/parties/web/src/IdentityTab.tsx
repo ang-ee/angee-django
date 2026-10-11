@@ -11,11 +11,11 @@ import {
 
 import { usePartiesT } from "./i18n";
 import {
-  usePartyHandleRowActions,
-  type PartyHandleActionRow,
-} from "./party-handle-row-actions";
+  usePartyStatementRowActions,
+  type PartyStatementActionRow,
+} from "./party-statement-row-actions";
 
-type LinkRow = PartyHandleActionRow & {
+type LinkRow = PartyStatementActionRow & {
   confidence?: number;
   evidence_refs?: Array<{ model: string; id: string }>;
   evidence_truncated?: boolean;
@@ -35,23 +35,17 @@ function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.React
  */
 export function IdentityTab({ recordId, form }: RecordPanelContext): React.ReactElement {
   const t = usePartiesT();
-  const rowActions = usePartyHandleRowActions<LinkRow>("remaining");
+  const rowActions = usePartyStatementRowActions<LinkRow>("remaining");
   const recordHref = useResourceRecordHrefLookup();
   const search = useRouteSearch();
-  const focusedHandle = typeof search.partyHandle === "string" ? search.partyHandle : "";
+  const focusedHandle = typeof search.partyStatement === "string" ? search.partyStatement : "";
 
   const columns = React.useMemo<readonly ListColumn<LinkRow>[]>(
     () => [
       { field: "handle.value", header: t("identity.handle") },
       { field: "handle.platform", header: t("identity.platform") },
       { field: "confidence" },
-      {
-        field: "source",
-        header: t("identity.claim"),
-        render: (row) => row.source === "EMAIL_MATCH"
-          ? t("identity.senderClaim")
-          : String(row.source ?? ""),
-      },
+      { field: "source_kind", header: t("identity.claim") },
       {
         field: "evidence_refs",
         header: t("identity.evidence"),
@@ -77,14 +71,14 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
     <div className="grid gap-3">
       <p className="text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
       <ListView<LinkRow>
-        resource="parties.PartyHandle"
+        resource="parties.PartyStatement"
         presentation="embedded"
         fields={[
           "id",
           "handle.value",
           "handle.platform",
           "confidence",
-          "source",
+          "source_kind",
           "evidence_refs.model",
           "evidence_refs.id",
           "evidence_truncated",
@@ -92,7 +86,7 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
           "is_dismissed",
         ]}
         baseFilter={{
-          party: { exact: recordId },
+          subject: { exact: recordId },
           ...(focusedHandle ? { id: { exact: focusedHandle } } : {}),
         }}
         columns={columns}

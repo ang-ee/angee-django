@@ -24,7 +24,6 @@ Address = messaging_models.Address
 Circle = messaging_models.Circle
 Organization = messaging_models.Organization
 Person = messaging_models.Person
-PartyHandle = messaging_models.PartyHandle
 Handle = messaging_models.Handle
 
 
@@ -190,9 +189,7 @@ def test_resource_metadata_omits_concrete_kinds_the_schema_does_not_expose() -> 
     organization = parties_schema._ORGANIZATION_RESOURCE
     withheld = {id(organization.query), id(organization.mutation), *map(id, organization.types)}
     parts = {
-        key: tuple(
-            surface for surface in parties_schema.schemas["public"].get(key, ()) if id(surface) not in withheld
-        )
+        key: tuple(surface for surface in parties_schema.schemas["public"].get(key, ()) if id(surface) not in withheld)
         for key in SCHEMA_PART_KEYS
     }
     schema = GraphQLSchemas([SchemaAddon({"public": parts})]).build("public")
@@ -208,7 +205,6 @@ def test_contact_resource_metadata_uses_human_relation_labels() -> None:
     resources = {item.model_label: item for item in _schema("public").angee_resources}
 
     assert resources["parties.Handle"].record_representation == "value"
-    assert resources["parties.PartyHandle"].record_representation == "display_name"
 
 
 def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
@@ -233,8 +229,8 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert "delete_handles_by_pk" not in mutations
     assert {
         "propose_manual_contact",
-        "confirm_party_handle",
-        "dismiss_party_handle",
+        "confirm_party_statement",
+        "dismiss_party_statement",
     } <= set(mutations)
 
     address = resources["parties.Address"]
@@ -414,54 +410,6 @@ def test_circle_console_insert_establishes_private_creator_access(
     assert created["name"] == "Friends"
     assert readable == {"id": created["id"], "name": "Friends", "description": ""}
     assert updated == {"id": created["id"], "description": "Creator write"}
-
-
-def test_party_handle_display_name_projects_only_readable_components(composed_tables: None) -> None:
-    """Association labels stay human-readable without leaking protected Handle values."""
-
-    admin = _platform_admin("party-handle-label-admin")
-    link_reader = User.objects.create_user(username="party-handle-label-link-reader")
-    party_reader = User.objects.create_user(username="party-handle-label-party-reader")
-    handle_reader = User.objects.create_user(username="party-handle-label-handle-reader")
-    full_reader = User.objects.create_user(username="party-handle-label-full-reader")
-    with system_context(reason="test.parties.party_handle_label.seed"):
-        party = messaging_models.Party.objects.create(
-            display_name="Readable counterparty",
-            created_by_id=admin.pk,
-        )
-        handle = Handle.objects.create(
-            platform="email",
-            value="contact@example.com",
-            normalized_value="contact@example.com",
-            created_by_id=admin.pk,
-        )
-        link = PartyHandle.objects.link(
-            party,
-            handle,
-            confidence=0.4,
-            source="manual",
-            created_by_id=admin.pk,
-        )
-    for reader in (link_reader, party_reader, handle_reader, full_reader):
-        _grant_reader(link, reader)
-    for reader in (party_reader, full_reader):
-        _grant_reader(party, reader)
-    for reader in (handle_reader, full_reader):
-        _grant_reader(handle, reader)
-
-    schema = _schema("public")
-    query = "query AssociationLabel { party_handles { id display_name } }"
-    link_only = _data(execute_schema(schema, query, user=link_reader))["party_handles"]
-    party_only = _data(execute_schema(schema, query, user=party_reader))["party_handles"]
-    handle_only = _data(execute_schema(schema, query, user=handle_reader))["party_handles"]
-    fully_readable = _data(execute_schema(schema, query, user=full_reader))["party_handles"]
-
-    assert link_only == [{"id": link.sqid, "display_name": "Contact association"}]
-    assert party_only == [{"id": link.sqid, "display_name": "Readable counterparty"}]
-    assert handle_only == [{"id": link.sqid, "display_name": "contact@example.com"}]
-    assert fully_readable == [
-        {"id": link.sqid, "display_name": "Readable counterparty — contact@example.com"}
-    ]
 
 
 def _schema(name: str) -> Any:

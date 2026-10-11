@@ -5,7 +5,7 @@ import { NexusTimeline, NexusTimelineRevalidate } from "./documents";
 
 // Handle/Party supply sender identity and membership; Thread supplies its title.
 // Circle moves affect subtree membership without writing CircleMember. The
-// computed PartyHandle projection has no change root; Handle owns its writes.
+// computed PartyStatement projection has no change root; Handle owns its writes.
 const TIMELINE_MODELS = [
   "messaging.Message", "messaging.Thread", "parties.Handle", "parties.Party",
 ] as const;
