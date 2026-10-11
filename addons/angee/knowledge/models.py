@@ -217,7 +217,6 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         else:
             # Native bulk insertion bypasses OwnerMixin's insert default.
             # Notify lifecycle subscribers within the captured write's group.
-            # Create/update dedupe is owed by the write group.
             with write_group():
                 self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
                 post_save.send(

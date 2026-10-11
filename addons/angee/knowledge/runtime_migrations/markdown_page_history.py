@@ -1,6 +1,8 @@
 """Add native history for the body-owning MarkdownPage child.
 
 The table starts empty; reversion's legacy Version snapshots are dropped, not converted.
+Page-level queryset writes snapshot existing tracked children in the same write group;
+native MarkdownPage saves retain simple-history's child-only save capture.
 Reverse drops the child's history, including any snapshots recorded since this
 migration, while retaining every live page and markdown body.
 """

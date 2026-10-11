@@ -860,7 +860,15 @@ class ModelHistory(HistoricalRecords):
         using: str,
         batch_size: int | None = None,
     ) -> None:
-        """Feed detached stored snapshots to simple-history's native batch writer."""
+        """Batch stored snapshots of this model and its tracked MTI descendants.
+
+        Each executed batch records pending receiver keys, never suppressing a
+        later queryset write in the group. Native receivers consume those keys.
+        """
+
+        # Capture runs after Django's phase-2 model loading; refs' identity
+        # helpers import AngeeModel, which is still loading when this module loads.
+        from angee.base.refs import concrete_child_models
 
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return
@@ -882,19 +890,22 @@ class ModelHistory(HistoricalRecords):
                     default_change_reason=self.get_change_reason_for_object(snapshots[0], history_type, using),
                     custom_historical_attrs={"changeset": context},
                 )
+                group.seen.update((model._meta.label_lower, snapshot.pk, history_type) for snapshot in snapshots)
                 for record, snapshot in zip(records, snapshots, strict=True):
                     self.create_historical_record_m2ms(record, snapshot)
                 self.record_rows(model, len(records), using=history_using)
-                if history_type == "-":
-                    group.seen.update((model._meta.label_lower, snapshot.pk) for snapshot in snapshots)
+            for child in concrete_child_models(model):
+                history = model_history(child)
+                if history is not None:
+                    history.bulk_history_create(child, keys, history_type, using=using, batch_size=batch_size)
 
     def create_historical_record(self, instance: models.Model, history_type: str, using: str | None = None) -> None:
         """Keep native signals and M2M capture on the same stored-snapshot writer."""
 
         model = type(instance)
-        key = (model._meta.label_lower, instance.pk)
+        key = (model._meta.label_lower, instance.pk, history_type)
         with write_group() as group:
-            if history_type == "-" and key in group.seen:
+            if key in group.seen:
                 group.seen.remove(key)
                 return
             current_changeset(required=True, record=True)

@@ -215,9 +215,9 @@ def changeset(
 
 @dataclass
 class _WriteGroup:
-    """Pending batch-delete snapshots consumed by each row's native receiver."""
+    """Pending batch snapshots consumed once by each row's matching native receiver."""
 
-    seen: set[tuple[str, object]] = field(default_factory=set)
+    seen: set[tuple[str, object, str]] = field(default_factory=set)
 
 
 _current_write_group: ContextVar[_WriteGroup | None] = ContextVar("angee_write_group", default=None)
