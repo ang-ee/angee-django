@@ -1192,35 +1192,6 @@ def test_page_reloads_conflicts_recorded_during_conditional_write(stream_bridge:
     assert (link.local_base_hash, link.remote_base_hash) == ("base", "base")
 
 
-def test_push_writes_each_record_against_its_bases_as_they_are_now(stream_bridge: Channel) -> None:
-    """A link moved since its batch loaded (here by a concurrent keep-local) is written against its new version."""
-
-    stream = SyncStream.objects.current(
-        stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
-    )
-    for key in ("one", "two"):
-        link = RecordLink.objects.observe(stream, key)
-        RecordLink.objects.promote(
-            link, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base", remote_version="v1"
-        )
-    SyncStream.objects.advance(stream, {}, exhausted=True)
-
-    class RacingAdapter(MemoryAdapter):
-        def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
-            if link.external_key == "one":
-                two = RecordLink.objects.get(stream=stream, external_key="two")
-                RecordLink.objects.promote(
-                    two, source_payload={}, source_hash="fresh", mapped_payload={}, local_hash="base",
-                    remote_version="v-fresh",
-                )
-            return super().write_back(link, projection, expected_version=expected_version)
-
-    adapter = RacingAdapter(candidates=(LocalChange("one", {"n": 1}, "local"), LocalChange("two", {"n": 2}, "local")))
-
-    assert push_stream(stream, adapter).count == 2
-    assert [(key, version) for key, _projection, version in adapter.written] == [("one", "v1"), ("two", "v-fresh")]
-
-
 def test_write_back_origin_is_recognized_on_next_pull(stream_bridge: Channel) -> None:
     stream = SyncStream.objects.current(
         stream_bridge,

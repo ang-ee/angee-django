@@ -112,14 +112,10 @@ interval or 24 hours. A zero interval means continuous inventory reconciliation,
 so it retains the 24-hour retry cap. A refused write holds its link's write-back
 until `retry_at`, on every write path (`SyncDiscrepancyQuerySet.holding_writes`);
 each refused link keeps its own row, and a later write that lands resolves it.
-A full push (no `external_keys`) also closes a due refusal whose link has nothing
-left to write, because its record was deleted or reverted locally: nothing would
-retry it, and no rescan reads it.
 Conflicts keep `retry_at=None` and require
 explicit resolution before either side can be written again. `resolve_conflict`
 requires `keep="remote"` (re-read and apply remotely owned facts) or `keep="local"`
-(re-read the remote, retain its source as the base, then conditionally write the
-local projection onto it).
+(re-read the remote base/version, then conditionally write the local projection).
 Plain `resolve` refuses conflicts. A newer remote edit may reject the chosen
 local write again and retain fresh quarantine.
 An invalid/expired cursor or `resync_required` creates a new baseline generation,

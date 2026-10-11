@@ -75,10 +75,7 @@ class CoverageInput(BaseModel):
     def current_streams(self, bridge: Bridge) -> list[Any]:
         """Resolve each declared partition through the durable epoch owner."""
         manager = apps.get_model("integrate", "SyncStream").objects
-        return [
-            _pull_only(manager.current_for_bridge(bridge, row.key).get(partition=row.partition))
-            for row in self.streams
-        ]
+        return [manager.current_for_bridge(bridge, row.key).get(partition=row.partition) for row in self.streams]
 
 
 class RescanConfig(BaseModel):
@@ -108,7 +105,7 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
         """Apply exactly one bounded page with integrate's page/cursor transaction."""
         bridge = _bridge_subject(ctx)
         with _stream_io(ctx, bridge) as adapter:
-            stream = _pull_only(open_stream(bridge, ctx.input.key, ctx.input.partition, adapter))
+            stream = open_stream(bridge, ctx.input.key, ctx.input.partition, adapter)
             page = advance_stream(stream, adapter, page_bound=ctx.input.page_bound)
         progress, resets = page.check_continuation(
             previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
@@ -205,15 +202,6 @@ class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
         ):
             raise ValidationError({"conflicts": "Resolve the sync conflicts before retrying this step."})
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
-
-
-def _pull_only(stream: Any) -> Any:
-    """Admit a pull-only partition: no cycle stage pushes, so none could write or retry a refused write."""
-    if stream.writes_back:
-        raise ValidationError(
-            f"Workflow sync cycles pull only; stream {stream.key!r} partition {stream.partition!r} writes back."
-        )
-    return stream
 
 
 def _bridge_subject(ctx: StepContext) -> Bridge:

@@ -91,7 +91,7 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, retain_remote_source, sync_bridge
+from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
@@ -3466,11 +3466,8 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
     def resolve_conflict(self, discrepancy: Any, *, keep: ConflictKeep) -> Any:
         """Keep a chosen side after a fresh read, preserving conditional remote writes.
 
-        Keeping the local side retains the fresh read as the remote base
-        (:func:`~angee.integrate.streams.retain_remote_source`), so the write
-        starts from the remote as it is now. Transport stays outside transactions.
-        A failed apply/write retains open quarantine; a newer remote version can
-        reject the local choice again.
+        Transport stays outside transactions. A failed apply/write retains open
+        quarantine; a newer remote version can reject the local choice again.
         """
         if keep not in ConflictKeep.values:
             raise ValidationError("Choose remote or local changes.")
@@ -3511,15 +3508,9 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                         return current
                     if (locked.remote_base_hash, locked.local_base_hash, locked.remote_version) != bases:
                         raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                    if remote is not None and remote.tombstone:
-                        # A deleted remote has no source to keep; the last one read stays the base.
+                    if remote is not None:
                         locked.remote_base_hash, locked.remote_version = remote.source_hash, remote.remote_version
                         locked.save(update_fields=["remote_base_hash", "remote_version", "updated_at"])
-                    elif remote is not None:
-                        # The local side is written onto the remote as read now, so a
-                        # remote edit the conflict's hash could not see survives it.
-                        revisions = apps.get_model("integrate", "RecordRevision").objects
-                        retain_remote_source(locked, remote, revision=revisions.latest_for(locked).first())
                     self._mark_resolved(current, conflict=True)
                 resolved = True
                 if keep == ConflictKeep.REMOTE:
@@ -3634,13 +3625,7 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
 
 
 class SyncDiscrepancy(AuditMixin, AngeeDataModel):
-    """A per-source-version failure, revisited by the owner that can clear it.
-
-    The adapter's rescan re-reads a failed observation; a conflict waits for
-    :meth:`SyncDiscrepancyManager.resolve_conflict`; a refused write
-    (``remote_rejected``) is the push's to retry once due, and a full push closes
-    it when its record has nothing left to write.
-    """
+    """A per-source-version failure to revisit through the adapter's rescan."""
 
     runtime = True
     sqid_prefix = "sdc_"
