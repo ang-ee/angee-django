@@ -2338,22 +2338,30 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 is_dismissed=False,
             ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
 
-            # Addresses carry no stable id, so mirror the parsed set wholesale —
-            # idempotent because the result is exactly the source's.
-            address_model.objects.filter(party=person).delete()
+            # Addresses carry no stable id, so each card address matches a stored
+            # row by its identity: a match takes the card's spelling and label and
+            # keeps what the card does not carry (coordinates, the primary flag), a
+            # new one is created, and only rows the card no longer lists go.
+            addresses = address_model.objects
+            remaining = [
+                (addresses.identity_key({field: getattr(row, field) for field in addresses.components}), row)
+                for row in addresses.filter(party=person).order_by("pk")
+            ]
             for addr in parsed.addresses:
-                address_model.objects.create(
-                    party=person,
-                    label=addr.label,
-                    po_box=addr.po_box,
-                    extended=addr.extended,
-                    street=addr.street,
-                    city=addr.city,
-                    region=addr.region,
-                    postal_code=addr.postal_code,
-                    country=addr.country,
-                    created_by_id=created_by_id,
-                )
+                mapped = {"label": addr.label, **{field: getattr(addr, field) for field in addresses.components}}
+                key = addresses.identity_key(mapped)
+                match = next((entry for entry in remaining if entry[0] == key), None)
+                if match is None:
+                    addresses.create(party=person, created_by_id=created_by_id, **mapped)
+                    continue
+                remaining.remove(match)
+                row = match[1]
+                dirty = [name for name, value in mapped.items() if getattr(row, name) != value]
+                if dirty:
+                    for name in dirty:
+                        setattr(row, name, mapped[name])
+                    row.save(update_fields=[*dirty, "updated_at"])
+            addresses.filter(pk__in=[row.pk for _key, row in remaining]).delete()
 
             # Employment maps to a typed edge: the vCard ORG is the counterparty
             # (free-text — a synced card names an employer, not a tracked org row),

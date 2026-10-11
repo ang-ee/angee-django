@@ -16,6 +16,7 @@ from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
 from angee.messaging.testing.models import (
+    Address,
     Circle,
     CircleMember,
     Folder,
@@ -27,7 +28,7 @@ from angee.messaging.testing.models import (
     Relationship,
     RelationshipKind,
 )
-from angee.parties.backends import ParsedContact
+from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.connections import ParsedConnection, ingest_connection
 from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
@@ -1109,6 +1110,40 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert refreshed.title == "Principal Mathematician"
     assert refreshed.notes == "Research lead"
     assert Relationship._base_manager.filter(pk=manual.pk, source=LinkSource.MANUAL).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> None:
+    """A card address updates its matching row and keeps its coordinates and primary flag.
+
+    A new address is created, and only a row the card no longer lists goes: two
+    equal card addresses are two rows, and listing the address once leaves one.
+    """
+
+    del composed_tables
+    home = ParsedAddress(label="home", street="1 Main St", city="Springfield", country="US")
+    work = ParsedAddress(label="work", street="2 Side St", city="Shelbyville", country="US")
+    with system_context(reason="test carddav addresses"):
+        owner = _user("carddav-addresses")
+        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
+        card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
+        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk)
+        assert Address._base_manager.filter(party=person, label="work").count() == 2
+        located = Address._base_manager.get(party=person, label="home")
+        located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
+        located.save(update_fields=["latitude", "longitude", "is_primary", "updated_at"])
+
+        moved = ParsedAddress(label="Home", street="1  MAIN st", city="springfield", country="US")
+        office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
+        Party.objects.ingest_contact(replace(card, addresses=(moved, work, office)), folder=folder,
+                                     created_by_id=owner.pk)
+        rows = list(Address._base_manager.filter(party=person).order_by("pk"))
+
+    kept = next(row for row in rows if row.pk == located.pk)
+    assert (kept.label, kept.street, kept.city) == ("Home", "1  MAIN st", "springfield")
+    assert (kept.latitude, kept.longitude, kept.is_primary) == (39.8, -89.6, True)
+    assert sorted(row.label for row in rows) == ["Home", "office", "work"]
 
 
 @pytest.mark.django_db(transaction=True)
