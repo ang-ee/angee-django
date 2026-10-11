@@ -70,7 +70,6 @@ from angee.messaging.testing.models import (
     Participant,
     Party,
     PartyHandle,
-    PartyHandleClaim,
     Person,
     Reaction,
     Thread,
@@ -1959,13 +1958,8 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
             email="foreign-sender-evidence@example.test",
         )
         foreign_party = Party._base_manager.create(display_name="Private evidence", created_by=foreign_owner)
-        PartyHandleClaim._base_manager.create(
-            link=link,
-            source=LinkSource.EMAIL_MATCH,
-            confidence=0.4,
-            metadata={"evidence_refs": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]},
-            created_by=owner,
-        )
+        link.metadata = {"evidence_refs": [{"model": "messaging.Party", "id": str(foreign_party.sqid)}]}
+        link.save(update_fields=("metadata", "updated_at"))
 
     for message in messages:
         PartyHandle.objects.propose_claimed_handle(
@@ -1980,7 +1974,7 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
     assert not link.is_dismissed
     assert link.confidence == 1.0
     assert link.source == LinkSource.MANUAL
-    assert PartyHandleClaim._base_manager.get(link=link, source=LinkSource.EMAIL_MATCH).metadata["evidence_refs"] == [
+    assert link.metadata["evidence_refs"] == [
         {"model": "messaging.Party", "id": str(foreign_party.sqid)},
         *({"model": "messaging.Message", "id": str(message.sqid)} for message in messages),
     ]
