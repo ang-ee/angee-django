@@ -16,10 +16,13 @@ class Command(BaseCommand):
     """Print, for each current stream of an integration, what a push would write and what it holds back.
 
     A thin dispatcher over :func:`angee.integrate.streams.preview_push`. It reads
-    the streams the last sync recorded rather than asking the adapter to declare
-    them, since declaring discovers the remote and records what it finds; the
-    preview sends no request and writes nothing. Before resuming an integration
-    paused for a mapping change, every stream should preview no writes.
+    the current epoch of every partition the integration ever recorded rather than
+    asking the adapter to declare them, since declaring discovers the remote and
+    records what it finds; the preview sends no request and writes nothing.
+    Streams record no retirement, so a partition the adapter no longer declares (a
+    removed address book) still previews its unsent local edits, which no push
+    writes. Before resuming an integration paused for a mapping change, every
+    stream the adapter still declares should preview no writes.
     """
 
     help = "Show what a push would write for each stream of the given integrations, without writing."
