@@ -390,29 +390,6 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
         manager.tombstone(link)
 
 
-def retain_remote_source(link: Any, record: RecordChange, *, revision: Any, target: Any = UNSET) -> None:
-    """Keep ``record``'s source as the link's remote base while its local side stays as applied.
-
-    The comparison hash cannot see every remote edit (an unmapped label, a
-    respelled value), so a source read without being applied still becomes what
-    the next write-back starts from, rather than something it reverts. The local
-    hash and ``revision``'s mapped payload and mapping facts stay; an identical
-    source reuses the revision.
-    """
-    _manager("RecordLink").promote(
-        link,
-        source_payload=record.source_payload,
-        source_hash=record.source_hash,
-        mapped_payload=revision.mapped_payload,
-        local_hash=link.local_base_hash,
-        mapping_version=revision.mapping_version,
-        dependency_digest=revision.dependency_digest,
-        target=target,
-        remote_version=record.remote_version,
-        origin=link.origin or "remote",
-    )
-
-
 def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult) -> None:
     if not isinstance(result, WriteBackResult):
         raise AdapterContractError("write_back must return WriteBackResult.")
@@ -584,15 +561,24 @@ def _apply_page(
                             raise SemanticError("both_changed", kind=DiscrepancyKind.CONFLICT)
                         if decision == ChangeKind.UNCHANGED:
                             assert revision is not None
-                            retain_remote_source(
+                            # The comparison hash cannot see every remote edit (an
+                            # unmapped label, a respelled value). Retain the source as
+                            # read now, so the next write-back starts from it rather
+                            # than reverting it; an identical source reuses the revision.
+                            _promote(
                                 link,
                                 record,
-                                revision=revision,
-                                target=record.target if record.target is not None else UNSET,
+                                ApplyResult(
+                                    target=record.target if record.target is not None else UNSET,
+                                    local_hash=record.local_hash,
+                                    mapped_payload=revision.mapped_payload,
+                                    dependency_digest=revision.dependency_digest,
+                                    mapping_version=revision.mapping_version,
+                                    count=0,
+                                ),
+                                origin=link.origin or "remote",
                             )
-                            if record.tombstone:
-                                links.tombstone(link)
-                            else:
+                            if not record.tombstone:
                                 adapter.on_revalidated(locked, (link,))
                             _resolve_applied(locked, record)
                             continue
@@ -706,12 +692,9 @@ def push_stream(
             candidates.add(candidate.external_key)
             if link is None:
                 link, revision = links.observe(stream, candidate.external_key), None
+            elif link.write_holds:
+                continue
             else:
-                # The batch loaded its links before the writes ahead of this one; a
-                # concurrent push or conflict resolution may have moved this link since.
-                link = links.filter(pk=link.pk).with_sync_evidence().get()
-                if link.write_holds or candidate.local_hash == link.local_base_hash:
-                    continue
                 revision = next(iter(link.latest_revisions), None)
             record = RecordChange(
                 candidate.external_key,
@@ -790,8 +773,7 @@ def _push_candidates(
     """Yield each local change that differs from its link's base, with that link or ``None`` when new.
 
     A link carries its sync evidence (:meth:`RecordLinkQuerySet.with_sync_evidence`),
-    so the preview reads its write holds without a query each. The push re-reads a
-    link just before writing it, since the batch predates the writes ahead of it.
+    so the caller reads its write holds and latest revision without a query each.
     """
 
     candidates = iter(adapter.local_changes(stream, keys=external_keys))

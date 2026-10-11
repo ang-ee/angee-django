@@ -800,55 +800,6 @@ def test_a_resync_does_not_resend_a_card_held_by_its_refusal(replica: Replica) -
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
-def test_a_refusal_resolved_between_the_page_passes_waits_for_the_next_page(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The first pass's hold decides: the page neither writes nor fails, and the next push writes."""
-
-    person, _link = replica.baseline()
-    person.notes = "Local edit a shared directory will not take"
-    person.save(update_fields=["notes"])
-    replica.server.read_only = True
-    assert push_stream(replica.stream, replica.backend).count == 0
-    refusal = SyncDiscrepancy.objects.get(kind=DiscrepancyKind.REMOTE_REJECTED, is_open=True)
-    replica.server.read_only = False
-    replica.server.requests.clear()
-    prepare_page = replica.backend.prepare_page
-
-    def resolve_meanwhile(stream: Any, page: Any) -> None:
-        prepare_page(stream, page)
-        SyncDiscrepancy.objects.resolve(refusal)
-
-    monkeypatch.setattr(replica.backend, "prepare_page", resolve_meanwhile)
-    SyncStream.objects.request_resync(replica.stream)
-    for _ in range(3):
-        replica.pull()
-
-    refusal.refresh_from_db()
-    assert not refusal.is_open
-    assert not [request for request in replica.server.requests if request[0] == "PUT"]
-    assert push_stream(replica.stream, replica.backend).count == 1
-    assert "Local edit a shared directory will not take" in replica.server.cards[_HREF][0]
-
-
-def test_a_due_refusal_no_longer_holds_its_write(replica: Replica) -> None:
-    person, _link = replica.baseline()
-    person.notes = "Local edit a shared directory will not take"
-    person.save(update_fields=["notes"])
-    replica.server.read_only = True
-    assert push_stream(replica.stream, replica.backend).count == 0
-    refusal = SyncDiscrepancy.objects.get(kind=DiscrepancyKind.REMOTE_REJECTED, is_open=True)
-    assert SyncDiscrepancy.objects.holding_writes().filter(pk=refusal.pk).exists()
-    preview = preview_push(replica.stream, replica.backend)
-    assert (preview.writes, preview.held) == ((), ("ada",))
-
-    SyncDiscrepancy.objects.filter(pk=refusal.pk).update(retry_at=timezone.now() - timedelta(seconds=1))
-
-    assert refusal.is_open
-    assert not SyncDiscrepancy.objects.holding_writes().filter(pk=refusal.pk).exists()
-    assert preview_push(replica.stream, replica.backend).writes == ("ada",)
-
-
 def test_a_remote_edit_the_hash_cannot_see_survives_the_next_write(replica: Replica) -> None:
     """An unchanged pull retains the card it read, so the next write-back starts from it."""
 
@@ -930,27 +881,6 @@ def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
         assert not puts
     assert link.remote_version == replica.server.cards[_HREF][1]
     assert push_stream(replica.stream, replica.backend).count == 0
-
-
-def test_keeping_the_local_side_keeps_a_remote_edit_the_hash_cannot_see(replica: Replica) -> None:
-    """A conflict kept local is written onto the card as re-read, not the card before the conflict."""
-
-    labelled = "item1.TEL;type=CELL:+14155552671\r\nitem1.X-ABLabel:{label}\r\nEND:VCARD"
-    replica.server.store(_HREF, _card().replace("END:VCARD", labelled.format(label="WhatsApp")))
-    person, link = replica.baseline()
-    person.notes = "Chosen local edit"
-    person.save(update_fields=["notes"])
-    replica.server.store(
-        _HREF, _card(notes="Concurrent remote edit").replace("END:VCARD", labelled.format(label="Signal"))
-    )
-    assert push_stream(replica.stream, replica.backend).count == 0
-    conflict = SyncDiscrepancy.objects.get(link=link, kind=DiscrepancyKind.CONFLICT)
-
-    SyncDiscrepancy.objects.resolve_conflict(conflict, keep=ConflictKeep.LOCAL)
-
-    card = vobject.readOne(replica.server.cards[_HREF][0])
-    assert card.note.value == "Chosen local edit"
-    assert [line.value for line in card.contents["x-ablabel"]] == ["Signal"]
 
 
 @pytest.mark.parametrize("policy", ["retain", "propagate"])

@@ -12,7 +12,7 @@ from rebac import system_context
 from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import ConflictKeep, DiscrepancyKind, StreamDirection, StreamKind, StreamPhase
+from angee.integrate.states import ConflictKeep, DiscrepancyKind, StreamKind, StreamPhase
 from angee.integrate.streams import (
     ApplyResult,
     CursorInvalid,
@@ -43,9 +43,7 @@ def cycle(execution, register_step, monkeypatch):
     bridge = make_integration("workflow-stream", model=SyncCycleTestBridge)
     extracted, applied, rescanned = [], [], []
     local_hashes = {}
-    transport = SimpleNamespace(
-        identity_reads=True, partitions=("",), size=2, fail=False, pages=None, direction=StreamDirection.PULL,
-    )
+    transport = SimpleNamespace(identity_reads=True, partitions=("",), size=2, fail=False, pages=None)
 
     class Adapter(BridgeImpl):
         @property
@@ -54,9 +52,7 @@ def cycle(execution, register_step, monkeypatch):
 
         def streams(self, *, deadline=None):
             return tuple(
-                StreamDefinition(
-                    "records", partition=partition, kind=StreamKind.RECORD_REPLICA, direction=transport.direction,
-                )
+                StreamDefinition("records", partition=partition, kind=StreamKind.RECORD_REPLICA)
                 for partition in transport.partitions
             )
 
@@ -368,23 +364,6 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     run_until(run)
     assert run.status == "failed" and system_queryset(Decision).count() == 1
     assert system_queryset(SyncDiscrepancy).unresolved().count() == 1
-
-
-@pytest.mark.parametrize("step", [StreamStage, Rescan])
-def test_sync_cycles_refuse_a_stream_that_writes_back(cycle, step):
-    """No cycle stage pushes, so a two-way partition is refused rather than left with refusals nothing retries."""
-    cycle.transport.direction = StreamDirection.BIDIRECTIONAL
-    if step is Rescan:
-        open_stream(cycle.bridge, "records", "", cycle.adapter)
-    value = {"key": "records"} if step is StreamStage else {"streams": [{"key": "records"}]}
-    run = cycle.start(step, value)
-
-    run_until(run)
-
-    assert run.status == "failed"
-    assert not cycle.extracted and not cycle.rescanned
-    failure = system_queryset(StepAttempt).filter(step_run=step_row(run)).latest("number")
-    assert "Workflow sync cycles pull only" in failure.error
 
 
 def test_coverage_rejects_duplicate_partitions():

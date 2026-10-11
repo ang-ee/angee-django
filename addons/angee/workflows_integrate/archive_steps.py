@@ -15,8 +15,8 @@ from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
 from angee.workflows.context import StepContext
-from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.steps import Settlement, Step, StepMode
 
 
