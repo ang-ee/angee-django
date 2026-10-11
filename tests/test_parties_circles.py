@@ -185,7 +185,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
 def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     composed_tables: None,
 ) -> None:
-    """Social connections confirm one Person and map employment to Relationship."""
+    """Social connections land one Person, unconfirmed but decisive by id, and map employment to Relationship."""
 
     del composed_tables
     with system_context(reason="test connection ingest"):
@@ -218,10 +218,10 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
 
     assert second.pk == first.pk
     assert Person._base_manager.filter(pk=first.pk).count() == 1
-    assert PartyHandle._base_manager.filter(party=first, is_confirmed=True).count() == 2
+    assert PartyHandle._base_manager.filter(party=first, is_confirmed=False, confidence=1.0).count() == 2
     social_handle = Handle._base_manager.get(platform="linkedin")
     social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
-    assert social_handle.party_link_confirmed is True
+    assert (social_handle.party_id, social_handle.party_link_confirmed) == (first.pk, False)
     assert social_link.source == LinkSource.IMPORT
     assert social_link.metadata["provenance"] == "linkedin_takeout"
     acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
@@ -233,8 +233,41 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
     assert Relationship._base_manager.count() == 2
 
 
+@pytest.mark.django_db(transaction=True)
+def test_a_name_only_connection_awaits_review_and_reimports_onto_the_same_person(composed_tables: None) -> None:
+    """A name can match a stranger: its link lands for review, and a re-import never mints a second person."""
+
+    del composed_tables
+    with system_context(reason="test name-only connection"):
+        owner = _user("name-only-connection")
+        RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
+        parsed = ParsedConnection(
+            handle=ParsedHandle(
+                platform="facebook",
+                value="Grace Hopper",
+                display_name="Grace Hopper",
+                metadata={"identity_confidence": "name_only"},
+            ),
+            provenance="facebook_takeout",
+        )
+        person = ingest_connection(parsed, created_by_id=owner.pk)
+        link = PartyHandle._base_manager.get(party=person)
+        handle = link.handle
+        assert (link.confidence, link.is_confirmed) == (0.4, False)
+        assert handle.party_id is None
+        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [link.pk]
+        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
+    with actor_context(owner):
+        link.dismiss()
+    with system_context(reason="test name-only connection reimport"):
+        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
+        link.refresh_from_db()
+        assert link.is_dismissed
+        assert Person._base_manager.filter(display_name="Grace Hopper").count() == 1
+
+
 def _reimported_connection(owner: Any) -> tuple[Any, Any, Any]:
-    """A LinkedIn takeout connection's email, confirmed by its import; the re-import repeats it."""
+    """A LinkedIn takeout connection's email, linked by its import; the re-import repeats it."""
 
     RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
     parsed = ParsedConnection(

@@ -2,7 +2,7 @@
 
 Adapters emit :class:`ParsedConnection` values and never write parties rows.
 This owner upserts the account handle, materializes a Person behind its
-confirmed PartyHandle, records the account owner's acquaintance edge, and maps
+PartyHandle (scored, never confirmed), records the account owner's acquaintance edge, and maps
 an optional employer onto parties' existing ``employee`` Relationship shape.
 
 Organization names in social exports are free text, not stable organization
@@ -116,10 +116,13 @@ def _ingest_one_connection(
     """Land one parsed connection and return its Person.
 
     The source account's user is the relationship anchor. The imported person
-    becomes its ``acquaintance`` from ``connected_at`` onward; the handle link is
-    confirmed with generic ``import`` provenance plus the adapter's precise
-    label in metadata. Optional email and employment facts compose the same
-    Handle/PartyHandle/Relationship owners.
+    becomes its ``acquaintance`` from ``connected_at`` onward. The handle link
+    carries generic ``import`` provenance plus the adapter's precise label in
+    metadata, and is never confirmed: an export is a source, not the person's
+    decision. It decides the handle's owner (confidence 1.0) only when the
+    handle names an account by a real identifier (:func:`_identified`); a name
+    alone lands at 0.4, for review. Optional email and employment facts compose
+    the same Handle/PartyHandle/Relationship owners.
     """
 
     handle_model = apps.get_model("parties", "Handle")
@@ -144,15 +147,16 @@ def _ingest_one_connection(
         person = _connection_person(
             handle,
             display_name=parsed.handle.display_name or parsed.handle.value,
+            provenance=provenance,
             person_model=person_model,
+            party_handle_model=party_handle_model,
             created_by_id=created_by_id,
         )
         party_handle_model.objects.link(
             person,
             handle,
-            confidence=1.0,
+            confidence=1.0 if _identified(parsed.handle, handle_model) else 0.4,
             source=LinkSource.IMPORT,
-            is_confirmed=True,
             metadata=link_metadata,
             created_by_id=created_by_id,
         )
@@ -168,7 +172,6 @@ def _ingest_one_connection(
                 email,
                 confidence=1.0,
                 source=LinkSource.IMPORT,
-                is_confirmed=True,
                 metadata=link_metadata,
                 created_by_id=created_by_id,
             )
@@ -195,21 +198,47 @@ def _ingest_one_connection(
         return person
 
 
+def _identified(parsed: ConnectionHandle, handle_model: Any) -> bool:
+    """Whether a connection names its account by a real identifier, not by a display name only.
+
+    An email address, a phone number or a platform id identifies one account; an
+    adapter whose export carries names alone declares ``identity_confidence:
+    name_only``, and a name can match a stranger.
+    """
+
+    if (parsed.metadata or {}).get("identity_confidence") == "name_only":
+        return False
+    return bool(parsed.external_id) or parsed.platform in {handle_model.Platform.EMAIL, handle_model.Platform.PHONE}
+
+
 def _connection_person(
     handle: Any,
     *,
     display_name: str,
+    provenance: str,
     person_model: Any,
+    party_handle_model: Any,
     created_by_id: Any,
 ) -> Any:
     """Return the handle's Person, filling a blank display name only.
 
+    The handle's owner when it has one; otherwise the party an earlier run of the
+    same import linked it to, since a link awaiting review, or one the person
+    dismissed, owns nothing; a re-import therefore never mints a second person.
     An existing name is never overwritten: it may be user-curated, and export
     text must not clobber curation on every re-run.
     """
 
-    if handle.party_id is not None:
-        person = person_model._base_manager.filter(pk=handle.party_id).first()
+    party_id = handle.party_id or (
+        party_handle_model._base_manager.filter(
+            handle=handle, source=LinkSource.IMPORT, metadata__provenance=provenance
+        )
+        .order_by("pk")
+        .values_list("party_id", flat=True)
+        .first()
+    )
+    if party_id is not None:
+        person = person_model._base_manager.filter(pk=party_id).first()
         if person is not None:
             if display_name and not person.display_name:
                 person.display_name = display_name
