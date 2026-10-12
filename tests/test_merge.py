@@ -6,6 +6,7 @@ assignments, a record tagged with both keeps one, and the merged tag goes away.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import DO_NOTHING
+from django.utils import timezone
 from rebac import PermissionDenied, RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
@@ -20,16 +22,17 @@ from rebac.roles import grant as grant_role
 from angee.base import merge as merge_module
 from angee.base.identity import public_id_of
 from angee.base.merge import EdgeReference, ForeignKeyReference, references
+from angee.base.mixins import MergeContractMixin, SourceKind
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.graphql import records
-from angee.messaging.testing.models import Party
+from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.conftest import addon_schema, create_user, execute_schema, make_integration, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import CustomColumnEdge, SelfLinkedNode, TagSlot
 from tests.workflow_steps import document
@@ -378,11 +381,47 @@ def test_a_collision_no_field_set_describes_refuses_the_merge() -> None:
 
 
 def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    edges = [model for model in apps.get_models() if issubclass(model, RecordRefMixin)]
-    assert not [error for model in edges for error in model.check() if error.id == "angee.E037"]
+    """Edges and plain pointing rows (a message's participants and reactions) declare their identity alike."""
+
+    pointing = [model for model in apps.get_models() if issubclass(model, MergeContractMixin)]
+    assert {Participant, Reaction} <= set(pointing)
+    assert not [error for model in pointing for error in model.check() if error.id == "angee.E037"]
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
     assert [error.id for error in CustomColumnEdge.check() if error.id == "angee.E037"] == ["angee.E037"]
+
+
+def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:
+    """Two directories' equal stances on parties that merge: the older stays older, the newer still wins."""
+
+    statements = Party.statements.model
+    with system_context(reason="merge test stance recency"):
+        owner = create_user("merge-recency")
+        kept = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        merged = Party._base_manager.create(display_name="Ada King", created_by=owner)
+        older, newer = (
+            statements._base_manager.create(
+                subject=party,
+                aspect="identity",
+                display_name=party.display_name,
+                asserted_by=str(to_subject_ref(make_integration(slug, model=Directory))),
+                source_kind=SourceKind.DIRECTORY,
+            )
+            for party, slug in ((merged, "recency-older"), (kept, "recency-newer"))
+        )
+        statements._base_manager.filter(pk=older.pk).update(updated_at=timezone.now() - timedelta(days=7))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        before = (older.updated_at, min((older, newer), key=lambda row: row.sort_key()).pk)
+
+        kept.with_actor(owner).merge(records=[merged.public_id])
+
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        kept.refresh_from_db()
+    assert (older.subject_id, older.superseded_id, newer.superseded_id) == (kept.pk, None, None)
+    assert (older.updated_at, min((older, newer), key=lambda row: row.sort_key()).pk) == before
+    assert (newer.applied, older.applied, kept.display_name) == (True, False, "Ada Lovelace")
 
 
 @pytest.mark.usefixtures("workflow_step_classes")

@@ -816,13 +816,69 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
         return self.trashed().update(**auto_now_stamps(self.model, timezone.now()), **TrashMixin.UNTRASHED_VALUES)
 
 
+def unique_field_sets(model: type[models.Model]) -> Iterator[tuple[tuple[str, ...], Q]]:
+    """Yield each unique field set of ``model`` with the condition it applies under.
+
+    An expression constraint names no field set and is not yielded.
+    """
+
+    for field in model._meta.concrete_fields:
+        if field.unique and not field.primary_key:
+            yield (field.name,), Q()
+    for together in model._meta.unique_together:
+        yield tuple(together), Q()
+    for constraint in model._meta.constraints:
+        if isinstance(constraint, models.UniqueConstraint) and constraint.fields:
+            yield tuple(constraint.fields), constraint.condition or Q()
+
+
 class MergeContractMixin(models.Model):
-    """Pointing-owner collision hook, shared by canonical and generated models."""
+    """What a record merge's collision means for a model whose rows point at the merged record.
+
+    Shared by canonical and generated models (see :mod:`angee.base.merge`). A
+    move that lands a row on one the survivor already holds under a
+    ``merge_identity`` set drops the merged record's copy as the same fact,
+    asking :meth:`merge_collapse` first when the two differ beyond it; any other
+    unique collision refuses the merge. ``merge_contract`` replaces the whole move
+    for a model that retains collisions instead (statements).
+    """
 
     merge_contract: ClassVar[Callable[..., None] | None] = None
 
+    merge_identity: ClassVar[tuple[tuple[str, ...], ...]] = ()
+    """Unique field sets whose equal rows state one fact."""
+
     class Meta:
         abstract = True
+
+    def merge_collapse(self, duplicate: Any) -> bool:
+        """Fold ``duplicate``'s state into this row before a merge drops it as the same fact.
+
+        A merge asks only when the two differ beyond their identity and
+        bookkeeping. Return whether the duplicate's state is now kept; the default
+        keeps nothing, so the merge refuses rather than lose it.
+        """
+
+        del duplicate
+        return False
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require every ``merge_identity`` set to be a declared unique field set."""
+
+        errors = super().check(**kwargs)
+        declared = {fields for fields, _condition in unique_field_sets(cls)}
+        for fields in cls.merge_identity:
+            if tuple(fields) not in declared:
+                errors.append(
+                    checks.Error(
+                        f"{cls._meta.label}.merge_identity names {fields}, which no unique field set declares.",
+                        hint="Declare the identity as a unique field, unique_together or a UniqueConstraint.",
+                        obj=cls,
+                        id="angee.E037",
+                    )
+                )
+        return errors
 
 
 class _ChangesetHistory(models.Model):
@@ -1812,6 +1868,8 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
         Survivorship, cross-subject member resolution and merge collapse all sort
         by this key; :class:`Survivorship` strategies reorder its components.
+        Recency is ``updated_at``, when the source last changed its stance
+        (:meth:`save`).
         """
 
         declaration = self.statement_aspects[self.aspect] if aspect is None else aspect
@@ -1891,11 +1949,19 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         }
 
     def save(self, *args: Any, **kwargs: Any) -> None:
+        """Record the writing changeset; a partial save writes only the columns it names.
+
+        ``updated_at`` is the stance's recency in :meth:`sort_key`, so only a
+        change of stance moves it: ``set()``'s ``update_or_create`` and a status
+        transition name it. Bookkeeping (``applied``, supersession, a merge's
+        re-key) leaves it, or a moved older stance would outrank a newer one.
+        """
+
         if not is_sudo():
             raise PermissionDenied("Write statements through their owning manager verbs.")
         self.changeset = current_changeset(required=True, record=True)
         if kwargs.get("update_fields") is not None:
-            kwargs["update_fields"] = update_fields_with_auto_now(self, (*kwargs["update_fields"], "changeset"))
+            kwargs["update_fields"] = (*kwargs["update_fields"], "changeset")
         super().save(*args, **kwargs)
 
     def delete(self, *args: Any, **kwargs: Any) -> Any:

@@ -45,13 +45,15 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import changeset, current_changeset
 from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.merge import references
+from angee.base.merge import references, validate_merged_record
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
+from angee.base.refs import MergePolicy
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
@@ -346,8 +348,9 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         not the key it matched on).
 
         ``created_by_id`` stamps the audit owner. Control ownership is deliberately
-        excluded from the generic refresh loop; :meth:`claim_own` is its only write
-        path, so a routine upsert cannot silently transfer an account between users.
+        excluded from the generic refresh loop; :meth:`claim_own` writes it (and
+        :meth:`merge` carries a merged alias's owner onto a handle without one), so a
+        routine upsert cannot silently transfer an account between users.
         ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
         on every hit; blank values never clobber. Source display text is truncated
         to its field limit; identifiers are validated without changing their meaning.
@@ -593,6 +596,71 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 logger.info("A reported %s handle avatar was not an accepted image.", report.platform)
                 return False
         return self.set_avatar(handle, avatar)
+
+    def merge(self, source: Any, *, into: Any) -> Any | None:
+        """Fold ``source`` into ``into``, the handle owning the same contact point; return the survivor.
+
+        For a handle that turned out to be another's spelling (a resolved
+        messenger alias). Under the identity lock order, ``into`` keeps every value
+        it has and takes the ones it lacks from ``source``: the control owner, the
+        label, display name and verification, the avatar (through
+        :meth:`set_avatar`) and transport metadata keys. ``source``'s handle
+        statements move through ``Party.objects.move_handle_statements``, which
+        re-resolves both handles; every other row pointing at it — messages,
+        participations, reactions, tags — moves through the generic reference
+        move (:func:`angee.base.merge.references`), which drops a moved copy of a
+        fact ``into`` already holds (the pointing model's ``merge_identity``). Then
+        ``source`` is deleted. The fold is system work in one merge changeset whose
+        origin is ``into``. A handle a concurrent fold already removed leaves
+        nothing to do and returns ``None``.
+
+        Refuses before anything moves while a row that cannot move (a ``BLOCK``
+        reference) points at ``source``, stored relationships name it or a merge
+        guard holds it (:func:`angee.base.merge.validate_merged_record`): deleting
+        it would lose them.
+        """
+
+        if source.pk == into.pk:
+            raise ValidationError("A handle cannot be merged into itself.")
+        owner = apps.get_model("parties", "Party").objects
+        with transaction.atomic(), system_context(reason="parties.handle.merge"):
+            handles, _parties = owner.lock_identity_rows(party_ids=(), handle_ids=(source.pk, into.pk))
+            merged, survivor = handles.get(source.pk), handles.get(into.pk)
+            if merged is None or survivor is None:
+                return None
+            moving = []
+            for reference in references(self.model):
+                if reference.policy == MergePolicy.KEEP or not reference.rows(merged).exists():
+                    continue
+                if reference.policy == MergePolicy.BLOCK:
+                    raise ValidationError(f"{reference.label} still refer to {merged}; resolve that before merging.")
+                moving.append(reference)
+            validate_merged_record(merged)
+            with changeset(fresh=True, activity="merge", origin=survivor):
+                filled = []
+                for name in ("owner", "label", "display_name", "is_verified"):
+                    attname = self.model._meta.get_field(name).attname
+                    if not getattr(survivor, attname) and getattr(merged, attname):
+                        setattr(survivor, attname, getattr(merged, attname))
+                        filled.append(name)
+                metadata = {**(merged.metadata or {}), **(survivor.metadata or {})}
+                if metadata != survivor.metadata:
+                    survivor.metadata = metadata
+                    filled.append("metadata")
+                if filled:
+                    survivor.save(update_fields=[*filled, "updated_at"])
+                if survivor.avatar_id is None and merged.avatar_id is not None:
+                    self.set_avatar(survivor, merged.avatar)
+                owner.move_handle_statements(merged, survivor)
+                for reference in moving:
+                    rows = reference.rows(merged)
+                    if rows.exists():
+                        reference.move(rows, survivor=survivor)
+                merged.delete()
+                if (context := current_changeset(required=True, record=True)) is not None:
+                    context.touched.append(self.model._meta.label_lower)
+        survivor.refresh_from_db()
+        return survivor
 
 
 class PartyStatementQuerySet(StatementQuerySet):

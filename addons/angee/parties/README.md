@@ -28,11 +28,16 @@ fallback is derived for reading and never stored or written to a card. Avatars
 live on storage's image drive, which every signed-in user reads; which avatar a
 party or handle shows stays with that record's readers.
 
-A handle that proves to be another's spelling (a resolved messenger alias) moves
-its handle statements onto the surviving handle through
-`Party.objects.move_handle_statements`, the generic reference move a record
-merge performs: collisions stay inspectable as superseded, so every decision and
-its evidence survive.
+A handle that proves to be another's spelling (a resolved messenger alias) folds
+into the handle that owns the contact point through `Handle.objects.merge(alias,
+into=kept)`, one merge changeset under the identity lock order. The kept handle
+fills only the values it lacks (owner, label, display name, verification, avatar,
+transport metadata keys). Handle statements move through
+`Party.objects.move_handle_statements`, the generic reference move a record merge
+performs: collisions stay inspectable as superseded, so every decision and its
+evidence survive. Every other pointing row (messages, participations, reactions,
+tags) takes the same generic move, which drops a copy of a fact the kept handle
+already holds; then the alias is deleted.
 
 Ordinary person edits assert normal statements; confirm/dismiss writes preferred
 statements without rewriting the source or copying evidence. Person preferences

@@ -215,7 +215,8 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                     for batch in by_key(rows.filter(subject=subject), subject_keys):
                         for row in batch.order_by("pk").select_for_update():
                             row.status = status
-                            row.save(using=self.db, update_fields=("status",))
+                            # A transition changes the source's stance, so it moves its recency.
+                            row.save(using=self.db, update_fields=("status", "updated_at"))
                             members = {
                                 name: row._meta.get_field(name).value_from_object(row)
                                 for name in self.model.statement_aspects[row.aspect].members
@@ -343,7 +344,11 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 )
 
     def merge(self, reference: Any, rows: models.QuerySet[Any], *, survivor: Any) -> None:
-        """Retain both assertions on key collisions, then resolve the moved subject."""
+        """Retain both assertions on key collisions, then resolve the moved subject.
+
+        A move re-keys a stance without changing it, so each row keeps its
+        recency (``updated_at``) and the trust ordering ranks it as before.
+        """
         target = reference.lookup(survivor) if reference is not None else {"subject_id": survivor.pk}
         columns = reference.columns if reference is not None else ("subject",)
         subjects = set()

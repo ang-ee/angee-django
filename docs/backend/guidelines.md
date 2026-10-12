@@ -1879,7 +1879,8 @@ redaction. Writes use the asserting source's native REBAC write scope on the
 subject. Merge collisions remain retained as superseded rows outside the current
 per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
 rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
-class's `tie_break()`, update time, primary key — shared by survivorship,
+class's `tie_break()`, the stance's update time (bookkeeping — `applied`,
+supersession, a merge move — keeps it), primary key — shared by survivorship,
 cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
 `Survivorship` strategies only reorder its components and `trust_ordering` is the
 SQL display order of the same stances.

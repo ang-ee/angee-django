@@ -17,7 +17,7 @@ public id), or work that retiring the record would cancel (an unfinished workflo
 run), is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``.
 
 A move re-keys the pointing column. Where the survivor already holds an equal
-row under the reference's identity (an edge's ``merge_identity``, an
+row under the reference's identity (the pointing model's ``merge_identity``, an
 auto-created many-to-many link's pair), the merged record's copy is dropped; any
 other unique collision refuses the merge, including one under a rule no field set
 describes (an expression constraint). The merged record's own many-to-many
@@ -62,6 +62,7 @@ from angee.base.mixins import (
     AuditMixin,
     MergeContractMixin,
     auto_now_stamps,
+    unique_field_sets,
 )
 from angee.base.querysets import model_history
 from angee.base.refs import (
@@ -69,7 +70,6 @@ from angee.base.refs import (
     RecordRefMixin,
     concrete_child_models,
     generic_pointer_model,
-    unique_field_sets,
 )
 from angee.base.scoping import lock_if_supported, read_scoped_queryset
 
@@ -414,18 +414,13 @@ class MergeableMixin(models.Model):
         """
 
         model = type(self)
-        guards = resolve_hooks("ANGEE_MERGE_GUARDS")
         with system_context(reason=MERGE_REASON):
             for condition, message in model.merge_blockers():
                 refused = model._base_manager.filter(pk__in=[record.pk for record in merged]).filter(condition)
                 if refused.exists():
                     raise ValidationError(message)
-            for record in merged:
-                if not self.retains_merged and named_in_relationships(record):
-                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
-                for guard in guards:
-                    if refusal := guard(record):
-                        raise ValidationError(refusal)
+        for record in merged:
+            validate_merged_record(record, retained=self.retains_merged)
 
     def merge_fields(self, merged: Sequence[Self], **options: Any) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""
@@ -460,6 +455,23 @@ class MergeableMixin(models.Model):
             locked.with_actor(instance_actor(merged)).delete()
         except (ProtectedError, RestrictedError) as error:
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
+
+
+def validate_merged_record(record: models.Model, *, retained: bool = False) -> None:
+    """Refuse merging ``record`` away while stored relationships name it or a merge guard holds it.
+
+    Retiring the record drops the relationships naming it, unless it is
+    ``retained`` as a redirect. ``ANGEE_MERGE_GUARDS`` callables take the record
+    and return a refusal message, or ``None``. :meth:`MergeableMixin.validate_merge`
+    and a model's own system fold of a duplicate share this rule.
+    """
+
+    with system_context(reason=MERGE_REASON):
+        if not retained and named_in_relationships(record):
+            raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
+        for guard in resolve_hooks("ANGEE_MERGE_GUARDS"):
+            if refusal := guard(record):
+                raise ValidationError(refusal)
 
 
 def named_in_relationships(record: models.Model) -> bool:
@@ -514,19 +526,19 @@ def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:
 
 
 def _collapse(kept: models.Model, duplicate: models.Model) -> bool:
-    """Let an edge fold a differing duplicate into the row a merge keeps; plain link rows cannot."""
+    """Let the pointing model fold a differing duplicate into the row a merge keeps; plain link rows cannot."""
 
-    return isinstance(kept, RecordRefMixin) and kept.merge_collapse(duplicate)
+    return isinstance(kept, MergeContractMixin) and kept.merge_collapse(duplicate)
 
 
 def _merge_identity(model: type[models.Model]) -> frozenset[tuple[str, ...]]:
     """Return the unique field sets whose equal rows of ``model`` state one fact.
 
-    An edge declares its own (``merge_identity``); an auto-created many-to-many
-    link is its pair. Any other model declares none.
+    A pointing model declares its own (``MergeContractMixin.merge_identity``); an
+    auto-created many-to-many link is its pair. Any other model declares none.
     """
 
-    if issubclass(model, RecordRefMixin):
+    if issubclass(model, MergeContractMixin):
         return frozenset(model.merge_identity)
     if model._meta.auto_created:
         return frozenset(tuple(fields) for fields in model._meta.unique_together)

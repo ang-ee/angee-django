@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -10,29 +11,37 @@ from typing import Any
 import pytest
 import yaml
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.mixins import SourceKind
+from angee.base.mixins import SourceKind, StatementSourceMixin
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.backends import ManualChannelBackend
 from angee.messaging.testing.models import (
     Address,
+    Channel,
     Circle,
     CircleMember,
     Directory,
     Folder,
     Handle,
+    Message,
     Organization,
+    Participant,
     Party,
     Person,
+    Reaction,
     Relationship,
     RelationshipKind,
+    Thread,
 )
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import make_integration
 from tests.test_messaging import _grant
 
@@ -459,6 +468,159 @@ def test_moving_statements_from_a_handle_already_gone_moves_nothing(composed_tab
         Handle._base_manager.filter(pk=alias.pk).delete()
 
         Party.objects.move_handle_statements(alias, phone)
+
+        phone.refresh_from_db()
+    assert phone.party_id == party.pk
+    assert Party.statements.filter(handle=phone).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_publishes(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The statement key carries its source: a takeout's alias and a card's number stay two current stances."""
+
+    del composed_tables
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    statements = Party.statements.model
+    with system_context(reason="test mixed-source move"):
+        owner = _user("move-mixed-sources")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324875@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421940", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
+        directory = make_integration("move-mixed-directory", model=Directory)
+        assert StatementSourceMixin.kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        imported, carded = (
+            statements._base_manager.create(
+                subject=party,
+                handle=handle,
+                aspect="handle",
+                asserted_by=str(to_subject_ref(source)),
+                source_kind=kind,
+                confidence=confidence,
+            )
+            for handle, source, kind, confidence in (
+                (alias, takeout, SourceKind.IMPORT, 1.0),
+                (phone, directory, SourceKind.DIRECTORY, 0.9),
+            )
+        )
+        Party.statements.resolve(subject=party, aspect="handle")
+
+        Party.objects.move_handle_statements(alias, phone)
+
+        for row in (imported, carded, phone):
+            row.refresh_from_db()
+        published = set(Party.statements.asserted().filter(handle=phone).values_list("pk", flat=True))
+    assert [(row.handle_id, row.superseded_id) for row in (imported, carded)] == [(phone.pk, None), (phone.pk, None)]
+    assert (carded.applied, imported.applied, phone.party_id) == (True, False, party.pk)
+    assert published == {carded.pk}
+
+
+def _handle_merge_fixture(slug: str, digits: str) -> tuple[Any, Any, Any]:
+    """An owner, a WhatsApp ``@lid`` alias and the phone handle it resolves to."""
+
+    owner = _user(slug)
+    alias = Handle._base_manager.create(platform="whatsapp", value=f"11335289432{digits}@lid", created_by=owner)
+    phone = Handle._base_manager.create(platform="whatsapp", value=f"+1858342{digits}", created_by=owner)
+    return owner, alias, phone
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_statements(
+    composed_tables: None,
+) -> None:
+    del composed_tables
+    with system_context(reason="test handle merge fill"):
+        owner, alias, phone = _handle_merge_fixture("merge-handle-fill", "1941")
+        Handle._base_manager.filter(pk=alias.pk).update(
+            owner=owner, label="work", display_name="Bob (LID)", is_verified=True, metadata={"jid": "a", "lid": "b"}
+        )
+        Handle._base_manager.filter(pk=phone.pk).update(display_name="Bob", metadata={"jid": "p"})
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        stance = party.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+
+        kept = Handle.objects.merge(alias, into=phone)
+
+        stance.refresh_from_db()
+    assert kept.pk == phone.pk
+    assert not Handle._base_manager.filter(pk=alias.pk).exists()
+    assert (kept.owner_id, kept.label, kept.display_name, kept.is_verified) == (owner.pk, "work", "Bob", True)
+    assert kept.metadata == {"jid": "p", "lid": "b"}
+    assert (stance.handle_id, stance.is_confirmed, kept.party_id, kept.party_link_confirmed) == (
+        phone.pk,
+        True,
+        party.pk,
+        True,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_handle_holds(
+    composed_tables: None,
+) -> None:
+    """A participation, reaction or tag the phone handle already has is one fact; the rest moves."""
+
+    del composed_tables
+    with system_context(reason="test handle merge references"):
+        owner, alias, phone = _handle_merge_fixture("merge-handle-references", "1942")
+        channel = make_integration("merge-handle-channel", model=Channel, backend_class="manual")
+        thread, other_thread = Thread.objects.create(owner=owner), Thread.objects.create(owner=owner)
+        message = Message._base_manager.create(
+            channel=channel,
+            thread=thread,
+            external_id="merge-handle-message",
+            direction="inbound",
+            status="synced",
+            message_type="email",
+            sender=alias,
+            created_by=owner,
+        )
+        role = Participant.ParticipantRole
+        for handle in (alias, phone):
+            Participant._base_manager.create(message=message, thread=thread, handle=handle, role=role.FROM)
+            Participant._base_manager.create(thread=thread, handle=handle, role=role.TO)
+            Reaction._base_manager.create(message=message, handle=handle, reaction="👍")
+        moved_participant = Participant._base_manager.create(thread=other_thread, handle=alias, role=role.TO)
+        moved_reaction = Reaction._base_manager.create(message=message, handle=alias, reaction="❤️")
+        vip, work = Tag.objects.create(name="VIP"), Tag.objects.create(name="Work")
+        handle_type = ContentType.objects.get_for_model(Handle)
+        for handle, tag in ((alias, vip), (phone, vip), (alias, work)):
+            TagAssignment._base_manager.create(tag=tag, content_type=handle_type, object_id=handle.pk)
+
+        Handle.objects.merge(alias, into=phone)
+
+        message.refresh_from_db()
+        moved_participant.refresh_from_db()
+        moved_reaction.refresh_from_db()
+        participants = Counter(
+            Participant._base_manager.filter(handle=phone).values_list("thread_id", "message_id", "role")
+        )
+        reactions = sorted(Reaction._base_manager.filter(handle=phone).values_list("reaction", flat=True))
+        tags = sorted(
+            TagAssignment._base_manager.filter(content_type=handle_type, object_id=phone.pk).values_list(
+                "tag__name", flat=True
+            )
+        )
+    assert message.sender_id == phone.pk
+    assert (moved_participant.handle_id, moved_reaction.handle_id) == (phone.pk, phone.pk)
+    assert participants == Counter(
+        [(thread.pk, message.pk, role.FROM), (thread.pk, None, role.TO), (other_thread.pk, None, role.TO)]
+    )
+    assert reactions == sorted(["👍", "❤️"])
+    assert tags == ["VIP", "Work"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_a_handle_a_concurrent_fold_removed_does_nothing(composed_tables: None) -> None:
+    del composed_tables
+    with system_context(reason="test handle merge vanished"):
+        owner, alias, phone = _handle_merge_fixture("merge-handle-vanished", "1943")
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        Party.objects.assert_handle(party, phone, asserted_by=owner)
+
+        assert Handle.objects.merge(alias, into=phone).pk == phone.pk
+        assert Handle.objects.merge(alias, into=phone) is None
 
         phone.refresh_from_db()
     assert phone.party_id == party.pk
