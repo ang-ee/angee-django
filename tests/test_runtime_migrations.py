@@ -1508,3 +1508,19 @@ def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, c
             else:
                 del constraints[index]
             assert not source.applies(evolved), (key, index, change)
+
+
+def test_participant_thread_identity_applies_until_its_constraint_exists() -> None:
+    """The declaration owns the thread-participation constraint and collapses repeats before adding it."""
+
+    from django.db.migrations.state import ProjectState
+
+    from angee.messaging.runtime_migrations import participant_thread_identity as declaration
+
+    state = ProjectState.from_apps(apps)
+    assert not declaration.applies(state)
+    model = state.models["messaging", "participant"]
+    model.options["constraints"] = [
+        constraint for constraint in model.options.get("constraints", ()) if constraint.name != declaration.CONSTRAINT
+    ]
+    assert declaration.applies(state)

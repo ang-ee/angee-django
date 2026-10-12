@@ -2057,6 +2057,7 @@ class StatementRecords(HistoricalRecords):
             excluded_fields=excluded_fields,
             custom_model_name=(lambda name: f"{name}Statement") if model_name is None else (lambda name: model_name),
         )
+        self.model_name = model_name
         self.aspects = dict(aspects)
         self.sqid_prefix = sqid_prefix
         self.link = link
@@ -2211,7 +2212,13 @@ class StatementRecords(HistoricalRecords):
         )
         return {
             "app_label": model._meta.app_label,
-            "db_table": f"{model._meta.db_table}_statement",
+            # A named model takes Django's default table for that name, which no other
+            # model of the app can hold; the default name keeps "<subject table>_statement".
+            "db_table": (
+                f"{model._meta.app_label}_{self.model_name.lower()}"
+                if self.model_name
+                else f"{model._meta.db_table}_statement"
+            ),
             "base_manager_name": Statement._meta.base_manager_name,
             "rebac_resource_type": None,
             "constraints": constraints,

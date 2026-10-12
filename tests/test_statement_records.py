@@ -52,6 +52,7 @@ def test_a_declaration_names_its_model_and_copies_money_without_its_currency() -
 
     generated = Ledger.statements.model
     assert generated.__name__ == "LedgerStance"
+    assert generated._meta.db_table == "base_ledgerstance"
     amount = generated._meta.get_field("amount")
     assert type(amount) is models.DecimalField
     assert (amount.max_digits, amount.decimal_places, amount.null) == (12, 2, True)

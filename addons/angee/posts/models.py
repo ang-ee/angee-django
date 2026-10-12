@@ -188,6 +188,9 @@ class FeedFollow(AuditMixin, AngeeDataModel):
 
     objects = FeedFollowManager()
 
+    merge_identity = (("feed", "handle"),)
+    """A handle follows a feed once: a merge drops a moved duplicate follow."""
+
     class Meta:
         """Django model options for the feed-follow source model."""
 
