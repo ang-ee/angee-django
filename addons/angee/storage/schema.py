@@ -286,6 +286,20 @@ class FolderWriteBackend(AngeeHasuraWriteBackend):
             raise ValueError(str(error)) from error
 
 
+def _browsable_drives(info: strawberry.Info) -> Any:
+    """Return the listed drives: every drive but the image drive."""
+
+    del info
+    return Drive.objects.browsable()
+
+
+def _browsable_files(info: strawberry.Info) -> Any:
+    """Return the listed files: every file but the image drive's, which its records show."""
+
+    del info
+    return File.objects.browsable()
+
+
 _MIME_TYPE_RESOURCE = hasura_model_resource(
     MimeTypeType,
     model=MimeType,
@@ -302,6 +316,7 @@ _DRIVE_RESOURCE = hasura_model_resource(
     DriveType,
     model=Drive,
     name="drives",
+    get_queryset=_browsable_drives,
     filterable=["id", "slug", "name", "is_archived", "backend", "owns_items"],
     sortable=["slug", "name", "created_at", "updated_at"],
     aggregatable=["id"],
@@ -331,6 +346,7 @@ _FILE_RESOURCE = hasura_model_resource(
     FileType,
     model=File,
     name="files",
+    get_queryset=_browsable_files,
     filterable=[
         "id",
         "filename",

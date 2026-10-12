@@ -11,8 +11,9 @@ or cascaded ``PartyHandle`` delete and a removed ``Handle``. They do **not** fir
 An account's person follows the account's name: every instance save of the user
 model that may change it renames the linked person in the same transaction.
 
-After every migrate, party avatars stored before storage's image drive move onto
-it (``PartyManager.rehome_avatars``), a no-op once none remain.
+After every migrate, storage's image drive is provisioned with its grant, and party
+avatars stored before it move onto it (``PartyManager.rehome_avatars``), a no-op once
+none remain.
 
 Receivers run under ``system_context`` because the derived writes are server-owned
 bookkeeping that must land even when the triggering write ran under a bare actor.
@@ -52,7 +53,7 @@ def connect() -> None:
 
 
 def _rehome_avatars(*, app_config: object, using: str, **kwargs: object) -> None:
-    """Move avatars stored before storage's image drive onto it, once per migrate.
+    """Provision storage's image drive and move avatars stored before it onto it, once per migrate.
 
     Best-effort: it needs storage's tables as well as the party table, and no
     failure, a storage outage included, ever fails the migrate; the next one retries.
