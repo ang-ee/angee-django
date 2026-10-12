@@ -15,7 +15,10 @@ dependencies = [
 ]
 
 [resources]
-master = [{ path = "resources/master/010_messaging.activitytype.yaml", adopt = "key" }]
+master = []
+# Activity types moved to angee.projects. On a stack without it, the drop guard lets
+# the catalog rows messaging's resource files seeded go with the removed model.
+retired_models = ["messaging.ActivityType"]
 
 [[migrations]]
 name = "follower_party"

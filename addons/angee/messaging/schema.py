@@ -9,7 +9,7 @@ producers retain their writes. Reactions remain nested message projections.
 from __future__ import annotations
 
 from dataclasses import fields
-from datetime import date, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Self, cast
 
@@ -61,7 +61,7 @@ from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
-from angee.messaging.models import ThreadedModelMixin
+from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -73,8 +73,6 @@ Channel = apps.get_model("messaging", "Channel")
 Thread = apps.get_model("messaging", "Thread")
 ThreadAttachment = apps.get_model("messaging", "ThreadAttachment")
 ThreadFollower = apps.get_model("messaging", "ThreadFollower")
-ThreadActivity = apps.get_model("messaging", "ThreadActivity")
-ActivityType = apps.get_model("messaging", "ActivityType")
 ThreadNotification = apps.get_model("messaging", "ThreadNotification")
 MessageSubtype = apps.get_model("messaging", "MessageSubtype")
 Message = apps.get_model("messaging", "Message")
@@ -323,15 +321,6 @@ class PartType(AngeeNode):
     fragment: FragmentType | None
     file: FileType | None = actor_scoped_to_one("file")
     created_at: auto
-
-
-@strawberry_django.type(ActivityType)
-class ActivityTypeType(AngeeNode):
-    """The installed resource-declared activity catalog."""
-
-    key: auto
-    name: auto
-    glyph: auto
 
 
 @strawberry_django.type(MessageSubtype)
@@ -777,30 +766,6 @@ class RecordThreadNotificationType(AngeeNode):
     updated_at: auto
 
 
-@strawberry_django.type(ThreadActivity)
-class RecordThreadActivityType(AngeeNode):
-    """Record-scoped activity projection without thread or attachment backedges."""
-
-    user: "UserType | None" = actor_scoped_to_one("user")
-    created_by: "UserType | None" = actor_scoped_to_one("created_by")
-    activity_type: str = strawberry_django.field(field_name="activity_type_id")
-    summary: auto
-    note: auto
-    due_date: auto
-    completed_at: auto
-    feedback: auto
-    status: auto
-    metadata: strawberry.scalars.JSON
-    created_at: auto
-    updated_at: auto
-
-    @strawberry.field
-    def state(self) -> str:
-        """Return the Odoo-style activity state."""
-
-        return cast(Any, self).activity_state
-
-
 @strawberry_django.type(ThreadAttachment)
 class ThreadAttachmentType(RecordReferenceNode):
     """GraphQL projection of a model-record thread attachment.
@@ -837,31 +802,6 @@ class ThreadFollowerType(FollowerIdentity, AngeeNode):
     updated_at: auto
 
 
-@strawberry_django.type(ThreadActivity)
-class ThreadActivityType(AngeeNode):
-    """GraphQL projection of a scheduled record chatter activity."""
-
-    thread: "ThreadType | None" = actor_scoped_to_one("thread")
-    attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
-    user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: str = strawberry_django.field(field_name="activity_type_id")
-    summary: auto
-    note: auto
-    due_date: auto
-    completed_at: auto
-    feedback: auto
-    status: auto
-    metadata: strawberry.scalars.JSON
-    created_at: auto
-    updated_at: auto
-
-    @strawberry.field
-    def state(self) -> str:
-        """Return the Odoo-style activity state."""
-
-        return cast(Any, self).activity_state
-
-
 @strawberry.type
 class RecordPointerType:
     """Minimal, read-only pointer back to the record a chatter row is attached to.
@@ -889,57 +829,6 @@ class RecordPointerType:
         )
 
 
-@strawberry_django.type(ThreadActivity)
-class AgendaActivityType(AngeeNode):
-    """The actor's own scheduled activity, narrowed for the cross-record agenda.
-
-    ``activity_agenda`` delivers ``ThreadActivity`` rows to a bare assignee through the
-    ``messaging/thread_activity.read`` ``user`` (assignee) arm — an assignment is itself
-    the grant. Because that assignee holds no read on the parent record, thread, or
-    attachment, this projection exposes only the activity's own fields, the assignee's own
-    identity (``user`` — always the actor, by the agenda filter), and the minimal record
-    pointer (``attachment`` → :class:`RecordPointerType`); it deliberately drops the parent
-    ``thread`` and the attachment's ``metadata``, which a to-one traversal would resolve
-    unguarded and so leak to a bare assignee through the agenda. The record-scoped
-    ``record_thread`` surface projects the full :class:`ThreadActivityType` for a user who
-    can already read the parent record.
-    """
-
-    user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: str = strawberry_django.field(field_name="activity_type_id")
-    summary: auto
-    note: auto
-    due_date: auto
-    completed_at: auto
-    feedback: auto
-    status: auto
-    metadata: strawberry.scalars.JSON
-    created_at: auto
-    updated_at: auto
-
-    @strawberry.field
-    def state(self) -> str:
-        """Return the derived activity state (planned/today/overdue/done/canceled)."""
-
-        return cast(Any, self).activity_state
-
-    @strawberry.field
-    def attachment(self) -> RecordPointerType:
-        """Return the minimal pointer to the record this activity is attached to.
-
-        This is the explicit exception to
-        :func:`angee.graphql.relations.actor_scoped_to_one`: a narrow-projection
-        contract, not visibility redaction.
-
-        The ``attachment`` FK is primed elevated and by id on the agenda queryset
-        (:meth:`ThreadActivityQuerySet.with_record_pointers`), so this reads no extra
-        row; the three pointer facts come from the ``ThreadAttachment`` owner without
-        loading or re-gating the target record.
-        """
-
-        return RecordPointerType.from_attachment(cast(Any, self).attachment)
-
-
 @strawberry_django.type(Message)
 class NotificationMessagePointerType:
     """Record-readable inbox context without message bodies or generic backedges."""
@@ -952,7 +841,7 @@ class NotificationMessagePointerType:
 
     @strawberry.field
     def attachment(self) -> RecordPointerType:
-        """Return the same attachment-owned pointer used by the activity agenda."""
+        """Return the attachment-owned pointer of the record this notification is about."""
 
         return RecordPointerType.from_attachment(cast(Any, self)._inbox_attachment)
 
@@ -1142,41 +1031,6 @@ class RecordFollowInput(RecordReferenceInput):
     subtype_keys: list[str] = strawberry.field(default_factory=list)
 
 
-@strawberry.input
-class RecordActivityScheduleInput(RecordReferenceInput):
-    """Fields accepted when scheduling a record activity."""
-
-    summary: str
-    note: str = ""
-    due_date: date | None = strawberry.field(name="due_date", default=None)
-    activity_type: str = strawberry.field(name="activity_type", default="todo")
-    user_id: strawberry.ID | None = strawberry.field(name="user_id", default=None)
-
-
-@strawberry.input
-class RecordActivityLogInput(RecordReferenceInput):
-    """One completed exchange on a record's chatter."""
-
-    activity_type: str = strawberry.field(name="activity_type")
-    occurred_on: date = strawberry.field(name="occurred_on")
-    note: str
-
-
-@strawberry.input
-class RecordActivityFeedbackInput:
-    """Fields accepted when completing a record activity."""
-
-    activity_id: strawberry.ID = strawberry.field(name="activity_id")
-    feedback: str = ""
-
-
-@strawberry.input
-class RecordActivityCancelInput:
-    """Fields accepted when canceling a record activity."""
-
-    activity_id: strawberry.ID = strawberry.field(name="activity_id")
-
-
 @strawberry.type
 class RecordErrorPayload:
     """The established record-chatter error envelope, preserved across commands."""
@@ -1208,9 +1062,6 @@ class RecordThreadStatePayload:
     needaction_count: int = strawberry.field(name="needaction_count", default=0)
     message_has_error: bool = strawberry.field(name="message_has_error", default=False)
     message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
-    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
-    activity_types: list[ActivityTypeType] = strawberry.field(default_factory=list)
-    activity_count: int = strawberry.field(name="activity_count", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
 
     @classmethod
@@ -1354,16 +1205,6 @@ class RecordFollowPayload(RecordErrorPayload):
 
 
 @strawberry.type
-class RecordActivityPayload(RecordErrorPayload):
-    """A record activity update result, or the error that prevented it."""
-
-    activity: RecordThreadActivityType | None = None
-    thread: RecordThreadType | None = None
-    activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
-    activity_count: int = strawberry.field(name="activity_count", default=0)
-
-
-@strawberry.type
 class MessageFeedPage:
     """A newest-first, currently authorized message page with stable cursors."""
 
@@ -1481,7 +1322,7 @@ class MessagingQuery:
         """Return the existing chatter thread attached to a model record."""
 
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1505,7 +1346,7 @@ class MessagingQuery:
         if _request_user(info) is None:
             return RecordRemovedMessagesPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
         except ValueError as error:
             return RecordRemovedMessagesPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1540,61 +1381,13 @@ class MessagingQuery:
         if user is None:
             return 0
         try:
-            record = _threaded_record(
-                RecordReferenceInput(
-                    model_label=model_label,
-                    record_id=record_id,
-                    role="chatter",
-                )
-            )
+            record = chatter_record(model_label, record_id)
         except ValueError:
             return 0
         if record is None:
             return 0
         return ThreadFollower.objects.unread_count_for_record(record, user=user, role="chatter")
 
-    @strawberry.field(name="activity_agenda")
-    def activity_agenda(
-        self,
-        info: strawberry.Info,
-        window_start: date,
-        window_end: date,
-        include_done: bool = False,
-    ) -> list[AgendaActivityType]:
-        """Return the current actor's assigned activities due within the window.
-
-        The actor's own agenda across records: ``ThreadActivity`` rows assigned to the
-        actor (``user``), due within ``[window_start, window_end)``, ordered by due date.
-        The window is the whole bound — no pagination. Done and canceled are excluded
-        unless ``include_done``. Overdue is neither stored nor filtered; it rides each
-        row's ``state`` derivation.
-
-        Authorization rides the existing ``messaging/thread_activity.read`` ``user``
-        (assignee) arm — an assignment is itself the grant — so the read needs no
-        parent-record re-gate and no record-read fan-out. Each row is projected as
-        :class:`AgendaActivityType`: the activity's own fields, the actor's own identity,
-        and the minimal record pointer — never the parent thread or attachment metadata,
-        which a to-one traversal would otherwise resolve unguarded. The assignee
-        FK is the request actor by construction, and the pointer ``attachment`` is primed
-        elevated and by id on the queryset, so the projection needs no REBAC-guarded
-        ``select_related`` (the pitfall) and no per-row pointer fan-out.
-        """
-
-        user = _request_user(info)
-        if user is None:
-            return []
-        rows = ThreadActivity.objects.agenda(
-            user,
-            window_start,
-            window_end,
-            include_done=include_done,
-        ).with_record_pointers()
-        for row in rows:
-            # The agenda filters on user == actor, so every row's assignee is the request
-            # actor: prime the FK from the actor already in hand instead of a per-row
-            # (and REBAC-guarded) user load.
-            row.user = user
-        return rows
 
 
 @strawberry.type
@@ -1662,7 +1455,7 @@ class MessagingMutation:
         """Post an internal comment to the record's chatter thread."""
 
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
         except ValueError as error:
             return RecordMessagePostPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1706,7 +1499,7 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageUpdatePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageUpdatePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1734,7 +1527,7 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageDeletePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDeletePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1782,7 +1575,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageReactionPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageReactionPayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1811,7 +1604,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageStarPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageStarPayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1835,7 +1628,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageDonePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDonePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1865,7 +1658,7 @@ class MessagingMutation:
         if user is None:
             return RecordFollowPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
         except ValueError as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1891,128 +1684,6 @@ class MessagingMutation:
             is_following=payload.is_following,
         )
 
-    @strawberry.mutation(name="log_record_activity")
-    def log_record_activity(self, info: strawberry.Info, input: RecordActivityLogInput) -> RecordActivityPayload:
-        """Record one completed exchange under the target record's authority."""
-
-        if _request_user(info) is None:
-            return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
-        try:
-            record = _threaded_record(input)
-        except ValueError as error:
-            return RecordActivityPayload(error=str(error), error_code="BAD_RECORD")
-        if record is None:
-            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
-        try:
-            activity = record.activity_log(input.activity_type, input.occurred_on, input.note)
-        except (PermissionDenied, ValueError, ValidationError) as error:
-            return RecordActivityPayload.from_error(error, invalid_code="BAD_ACTIVITY")
-        payload = _record_thread_payload(record, info, role=input.role)
-        return RecordActivityPayload(
-            activity=activity, thread=payload.thread, activities=payload.activities,
-            activity_count=payload.activity_count,
-        )
-
-    @strawberry.mutation(name="schedule_record_activity")
-    def schedule_record_activity(
-        self,
-        info: strawberry.Info,
-        input: RecordActivityScheduleInput,
-    ) -> RecordActivityPayload:
-        """Schedule an activity on the record's chatter thread."""
-
-        current_user = _request_user(info)
-        if current_user is None:
-            return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
-        try:
-            record = _threaded_record(input)
-            assigned_user = _user_from_public_id(input.user_id) if input.user_id else current_user
-        except ValueError as error:
-            return RecordActivityPayload(error=str(error), error_code="BAD_RECORD")
-        if record is None:
-            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
-        try:
-            activity = cast(Any, record).activity_schedule(
-                user=assigned_user,
-                summary=input.summary,
-                note=input.note,
-                due_date=input.due_date,
-                activity_type=input.activity_type,
-            )
-        except (PermissionDenied, ValueError, ValidationError) as error:
-            return RecordActivityPayload.from_error(error, invalid_code="BAD_ACTIVITY")
-        payload = _record_thread_payload(record, info, role=input.role)
-        return RecordActivityPayload(
-            activity=activity,
-            thread=payload.thread,
-            activities=payload.activities,
-            activity_count=payload.activity_count,
-        )
-
-    @strawberry.mutation(name="complete_record_activity")
-    def complete_record_activity(
-        self,
-        info: strawberry.Info,
-        input: RecordActivityFeedbackInput,
-    ) -> RecordActivityPayload:
-        """Complete a scheduled record activity and log its feedback."""
-
-        if _request_user(info) is None:
-            return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
-        try:
-            activity = _thread_activity(input.activity_id)
-        except ValueError as error:
-            return RecordActivityPayload(error=str(error), error_code="BAD_ACTIVITY")
-        record = activity.attachment.target
-        if record is None or not isinstance(record, ThreadedModelMixin):
-            return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
-        record = _readable_record(record)
-        if record is None:
-            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
-        try:
-            activity = cast(Any, record).activity_feedback(activity, feedback=input.feedback)
-        except PermissionDenied as error:
-            return RecordActivityPayload(error=str(error), error_code="PERMISSION_DENIED")
-        payload = _record_thread_payload(record, info)
-        return RecordActivityPayload(
-            activity=activity,
-            thread=payload.thread,
-            activities=payload.activities,
-            activity_count=payload.activity_count,
-        )
-
-    @strawberry.mutation(name="cancel_record_activity")
-    def cancel_record_activity(
-        self,
-        info: strawberry.Info,
-        input: RecordActivityCancelInput,
-    ) -> RecordActivityPayload:
-        """Cancel a scheduled record activity."""
-
-        if _request_user(info) is None:
-            return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
-        try:
-            activity = _thread_activity(input.activity_id)
-        except ValueError as error:
-            return RecordActivityPayload(error=str(error), error_code="BAD_ACTIVITY")
-        record = activity.attachment.target
-        if record is None or not isinstance(record, ThreadedModelMixin):
-            return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
-        record = _readable_record(record)
-        if record is None:
-            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
-        try:
-            activity = cast(Any, record).activity_unlink(activity)
-        except PermissionDenied as error:
-            return RecordActivityPayload(error=str(error), error_code="PERMISSION_DENIED")
-        payload = _record_thread_payload(record, info)
-        return RecordActivityPayload(
-            activity=activity,
-            thread=payload.thread,
-            activities=payload.activities,
-            activity_count=payload.activity_count,
-        )
-
     @strawberry.mutation(name="mark_record_thread_read")
     def mark_record_thread_read(self, info: strawberry.Info, input: RecordReferenceInput) -> RecordThreadPayload:
         """Advance the current follower's record cursor without acknowledging inbox items."""
@@ -2021,7 +1692,7 @@ class MessagingMutation:
         if user is None:
             return RecordThreadPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = _threaded_record(input)
+            record = chatter_record(input.model_label, input.record_id)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -2330,17 +2001,7 @@ _NOTIFICATION_INBOX_RESOURCE = hasura_model_resource(
 )
 
 
-_ACTIVITY_TYPE_RESOURCE = hasura_model_resource(
-    ActivityTypeType, model=ActivityType, name="activity_types",
-    filterable=["id", "key", "name"], sortable=["name", "key"],
-    aggregatable=["id"],
-    insertable=["key", "name", "glyph"], updatable=["name", "glyph"],
-    write_backend=AngeeHasuraWriteBackend(ActivityType),
-)
-
-
 _RESOURCE_TYPES = [
-    *_ACTIVITY_TYPE_RESOURCE.types,
     *_CHANNEL_RESOURCE.types,
     *_MESSAGE_RESOURCE.types,
     *_THREAD_RESOURCE.types,
@@ -2353,7 +2014,6 @@ _RESOURCE_TYPES = [
 
 _MESSAGING_SCHEMA_BUCKET = {
     "query": [
-        _ACTIVITY_TYPE_RESOURCE.query,
         MessagingPairingQuery,
         MessagingQuery,
         _CHANNEL_RESOURCE.query,
@@ -2365,7 +2025,6 @@ _MESSAGING_SCHEMA_BUCKET = {
         _NOTIFICATION_INBOX_RESOURCE.query,
     ],
     "mutation": [
-        _ACTIVITY_TYPE_RESOURCE.mutation,
         MessagingPairingMutation,
         MessagingChannelMutation,
         MessagingMutation,
@@ -2375,14 +2034,11 @@ _MESSAGING_SCHEMA_BUCKET = {
         _PART_RESOURCE.mutation,
     ],
     "types": [
-        ActivityTypeType,
         ChannelType,
         PairingProjection,
         ThreadType,
         ThreadAttachmentType,
         ThreadFollowerType,
-        ThreadActivityType,
-        AgendaActivityType,
         RecordPointerType,
         ThreadNotificationType,
         MessageSubtypeType,
@@ -2404,7 +2060,6 @@ _MESSAGING_SCHEMA_BUCKET = {
         RecordThreadType,
         RecordThreadFollowerType,
         RecordThreadNotificationType,
-        RecordThreadActivityType,
         RecordThreadPayload,
         RecordMessagePostPayload,
         RecordMessageUpdatePayload,
@@ -2413,7 +2068,6 @@ _MESSAGING_SCHEMA_BUCKET = {
         RecordMessageStarPayload,
         RecordMessageDonePayload,
         RecordFollowPayload,
-        RecordActivityPayload,
         *_RESOURCE_TYPES,
     ],
     "type_extensions": ([] if _CHANNEL_WEBFORM_EXTENSION is None else [_CHANNEL_WEBFORM_EXTENSION]),
@@ -2428,7 +2082,6 @@ schemas = {
             changes(Channel, field="channelChanged"),
             changes(Message, field="messageChanged"),
             changes(Thread, field="threadChanged"),
-            changes(ThreadActivity, field="threadActivityChanged"),
             changes(ThreadNotification, field="threadNotificationChanged"),
             changes(MessageStar, field="messageStarChanged"),
             changes(Part, field="partChanged"),
@@ -2437,22 +2090,6 @@ schemas = {
         ],
     },
 }
-
-
-def _threaded_record(input: RecordReferenceInput) -> Any | None:
-    """Return the record addressed by ``input`` when its model opts into chatter."""
-
-    try:
-        model = apps.get_model(input.model_label)
-    except (LookupError, ValueError) as error:
-        raise ValueError(f"Unknown model {input.model_label!r}.") from error
-    if not issubclass(model, ThreadedModelMixin):
-        raise ValueError(f"{model._meta.label} does not inherit ThreadedModelMixin.")
-    try:
-        queryset = model._default_manager.all()
-        return instance_from_public_id(model, str(input.record_id), queryset=queryset)
-    except ImproperlyConfigured as error:
-        raise ValueError(str(error)) from error
 
 
 def _referenced_record(input: RecordReferenceInput) -> Any | None:
@@ -2565,20 +2202,6 @@ def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
         follower._meta.get_field("party").set_cached_value(follower, parties.get(follower.party_id))
 
 
-def _prime_activity_identities(activities: list[Any], actor: Any) -> None:
-    """Load readable activity accounts once for both guarded identity fields."""
-
-    if not activities:
-        return
-    ids = {value for row in activities for value in (row.user_id, row.created_by_id) if value is not None}
-    users = {
-        row.pk: row for row in get_user_model().objects.with_actor(actor).filter(pk__in=ids)
-    } if actor is not None else {}
-    for row in activities:
-        for name in ("user", "created_by"):
-            row._meta.get_field(name).set_cached_value(row, users.get(getattr(row, f"{name}_id")))
-
-
 def _moderate_record_message(
     info: strawberry.Info,
     input: RecordMessageTrashInput | RecordMessageRestoreInput,
@@ -2593,7 +2216,7 @@ def _moderate_record_message(
     if not input.confirm:
         return RecordMessageTrashPayload(error="Confirm the change to apply it.", error_code="CONFIRMATION_REQUIRED")
     try:
-        record = _threaded_record(input)
+        record = chatter_record(input.model_label, input.record_id)
     except ValueError as error:
         return RecordMessageTrashPayload(error=str(error), error_code="BAD_MESSAGE")
     if record is None:
@@ -2669,14 +2292,6 @@ def _record_thread_payload(
     _prime_record_messages(messages)
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
-    activities = (
-        ThreadActivity.objects.for_record_window(
-            record, role=role, search=search, limit=message_limit,
-            messages=messages, message_count=message_result_count,
-            bounded=any(value not in (None, "") for value in (before, after, around)),
-        ) if thread is not None else []
-    )
-    _prime_activity_identities(activities, current_actor())
     attachment_count = (
         apps.get_model("messaging", "Part")
         .objects.filter(message__thread=thread, message__is_trashed=False)
@@ -2762,9 +2377,6 @@ def _record_thread_payload(
         needaction_count=unread_count,
         message_has_error=message_has_error_counter > 0,
         message_has_error_counter=message_has_error_counter,
-        activities=activities,
-        activity_count=len(activities),
-        activity_types=list(ActivityType.objects.all()),
         attachment_count=attachment_count,
         removed_message_count=removed_message_count,
     )
@@ -2780,22 +2392,6 @@ def _request_user(info: strawberry.Info | None) -> Any | None:
     if user is None or getattr(user, "is_authenticated", False) is False:
         return None
     return user
-
-
-def _user_from_public_id(user_id: strawberry.ID | None) -> Any:
-    """Return a user by public id for activity assignment."""
-
-    if user_id is None:
-        raise ValueError("A user id is required.")
-    try:
-        return require_instance_for_id(
-            get_user_model(),
-            user_id,
-            queryset=get_user_model()._default_manager.all(),
-            not_found="assigned user not found",
-        )
-    except ImproperlyConfigured as error:
-        raise ValueError(str(error)) from error
 
 
 def _users_from_public_ids(user_ids: list[strawberry.ID]) -> tuple[Any, ...]:
@@ -2815,35 +2411,13 @@ def _users_from_public_ids(user_ids: list[strawberry.ID]) -> tuple[Any, ...]:
         raise ValueError(str(error)) from error
 
 
-def _thread_activity(activity_id: strawberry.ID) -> Any:
-    """Return a scheduled record activity by public id, decoded elevated.
-
-    The decode intentionally bypasses the activity's own read scope: authorization
-    for reaching (and acting on) a record activity rides its parent record's read —
-    the ``record_thread`` gate applied by :func:`_readable_record` in the complete
-    and cancel resolvers — not the activity's own messaging permission. So the decode
-    only resolves the public id; the record read is the gate.
-    """
-
-    try:
-        return require_instance_for_id(
-            ThreadActivity,
-            activity_id,
-            queryset=ThreadActivity.system_queryset().select_related("attachment", "attachment__content_type"),
-            not_found="activity not found",
-        )
-    except ImproperlyConfigured as error:
-        raise ValueError(str(error)) from error
-
-
 def _readable_record(record: Any) -> Any | None:
     """Return ``record`` re-resolved under the request actor's read scope, else None.
 
-    The ``record_thread`` gate: record chatter — its thread, messages, and
-    activities — is reachable only when the actor can read the parent record, so an
-    activity reached elevated (see :func:`_thread_activity`) is authorized *through*
-    the record's read. Re-resolving on the actor-scoped default manager (the exact
-    scope :func:`_threaded_record` uses) yields ``None`` when the record is unreadable,
+    The ``record_thread`` gate: record chatter — its thread and messages — is
+    reachable only when the actor can read the parent record, so a row reached
+    elevated is authorized *through* the record's read. Re-resolving on the actor-scoped default manager (the exact
+    scope :func:`threaded_record` uses) yields ``None`` when the record is unreadable,
     which the caller surfaces as ``NOT_FOUND``.
     """
 

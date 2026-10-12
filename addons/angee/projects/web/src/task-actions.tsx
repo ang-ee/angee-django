@@ -191,7 +191,8 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
   );
 }
 
-function isOpenTask(record: { status?: unknown }): boolean {
+/** Whether the row's lifecycle is open, whatever the status casing it carries. */
+export function isOpenTask(record: { status?: unknown }): boolean {
   return taskStatus(record) === "open";
 }
 

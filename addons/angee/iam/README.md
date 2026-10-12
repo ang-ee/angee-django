@@ -24,8 +24,7 @@ confirmed opening verb.
 ## The people directory
 
 - **Names for everyone signed in.** `auth/user#read` is `authenticated`, so a
-  record embedding an account (assignee, owner, requester, `run_as`, an
-  activity's user) shows its display name to every reader. The web draws the
+  record embedding an account (assignee, owner, requester, `run_as`) shows its display name to every reader. The web draws the
   avatar's initials from that name. Records that carry a label instead resolve
   the same IAM label elevated (`angee.iam.identity`).
 - **Restricted fields** are field gates on `read_private` (`self + list`):

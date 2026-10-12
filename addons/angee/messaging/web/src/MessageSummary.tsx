@@ -1,5 +1,5 @@
 import * as React from "react";
-import { senderDisplayName, type SenderIdentity } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "@angee/parties";
 import { Avatar, Glyph, RelativeTime, avatarInitials } from "@angee/ui";
 
 import { useMessagingT } from "./i18n";
@@ -26,8 +26,10 @@ export const MESSAGE_SUMMARY_FIELDS = [
   "sender.display_name",
   "sender.value",
   "sender.party_link_confirmed",
+  "sender.avatar.url",
   "sender.party.id",
   "sender.party.display_name",
+  "sender.party.display_avatar.url",
   "channel.id",
   "channel.display_name",
 ] as const;
@@ -38,7 +40,7 @@ export function MessageSummary({ message }: { message: MessageSummaryData }): Re
   const sender = senderDisplayName(message.sender, t("message.unknownSender"));
   return (
     <div className="flex min-w-0 items-start gap-3 whitespace-normal py-3">
-      <Avatar size="sm" initials={avatarInitials(sender)} />
+      <Avatar size="sm" src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{sender}</span>

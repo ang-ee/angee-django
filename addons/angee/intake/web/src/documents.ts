@@ -33,7 +33,7 @@ export const TaskAccessNeedsDocument = graphql(`
       claimed_email
       requester_user
       requester_access_granted
-      party { id display_name }
+      party { id display_name display_avatar { id url } }
       access_verdict
       access_decision { id is_open verdict }
     }

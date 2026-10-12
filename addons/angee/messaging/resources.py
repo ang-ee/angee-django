@@ -100,18 +100,3 @@ class MessageResource(_ChatterResource):
             message.refresh_from_db()
         return message
 
-
-class ThreadActivityResource(_ChatterResource):
-    """Log a completed exchange (call, email, meeting) on a threaded record.
-
-    Columns: ``record`` and ``author`` (xrefs), ``activity_type`` (the type's
-    key), and the native ``due_date`` (the day it happened) and ``note``.
-    """
-
-    activity_type = fields.Field(column_name="activity_type", readonly=True)
-
-    def write(self, record: Any, author: Any, instance: Any, row: Mapping[str, Any]) -> models.Model:
-        del author
-        if instance.due_date is None:
-            raise ValidationError({"due_date": "A logged activity needs the day it happened."})
-        return record.activity_log(row.get("activity_type") or "other", instance.due_date, instance.note)

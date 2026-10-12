@@ -11,7 +11,7 @@ live in code docstrings.
 
 ## Unreleased — django-zed-rebac 0.27
 
-- Require django-zed-rebac 0.27.0. Its read guards refuse filtering or ordering
+- Require django-zed-rebac 0.27.1. Its read guards refuse filtering or ordering
   on a gated field under an actor; filters and sorts over a gated field use the
   queryset's `readable(field)`, and Angee's `gated_field_expression` is removed.
 - IAM declares its deliberate disclosures in Zed: filtered constants on the
@@ -20,11 +20,35 @@ live in code docstrings.
   primary key. Pickers leave inactive accounts out without showing their state.
 - `AngeeModel.validate_unique` and `validate_constraints` compare against every
   row under a named system context when the row's save would pass its REBAC
-  gate, decided once per `full_clean`; before, an actor-scoped check saw only
-  readable rows. A new row's `create` check evaluates the candidate as its save
-  does, with `OwnerMixin`'s owner default held for the check.
+  gates (REBAC's `check_save`, decided once per `full_clean`), leaving out the
+  fields a saved row's actor may not read; before, an actor-scoped check saw only
+  readable rows. `OwnerMixin`'s owner default is held for the checks.
 - `AngeeModel.system_queryset` returns a permission-naive default queryset as it
   is, and GraphQL filter expressions take their output fields from it.
+
+## Unreleased — record tasks (breaking; ships in 0.3.0)
+
+Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tasks".
+
+- Record activities are record tasks: a `projects.Task` whose `subject` is a
+  record's chatter attachment, typed by `projects.ActivityType` (moved from
+  messaging with its public ids). A record task answers to its record alone, in
+  the permission schema: a record type takes tasks once its owner declares
+  `record_read` and `record_write` on `messaging/thread_attachment`.
+- The cutover, `projects:record_tasks`, is irreversible: it converts every
+  activity and drops messaging's `ThreadActivity` and `ActivityType` tables,
+  holding the task tables' lock throughout. projects refuses the `migrate` run
+  that would apply it while activities sit on undeclared record types.
+- GraphQL removals: messaging's activity types and nodes, `activity_agenda`, the
+  record activity mutations and the activity fields on the record-thread
+  payload; `promote_thread_activity_to_task` and `Task.converted_from_activity`.
+  Record tasks use `record_tasks`, `schedule_record_task`, `log_record_task`,
+  `complete_task(id, feedback)` and `drop_task`.
+- Messaging's change-history tab is `messaging.history` (placeholder
+  `chatter.history`); the former ids stay as `?chatterTab=` aliases until 0.4.0.
+- The composer's drop guard refuses an autodetected `DeleteModel` whose table
+  holds rows, except rows the retiring addon's resource files seeded once it
+  names the model under `retired_models` in its `addon.toml` `[resources]`.
 
 ## Unreleased — in-process agent sessions
 

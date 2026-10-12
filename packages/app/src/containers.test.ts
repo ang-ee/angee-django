@@ -191,19 +191,19 @@ describe("compileContainers", () => {
   test("the framework's own children are every addon's to alter, without a dependency", () => {
     const aside: CoreContainer = { address: "record#aside", models: true, children: {
       "chatter.comments": { content: "comments", sequence: 10 },
-      "chatter.activity": { content: "activity", sequence: 20 },
+      "chatter.history": { content: "history", sequence: 20 },
     } };
     const views: CoreContainer = { address: "resource#views", models: true, children: {
       list: { content: "list", sequence: 10 }, board: { content: "board", sequence: 20 },
     } };
     const messaging = layer("messaging", { "record#aside": {
       "chatter.comments": { remove: true },
-      "chatter.activity": { sequence: 5 },
+      "chatter.history": { sequence: 5 },
       "messaging.comments": { content: "real comments", sequence: 10 },
     } });
     const product = layer("product", {
       "resource#views": [{ except: ["board"], when: { app: "product" } }],
-      "record#aside": { only: ["chatter.activity"] },
+      "record#aside": { only: ["chatter.history"] },
     });
     const composed = compileContainers([messaging, product], [...core, aside, views]);
     expect(composed.removed).toEqual([{ address: "record#aside", id: "chatter.comments", by: "messaging" }]);
@@ -212,14 +212,14 @@ describe("compileContainers", () => {
     const workRemoves = layer("pm", { "form#sections": { "work.task": { remove: true } } }, ["work"]);
     expect(() => compileContainers([owned, workRemoves, layer("stranger", { "form#sections": { "work.task": { remove: true } } })], core))
       .toThrow(/"stranger".*"work"/);
-    expect(composed.provenance["record#aside/chatter.activity"]).toEqual({ content: "framework", sequence: "messaging" });
+    expect(composed.provenance["record#aside/chatter.history"]).toEqual({ content: "framework", sequence: "messaging" });
     // product's only names a framework child; messaging is no dependent of product's, so its tab is narrowed out too.
-    expect(ids(resolveContainer(composed, "record#aside"))).toEqual(["chatter.activity"]);
+    expect(ids(resolveContainer(composed, "record#aside"))).toEqual(["chatter.history"]);
     expect(ids(resolveContainer(composed, "resource#views", { scope: scope([], ["product"]) }))).toEqual(["list"]);
     expect(ids(resolveContainer(composed, "resource#views", { scope: scope([], ["other"]) }))).toEqual(["list", "board"]);
     // Unrelated addons still may not both set one field of a framework child.
-    expect(() => compileContainers([messaging, layer("other", { "record#aside": { "chatter.activity": { sequence: 7 } } })], [...core, aside]))
-      .toThrow(/Unrelated addons "messaging" and "other" both set child "chatter.activity"/);
+    expect(() => compileContainers([messaging, layer("other", { "record#aside": { "chatter.history": { sequence: 7 } } })], [...core, aside]))
+      .toThrow(/Unrelated addons "messaging" and "other" both set child "chatter.history"/);
   });
 
   test("permission is checked against the row; the deployment layer alters anything last", () => {
@@ -370,12 +370,12 @@ describe("compileContainers", () => {
   test("remove is idempotent across unrelated removers; altering a removed child names its remover", () => {
     const aside: CoreContainer = { address: "record#aside", models: true, children: {
       "chatter.comments": { content: "comments", sequence: 10 },
-      "chatter.activity": { content: "activity", sequence: 20 },
+      "chatter.history": { content: "history", sequence: 20 },
     } };
     const messaging = layer("messaging", { "record#aside": { "chatter.comments": { remove: true } } });
     const bridge = layer("bridge", { "record#aside": { "chatter.comments": { remove: true } } });
     const composed = compileContainers([messaging, bridge], [aside]);
-    expect(ids(resolveContainer(composed, "record#aside"))).toEqual(["chatter.activity"]);
+    expect(ids(resolveContainer(composed, "record#aside"))).toEqual(["chatter.history"]);
     expect(composed.removed).toEqual([{ address: "record#aside", id: "chatter.comments", by: "messaging" }]);
     // Removing again still takes the right to alter the child.
     const owned = layer("work", { "form#sections": { "work.task": { content: 1 } } });
@@ -408,7 +408,7 @@ describe("compileContainers", () => {
 
   test("unpositioned render-time extras trail all composed children in input order", () => {
     const aside: CoreContainer = { address: "record#aside", extras: true, children: {
-      "chatter.activity": { content: "activity", sequence: 20 },
+      "chatter.history": { content: "history", sequence: 20 },
       "chatter.comments": { content: "comments", sequence: 10 },
       "chatter.sources": { content: "sources" },
     } };
@@ -419,7 +419,7 @@ describe("compileContainers", () => {
       { id: "records", owner: "page", address: "record#aside", content: "records" },
     ];
     expect(ids(resolveContainer(composed, "record#aside", { extra })))
-      .toEqual(["chatter.comments", "chatter.activity", "chatter.sources", "workflow", "details", "records"]);
+      .toEqual(["chatter.comments", "chatter.history", "chatter.sources", "workflow", "details", "records"]);
   });
 
   test.each([

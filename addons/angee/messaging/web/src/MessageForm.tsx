@@ -96,7 +96,7 @@ function partColumns(
         }
         // An attachment part links to its storage.File record page (breadcrumbs
         // included) so the filename opens the file in-app instead of being dead
-        // text — the same follow pattern the activity agenda uses. Degrades to
+        // text — the same follow pattern record pointers use. Degrades to
         // plain text where storage.File has no routed page.
         const file = row.file;
         // Prefer the part's own name: one File is content-addressed and can back
