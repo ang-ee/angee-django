@@ -1,4 +1,4 @@
-import { senderDisplayName } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import { IntegrationSyncColumns } from "@angee/integrate";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
@@ -101,7 +101,7 @@ function FeedPostRow({
 
   return (
     <MessageRow
-      avatar={<Avatar initials={avatarInitials(author)} size="sm" />}
+      avatar={<Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(author)} size="sm" />}
       author={author}
       timestamp={timestamp}
       reactions={

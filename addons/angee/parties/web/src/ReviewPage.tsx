@@ -127,9 +127,9 @@ export function ReviewPage(): React.ReactElement {
                   >
                     <span className="grid gap-3">
                       <span className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                        <PartySummary name={candidate.left.display_name} />
+                        <PartySummary party={candidate.left} />
                         <Glyph name="chevron-right" className="text-fg-muted" />
-                        <PartySummary name={candidate.right.display_name} align="right" />
+                        <PartySummary party={candidate.right} align="right" />
                       </span>
                       <span className="flex flex-wrap items-center gap-2">
                         <Tag tone="warning">{t("review.possibleDuplicates.sharedHandle")}</Tag>
@@ -153,16 +153,16 @@ export function ReviewPage(): React.ReactElement {
 }
 
 function PartySummary({
-  name,
+  party,
   align = "left",
 }: {
-  name: string;
+  party: { display_name: string; display_avatar?: { url?: string | null } | null };
   align?: "left" | "right";
 }): React.ReactElement {
   return (
     <span className={`flex min-w-0 items-center gap-2 ${align === "right" ? "flex-row-reverse text-right" : ""}`}>
-      <Avatar size="sm" initials={avatarInitials(name)} />
-      <span className="truncate text-13 font-semibold text-fg">{name}</span>
+      <Avatar size="sm" src={party.display_avatar?.url || undefined} initials={avatarInitials(party.display_name)} />
+      <span className="truncate text-13 font-semibold text-fg">{party.display_name}</span>
     </span>
   );
 }
