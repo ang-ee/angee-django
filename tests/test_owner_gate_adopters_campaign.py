@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 from django.apps import apps
 from rebac import PermissionDenied, actor_context, system_context
+from rebac.roles import grant as grant_role
 
+from angee.agents.testing.models import Agent
 from angee.base.checks import check_ownership
 from angee.messaging.testing.models import Person, Thread
 from angee.projects.testing.models import Project, Queue, Task
@@ -18,7 +20,7 @@ from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
-@pytest.fixture(params=(Vault, Thread, Group, Queue, Project, Task, Drive, File))
+@pytest.fixture(params=(Vault, Thread, Group, Queue, Project, Task, Drive, File, Agent))
 def owned_record(request, campaign_access, campaign_user):
     owner, writer, replacement = (campaign_user(role) for role in ("owner", "writer", "replacement"))
     model = request.param
@@ -39,7 +41,7 @@ def owned_record(request, campaign_access, campaign_user):
             )
         else:
             values = {"owner": owner, "created_by": owner}
-            if model in (Vault, Group, Queue):
+            if model in (Vault, Group, Queue, Agent):
                 values["name"] = "Owned row"
             if model is Queue:
                 values["key"] = "GATE"
@@ -92,6 +94,20 @@ def test_transfer_uses_owner_authority_and_preserves_attribution(owned_record):
         type(row).objects.get(pk=row.pk).transfer_ownership(None)
     persisted.refresh_from_db()
     assert persisted.owner_id is None and persisted.created_by_id == author
+
+
+def test_an_agent_installed_without_a_user_is_claimed_only_through_transfer(campaign_access, campaign_user):
+    """Install-time loads have no acting user; a platform administrator claims the agent afterwards."""
+    admin, stranger = campaign_user("admin"), campaign_user("stranger")
+    with system_context(reason="tests.t3.agent_install"):
+        grant_role(actor=admin, role="angee/role:admin")
+        agent = Agent.objects.create(name="Installed agent")
+    assert agent.owner_id is None and agent.created_by_id is None
+    with actor_context(stranger), pytest.raises(PermissionDenied):
+        Agent._base_manager.get(pk=agent.pk).transfer_ownership(stranger)
+    with actor_context(admin):
+        Agent._base_manager.get(pk=agent.pk).transfer_ownership(admin)
+    assert Agent._base_manager.get(pk=agent.pk).owner_id == admin.pk
 
 
 @pytest.mark.parametrize("mutation", ("missing", "row_write", "widened"))

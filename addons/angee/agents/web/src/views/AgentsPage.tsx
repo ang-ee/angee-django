@@ -161,7 +161,6 @@ function AgentResourceListPage({
         <Group label={labels.modelTemplates} columns={2}>
           <Field name="model" />
           <Field name="inference_credential" />
-          <Field name="owner" createOnly />
           <Field name="runtime_class" />
           <Field name="workspace_template" />
         </Group>
