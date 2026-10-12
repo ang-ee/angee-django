@@ -628,6 +628,22 @@ def test_merging_a_handle_a_concurrent_fold_removed_does_nothing(composed_tables
 
 
 @pytest.mark.django_db(transaction=True)
+def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -> None:
+    """Two platforms are two contact points, never one's spelling of the other."""
+
+    del composed_tables
+    with system_context(reason="test handle merge platforms"):
+        owner, alias, _phone = _handle_merge_fixture("merge-handle-platforms", "1944")
+        email = Handle._base_manager.create(platform="email", value="bob-1944@example.test", created_by=owner)
+
+        with pytest.raises(ValidationError, match="same platform"):
+            Handle.objects.merge(alias, into=email)
+
+        kept = set(Handle._base_manager.filter(pk__in=(alias.pk, email.pk)).values_list("pk", flat=True))
+    assert kept == {alias.pk, email.pk}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tables: None) -> None:
     """Confirming a rule's suggestion writes the person's preferred statement beside the untouched producer.
 

@@ -390,6 +390,8 @@ def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
     assert [error.id for error in CustomColumnEdge.check() if error.id == "angee.E037"] == ["angee.E037"]
+    monkeypatch.setattr(Participant, "merge_identity", (("message", "handle"),))
+    assert [error.id for error in Participant.check() if error.id == "angee.E037"] == ["angee.E037"]
 
 
 def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:

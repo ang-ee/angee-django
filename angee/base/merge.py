@@ -26,15 +26,17 @@ rows are its data, not references: they leave with it unless
 relationships naming a merged record (a share, a membership) refuse the merge:
 retiring the record would drop them, and no merge moves them yet.
 
-Moves, and the identity copies they drop, run as named system work once
-:meth:`MergeableMixin.merge` has authorized the actor: under an actor REBAC only
-deletes and recreates an edge, which would cost a row its identity. Retiring a
-merged record is the actor's own delete.
+Every merge shares one system fold, :func:`fold_records`: its refusals, the
+moves (and the identity copies they drop) as named system work, and the merge
+changeset. :meth:`MergeableMixin.merge` calls it once it has authorized the
+actor, whose own delete retires each merged record; under an actor REBAC only
+deletes and recreates an edge, which would cost a row its identity. A model's own
+system verb that folds a duplicate has no actor to authorize and calls it directly.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self
 
@@ -323,10 +325,12 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
 class MergeableMixin(models.Model):
     """Merge records of this model into a survivor through one template.
 
-    :meth:`merge` locks the survivor and the merged records, authorizes the
-    actor, checks :meth:`validate_merge`, lets :meth:`merge_fields` carry values
-    over, re-points references (:meth:`merge_references`) as named system work
-    and retires each merged record (:meth:`retire_merged`). A model adapts the
+    :meth:`merge` locks the survivor and the merged records and authorizes the
+    actor, then folds them (:func:`fold_records`): the fold refuses a record a
+    :meth:`merge_blockers` condition, a stored relationship or a merge guard
+    holds, :meth:`validate_merge` adds the model's own refusals,
+    :meth:`merge_fields` carries values over, references move as named system
+    work and :meth:`retire_merged` retires each merged record. A model adapts the
     merge by overriding those hooks and calling ``super()``.
     """
 
@@ -348,15 +352,12 @@ class MergeableMixin(models.Model):
         """Return each condition on a merged record that refuses its merge, with its message.
 
         A verb and a batched projection share these: a row matching any of them
-        cannot be merged. The default refuses while a ``BLOCK`` reference points
-        at the record. Overrides add the model's own conditions to ``super()``'s.
+        cannot be merged. The default (:func:`reference_blockers`) refuses while a
+        ``BLOCK`` reference points at the record. Overrides add the model's own
+        conditions to ``super()``'s.
         """
 
-        return tuple(
-            (Q(reference.pointing(cls)), f"{reference.label} still refer to it.")
-            for reference in references(cls)
-            if reference.policy == MergePolicy.BLOCK
-        )
+        return reference_blockers(cls)
 
     def merge(self, *, records: Sequence[str], **options: Any) -> Self:
         """Merge the records named by public id into this one and return it.
@@ -391,36 +392,31 @@ class MergeableMixin(models.Model):
                 raise PermissionDenied("You are not allowed to change the record that is kept.")
             if not all(record.has_access(self.MERGED_PERMISSION) for record in merged):
                 raise PermissionDenied("You are not allowed to remove every record being merged.")
-            with changeset(fresh=True, activity="merge", origin=survivor):
+
+            def carry() -> None:
                 survivor.validate_merge(merged)
                 survivor.merge_fields(merged, **options)
-                with system_context(reason=MERGE_REASON):
-                    for record in merged:
-                        survivor.merge_references(record)
-                for record in merged:
-                    survivor.retire_merged(record)
-                if (context := current_changeset(required=True, record=True)) is not None:
-                    context.touched.append(model._meta.label_lower)
+
+            fold_records(
+                survivor,
+                merged,
+                carry=carry,
+                retire=survivor.retire_merged,
+                blockers=model.merge_blockers(),
+                retained=self.retains_merged,
+            )
         self.refresh_from_db()
         return self
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
-        """Refuse a merged record that a :meth:`merge_blockers` condition, a stored relationship or a guard holds.
+        """Refuse merging ``merged`` into this record for the model's own reasons; the default adds none.
 
-        ``ANGEE_MERGE_GUARDS`` callables take one merged record and return a
-        refusal message, or ``None``: an addon whose rows point at records in a
-        form no reference can read (a resource ledger's public id) refuses there.
-        Overrides add rules about the pair, such as a recorded "keep separate".
+        :func:`fold_records` has already refused a merged record that a
+        :meth:`merge_blockers` condition, a stored relationship or a merge guard
+        holds. Overrides add rules about the pair, such as a recorded "keep separate".
         """
 
-        model = type(self)
-        with system_context(reason=MERGE_REASON):
-            for condition, message in model.merge_blockers():
-                refused = model._base_manager.filter(pk__in=[record.pk for record in merged]).filter(condition)
-                if refused.exists():
-                    raise ValidationError(message)
-        for record in merged:
-            validate_merged_record(record, retained=self.retains_merged)
+        del merged
 
     def merge_fields(self, merged: Sequence[Self], **options: Any) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""
@@ -428,22 +424,6 @@ class MergeableMixin(models.Model):
         del merged
         if options:
             raise ValidationError(f"Unsupported merge options: {', '.join(sorted(options))}.")
-
-    def merge_references(self, merged: Self) -> None:
-        """Re-point what refers to ``merged`` to this record, by each reference's policy.
-
-        A reference from this record itself to ``merged`` refuses the merge:
-        moving it would point the record at itself.
-        """
-
-        for reference in references(type(merged)):
-            if reference.policy != MergePolicy.MOVE:
-                continue
-            rows = reference.rows(merged)
-            if isinstance(self, reference.model) and rows.filter(pk=self.pk).exists():
-                raise ValidationError(f"{self} refers to {merged} through {reference.label}; change that first.")
-            if rows.exists():
-                reference.move(rows, survivor=self)
 
     def retire_merged(self, merged: Self) -> None:
         """Remove ``merged`` through the model's delete lock, as the actor; the default deletes it."""
@@ -457,21 +437,81 @@ class MergeableMixin(models.Model):
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
 
 
-def validate_merged_record(record: models.Model, *, retained: bool = False) -> None:
-    """Refuse merging ``record`` away while stored relationships name it or a merge guard holds it.
+def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
+    """Return a refusal condition on ``model`` rows per ``BLOCK`` reference, with its message.
 
-    Retiring the record drops the relationships naming it, unless it is
-    ``retained`` as a redirect. ``ANGEE_MERGE_GUARDS`` callables take the record
-    and return a refusal message, or ``None``. :meth:`MergeableMixin.validate_merge`
-    and a model's own system fold of a duplicate share this rule.
+    A row a ``BLOCK`` reference points at cannot be merged: the refusal every
+    merge shares (:func:`fold_records`) and the default of
+    :meth:`MergeableMixin.merge_blockers`.
     """
 
-    with system_context(reason=MERGE_REASON):
-        if not retained and named_in_relationships(record):
-            raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
-        for guard in resolve_hooks("ANGEE_MERGE_GUARDS"):
-            if refusal := guard(record):
-                raise ValidationError(refusal)
+    return tuple(
+        (Q(reference.pointing(model)), f"{reference.label} still refer to it.")
+        for reference in references(model)
+        if reference.policy == MergePolicy.BLOCK
+    )
+
+
+def fold_records(
+    survivor: models.Model,
+    merged: Sequence[models.Model],
+    *,
+    carry: Callable[[], object],
+    retire: Callable[[Any], object],
+    blockers: Sequence[tuple[Q, str]] | None = None,
+    retained: bool = False,
+) -> None:
+    """Fold ``merged`` into ``survivor``, a record of their model, in one merge changeset it is the origin of.
+
+    The system work every record merge shares; it needs no actor. The caller has
+    locked the records, in the transaction this runs in, and authorized an
+    actor's merge. In order, the fold:
+
+    - refuses before anything moves while a merged record matches a ``blockers``
+      condition (by default :func:`reference_blockers`), stored relationships
+      name it (unless it is ``retained`` as a redirect: retiring it would drop
+      them) or an ``ANGEE_MERGE_GUARDS`` callable refuses it. A guard takes the
+      record and returns a refusal message, or ``None``: an addon whose rows
+      point at records in a form no reference reads (a resource ledger's public
+      id) refuses there;
+    - runs ``carry``: the caller's own refusals, then the values it carries over;
+    - re-points every ``MOVE`` reference to ``survivor`` as named system work;
+      a reference from ``survivor`` itself to a merged record refuses, since
+      moving it would point the record at itself;
+    - lets ``retire`` remove each merged record, in the caller's own context;
+    - records the model as touched on the caller's changeset row.
+    """
+
+    model = type(survivor)
+    with changeset(fresh=True, activity="merge", origin=survivor):
+        with system_context(reason=MERGE_REASON):
+            rows = model._base_manager.filter(pk__in=[record.pk for record in merged])
+            for condition, message in reference_blockers(model) if blockers is None else blockers:
+                if rows.filter(condition).exists():
+                    raise ValidationError(message)
+            guards = resolve_hooks("ANGEE_MERGE_GUARDS")
+            for record in merged:
+                if not retained and named_in_relationships(record):
+                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
+                for guard in guards:
+                    if refusal := guard(record):
+                        raise ValidationError(refusal)
+        carry()
+        moving = [reference for reference in references(model) if reference.policy == MergePolicy.MOVE]
+        with system_context(reason=MERGE_REASON):
+            for record in merged:
+                for reference in moving:
+                    pointing = reference.rows(record)
+                    if isinstance(survivor, reference.model) and pointing.filter(pk=survivor.pk).exists():
+                        raise ValidationError(
+                            f"{survivor} refers to {record} through {reference.label}; change that first."
+                        )
+                    if pointing.exists():
+                        reference.move(pointing, survivor=survivor)
+        for record in merged:
+            retire(record)
+        if (context := current_changeset(required=True, record=True)) is not None:
+            context.touched.append(model._meta.label_lower)
 
 
 def named_in_relationships(record: models.Model) -> bool:

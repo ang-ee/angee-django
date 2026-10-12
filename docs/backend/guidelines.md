@@ -705,11 +705,15 @@ data through REBAC, never a queryset bypass.
     it finds the merged records through the actor's read scope, even inside an
     outer system context, and needs `write` on the survivor and `delete` on each
     merged record.
-  - Only then does it move references under `system_context(reason="merge")`,
-    including deleting a merged record's copy of an identity row the survivor
-    already holds. Under an actor, REBAC only deletes and recreates an edge,
-    which would cost attachments their identity and dependants.
+  - Only then does it call the system fold, [`fold_records`](../../angee/base/merge.py),
+    which moves references under `system_context(reason="merge")`, including
+    deleting a merged record's copy of an identity row the survivor already
+    holds. Under an actor, REBAC only deletes and recreates an edge, which would
+    cost attachments their identity and dependants.
   - Retiring a merged record stays the actor's own delete.
+  - A model's own system verb folding a duplicate (no actor to authorize) calls
+    `fold_records` directly with its own carry-over and retirement, as
+    [`Handle.objects.merge`](../../addons/angee/parties/managers.py) does.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

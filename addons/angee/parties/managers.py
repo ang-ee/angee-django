@@ -45,15 +45,13 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset, current_changeset
 from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.merge import references, validate_merged_record
+from angee.base.merge import fold_records, references
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
-from angee.base.refs import MergePolicy
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
@@ -601,23 +599,21 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         """Fold ``source`` into ``into``, the handle owning the same contact point; return the survivor.
 
         For a handle that turned out to be another's spelling (a resolved
-        messenger alias). Under the identity lock order, ``into`` keeps every value
-        it has and takes the ones it lacks from ``source``: the control owner, the
+        messenger alias), so it refuses handles on different platforms. Under the
+        identity lock order, the record fold (:func:`angee.base.merge.fold_records`)
+        runs as system work in one merge changeset whose origin is ``into``. It
+        refuses before anything moves while a row that cannot move (a ``BLOCK``
+        reference) points at ``source``, stored relationships name it or a merge
+        guard holds it: deleting it would lose them. ``into`` keeps every value it
+        has and takes the ones it lacks from ``source``: the control owner, the
         label, display name and verification, the avatar (through
         :meth:`set_avatar`) and transport metadata keys. ``source``'s handle
         statements move through ``Party.objects.move_handle_statements``, which
-        re-resolves both handles; every other row pointing at it — messages,
-        participations, reactions, tags — moves through the generic reference
-        move (:func:`angee.base.merge.references`), which drops a moved copy of a
-        fact ``into`` already holds (the pointing model's ``merge_identity``). Then
-        ``source`` is deleted. The fold is system work in one merge changeset whose
-        origin is ``into``. A handle a concurrent fold already removed leaves
-        nothing to do and returns ``None``.
-
-        Refuses before anything moves while a row that cannot move (a ``BLOCK``
-        reference) points at ``source``, stored relationships name it or a merge
-        guard holds it (:func:`angee.base.merge.validate_merged_record`): deleting
-        it would lose them.
+        re-resolves both handles; the fold moves every other row pointing at it —
+        messages, participations, reactions, tags — dropping a moved copy of a
+        fact ``into`` already holds (the pointing model's ``merge_identity``).
+        Then ``source`` is deleted. A handle a concurrent fold already removed
+        leaves nothing to do and returns ``None``.
         """
 
         if source.pk == into.pk:
@@ -628,15 +624,10 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             merged, survivor = handles.get(source.pk), handles.get(into.pk)
             if merged is None or survivor is None:
                 return None
-            moving = []
-            for reference in references(self.model):
-                if reference.policy == MergePolicy.KEEP or not reference.rows(merged).exists():
-                    continue
-                if reference.policy == MergePolicy.BLOCK:
-                    raise ValidationError(f"{reference.label} still refer to {merged}; resolve that before merging.")
-                moving.append(reference)
-            validate_merged_record(merged)
-            with changeset(fresh=True, activity="merge", origin=survivor):
+            if merged.platform != survivor.platform:
+                raise ValidationError("Only handles on the same platform can be merged.")
+
+            def carry() -> None:
                 filled = []
                 for name in ("owner", "label", "display_name", "is_verified"):
                     attname = self.model._meta.get_field(name).attname
@@ -652,13 +643,8 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 if survivor.avatar_id is None and merged.avatar_id is not None:
                     self.set_avatar(survivor, merged.avatar)
                 owner.move_handle_statements(merged, survivor)
-                for reference in moving:
-                    rows = reference.rows(merged)
-                    if rows.exists():
-                        reference.move(rows, survivor=survivor)
-                merged.delete()
-                if (context := current_changeset(required=True, record=True)) is not None:
-                    context.touched.append(self.model._meta.label_lower)
+
+            fold_records(survivor, [merged], carry=carry, retire=lambda record: record.delete())
         survivor.refresh_from_db()
         return survivor
 
