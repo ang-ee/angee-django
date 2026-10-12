@@ -1,10 +1,9 @@
 import * as React from "react";
 import { type DocumentType } from "@angee/gql/console";
-import { senderDisplayName } from "@angee/parties";
+import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import { messageFeedRows } from "@angee/messaging";
 import {
   Avatar,
-  AvatarFallback,
   Button,
   EmptyState,
   LoadingPanel,
@@ -91,9 +90,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
               key={message.id}
               className="rounded-6 px-2 py-2 hover:bg-sheet-2"
               avatar={
-                <Avatar size="sm">
-                  <AvatarFallback>{avatarInitials(author)}</AvatarFallback>
-                </Avatar>
+                <Avatar size="sm" src={senderAvatarUrl(message.sender)} initials={avatarInitials(author)} />
               }
               author={author}
               timestamp={orderAt(message)}

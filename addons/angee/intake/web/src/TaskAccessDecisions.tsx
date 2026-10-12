@@ -60,7 +60,7 @@ export function TaskAccessDecisions({
     const state = STATE_COPY[stateKey];
     return <Card key={need.id}>
       <CardHeader className="flex-row flex-wrap items-center gap-2">
-        <Avatar size="sm" initials={avatarInitials(name)} />
+        <Avatar size="sm" src={need.party?.display_avatar?.url || undefined} initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
         <Badge shape="pill" tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>
