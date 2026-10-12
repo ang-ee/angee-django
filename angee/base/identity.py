@@ -290,17 +290,3 @@ def public_subject_ref(subject: SubjectRef) -> SubjectRef:
         subject.optional_relation,
     )
 
-
-def __getattr__(name: str) -> Any:
-    """Historical import of ``EvidenceReference`` for the unreleased parties fold module.
-
-    The evidence owner is :mod:`angee.base.evidence`, which this module cannot import
-    eagerly (it composes the mixins that import this module). Remove with the fold's
-    import migration.
-    """
-
-    if name == "EvidenceReference":
-        from angee.base.evidence import EvidenceReference
-
-        return EvidenceReference
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
