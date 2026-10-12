@@ -126,6 +126,7 @@ export const inboxMessages = {
   "inbox.noRelated": "No matching uses",
   "inbox.sharedText": "Shared text",
   "inbox.file": "File",
+  "inbox.filePreview": "File preview",
   "inbox.copyLink": "Copy link",
   "inbox.copied": "Link copied",
   "inbox.unavailable": "Message unavailable",
