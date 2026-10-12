@@ -1,17 +1,17 @@
 _meta:
   model: parties.Handle
 rows:
-  - xref: same_as_left_handle
+  - xref: duplicate_left_handle
     fields:
       platform: email
       value: directory-contact@example.test
-      party: workflows_parties.same_as_left
+      party: workflows_parties.duplicate_left
       created_by: iam.user_admin
       updated_by: iam.user_admin
-  - xref: same_as_right_handle
+  - xref: duplicate_right_handle
     fields:
       platform: email
       value: Directory-Contact@example.test
-      party: workflows_parties.same_as_right
+      party: workflows_parties.duplicate_right
       created_by: iam.user_admin
       updated_by: iam.user_admin

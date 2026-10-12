@@ -86,7 +86,6 @@ export const enPartiesMessages: Record<string, string> = {
   "identity.state.dismissed": "Dismissed",
   "identity.state.suggested": "Suggested",
   "identity.claim": "Claim",
-  "identity.senderClaim": "Sender claimed by source",
   "identity.evidence": "Source evidence",
   "identity.evidenceSource": "Open source {number}",
   "identity.evidenceTruncated": "More source evidence is retained",

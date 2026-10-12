@@ -239,7 +239,8 @@ describe("Integration Streams contribution", () => {
     await waitFor(() => expect(listProps().resource).toBe(RECORD_LINK_MODEL));
     expect(listProps().baseFilter).toEqual({ stream: { exact: "stream_1" } });
     expect(listProps().columns.map((column) => column.field)).toEqual([
-      "external_key", "status", "origin", "remote_version", "last_seen_at", "record_id",
+      "external_key", "status", "origin", "remote_version", "applied_at", "pinned", "outbox_state", "last_seen_at",
+      "record_id",
     ]);
     expect(listProps().fields).toContain("model_label");
     fireEvent.click(screen.getByRole("button", { name: /back/i }));

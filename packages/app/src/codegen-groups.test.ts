@@ -76,7 +76,7 @@ describe("group operation codegen", () => {
     const generated = generateActions(METADATA);
 
     expect(generated).toContain(
-      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncFailure" | "submit_channel_password";',
+      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncFailure" | "retrySyncFailure" | "submit_channel_password";',
     );
     for (const field of [
       "install", "disable", "start_workflow_run", "start_workflow_recovery",
@@ -200,6 +200,7 @@ const SDL = `
     submit_channel_password(id: ID!, password: String!): ActionResult!
     close_round(round: ID!, outcome: RoundOutcome!, accepted: [ID!]!): ActionResult!
     resolveSyncFailure(id: ID!, keep: ConflictKeep = null): ActionResult!
+    retrySyncFailure(stream: ID!, link: ID = null, slot: Int = null): ActionResult!
     optional_action(id: ID!, keep: ConflictKeep): ActionResult!
     defaulted_action(id: ID!, note: String! = ""): ActionResult!
     install(addon: String!, revision: String = null): ActionResult!

@@ -191,9 +191,9 @@ class PartyWorkflowTests(TransactionTestCase):
         ledger.load_xref("angee.iam.user_admin", model=get_user_model(), actor=self.admin, allow_non_dev=True)
         sample, left, right = (
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Party, actor=self.admin, allow_non_dev=True)
-            for key in ("identity_sample", "same_as_left", "same_as_right")
+            for key in ("identity_sample", "duplicate_left", "duplicate_right")
         )
-        for key in ("same_as_left_handle", "same_as_right_handle"):
+        for key in ("duplicate_left_handle", "duplicate_right_handle"):
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Handle, actor=self.admin, allow_non_dev=True)
         self.assertEqual(sample.display_name, "Directory sample")
         with actor_context(self.admin):

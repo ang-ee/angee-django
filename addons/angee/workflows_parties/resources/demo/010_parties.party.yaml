@@ -6,12 +6,12 @@ rows:
       display_name: Directory sample
       created_by: iam.user_admin
       updated_by: iam.user_admin
-  - xref: same_as_left
+  - xref: duplicate_left
     fields:
       display_name: Directory contact
       created_by: iam.user_admin
       updated_by: iam.user_admin
-  - xref: same_as_right
+  - xref: duplicate_right
     fields:
       display_name: Directory contact copy
       created_by: iam.user_admin

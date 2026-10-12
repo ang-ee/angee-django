@@ -3,7 +3,7 @@
 // @rebac_schema_revision: 3
 
 definition provenance/role {
-    relation member: provenance/rule | provenance/seed
+    relation member: provenance/rule | provenance/seed | angee/role:admin#member
     permission effective_member = member
 }
 

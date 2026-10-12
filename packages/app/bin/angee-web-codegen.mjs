@@ -695,13 +695,11 @@ function actionFields(schema) {
       }
       if (field.args.length === 0) return [];
       const requiredArgs = field.args.filter(isRequiredArgument);
+      // Every argument required, or one required ID target (whatever its name: the
+      // hook's `idArgument` names it) beside optional arguments.
       if (
         requiredArgs.length !== field.args.length &&
-        !(
-          requiredArgs.length === 1 &&
-          requiredArgs[0].name === "id" &&
-          requiredArgs[0].type.ofType === GraphQLID
-        )
+        !(requiredArgs.length === 1 && requiredArgs[0].type.ofType === GraphQLID)
       ) {
         return [];
       }

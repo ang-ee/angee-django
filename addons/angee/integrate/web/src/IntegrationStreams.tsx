@@ -252,7 +252,7 @@ export function IntegrationStreamsPane(): ReactElement {
     { field: "applied_at" },
     { field: "history_id", header: t("streams.payloads"), sortable: false, interactive: true,
       render: (row) => <HistoryPayload link={linkId ?? ""}
-        historyId={row.history_id}
+        historyId={Number(row.history_id)}
         dataProviderName={dataProviderName} />,
     },
   ], [dataProviderName, linkId, t]);
