@@ -6,6 +6,8 @@ from django.apps import apps
 from django.http import FileResponse, HttpRequest, JsonResponse
 from django.http.response import HttpResponseBase
 from django.utils.cache import get_conditional_response, patch_cache_control, patch_vary_headers, quote_etag
+from django.utils.csp import CSP
+from django.views.decorators.csp import csp_override
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rebac import bearer_token
@@ -16,7 +18,15 @@ from angee.storage.uploads import (
     DOWNLOAD_TOKEN_MAX_AGE,
     FALLBACK_MIME,
     UPLOAD_TOKEN_HEADER,
+    renders_inline,
 )
+
+DOWNLOAD_CSP = {"default-src": [CSP.NONE], "style-src": [CSP.UNSAFE_INLINE], "sandbox": True}
+"""The policy on every download: opened directly, served bytes load nothing and run nothing.
+
+``sandbox`` gives the document an opaque origin; the inline style a browser's own
+image page uses is all it allows. A page embedding the file is unaffected.
+"""
 
 
 @csrf_exempt
@@ -48,6 +58,7 @@ def upload(request: HttpRequest) -> JsonResponse:
 
 
 @require_http_methods(["GET"])
+@csp_override(DOWNLOAD_CSP)
 def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     """Stream one READY file's bytes for a signed proxy download token.
 
@@ -56,7 +67,10 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
     bearer capability. The manager checks its signature, expiry and the issuing
     actor's current read permission before serving bytes or answering 304; no
     request credentials are needed. The ``filename`` in the path is the save-as
-    name only; the authoritative name and content type come from the row.
+    name only; the authoritative name and content type come from the row. Only
+    raster images render in place (:func:`~angee.storage.uploads.renders_inline`);
+    every other type downloads as an attachment. Every response carries
+    :data:`DOWNLOAD_CSP`, and ``nosniff`` from Django's ``SecurityMiddleware``.
     """
 
     del filename  # cosmetic save-as name; the token identifies the file
@@ -73,7 +87,9 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
         return _download_cache_response(conditional, etag)
     stream = row.open_stream()
     content_type = row.mime_type.mime_type if row.mime_type_id else FALLBACK_MIME
-    response = FileResponse(stream, filename=row.filename, content_type=content_type)
+    response = FileResponse(
+        stream, filename=row.filename, content_type=content_type, as_attachment=not renders_inline(content_type)
+    )
     return _download_cache_response(response, etag)
 
 

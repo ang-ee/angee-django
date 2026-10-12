@@ -139,7 +139,13 @@ class AutoConfig:
 
 
 SETTINGS = {
-    "MIDDLEWARE:append": ["django.middleware.common.CommonMiddleware"],
+    # Django's response security headers (SECURE_* settings, nosniff among them) lead
+    # the stack; its CSP middleware applies SECURE_CSP and each view's csp_override.
+    "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],
+    "MIDDLEWARE:append": [
+        "django.middleware.common.CommonMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
+    ],
     # Seconds one PostgreSQL statement may run in a web process; 0 disables the
     # bound. ``angee.asgi`` applies it; workers and commands keep the server's.
     "ANGEE_WEB_STATEMENT_TIMEOUT": 60,

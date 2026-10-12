@@ -20,7 +20,7 @@ from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
-from django.test import RequestFactory
+from django.test import Client, RequestFactory
 from rebac import RelationshipTuple, actor_context, generic_target, system_context, to_object_ref, write_relationships
 from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
@@ -1179,6 +1179,35 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     )
     assert failed_precondition.status_code == 412
     assert "immutable" not in failed_precondition.get("Cache-Control", "")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("payload", "mime", "disposition"),
+    [
+        (PNG_BYTES, "image/png", "inline"),
+        (SVG_BYTES, "image/svg+xml", "attachment"),
+        (b"<!doctype html><html><body>page</body></html>", "text/html", "attachment"),
+    ],
+)
+def test_a_download_renders_only_a_raster_image_in_place_under_a_locked_down_policy(
+    drive: Any, settings: Any, payload: bytes, mime: str, disposition: str
+) -> None:
+    """Through the composed middleware, every download is nosniff and sandboxed; only an image renders in place."""
+
+    settings.ROOT_URLCONF = "angee.storage.urls"
+    with system_context(reason="test storage download types"):
+        MimeType._base_manager.get_or_create(mime_type=mime, defaults={"category": "other", "label": mime})
+    row = _proxy_upload(drive, payload)
+    assert row.mime_type.mime_type == mime
+    with actor_context(drive.alice):
+        url = row.download_url()
+    response = Client().get(url)
+    assert response.status_code == 200
+    assert response["Content-Disposition"].split(";", 1)[0] == disposition
+    assert response["X-Content-Type-Options"] == "nosniff"
+    assert response["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    response.close()
 
 
 def _header_values(value: str) -> set[str]:

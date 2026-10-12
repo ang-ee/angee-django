@@ -138,6 +138,18 @@ def detect_mime(payload: bytes, filename: str = "") -> str:
     return (guessed or FALLBACK_MIME).split(";", 1)[0].strip().lower()
 
 
+def renders_inline(mime: str) -> bool:
+    """Whether a browser opening a stored file of ``mime`` renders it in place rather than downloads it.
+
+    Only the raster types of the image rule (``ANGEE_STORAGE_IMAGE_TYPES``) render
+    in place. Every other type, a document that can carry script (HTML, SVG, XML)
+    above all, is an attachment. Audio and video are attachments too: a sandboxed
+    media page cannot load its own bytes, while the app's players embed them as before.
+    """
+
+    return mime in settings.ANGEE_STORAGE_IMAGE_TYPES
+
+
 def require_image(content: bytes) -> str:
     """Return the type of an image the server may render inline, or refuse it.
 

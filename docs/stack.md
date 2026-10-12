@@ -41,7 +41,7 @@ into a remote permission store.
 | Pick | Owns | Angee adds |
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |
-| Django >= 6.0, < 6.1 | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
+| Django >= 6.0, < 6.1 | ORM, migrations, admin, auth contract, app registry, response security headers (`SecurityMiddleware`, `ContentSecurityPolicyMiddleware` with per-view `csp_override`) | Abstract bases and build-time composition into runtime apps; the composer installs both security middlewares |
 | strawberry-django >= 0.89.2 | GraphQL types, dataloaders, schema printing, and the create resolver, which without a pre-save hook persists through `manager.create(**kwargs)`; on a REBAC manager that composes `RebacQuerySet.insert`, so queryset factories and the candidate gate run for GraphQL creates. Upstream PR strawberry-graphql/strawberry-django#959 proposes persisting the same prepared instance the resolver validated | Merge addon schema parts into named schemas, public-ID decoding, `changes` subscription shortcuts, emit SDL, serve per name; the write backend passes no pre-save hook |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | django-countries >= 9, < 10 | Configurable ISO 3166-1 country choices, overrides, localized names, and translated display names | `angee.parties.fields.CountryCodeField` preserves configured codes and names, stores alpha-2 as a plain string, and exposes the upstream choices through resource metadata |

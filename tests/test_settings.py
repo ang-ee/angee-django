@@ -190,6 +190,15 @@ def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> Non
     assert session_at < csrf_at < auth_at < actor_at < bearer_at
 
 
+def test_django_security_headers_lead_and_csp_middleware_applies_view_policies(tmp_path: Path) -> None:
+    """Every response passes Django's SecurityMiddleware first; its CSP middleware is composed too."""
+
+    middleware = _compose(tmp_path)["MIDDLEWARE"]
+
+    assert middleware[0] == "django.middleware.security.SecurityMiddleware"
+    assert "django.middleware.csp.ContentSecurityPolicyMiddleware" in middleware
+
+
 def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     """IAM wires login throttling at Django's authenticate/backend seam."""
 
@@ -1178,7 +1187,9 @@ def test_addon_autoconfig_applies_setting_fragments(
     assert settings["ALPHA_SETTING"] == "ok"
     assert settings["CHANNEL_LAYERS"]["alpha"]["BACKEND"] == "tests.Layer"
     assert settings["MIDDLEWARE"] == [
+        "django.middleware.security.SecurityMiddleware",
         "django.middleware.common.CommonMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
         "alpha.middleware.One",
     ]
 
@@ -1247,7 +1258,9 @@ def test_addon_autoconfig_merges_sequences_in_dependency_order(
     Composer(settings).compose_settings()
 
     assert settings["MIDDLEWARE"] == [
+        "django.middleware.security.SecurityMiddleware",
         "django.middleware.common.CommonMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
         "alpha.middleware.One",
         "beta.middleware.Two",
     ]
