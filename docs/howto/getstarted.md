@@ -320,29 +320,31 @@ Commits stay on the agent's workspace branch; publish with
 `angee ws source push`. From here you are modifying Angee itself — the
 workspace slots are the real framework repos.
 
-### Upgrading to record tasks
+### Upgrading from angee 0.1.x to 0.2: record tasks
 
-Activities became record tasks: `projects.Task` rows about a record, owned by
-`angee.projects`. The `projects:record_tasks` cutover converts them in place.
+This applies to stacks upgrading from angee 0.1.x, whose messaging activities
+become record tasks owned by `angee.projects`; angee 0.3.0 removes this section.
+The cutover, [`projects:record_tasks`](../../addons/angee/projects/runtime_migrations/record_tasks.py),
+documents what it converts, what it refuses and how long it holds its lock;
+[the projects README](../../addons/angee/projects/README.md) describes record tasks.
 
 - **Back up and plan a maintenance window.** The cutover is irreversible and
-  holds the task tables' lock throughout (about 17 s per 20,000 activities on
-  PostgreSQL).
+  locks the task tables while it runs.
 - **Provision `angee.projects` first.** A stack that holds activities composes
-  and provisions `angee.projects` on its current release, then upgrades.
+  and provisions `angee.projects` on its 0.1.x release, then upgrades.
   Otherwise `makemigrations` refuses to drop the populated activity tables and
-  writes nothing; adding projects in the same upgrade is refused the same way.
-  A stack without activities needs nothing: its seeded catalog retires with
-  messaging's models.
-- **Declare the record types that take tasks.** A record task answers to its
-  record alone, so a record type's owner unions `record_read` and
-  `record_write` for it into `messaging/thread_attachment` in its
-  `permissions.extends.zed`. The cutover refuses activities on undeclared types
-  and names them. A consumer carrying the declaration needs this framework.
-- **Sync the permission schema.** The system check reports `rebac.E009` for the
-  retired `messaging/thread_activity` and `messaging/activity_type` until the
-  schema is synced. `angee provision` syncs; after a chained restart run
-  `manage.py rebac sync`.
+  writes nothing. A stack without activities needs nothing.
+- **Declare the record types that take tasks.** Each record type's owner unions
+  `record_read` and `record_write` for it into `messaging/thread_attachment`
+  in its `permissions.extends.zed`; `migrate` refuses the cutover while
+  activities sit on undeclared types and names them. A consumer carrying the
+  declaration needs angee 0.2.
+- **Let provision sync the permission schema.** Until it is synced, the system
+  checks report `rebac.E009` for the retired `messaging/thread_activity` and
+  `messaging/activity_type`. `angee provision` (which an operator restart job
+  that reruns provision also runs) migrates without checks and syncs before it
+  checks, so it needs no manual step. A stack migrated by hand runs
+  `manage.py migrate --skip-checks`, then `manage.py rebac --skip-checks sync`.
 
 ### Upgrading a stack rendered before the monorepo
 

@@ -78,7 +78,8 @@ definition messaging/message {
 //     permission record_write = doc->write
 //
 // They stay apart from `target_write`, which also names record types whose own
-// access may depend on such rows. `authenticated - row->attached` holds exactly
+// access may depend on such rows. `record_withheld` names whom a record withholds
+// its rows from (a concealed record conceals them too). `authenticated - row->attached` holds exactly
 // while a row points at no edge.
 definition messaging/thread_attachment {
     relation thread: messaging/thread // rebac:field=thread
@@ -93,6 +94,7 @@ definition messaging/thread_attachment {
     permission target_write = file->write
     permission record_read = nil
     permission record_write = nil
+    permission record_withheld = nil
 
     // Arrow-only through `source`: never check `retains` directly.
     permission retains = authenticated

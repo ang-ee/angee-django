@@ -14,7 +14,8 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.identity import public_id_of
+from angee.base.identity import SqidPublicIdentity, public_id_of
+from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
@@ -59,6 +60,33 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         """Return the ledger rows whose target is ``record``, by its model label and public id."""
 
         return self.filter(target_model=record._meta.label, target_id=public_id_of(record))
+
+    def seeded_target_keys(self, model_label: str, *, source_addons: Iterable[str]) -> set[Any]:
+        """Return the primary keys of ``model_label`` rows ``source_addons``' resource files seeded.
+
+        The model's code may already be gone, so a ledger's public id decodes without
+        it: a sqid id through :class:`SqidPublicIdentity` under its own prefix, kept
+        only when it re-encodes to itself; any other id is the row's primary key as
+        text (:func:`public_id_of`). Callers convert keys to the model's key type.
+        """
+
+        sqid = SqidMixin._meta.get_field("sqid")
+        public_ids = list(
+            self.filter(target_model__iexact=model_label, source_addon__in=list(source_addons))
+            .exclude(target_id="")
+            .values_list("target_id", flat=True)
+        )
+        keys: set[Any] = set()
+        for public_id in public_ids:
+            prefix, separator, _encoded = public_id.partition("_")
+            if separator:
+                identity = SqidPublicIdentity(prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet)
+                value = identity.public_id_to_pk(public_id)
+                if value is not None and identity.public_id_from_pk(value) == public_id:
+                    keys.add(value)
+                    continue
+            keys.add(public_id)
+        return keys
 
 
 def seeded_record_merge_guard(record: models.Model) -> str | None:

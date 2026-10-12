@@ -14,11 +14,12 @@ history row), unless the task is project or queue work: that task keeps its own
 access and takes only the activity's type. Activity public ids (``tac_``) are not
 mapped: they name rows that no longer exist.
 
-A record task answers to its record alone, so the cutover refuses while any
-activity sits on a record type whose owner has not declared ``record_read`` and
-``record_write`` on ``messaging/thread_attachment``; it names the types, their
-activities and their assignees. An assignee who cannot read the record keeps the
-task but no longer sees it: access is evaluated only once the schema is synced.
+A record task answers to its record alone: projects refuses the ``migrate`` run
+that would apply this cutover while an activity sits on a record type whose owner
+declares no ``record_read`` and ``record_write`` on ``messaging/thread_attachment``
+(``angee.projects.upgrade``, a fact of the current composition, checked outside
+this history). An assignee who cannot read the record keeps the task but no longer
+sees it: access is evaluated only once the schema is synced.
 Activity metadata has no task field, so the cutover refuses while any activity
 carries some. Resource ledgers that name the catalog follow it. Messaging's two
 models are retired here, after the copy, so no autodetected deletion can run
@@ -29,11 +30,14 @@ the task tables' lock throughout (about 17 s per 20,000 activities on
 PostgreSQL). Back the database up and plan a maintenance window.
 """
 
+import logging
+
 from django.core.management.color import no_style
 from django.db import migrations, models
 from django.db.migrations.state import ModelState
 from django.utils import timezone
 
+logger = logging.getLogger(__name__)
 RANK_STEP = 1024.0
 BATCH_SIZE = 500
 CATALOG_LEDGER = ("angee.messaging", "angee.projects", "resources/master/010_projects.activitytype.yaml")
@@ -100,7 +104,6 @@ def convert_activities(apps, schema_editor):
             f"{len(carrying)} record activities carry metadata a task has no field for (ids {shown}"
             f"{', …' if len(carrying) > 5 else ''}); export or clear it, then migrate again."
         )
-    _refuse_undeclared_record_types(apps, activities)
     field_names = {field.name for field in task_model._meta.get_fields()}
     # Audit, owner and queue columns arrive in different releases: use those this history has.
     columns = {field.attname for field in task_model._meta.concrete_fields}
@@ -172,9 +175,10 @@ def convert_activities(apps, schema_editor):
         _record_history(apps, tasks, list(tasks.filter(pk__in=reused).order_by("pk")), "~",
                         "Became its record's task in the activity cutover")
     if project_work:
-        print(
-            f"  record_tasks: {len(project_work)} task(s) promoted from activities stay project or queue work "
-            "(their own access), typed by their activity but not attached to its record."
+        logger.warning(
+            "record_tasks: %d task(s) promoted from activities stay project or queue work (their own access), "
+            "typed by their activity but not attached to its record.",
+            len(project_work),
         )
     if schema_editor.connection.vendor == "postgresql":
         # Fire the deferred foreign-key checks these rows queued: PostgreSQL refuses
@@ -216,56 +220,6 @@ def _record_history(apps, tasks, rows, history_type, reason):
         ],
         batch_size=BATCH_SIZE,
     )
-
-
-def _refuse_undeclared_record_types(apps, activities):
-    """Refuse activities on record types whose readers no declared record arm reaches.
-
-    The composed ``messaging/thread_attachment`` schema on disk (base plus every
-    installed extension) names the record types that take tasks; the synced
-    store still holds the released schema while this runs.
-    """
-
-    from django.apps import apps as installed
-    from django.db.models import Count
-    from rebac.resources import model_resource_type
-    from rebac.schema import PermArrow, PermBinOp
-
-    from angee.base.permissions import effective_rebac_definition
-
-    counts = list(
-        activities.order_by()
-        .values_list("attachment__content_type__app_label", "attachment__content_type__model")
-        .annotate(activities=Count("pk"), assignees=Count("user", distinct=True))
-    )
-    if not counts:
-        return
-    definition = effective_rebac_definition(installed.get_model("messaging", "ThreadAttachment"))
-    relations = {relation.name: relation for relation in definition.relations} if definition else {}
-    permission = next((item for item in definition.permissions if item.name == "record_read"), None) \
-        if definition else None
-    declared, pending = set(), [permission.expression] if permission else []
-    while pending:
-        expression = pending.pop()
-        if isinstance(expression, PermBinOp):
-            pending += [expression.left, expression.right]
-        elif isinstance(expression, PermArrow) and expression.via in relations:
-            declared.update(subject.type for subject in relations[expression.via].allowed_subjects)
-    undeclared = []
-    for app_label, model_name, count, assignees in counts:
-        try:
-            resource_type = model_resource_type(installed.get_model(app_label, model_name))
-        except LookupError:
-            resource_type = None
-        if resource_type not in declared:
-            undeclared.append(f"{app_label}.{model_name} ({count} activities, {assignees} assignees)")
-    if undeclared:
-        raise RuntimeError(
-            "record activities sit on record types that take no record tasks: " + "; ".join(undeclared)
-            + ". A record task answers to its record alone, so these would reach only administrators. "
-            "Declare record_read and record_write for these types on messaging/thread_attachment in their "
-            "owner's permissions.extends.zed (or delete the activities), then migrate again."
-        )
 
 
 def retarget_ledgers(apps, schema_editor):

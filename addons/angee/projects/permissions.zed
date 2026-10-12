@@ -39,7 +39,9 @@ definition projects/milestone {
 // its direct holders, which never run through its own subject, so task access
 // never recurses. Contributors whose readers should see a task's record tasks
 // extend them (work lends its queue). Project readers are not lent: that arrow
-// takes generic target unions past SQLite's expression depth.
+// takes generic target unions past SQLite's expression depth. A withheld task
+// withholds its record tasks (`subject->record_withheld`), subtracted beside the
+// subject arm rather than inside it for the same reason.
 definition projects/task {
     relation project: projects/project // rebac:field=project
     relation subject: messaging/thread_attachment // rebac:field=subject
@@ -61,12 +63,12 @@ definition projects/task {
     permission create = (authenticated - subject->attached) + subject->record_write + admin->member
     permission read_granted = inherited_project->read + owner + assignee + reader + editor
     permission withheld = nil
-    permission read = (((read_granted & unbound->free) + subject->record_read) - withheld) + admin->member
+    permission read = (((read_granted & unbound->free) + subject->record_read) - withheld - subject->record_withheld) + admin->member
     permission read_as_subject = owner + assignee + reader + editor + admin->member
     permission read_promoted_phase = promoted_project->read + admin->member
     permission write_granted = inherited_project->write + owner + assignee + editor
     permission write_withheld = nil
-    permission write = (((write_granted & unbound->free) + subject->record_write) - withheld - write_withheld) + admin->member
+    permission write = (((write_granted & unbound->free) + subject->record_write) - withheld - write_withheld - subject->record_withheld) + admin->member
     permission write_as_subject = owner + assignee + editor + admin->member
     permission share_granted = inherited_project->share + owner + editor
     permission share = (((share_granted & unbound->free) + subject->record_write) - withheld) + admin->member

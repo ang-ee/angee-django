@@ -1489,6 +1489,37 @@ class ThreadAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
 
         return self.label or f"{self.content_type}:{self.object_id}"
 
+    POINTER_COLUMNS: ClassVar[tuple[str, ...]] = ("label", "content_type_id", "object_id")
+    """The columns a record pointer reads from an edge: its label and its record's identity."""
+
+    @classmethod
+    def pointer_annotations(cls, path: str) -> dict[str, models.Expression]:
+        """Annotate the record pointer of the edge a row reaches at ``path``, through the join.
+
+        The edge row itself is never loaded; :meth:`pointer_from_row` rebuilds the
+        pointer from these columns. The caller owns whether the row's readers may
+        see the edge's record.
+        """
+
+        return {f"_{path}_pointer_{column}": models.F(f"{path}__{column}") for column in cls.POINTER_COLUMNS}
+
+    @classmethod
+    def pointer_from_row(cls, row: models.Model, path: str) -> ThreadAttachment | None:
+        """Return the unsaved edge ``row`` reaches at ``path``, carrying only its record pointer.
+
+        It reads :meth:`pointer_annotations` when the row carries them, else the
+        edge by its id under system context (a structural read of the same columns).
+        """
+
+        edge_id = getattr(row, f"{path}_id")
+        if edge_id is None:
+            return None
+        prefix = f"_{path}_pointer_"
+        if all(hasattr(row, f"{prefix}{column}") for column in cls.POINTER_COLUMNS):
+            return cls(**{column: getattr(row, f"{prefix}{column}") for column in cls.POINTER_COLUMNS})
+        with system_context(reason="messaging.thread_attachment.pointer"):
+            return cls._base_manager.only(*cls.POINTER_COLUMNS).get(pk=edge_id)
+
 
 class FileSourceThreads(models.Model):
     """Messaging-owned reverse edges from a Storage File to source conversations."""

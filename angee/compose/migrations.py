@@ -15,7 +15,7 @@ from typing import Any, cast
 from django.apps import AppConfig, apps
 from django.apps.registry import Apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management.base import CommandError
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
@@ -31,7 +31,6 @@ from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config
-from angee.base.fields import SqidField
 from angee.compose.history import HistoricalRuntimeConfig, historical_labels
 from angee.fs import write_atomic
 
@@ -621,9 +620,9 @@ class DropGuardAutodetector(MigrationAutodetector):
     database that may receive the migration, selected like Django's history
     consistency check, must prove the column empty; an unreachable or
     unconfigured database cannot, so the drop is refused. A deleted model's table
-    holds data when it has a row its addon's resource files did not seed (rows the
-    resource ledger names are regenerable declarations, retired with the model),
-    under the same proof, retired historical labels included.
+    holds data when it has a row, under the same proof, retired historical labels
+    included; an addon that names the model in its AppConfig ``retired_seed_models``
+    vouches for the rows its own resource files seeded, which retire with the model.
 
     A reviewed drop is an addon runtime migration: ``angee build`` materializes it
     into the history first, so its removal is never autodetected here.
@@ -675,7 +674,8 @@ class DropGuardAutodetector(MigrationAutodetector):
             raise CommandError(
                 "unsafe autodetected table drop: " + "; ".join(refusals)
                 + ". A deleted model's table is dropped automatically only when every database that may "
-                "receive the migration proves it holds nothing but resource-seeded rows. Declare a cutover "
+                "receive the migration proves it holds nothing but rows its retiring addon's resource files seeded "
+                "(AppConfig.retired_seed_models). Declare a cutover "
                 "migration that preserves or retires its rows and deletes the model in an installed addon's "
                 "addon.toml [[migrations]], then run `angee build` before makemigrations."
             )
@@ -762,31 +762,31 @@ class DropGuardAutodetector(MigrationAutodetector):
                 yield f"{name}: {storage} holds data in {count} row(s) on database {alias!r}"
 
 
-def _seeded_primary_keys(model: type[Any], alias: str) -> set[int]:
-    """Return the primary keys of ``model``'s rows the resource ledger on ``alias`` seeded.
+def _seeded_primary_keys(model: type[Any], alias: str) -> set[Any]:
+    """Return the keys of ``model``'s rows its retiring addon's resource files seeded on ``alias``.
 
-    A ledger names its target by public id, so each id decodes through the shared
-    public-id codec under its own prefix; the model's code may already be gone.
+    An addon vouches for its own seeded rows by naming the model in its AppConfig's
+    ``retired_seed_models``; rows other addons seeded, and models no addon names,
+    still count as data. The resource ledger (``angee.resources``) owns reading
+    them; a key the model's primary key cannot hold is not a seeded row of it.
     """
 
+    label = model._meta.label
+    owners = [config.name for config in apps.get_app_configs() if label in getattr(config, "retired_seed_models", ())]
+    if not owners:
+        return set()
     try:
         ledger = apps.get_model("resources", "Resource")
     except LookupError:
         return set()
     try:
-        public_ids = list(
-            ledger._base_manager.using(alias)
-            .filter(target_model__iexact=model._meta.label)
-            .exclude(target_id="")
-            .values_list("target_id", flat=True)
-        )
+        candidates = ledger.objects.using(alias).seeded_target_keys(label, source_addons=owners)
     except DatabaseError:
         return set()
     keys = set()
-    for public_id in public_ids:
-        prefix, separator, _encoded = public_id.partition("_")
-        codec = SqidField(real_field_name="id", min_length=8, prefix=prefix if separator else "")
-        value = codec.public_id_to_value(public_id)
-        if isinstance(value, int):
-            keys.add(value)
+    for candidate in candidates:
+        try:
+            keys.add(model._meta.pk.to_python(candidate))
+        except ValidationError:
+            continue
     return keys

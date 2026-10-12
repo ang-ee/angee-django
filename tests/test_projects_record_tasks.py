@@ -15,6 +15,7 @@ from django.core.management.base import CommandError
 from django.db import connection, migrations, models
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.state import ModelState, ProjectState
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
@@ -25,14 +26,17 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.schema import parse_zed
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.fields import SqidField
+from angee.base.permissions import permission_subject_types
 from angee.compose.migrations import DropGuardAutodetector
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
 from angee.projects.runtime_migrations import record_tasks
-from angee.projects.testing.models import Project, Task
-from tests.chatterdemo.models import ChatterDoc, ChatterMemo, TrackedRecordParent
+from angee.projects.testing.models import Project, Queue, Stage, Task
+from angee.projects.upgrade import refuse_incomplete_cutover
+from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
 from tests.conftest import create_platform_admin
 from tests.test_runtime_migrations import seed_ledger
 
@@ -90,22 +94,21 @@ def test_record_tasks_answer_to_their_records_readers_and_writers() -> None:
         assert not Task.objects.filter(pk=task.pk).exists()
 
 
-def test_a_records_reader_loads_its_tasks_with_their_subject() -> None:
-    """A memo's reader reads its tasks' subject pointer, though the memo opens no chatter thread."""
-
-    owner, reader = _user("memo-owner"), _user("memo-reader")
-    with system_context(reason="test.record_tasks.memo"):
-        memo = ChatterMemo.objects.create(title="Supplier memo")
-    _grant(memo, "owner", owner)
-    _grant(memo, "reader", reader)
+def test_a_records_reader_reads_its_tasks_subject_pointer_without_loading_the_edge() -> None:
+    owner, reader = _user("pointer-owner"), _user("pointer-reader")
+    doc = _doc("Supplier memo")
+    _grant(doc, "writer", owner)
+    _grant(doc, "reader", reader)
     with actor_context(owner):
-        task = Task.objects.schedule(_as(owner, memo), title="Answer the memo")
+        task = Task.objects.schedule(_as(owner, doc), title="Answer the memo")
     with actor_context(reader):
-        (row,) = Task.objects.for_record(_as(reader, memo)).annotate(**Task.subject_pointer_annotations())
-        pointer = row.subject_pointer()
+        (row,) = Task.objects.for_record(_as(reader, doc)).annotate(**Task.subject_pointer_annotations())
+        with CaptureQueriesContext(connection) as queries:
+            pointer = row.subject_pointer()
+    assert queries.captured_queries == []
     reference = pointer.record_ref
     assert (row.pk, pointer.label) == (task.pk, "Supplier memo")
-    assert (reference.model_label, reference.public_id) == ("chatterdemo.ChatterMemo", memo.sqid)
+    assert (reference.model_label, reference.public_id) == ("chatterdemo.ChatterDoc", doc.sqid)
 
 
 def test_a_record_tasks_own_grants_reach_nothing_past_its_record() -> None:
@@ -152,6 +155,24 @@ def test_a_task_takes_record_tasks_under_its_own_grants() -> None:
             Task.objects.schedule(_as(owner, follow_up), title="Nested")
         _as(owner, follow_up).complete()
     assert _posts() == ["Done: Call the supplier"]
+
+
+def test_a_concealed_tasks_holders_lose_its_record_tasks() -> None:
+    """Concealing a task withholds the record tasks about it, and through them its title."""
+
+    owner = _user("concealed-owner")
+    with system_context(reason="test.record_tasks.concealed"):
+        queue = Queue.objects.create(name="Concerns", key="CN", owner=owner)
+        removed = Stage.objects.create(queue=queue, name="Removed", category="canceled", conceals=True)
+        concern = Task.objects.create(title="Concealed concern", queue=queue, owner=owner)
+        follow_up = Task.objects.schedule(concern, title="Call about it", assignee=owner)
+    with actor_context(owner):
+        assert Task.objects.filter(pk=follow_up.pk).exists()
+    with system_context(reason="test.record_tasks.conceal"):
+        Task._base_manager.filter(pk=concern.pk).update(stage=removed)
+    with actor_context(owner):
+        assert not Task.objects.filter(pk=follow_up.pk).exists()
+    assert not Task._base_manager.get(pk=follow_up.pk).with_actor(owner).has_access("read")
 
 
 def test_a_record_task_is_assigned_only_to_someone_who_reads_the_record() -> None:
@@ -509,15 +530,32 @@ def test_a_stack_without_projects_drops_its_seeded_catalog_and_refuses_live_acti
             DropGuardAutodetector(released, current).changes(graph=graph)
 
 
-def test_the_cutover_refuses_activities_on_record_types_that_take_no_tasks() -> None:
+def test_migrate_refuses_the_cutover_for_activities_on_record_types_that_take_no_tasks() -> None:
     released = _released()
     registry = released.apps
-    refused = pytest.raises(RuntimeError, match=r"chatterdemo\.trackedrecordparent \(5 activities, 1 assignees\)")
+    cutover = [(record_tasks.Migration("0099_record_tasks", "projects"), False)]
     with _released_tables(released):
-        with refused, connection.schema_editor() as editor:
+        with connection.schema_editor() as editor:
             _create(registry, editor)
-            _seed(registry, TrackedRecordParent)
-            record_tasks.Migration("0099_record_tasks", "projects").apply(released, editor)
+        _seed(registry, TrackedRecordParent)
+        # Nothing to check unless the plan applies the cutover.
+        refuse_incomplete_cutover(sender=None, plan=[], apps=registry, using="default")
+        with pytest.raises(CommandError, match=r"chatterdemo\.trackedrecordparent \(5 activities, 1 assignees\)"):
+            refuse_incomplete_cutover(sender=None, plan=cutover, apps=registry, using="default")
+
+
+def test_a_permission_reaches_the_subject_types_of_its_arrows_relations_and_permissions() -> None:
+    (definition,) = [item for item in parse_zed("""
+definition t/edge {
+    relation doc: t/doc
+    relation other: t/other
+    relation user: auth/user
+    permission own = doc->read
+    permission record_read = own + user - other->read
+}
+""").definitions if item.resource_type == "t/edge"]
+    assert permission_subject_types(definition, "record_read") == {"t/doc", "auth/user"}
+    assert permission_subject_types(definition, "missing") == set()
 
 
 def test_the_cutover_refuses_activity_metadata_a_task_cannot_hold() -> None:

@@ -16,6 +16,12 @@ class MessagingConfig(AppConfig):
 
     default = True
     name = "angee.messaging"
+    retired_seed_models: tuple[str, ...] = ("messaging.ActivityType",)
+    """Removed models whose rows this addon's resource files seeded and that retire with them.
+
+    Activity types moved to ``angee.projects``; on a stack without it, the drop guard
+    lets messaging's own seeded catalog rows go with the model (no other row).
+    """
 
     def ready(self) -> None:
         """Wire messaging-owned signal receivers after app population."""

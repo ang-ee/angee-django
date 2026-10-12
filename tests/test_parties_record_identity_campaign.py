@@ -64,9 +64,9 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
             assert list(query.values_list("pk", flat=True)) == [person.pk]
         # Fetching guards all projected columns in one schema operation; reads
         # of the filled result cache skip the guard. There are two revision reads,
-        # actor sets, 16 arrows (a filed task's subject adds three), and one
-        # application row SELECT.
-        assert len(queries) == 20, queries.captured_queries
+        # actor sets, 15 arrows (a filed task's subject adds its attachment and
+        # record type), and one application row SELECT.
+        assert len(queries) == 19, queries.captured_queries
         assert sum(
             query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
         ) == 1

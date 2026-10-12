@@ -464,10 +464,11 @@ def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref:
         )
 
 
+@pytest.mark.parametrize("public_ids", ["sqid", "primary_key"])
 @pytest.mark.django_db
 @pytest.mark.usefixtures("isolated_upgrade_database")
-def test_autodetected_table_drop_ignores_rows_its_resources_seeded() -> None:
-    """Seeded rows retire with their model's declarations; any other row still refuses the drop."""
+def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypatch, public_ids: str) -> None:
+    """Only the addon that names the model vouches for its own seeded rows; any other row refuses the drop."""
 
     history, current = ProjectState(), ProjectState()
     for state in (history, current):
@@ -478,15 +479,32 @@ def test_autodetected_table_drop_ignores_rows_its_resources_seeded() -> None:
     retired = history.apps.get_model("probe", "Retired")
     with connection.schema_editor() as editor:
         editor.create_model(retired)
-    seeded = retired._base_manager.create()
     codec = SqidField(real_field_name="id", min_length=8, prefix="ret")
-    seed_ledger("probe.Retired", codec.public_id_from_value(seeded.pk))
 
+    def public_id(row):
+        return codec.public_id_from_value(row.pk) if public_ids == "sqid" else str(row.pk)
+
+    owner = apps.get_app_config("resources")
+    seeded = retired._base_manager.create()
+    seed_ledger("probe.Retired", public_id(seeded), addon=owner.name)
+    refused = r"probe\.retired: table probe_retired holds data in 1 row\(s\)"
+    with pytest.raises(CommandError, match=refused):  # No addon vouches for the row yet.
+        DropGuardAutodetector(history, current).changes(graph=graph)
+
+    monkeypatch.setattr(owner, "retired_seed_models", ("probe.Retired",), raising=False)
     (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
     assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
-    retired._base_manager.create()
-    with pytest.raises(CommandError, match=r"probe\.retired: table probe_retired holds data in 1 row\(s\)"):
-        DropGuardAutodetector(history, current).changes(graph=graph)
+
+    # Another addon's seeded row, a ledger id that is not the row's canonical public
+    # id, and an unledgered row each still count as data.
+    for addon, ledgered in (("probe.other", True), (owner.name, False), (None, None)):
+        row = retired._base_manager.create()
+        if addon is not None:
+            stale = SqidField(real_field_name="id", min_length=0, prefix="ret").public_id_from_value(row.pk)
+            seed_ledger("probe.Retired", public_id(row) if ledgered else stale, addon=addon, xref=f"row{row.pk}")
+        with pytest.raises(CommandError, match=refused):
+            DropGuardAutodetector(history, current).changes(graph=graph)
+        retired._base_manager.filter(pk=row.pk).delete()
 
 
 @pytest.mark.parametrize(("name", "wrapper"), [

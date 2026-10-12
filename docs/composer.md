@@ -57,7 +57,7 @@ below.
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Atomic writes, drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/fs.py) |
 | Addon migration materialization and dependency projection | [`RuntimeMigrations`](../angee/compose/migrations.py), [`AddonDependencyGroup`](../angee/compose/dependencies.py) |
-| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column, or a table holding rows its resource files did not seed, in `makemigrations` |
+| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column or table in `makemigrations`, apart from rows the retiring addon declares seeded |
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
@@ -284,10 +284,13 @@ any file is written:
 
 - an autodetected `RemoveField` when a row differs from the field's empty value
   (NULL, or a non-null field's default);
-- an autodetected `DeleteModel` when its table holds a row the resource ledger
-  did not seed. Seeded master and demo rows are the removed model's own
-  declarations and retire with it; their ledger rows stay and resolve to nothing.
-  Retirements of migration-only historical labels are guarded the same way.
+- an autodetected `DeleteModel` when its table holds a row. An addon that removes
+  a model may name it in its AppConfig `retired_seed_models`: the rows its own
+  resource files seeded then retire with the model, read through the resource
+  ledger (`ResourceQuerySet.seeded_target_keys`); other addons' seeded rows still
+  count. The ledger rows stay as `angee.resources` history; the loader skips a
+  model it cannot resolve. Retirements of migration-only historical labels are
+  guarded the same way.
 
 Both proofs run on every database that may receive the migration; without
 `DATABASE_ROUTERS` that is `default` alone, as in Django's history consistency

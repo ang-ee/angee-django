@@ -70,6 +70,7 @@ definition messaging/thread_attachment {
     // own subject, so record task access never recurses.
     permission record_read = task->read_as_subject + project->read
     permission record_write = task->write_as_subject + project->write
+    permission record_withheld = task->withheld
 }
 
 definition knowledge/record_binding {
