@@ -6,12 +6,14 @@ import hashlib
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import models
 from django.db.models import Exists, OuterRef
 from django.db.models.functions import Coalesce
@@ -22,6 +24,7 @@ from rebac import (
     check_new,
     current_actor,
     delete_relationship,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -50,6 +53,10 @@ from angee.base.tiers import ResourceTier
 from angee.base.transitions import StateTransitions
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+_SAVE_VERDICT = "_angee_save_verdict"
+"""Instance key caching the save decision for the length of one ``full_clean``."""
+_SAVE_PENDING = "pending"
+"""The verdict while REBAC checks the save, so a clean that save runs skips the elevated checks."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,14 +384,118 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
     ) -> AngeeQuerySet[Self]:
         """Return an elevated unscoped queryset with backend-gated locks; SQLite stays unlocked.
 
-        Locking was previously dead at these call sites and is now real.
+        Locking was previously dead at these call sites and is now real. A model
+        whose default manager is already permission-naive (``AngeeUnscopedQuerySet``)
+        returns that queryset as it is.
         """
 
-        queryset = cast(
-            AngeeQuerySet[Self],
-            cls._default_manager.get_queryset(),
-        ).system_context(reason=f"{cls._meta.label_lower}.system_queryset")
+        queryset = cast(AngeeQuerySet[Self], cls._default_manager.get_queryset())
+        if isinstance(queryset, RebacQuerySet):
+            queryset = queryset.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
         return queryset.lock_if_supported(of=lock) if lock is not None else queryset
+
+    def full_clean(
+        self,
+        exclude: Collection[str] | None = None,
+        validate_unique: bool = True,
+        validate_constraints: bool = True,
+    ) -> None:
+        """Clean as Django does; uniqueness and constraints share one access decision.
+
+        See :meth:`constraint_check`.
+        """
+
+        self.__dict__[_SAVE_VERDICT] = None
+        try:
+            super().full_clean(exclude, validate_unique, validate_constraints)
+        finally:
+            self.__dict__.pop(_SAVE_VERDICT, None)
+
+    def validate_unique(self, exclude: Collection[str] | None = None) -> None:
+        """Check field uniqueness against every row once this row's save may proceed.
+
+        See :meth:`constraint_check`.
+        """
+
+        if (check := self.constraint_check("validate_unique")) is not None:
+            scope, unwritten = check
+            with scope:
+                super().validate_unique({*(exclude or ()), *unwritten} if unwritten else exclude)
+
+    def validate_constraints(self, exclude: Collection[str] | None = None) -> None:
+        """Check model constraints against every row once this row's save may proceed.
+
+        See :meth:`constraint_check`.
+        """
+
+        if (check := self.constraint_check("validate_constraints")) is not None:
+            scope, unwritten = check
+            with scope:
+                super().validate_constraints({*(exclude or ()), *unwritten} if unwritten else exclude)
+
+    def constraint_check(self, step: str) -> tuple[AbstractContextManager[Any], frozenset[str]] | None:
+        """Return how Django's ``step`` (``validate_unique`` or ``validate_constraints``) runs, or ``None``.
+
+        Uniqueness and constraints compare this row with rows the actor may not
+        read, so under an actor they run in a named system context, and only when
+        this row's save would pass its REBAC gates (:meth:`_save_allowed`); otherwise
+        ``None`` skips them, and the save refuses the row. For a saved row they leave
+        out the fields the actor may not read (the second item): those were redacted
+        when it loaded, and its save leaves them unwritten. They run as they are for
+        a model without row policy, for a step with no rule that reads other rows,
+        inside a system context, and with no actor (where strict mode refuses an
+        actor-less read). An instance's own bypass (``sudo``) enters a system context.
+        """
+
+        if not model_resource_type(type(self)) or is_sudo() or not self._compares_other_rows(step):
+            return nullcontext(), frozenset()
+        if self.is_sudo():
+            return system_context(reason=f"{self._meta.label_lower}.{step}"), frozenset()
+        actor, _unscoped = self.effective_actor()
+        if actor is None:
+            return nullcontext(), frozenset()
+        if not self._save_allowed():
+            return None
+        unwritten = frozenset() if self._state.adding else self.denied_read_fields()
+        return system_context(reason=f"{self._meta.label_lower}.{step}"), unwritten
+
+    def _compares_other_rows(self, step: str) -> bool:
+        """Whether Django's ``step`` has a rule that reads rows other than this one."""
+
+        lineage = (type(self), *self._meta.get_parent_list())
+        if step == "validate_constraints":
+            return any(model._meta.constraints for model in lineage)
+        fields = self._meta.concrete_fields
+        return (
+            any(field.unique and not field.primary_key for field in fields)
+            or any(field.unique_for_date or field.unique_for_month or field.unique_for_year for field in fields)
+            or any(model._meta.unique_together for model in lineage)
+        )
+
+    def _save_allowed(self) -> bool:
+        """Whether this row's save would pass its REBAC gates, decided once per :meth:`full_clean`.
+
+        REBAC's ``check_save`` runs the save itself in a transaction it rolls
+        back: the create candidate for a new row; ``write``, each changed field's
+        ``write__`` gate, moving edges, expression reads and redacted writes for a
+        saved one. A candidate it cannot evaluate (a related row that does not
+        exist, a save that refuses its values or its actor) counts as refused, so
+        its field errors stand. A clean that the checked save runs again sees no verdict yet.
+        """
+
+        verdict = self.__dict__.get(_SAVE_VERDICT)
+        if verdict is not None:
+            return verdict is True
+        deciding = _SAVE_VERDICT in self.__dict__
+        if deciding:
+            self.__dict__[_SAVE_VERDICT] = _SAVE_PENDING
+        try:
+            verdict = self.check_save().allowed
+        except (DjangoPermissionDenied, ObjectDoesNotExist, TypeError, ValidationError, ValueError):
+            verdict = False
+        if deciding:
+            self.__dict__[_SAVE_VERDICT] = verdict
+        return verdict
 
     @classmethod
     def is_catalogue_model(cls) -> bool:

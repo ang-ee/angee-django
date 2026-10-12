@@ -100,10 +100,10 @@ export function InboxMessageReader({
           <MessageReader
             message={message}
             activePartId={navigation.part}
-            previewPartId={navigation.tab === "preview" ? navigation.part : undefined}
-            onPreviewPartChange={(part) =>
-              navigation.patch(part ? { part, tab: "preview" } : { tab: undefined })
-            }
+            onPreviewPartChange={(partId) => {
+              const file = message.parts.find((part) => part.id === partId)?.file;
+              if (file) navigation.previewFile(file.id, message.id);
+            }}
             actions={
               <Button size="sm" variant="ghost" onClick={() => void copyLink()}>
                 <Glyph name="link" />

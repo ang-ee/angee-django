@@ -1602,7 +1602,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if expressions:
         assert resource.filter_type is not None
         filter_name = get_object_definition(resource.filter_type, strict=True).name
-        empty = model._default_manager.none()
+        # Only the expressions' output fields are read; a gated field needs a scope to build one.
+        empty = system_queryset(model).none()
         output_fields = {
             key: (expression(empty) if callable(expression) else expression).output_field
             for key, expression in expressions.items()
