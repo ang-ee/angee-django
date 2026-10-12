@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from copy import copy
 from datetime import datetime
 from enum import Enum
@@ -297,11 +298,47 @@ class OwnerMixin(AuditMixin):
         if ownerless and (not self._state.adding or self.owner_id is not None):
             raise ValidationError({"owner": "Ownerless insertion requires a new row with no owner."})
         if self._state.adding and self.owner_id is None and not ownerless:
-            if not self.container_owns_items():
-                self.owner_id = (
-                    self.created_by_id if self.created_by_id is not None else actor_user_id(instance_actor(self))
-                )
+            self.owner_id = self.insert_owner_default()
         super().save(*args, **kwargs)
+
+    def insert_owner_default(self) -> Any:
+        """Return the owner an insert without one takes: its creator, else its acting user.
+
+        None when an owning container holds its items' ownership.
+        """
+
+        if self.container_owns_items():
+            return None
+        return self.created_by_id if self.created_by_id is not None else actor_user_id(instance_actor(self))
+
+    def validate_unique(self, exclude: Collection[str] | None = None) -> None:
+        """Check uniqueness as the insert will save the row, with its owner default."""
+
+        with self._insert_owner_default_held():
+            super().validate_unique(exclude)
+
+    def validate_constraints(self, exclude: Collection[str] | None = None) -> None:
+        """Check constraints as the insert will save the row, with its owner default."""
+
+        with self._insert_owner_default_held():
+            super().validate_constraints(exclude)
+
+    @contextmanager
+    def _insert_owner_default_held(self) -> Iterator[None]:
+        """Hold the owner an ordinary insert would save for the length of one check.
+
+        The checks, and the create decision they wait on, then see the row as saved.
+        The default is withdrawn afterwards, so ``save(ownerless=True)`` stays possible.
+        """
+
+        if not self._state.adding or self.owner_id is not None:
+            yield
+            return
+        self.owner_id = self.insert_owner_default()
+        try:
+            yield
+        finally:
+            self.owner_id = None
 
     def transfer_ownership(self, user: models.Model | None) -> Self:
         """Authorize against the locked row, transfer or clear its owner, and retain attribution.
