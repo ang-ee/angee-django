@@ -5,14 +5,12 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Router
 import { ResourceQuery, type DataResourceFieldMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
-import {
-  ActionSelectionLimit, AppRuntimeProvider, ModalsHost, ToastProvider, ResourceViewProvider, useResourceView,
-  type ResourceViewContextValue,
-} from "@angee/ui";
+import { ActionSelectionLimit, AppRuntimeProvider, ModalsHost, ToastProvider, ResourceViewProvider } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
+import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { MessagesPage, type MessageListRow } from "./MessagesPage";
+import { HeldDraftActions, MessagesPage, type MessageListRow } from "./MessagesPage";
 
 const query = ResourceQuery.forRows({ fields: {
   id: { scalar: "ID" }, title: { scalar: "String" }, preview: { scalar: "String" },
@@ -46,11 +44,20 @@ afterEach(() => { cleanup(); clearClients(); });
 // exceed the 1 s default, so the fixture owns that one wait.
 const FIRST_ROWS_TIMEOUT = 5000;
 
-async function fixture({ held = false, count = 2, fail = false, transportFailure = false, limitFailure = false } = {}) {
-  let view!: ResourceViewContextValue;
+const HELD = { is_held: true } as const;
+
+function rowCheckbox(title: string): HTMLElement {
+  return within(screen.getByText(title).closest("tr")!).getByRole("checkbox", { name: "Select row" });
+}
+
+function checked(element: HTMLElement): boolean {
+  return element.getAttribute("aria-checked") === "true";
+}
+
+function dataProvider({ count = 2, fail = false, transportFailure = false, limitFailure = false } = {}) {
   const rows: MessageListRow[] = Array.from({ length: count }, (_, index) => ({
     id: String(index + 1), title: `Message ${index + 1}`, preview: "A held reply",
-    created_at: "2026-10-01T00:00:00Z", channel: { ...{ id: "channel", display_name: "Discussion" } },
+    created_at: "2026-10-01T00:00:00Z", channel: { id: "channel", display_name: "Discussion" },
     revision: index + 3, permissions: ["read", "delete", "send_held"],
   }));
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
@@ -72,25 +79,35 @@ async function fixture({ held = false, count = 2, fail = false, transportFailure
     return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count } }], totalCount: 1 } };
   });
   const getList = vi.fn(async () => ({ data: [...rows], total: count }));
-  function Inbox() {
-    view = useResourceView();
-    return <MessagesPage />;
-  }
+  return { rows, custom, getList, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
+}
+
+/** Mount a component as the /messages route renders it: no ambient view above it. */
+function mount(component: () => ReactElement, provider: ReturnType<typeof dataProvider>) {
   const root = createRootRoute();
-  const route = createRoute({ getParentRoute: () => root, path: "/messages", validateSearch: (search) => search,
-    component: () => <ResourceViewProvider resource="messaging.Message" initialState={{
-      filter: held ? { is_held: true } : {}, groupStack: [{ field: "channel" }],
-    }}><Inbox /></ResourceViewProvider> });
+  const route = createRoute({ getParentRoute: () => root, path: "/messages", validateSearch: (search) => search, component });
   const record = createRoute({ getParentRoute: () => route, path: "$id", component: () => null });
   const router = createRouter({ routeTree: root.addChildren([route.addChildren([record])]), history: createMemoryHistory({ initialEntries: ["/messages"] }) });
-  render(<Provider dataProvider={{ getList, custom }}><AppRuntimeProvider runtime={{}}>
+  render(<Provider dataProvider={{ getList: provider.getList, custom: provider.custom }}><AppRuntimeProvider runtime={{}}>
     <OperationDocumentsProvider documents={{ console: { groups: { "messaging.Message":
       "query MessageGroups { messages_groups { key { channel_id channel_name } aggregate { count } } totalCount }",
     } } }}><ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost></OperationDocumentsProvider>
   </AppRuntimeProvider></Provider>);
+  return router;
+}
+
+/** The messages route, whose ResourceList owns the one view the page and its held verbs read. */
+async function fixture({ held = false, ...data }: { held?: boolean } & Parameters<typeof dataProvider>[0] = {}) {
+  const provider = dataProvider(data);
+  const router = mount(MessagesPage, provider);
   await screen.findByText("Message 1", {}, { timeout: FIRST_ROWS_TIMEOUT });
-  return { get view() { return view; }, rows, custom, getList, router,
-    mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
+  /** Edit the route's filter, which the view reads from the URL as JSON text. */
+  const showFilter = async (filter: object): Promise<void> => {
+    await act(async () => { await router.navigate({ to: "/messages", search: { filter: JSON.stringify(filter) } }); });
+    await screen.findByText("Message 1", {}, { timeout: FIRST_ROWS_TIMEOUT });
+  };
+  if (held) await showFilter(HELD);
+  return { ...provider, router, showFilter };
 }
 
 test("the ordinary grouped route retains selection and the shared delete action", async () => {
@@ -102,25 +119,24 @@ test("the ordinary grouped route retains selection and the shared delete action"
 
 test("route edits and browser back clear selection while preserving grouping", async () => {
   const f = await fixture({ held: true });
-  act(() => f.view.toggleSelectedId("1", true));
+  fireEvent.click(rowCheckbox("Message 1"));
   await screen.findByRole("button", { name: "Send now" });
-  act(() => f.view.setFilter({ is_held: true, title: { iContains: "Message" } }));
-  await waitFor(() => expect(f.view.state.rowSelection).toEqual({}));
-  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("filter"));
-  const editedFilter = f.view.state.filter;
-  await act(async () => { await f.router.navigate({ to: "/messages", search: {} }); });
-  await waitFor(() => expect(f.view.state.filter).toEqual({ is_held: { exact: true } }));
-  act(() => f.view.toggleSelectedId("2", true));
+  await f.showFilter({ ...HELD, title: { iContains: "Message" } });
+  expect(checked(rowCheckbox("Message 1"))).toBe(false);
+  fireEvent.click(rowCheckbox("Message 2"));
+  await waitFor(() => expect(checked(rowCheckbox("Message 2"))).toBe(true));
   await act(async () => { f.router.history.back(); });
-  await waitFor(() => expect(f.view.state.filter).toEqual(editedFilter));
-  expect(f.view.state.rowSelection).toEqual({});
-  expect(f.view.state.groupStack).toEqual([{ field: "channel" }]);
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("filter", JSON.stringify(HELD)));
+  await waitFor(() => expect(checked(rowCheckbox("Message 2"))).toBe(false));
+  expect(screen.getByRole("checkbox", { name: "Select the loaded rows in Discussion" })).toBeTruthy();
+  // The restored held filter still offers its verbs over a fresh selection.
+  fireEvent.click(rowCheckbox("Message 1"));
+  expect(await screen.findByRole("button", { name: "Send now" })).toBeTruthy();
 });
 
 test.each([false, true])("successful held actions discarding=%s clear selection and report a plural outcome", async (discarding) => {
   const f = await fixture({ held: true });
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
-  expect(f.view.selectedRows).toEqual(f.rows);
   const name = discarding ? "Discard" : "Send now";
   const action = await screen.findByRole("button", { name });
   await waitFor(() => expect(action.hasAttribute("disabled")).toBe(false));
@@ -128,14 +144,16 @@ test.each([false, true])("successful held actions discarding=%s clear selection 
   fireEvent.click(action);
   fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name }));
   await waitFor(() => expect(f.mutations()).toHaveLength(1));
-  await waitFor(() => expect(f.view.state.rowSelection).toEqual({}));
+  expect(f.mutations()[0]![0].meta?.gqlVariables).toEqual({ selection: [
+    { id: "1", expected_revision: 3 }, { id: "2", expected_revision: 4 },
+  ] });
+  await waitFor(() => expect(checked(rowCheckbox("Message 1")) || checked(rowCheckbox("Message 2"))).toBe(false));
   expect(await screen.findByText(discarding ? "Discarded 2 held drafts." : "Queued 2 held drafts.")).toBeTruthy();
 });
 
 test.each([false, true])("a grouped held action discarding=%s sends selected revisions and drops refused ids for reselection", async (discarding) => {
   const f = await fixture({ held: true, fail: true });
   fireEvent.click(screen.getByRole("checkbox", { name: "Select the loaded rows in Discussion" }));
-  expect(f.view.selectedRows).toEqual(f.rows);
   const action = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(action.hasAttribute("disabled")).toBe(false));
   fireEvent.click(action);
@@ -146,12 +164,11 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   expect(f.mutations()[0]![0].meta?.gqlVariables).toEqual({ selection: [
     { id: "1", expected_revision: 3 }, { id: "2", expected_revision: 4 },
   ] });
-  await waitFor(() => expect(f.view.state.rowSelection).toEqual({}));
+  await waitFor(() => expect(checked(rowCheckbox("Message 1")) || checked(rowCheckbox("Message 2"))).toBe(false));
   expect(await screen.findByText(`${discarding ? "Discarded one held draft." : "Queued one held draft."}; Revision changed`, { selector: "h2" })).toBeTruthy();
   // Publishing invalidates the loaded rows. Reselecting captures the on-screen revision.
   await waitFor(() => expect(f.getList.mock.calls.length).toBeGreaterThan(1));
-  fireEvent.click(within(screen.getByText("Message 2").closest("tr")!).getByRole("checkbox", { name: "Select row" }));
-  expect(f.view.selectedRows).toEqual([f.rows[1]]);
+  fireEvent.click(rowCheckbox("Message 2"));
   const retry = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
   fireEvent.click(retry);
@@ -162,22 +179,23 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
 
 test("a transport refusal keeps selection and permits another attempt", async () => {
   const f = await fixture({ held: true, transportFailure: true });
-  fireEvent.click(within(screen.getByText("Message 1").closest("tr")!).getByRole("checkbox", { name: "Select row" }));
-  expect(f.view.selectedRows).toEqual([f.rows[0]]);
+  fireEvent.click(rowCheckbox("Message 1"));
   const action = await screen.findByRole("button", { name: "Send now" });
   await waitFor(() => expect(action.hasAttribute("disabled")).toBe(false));
   fireEvent.click(action);
   fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Send now" }));
   await screen.findByText("Publish unavailable", { selector: "h2" });
-  expect(f.view.state.rowSelection).toEqual({ "1": true });
-  expect(f.view.selectedRows).toEqual([f.rows[0]]);
+  expect(f.mutations()[0]![0].meta?.gqlVariables).toEqual({ selection: [{ id: "1", expected_revision: 3 }] });
+  expect(checked(rowCheckbox("Message 1"))).toBe(true);
+  expect(checked(rowCheckbox("Message 2"))).toBe(false);
   await waitFor(() => expect(action.hasAttribute("disabled")).toBe(false));
 });
 
 test("both held verbs disable above the server's selection bound", async () => {
   const f = await fixture({ held: true, count: 101 });
-  fireEvent.click(screen.getByRole("checkbox", { name: "Select all loaded rows" }));
-  expect(f.view.selectedRows).toEqual(f.rows);
+  const all = screen.getByRole("checkbox", { name: "Select all loaded rows" });
+  fireEvent.click(all);
+  expect(checked(all)).toBe(true);
   expect((await screen.findByRole("button", { name: "Send now" })).hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
   const reason = await screen.findByText("Select at most 100 held drafts.");
@@ -187,8 +205,11 @@ test("both held verbs disable above the server's selection bound", async () => {
 });
 
 test("an unavailable selected row explains both disabled verbs without a loaded-row policy projection", async () => {
-  const f = await fixture({ held: true });
-  act(() => f.view.toggleSelectedId("unloaded", true));
+  // A selected id whose row was never captured: only the verbs' own view can hold it.
+  const f = dataProvider();
+  mount(() => <ResourceViewProvider resource="messaging.Message" scope="local">
+    <HeldDraftActions ids={new Set(["unloaded"])} rows={[]} />
+  </ResourceViewProvider>, f);
   const reason = await screen.findByText("Select readable held drafts with permission to send or discard them.");
   for (const name of ["Send now", "Discard"]) {
     const button = screen.getByRole("button", { name });
@@ -200,8 +221,7 @@ test("an unavailable selected row explains both disabled verbs without a loaded-
 
 test("an action limit read error explains both disabled verbs instead of loading forever", async () => {
   const f = await fixture({ held: true, limitFailure: true });
-  fireEvent.click(within(screen.getByText("Message 1").closest("tr")!).getByRole("checkbox", { name: "Select row" }));
-  expect(f.view.selectedRows).toEqual([f.rows[0]]);
+  fireEvent.click(rowCheckbox("Message 1"));
   const reason = await screen.findByText("Could not load the action selection limit. Refresh to try again.");
   for (const name of ["Send now", "Discard"]) {
     const button = screen.getByRole("button", { name });

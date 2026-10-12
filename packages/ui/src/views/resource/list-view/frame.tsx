@@ -240,7 +240,15 @@ function ListViewBody<TRow extends Row = Row>({
   const modelMetadata = source ? null : discoveredMetadata;
   const textFilterField = declaredTextField === undefined && !modelMetadata ? DEFAULT_TEXT_FILTER_FIELD : declaredTextField;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
-  const queryFields = useValueStable([...(fields ?? []), ...recordMatchFields, ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : [])]);
+  // A declared filter option names the fields its rows need while its filter is active.
+  const activeFilter = Filter.from(Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter));
+  const filterOptionFields = (explicitFilterOptions ?? []).flatMap(
+    (option) => option.fields?.length && activeFilter.hasPreset(option.filter) ? option.fields : [],
+  );
+  const queryFields = useValueStable([
+    ...(fields ?? []), ...filterOptionFields, ...recordMatchFields,
+    ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : []),
+  ]);
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);

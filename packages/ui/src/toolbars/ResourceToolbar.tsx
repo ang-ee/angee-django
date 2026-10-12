@@ -67,6 +67,9 @@ export interface ResourceToolbarFilterOption {
   chipLabel?: ReactNode;
   filter: ResourceViewFilter;
   group?: string;
+  /** Extra resource fields the list selects while this option's filter is active,
+   * such as the revision and permissions its bulk actions read. */
+  fields?: readonly string[];
 }
 
 /** The typed view-controls seam a kind contributes: mode switch + period nav +
