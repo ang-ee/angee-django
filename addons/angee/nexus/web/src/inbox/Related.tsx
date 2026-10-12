@@ -32,6 +32,14 @@ export function InboxRelatedPane({
     { models: INBOX_MODELS, enabled: Boolean(navigation.related) },
   );
   const target = query.data?.inbox_related_target;
+  const file = target?.file?.url
+    ? {
+        url: target.file.url,
+        name: target.label,
+        mime: target.file.mime_type?.mime_type,
+        size: target.file.size_bytes,
+      }
+    : undefined;
   const source = useMemo(
     () => relatedSource(navigation.related, target?.unit ?? "messages", t),
     [navigation.related, target?.unit, t],
@@ -83,39 +91,41 @@ export function InboxRelatedPane({
             <Alert tone="danger">{query.error.message}</Alert>
           ) : null}
           <div className="space-y-2 border-b border-border-subtle p-4">
-            {target?.file?.url ? (
-              <Dialog.Root key={target.id}>
-                <Dialog.Trigger
-                  render={
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="max-w-full justify-start px-0"
-                    />
-                  }
-                >
-                  <span className="truncate">{target.label}</span>
-                </Dialog.Trigger>
-                <Dialog.Portal>
-                  <Dialog.Backdrop />
-                  <Dialog.Content size="lg" placement="center">
-                    <Dialog.Header className="flex items-center justify-between">
-                      <Dialog.Title>{target.label}</Dialog.Title>
-                      <Dialog.Close />
-                    </Dialog.Header>
-                    <Dialog.Body>
-                      <PreviewPane
-                        file={{
-                          url: target.file.url,
-                          name: target.label,
-                          mime: target.file.mime_type?.mime_type,
-                          size: target.file.size_bytes,
-                        }}
+            {target && file ? (
+              <>
+                <Dialog.Root key={target.id}>
+                  <Dialog.Trigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="max-w-full justify-start px-0"
                       />
-                    </Dialog.Body>
-                  </Dialog.Content>
-                </Dialog.Portal>
-              </Dialog.Root>
+                    }
+                  >
+                    <span className="truncate">{target.label}</span>
+                  </Dialog.Trigger>
+                  <Dialog.Portal>
+                    <Dialog.Backdrop />
+                    <Dialog.Content size="lg" placement="center">
+                      <Dialog.Header className="flex items-center justify-between">
+                        <Dialog.Title>{target.label}</Dialog.Title>
+                        <Dialog.Close />
+                      </Dialog.Header>
+                      <Dialog.Body>
+                        <PreviewPane file={file} />
+                      </Dialog.Body>
+                    </Dialog.Content>
+                  </Dialog.Portal>
+                </Dialog.Root>
+                <div
+                  role="region"
+                  aria-label={t("inbox.filePreview")}
+                  className="h-96 overflow-hidden rounded-6 border border-border-subtle"
+                >
+                  <PreviewPane file={file} />
+                </div>
+              </>
             ) : (
               <p className="text-13 font-semibold">
                 {target?.label ?? t("inbox.loading")}

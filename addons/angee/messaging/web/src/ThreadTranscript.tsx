@@ -16,6 +16,7 @@ import {
   reactionsFromGroups,
   textRoleVariants,
   type ChatBubbleRole,
+  type MessagePart,
 } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -54,6 +55,9 @@ export interface ThreadTranscriptProps {
     children: React.ReactElement,
   ) => React.ReactElement;
   renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
+  /** Open an attachment in the host's preview. Without it, a chip opens the file
+   *  URL itself (see `MessagePartsView`). */
+  onPreviewFile?: (message: ThreadTranscriptRow, part: MessagePart) => void;
 }
 
 /**
@@ -73,6 +77,7 @@ export function ThreadTranscript({
   renderMessageActions,
   renderWindow,
   timezone,
+  onPreviewFile,
 }: ThreadTranscriptProps): React.ReactElement {
   // Remount per thread so scroll anchors and virtualizer measurements reset.
   return (
@@ -85,6 +90,7 @@ export function ThreadTranscript({
       renderMessageActions={renderMessageActions}
       renderWindow={renderWindow}
       timezone={timezone}
+      onPreviewFile={onPreviewFile}
     />
   );
 }
@@ -97,6 +103,7 @@ function TranscriptBody({
   renderMessageActions,
   renderWindow,
   timezone,
+  onPreviewFile,
 }: ThreadTranscriptProps): React.ReactElement {
   const t = useMessagingT();
   const transcript = useThreadMessageFeed(threadId, anchor);
@@ -281,7 +288,11 @@ function TranscriptBody({
                 {day !== previousDay ? (
                   <MessageDaySeparator as="div">{day}</MessageDaySeparator>
                 ) : null}
-                <TranscriptMessage message={message} t={t} />
+                <TranscriptMessage
+                  message={message}
+                  t={t}
+                  onPreviewFile={onPreviewFile}
+                />
                 {renderMessageActions ? (
                   <div className="mt-2 flex justify-end">
                     {renderMessageActions(message)}
@@ -322,6 +333,7 @@ function TranscriptBody({
 interface TranscriptMessageProps {
   message: ThreadTranscriptRow;
   t: MessagingT;
+  onPreviewFile?: ThreadTranscriptProps["onPreviewFile"];
 }
 
 /** One transcript turn: an internal note as a distinct centered card, otherwise a
@@ -330,6 +342,7 @@ interface TranscriptMessageProps {
 function TranscriptMessage({
   message,
   t,
+  onPreviewFile,
 }: TranscriptMessageProps): React.ReactElement {
   // Read the SDL's UPPERCASE `Direction` enum verbatim — one enum-casing convention
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
@@ -345,6 +358,9 @@ function TranscriptMessage({
     <>
       <MessagePartsView
         parts={message.parts}
+        onPreviewFile={
+          onPreviewFile ? (part) => onPreviewFile(message, part) : undefined
+        }
       />
       {reactions.length > 0 ? (
         <div className="mt-2">

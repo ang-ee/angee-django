@@ -186,6 +186,9 @@ export interface MessagePartsViewProps extends Omit<HTMLAttributes<HTMLDivElemen
   renderPartActions?: (part: MessagePart) => ReactNode;
   /** Reveal and scroll an addressed part, including folded quoted content. */
   activePartId?: string | null;
+  /** Opens a file part in the consumer's preview. Without it, an attachment chip
+   *  opens the file URL in a new tab, where the server's disposition decides
+   *  whether the browser shows the file or downloads it. */
   onPreviewFile?: (part: MessagePart) => void;
 }
 
@@ -425,7 +428,7 @@ function renderMessagePartFile(
   if (onPreviewFile) return <button type="button" className="inline-flex max-w-full rounded-6 focus-visible:focus-ring" onClick={() => onPreviewFile(part)}>{chip}</button>;
   if (!url) return chip;
   return (
-    <a href={url} download={file.filename ?? undefined} className="inline-flex max-w-full align-middle">
+    <a href={url} target="_blank" rel="noreferrer" className="inline-flex max-w-full align-middle">
       {chip}
     </a>
   );

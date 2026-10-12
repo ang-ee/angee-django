@@ -50,6 +50,9 @@ export function InboxConversation({
           renderMessageActions={(message) => (
             <MessageActions id={message.id} navigation={navigation} />
           )}
+          onPreviewFile={(message, part) => {
+            if (part.file?.id) navigation.previewFile(part.file.id, message.id);
+          }}
         />
       </div>
     </section>

@@ -199,13 +199,7 @@ function ResultRow({
             size="sm"
             variant="ghost"
             className="min-w-0 justify-start px-0"
-            onClick={() => {
-              navigation.patch({
-                message: row.message.id,
-                part: row.part?.id,
-                tab: "preview",
-              });
-            }}
+            onClick={() => navigation.connect(row.id, row.message.id)}
           >
             <span className="truncate">
               {row.part.name || row.file.filename}
