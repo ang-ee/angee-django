@@ -1674,7 +1674,10 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
     def stance_constraint(cls) -> models.CheckConstraint:
         return models.CheckConstraint(
             condition=Q(confidence__gte=0, confidence__lte=1)
-            & (Q(rank=cls.StatementRank.NORMAL) | Q(rank=cls.StatementRank.PREFERRED, source_kind=SourceKind.PERSON))
+            & (
+                Q(rank=cls.StatementRank.NORMAL)
+                | Q(rank=cls.StatementRank.PREFERRED, source_kind__in=[SourceKind.PERSON, SourceKind.SEED])
+            )
             & Q(
                 snak__in=cls.StatementSnak.values,
                 status__in=cls.StatementStatus.values,

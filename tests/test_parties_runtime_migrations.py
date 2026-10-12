@@ -504,21 +504,20 @@ def test_preflight_names_every_blocking_row_before_anything_runs(legacy: LegacyH
 
     rows, notices = preflight_party_folds.blockers(legacy.apps, connection.alias)
 
+    # A veto recorded without a person is a standing decision, not an upgrade blocker (ruling).
     assert {(row.label, row.pk) for row in rows} == {
         ("PartyHandle", unknown.pk),
         ("PartyHandle", dangling.pk),
-        ("parties.MergeVeto", veto.pk),
     }
     assert any("takeout import without one identified account channel (social_takeout)" in reason for reason in notices)
-    with pytest.raises(
-        ValueError, match=rf"3 rows block.*\n.*{unknown.pk}.*\n.*{dangling.pk}.*\n.*MergeVeto {veto.pk}"
-    ):
+    assert any("anti-link without a recorded person" in reason for reason in notices)
+    with pytest.raises(ValueError, match=rf"2 rows block.*\n.*{unknown.pk}.*\n.*{dangling.pk}"):
         legacy.apply(preflight_party_folds)
     assert not legacy.rows("parties.PartyStatement").exists()
     for row in (unknown, dangling):
         legacy.rows("parties.PartyHandle").filter(pk=row.pk).delete()
-    legacy.rows("parties.MergeVeto").filter(pk=veto.pk).delete()
     assert preflight_party_folds.blockers(legacy.apps, connection.alias)[0] == []
+    assert legacy.rows("parties.MergeVeto").filter(pk=veto.pk).exists()
     legacy.apply(preflight_party_folds)
 
 
@@ -601,6 +600,13 @@ def test_handle_fold_attributes_every_live_producer_and_carries_stamps(
 def test_aspect_fold_proves_against_the_applied_snapshot_and_credits_only_persons(
     legacy: LegacyHost, seeded: dict[str, Any]
 ) -> None:
+    # A second keep-separate recorded by a service account: a standing decision by the fold's seed.
+    legacy.create(
+        "parties.MergeVeto",
+        party_a_id=min(seeded["manual"].pk, seeded["organization"].pk),
+        party_b_id=max(seeded["manual"].pk, seeded["organization"].pk),
+        created_by=seeded["service"],
+    )
     legacy.apply(fold_party_handle_statements)
     legacy.apply(fold_party_aspects)
 
@@ -624,8 +630,13 @@ def test_aspect_fold_proves_against_the_applied_snapshot_and_credits_only_person
     assert _statements(legacy, seeded["imported"], aspect="identity") == []
     [manual] = _statements(legacy, seeded["manual"], aspect="identity")
     assert manual.asserted_by == _user(seeded["person"])
-    [veto] = legacy.rows("parties.PartySameAsPairStatement")
-    assert (veto.rank, veto.snak, veto.asserted_by) == ("preferred", "no_value", _user(seeded["person"]))
+    vetoes = {row.asserted_by: row for row in legacy.rows("parties.PartySameAsPairStatement")}
+    seed = legacy.rows("provenance.Seed").get(key="parties.fold_party_handle")
+    assert set(vetoes) == {_user(seeded["person"]), f"provenance/seed:{seed.pk}"}
+    assert {(row.rank, row.snak, row.source_kind) for row in vetoes.values()} == {
+        ("preferred", "no_value", "person"),
+        ("preferred", "no_value", "seed"),
+    }
     assert card["identity"].created_at == seeded["card"].created_at == seeded["week_ago"]
 
 

@@ -173,7 +173,7 @@ ahead of people's normal-rank statements; unset, the stream is a system of
 reference below people (DAMA). A person's confirm or dismiss stays on top.
 
 **Rank / snak / status** — a statement's three facts (Wikibase): rank
-`preferred`/`normal` (only a PERSON source writes `preferred`), snak
+`preferred`/`normal` (a PERSON writes `preferred`; seeded install data may hold a standing decision), snak
 `value`/`some_value`/`no_value`, and status `asserted`/`withdrawn`/
 `quarantined`/`deprecated` — the source's current stance. Canonical candidates
 are asserted; `confirm()` writes a preferred value, `dismiss()` a preferred

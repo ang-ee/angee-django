@@ -15,8 +15,10 @@ REBAC policy is evaluated and no actor is ever invented. Attribution per row:
   A party whose legacy carriers are ``import`` links (connections takeout) and an
   ``import`` relationship are left unasserted and counted: IMPORT attribution awaits
   its ruling. Relationship sources outside manual/carddav/import block.
-- A MergeVeto is a person's anti-link: a preferred ``no_value`` ``same_as`` statement
-  by its recorded person on the ordered pair. A veto without a person blocks.
+- A MergeVeto is an anti-link: a preferred ``no_value`` ``same_as`` statement on the
+  ordered pair by its recorded person, or (ruling, 2026-10-12) by the fold's seed
+  principal when no person recorded it — a standing keep-separate decision a person
+  can undo explicitly. Only missing or equal endpoints block.
 - Legacy extension data is retained on the card's link payload (the evidence owner);
   a payload that already holds different extension data blocks (a re-run state).
   Folded handle claims of a directory party gain their card link.
@@ -241,16 +243,22 @@ def plan(apps, db):
                 continue
             person = legacy.person(veto)
             if person is None:
-                blockers.append(Blocked("parties.MergeVeto", veto.pk, "anti-link decision has no recorded person actor"))
-                continue
+                notices["anti-link without a recorded person: a standing decision by the fold's seed principal"] += 1
             vetoes.append((veto, left, right, person))
     return legacy, plans, vetoes, blockers, notices
 
 
-def _principal(principal):
+SYSTEM_KEY = "parties.fold_party_handle"
+"""The fold chain's one seed principal; the handle fold creates it under the same key."""
+
+
+def _principal(principal, legacy=None):
     kind, value = principal
     if kind == "user":
         return str(SubjectRef.of(app_settings.REBAC_USER_TYPE, str(value)))
+    if kind == "seed":
+        row, _ = legacy.rows("provenance.Seed").get_or_create(key=value)
+        return str(SubjectRef.of("provenance/seed", str(row.pk)))
     return str(SubjectRef.of("integrate/integration", str(value)))
 
 
@@ -264,7 +272,7 @@ class Writer:
 
     def statement(self, name, subject, aspect, principal, kind, values, *, link=None, preferred=False, snak="value"):
         statements = self.legacy.rows("parties." + name + "Statement")
-        asserted_by = _principal(principal)
+        asserted_by = _principal(principal, self.legacy)
         key = dict(subject_id=subject.pk, aspect=aspect, asserted_by=asserted_by, superseded_id=None)
         if statements.filter(**key).exists():
             raise Blocked(f"parties.{name}", subject.pk, f"occupied {aspect} statement key {asserted_by}")
@@ -348,7 +356,8 @@ def forwards(apps, schema_editor):
             pair, created = pairs.get_or_create(left_id=left, right_id=right)
             if created:
                 writer.add(pair, "+")
-            writer.statement("PartySameAsPair", pair, "same_as", person, "person", {}, preferred=True, snak="no_value")
+            principal, kind = (person, "person") if person is not None else (("seed", SYSTEM_KEY), "seed")
+            writer.statement("PartySameAsPair", pair, "same_as", principal, kind, {}, preferred=True, snak="no_value")
         writer.flush()
         legacy.rows(settings.ANGEE_CHANGESET_MODEL).filter(pk=cs.pk).update(
             counts=dict(writer.counts), touched=sorted(writer.counts),

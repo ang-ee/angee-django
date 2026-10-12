@@ -221,7 +221,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='partystatement',
-            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind', 'person')), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_partystatement_stance'),
+            constraint=models.CheckConstraint(condition=models.Q(('confidence__gte', 0), ('confidence__lte', 1), models.Q(('rank', 'normal'), models.Q(('rank', 'preferred'), ('source_kind__in', ['person', 'seed'])), _connector='OR'), ('snak__in', ['value', 'some_value', 'no_value']), ('source_kind__in', ['person', 'system_of_record', 'directory', 'network', 'import', 'seed', 'document', 'extraction', 'rule']), ('status__in', ['asserted', 'withdrawn', 'quarantined', 'deprecated'])), name='parties_partystatement_stance'),
         ),
         migrations.AddConstraint(
             model_name='partystatement',

@@ -127,8 +127,13 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             raise ValidationError("The source must declare a known per-row source_kind.")
         rank = self.model.StatementRank.NORMAL if rank is None else rank
         snak = self.model.StatementSnak.VALUE if snak is None else snak
-        if rank == self.model.StatementRank.PREFERRED and kind != self.model.SourceKind.PERSON:
-            raise PermissionDenied("Only person sources may assert preferred statements.")
+        if rank == self.model.StatementRank.PREFERRED and kind not in (
+            self.model.SourceKind.PERSON,
+            self.model.SourceKind.SEED,
+        ):
+            # A preferred statement is a standing decision: a person's, or seeded install
+            # data's (a keep-separate recorded without a person, by ruling).
+            raise PermissionDenied("Only person and seed sources may assert preferred statements.")
         subject.require_statement_write(source)
         if set(values) - set(declaration.fields) or (snak != self.model.StatementSnak.VALUE and values):
             raise ValidationError("Only value snaks carry the declared aspect's values.")
