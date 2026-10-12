@@ -53,7 +53,7 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.actors import instance_actor
 from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AuditMixin, OwnerMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.scoping import lock_if_supported
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -851,7 +851,7 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Agent(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -859,6 +859,11 @@ class Agent(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     ``instructions`` into AGENTS.md/CLAUDE.md, the selected skills and MCP servers/tools
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
+
+    Ownership is transferable (:class:`~angee.base.mixins.OwnerMixin`). An agent
+    installed before any user exists loads without an owner until an
+    administrator transfers it, and deleting the owner clears it, leaving the
+    agent to platform administrators.
 
     Deletion requires teardown and stopped turns on every Django collector path.
     Sessions and turns derive delete authority from this agent in the Zed schema.
@@ -872,7 +877,6 @@ class Agent(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     is_template = models.BooleanField(default=False, db_index=True)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agents")
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         null=True,
