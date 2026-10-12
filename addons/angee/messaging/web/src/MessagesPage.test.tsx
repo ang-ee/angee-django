@@ -70,11 +70,12 @@ vi.mock("@angee/metadata", async (importOriginal) => ({
   useResourceInvalidates: () => [],
 }));
 
-const sender = vi.hoisted(() => ({ id: "hdl-1", display_name: "Billing Desk", value: "billing@example.test", party_link_confirmed: false, party: null }));
+const sender = vi.hoisted(() => ({ id: "hdl-1", display_name: "Billing Desk", value: "billing@example.test", party_link_confirmed: false, party: null, avatar: null }));
 
 vi.mock("@angee/parties", () => ({
   senderDisplayName: (sender: { display_name?: string; value?: string } | null, fallback = "") =>
     sender?.display_name || sender?.value || fallback,
+  senderAvatarUrl: () => undefined,
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
