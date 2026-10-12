@@ -4,15 +4,36 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from django.apps import apps
 from django.db import connection, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.integrate.constants import DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.models import Bridge
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
+from angee.jobs.enqueue import enqueue_task
 
 _QUEUED_RECOVERY_SECONDS = 300
+
+
+def enqueue_pending_discoveries(*, now: datetime | None = None) -> int:
+    """Redispatch due discovery after broker loss, worker exit, or provider throttling."""
+
+    with system_context(reason="integrate.scheduler.discoveries"):
+        model = apps.get_model("integrate", "Integration")
+        rows = list(
+            model.objects.pending_discoveries(now=now or timezone.now()).values_list(
+                "pk", "credential_id", "discovery_generation",
+            )
+        )
+        for pk, credential_pk, generation in rows:
+            enqueue_task(
+                DISCOVERY_TASK, kwargs={"integration_pk": pk, "credential_pk": credential_pk, "generation": generation},
+                expires=DISCOVERY_TASK_EXPIRES, robust=True,
+            )
+    return len(rows)
 
 
 def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:

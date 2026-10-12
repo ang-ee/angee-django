@@ -133,16 +133,6 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
         return claims
 
-    def fetch_userinfo(self, access_token: str) -> dict[str, Any]:
-        """Fetch userinfo, resolving the endpoint from discovery when it is blank."""
-
-        if access_token and not str(getattr(self.oauth_client, "userinfo_endpoint", "") or ""):
-            try:
-                self.ensure_endpoints()
-            except OAuthFlowError:
-                return {}
-        return super().fetch_userinfo(access_token)
-
     def ensure_endpoints(self) -> dict[str, Any]:
         """Fill blank endpoints on the OAuth client via discovery.
 

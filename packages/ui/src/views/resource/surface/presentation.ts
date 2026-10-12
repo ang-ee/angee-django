@@ -1,5 +1,5 @@
 import * as React from "react";
-import { type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { getCoreRowModel, getExpandedRowModel, getFilteredRowModel, getGroupedRowModel, getPaginationRowModel, getSortedRowModel, useReactTable, type ColumnDef, type ExpandedState, type FilterFn, type Table as TableModel, type VisibilityState } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useUiT } from "../../../i18n";
@@ -37,7 +37,7 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   filter?: ResourceViewFilter;
   textSearchField?: string;
   textSearchFields?: readonly string[];
-}): FlatResourceViewPresentationSurface<TRow> {
+}): FlatResourceViewPresentationSurface<TRow> & { mergedFilter: QueryFilter } {
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const tableState = useResourceViewTableState({
@@ -73,7 +73,7 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     (row, _columnId, value) => query.matches(row.original, value),
     [query],
   );
-  const table = useReactTable<TRow>({
+  const table: TableModel<TRow> = useReactTable<TRow>({
     data: rows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
     state: {
@@ -88,7 +88,7 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     onColumnVisibilityChange: setColumnVisibility,
     onExpandedChange: setExpanded,
     onPaginationChange: handlePaginationChange,
-    onRowSelectionChange: handleRowSelectionChange,
+    onRowSelectionChange: (updater) => handleRowSelectionChange(updater, table),
     onSortingChange: handleSortingChange,
     enableMultiSort: false,
     getCoreRowModel: getCoreRowModel(),
@@ -115,25 +115,19 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
       resourceView.setPage(pageCount);
     }
   }, [pageCount, resourceView.setPage, (resourceView.state.pagination.pageIndex + 1)]);
-  return useResourceViewPresentationSurfaceFromTable({
-    rows,
-    table,
-    columnVisibility,
-    resourceView,
-    groupStack,
-    boardLaneState,
-  });
+  return {
+    ...useResourceViewPresentationSurfaceFromTable({ table, columnVisibility, resourceView, groupStack, boardLaneState }),
+    mergedFilter: globalFilter,
+  };
 }
 
 export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
-  rows,
   table,
   columnVisibility,
   resourceView,
   groupStack,
   boardLaneState,
 }: {
-  rows: readonly TRow[];
   table: TableModel<TRow>;
   columnVisibility: VisibilityState;
   resourceView: ResourceViewContextValue;
@@ -151,10 +145,7 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   const rowModels = table.getRowModel().rows;
   const groupedRowModels = table.getPreExpandedRowModel().rows;
   const tableRowSelection = table.getState().rowSelection;
-  const selectedIds = React.useMemo(
-    () => idsFromRowSelectionState(tableRowSelection),
-    [tableRowSelection],
-  );
+  const selectedIds = React.useMemo(() => idsFromRowSelectionState(tableRowSelection), [tableRowSelection]);
   const pageIds = React.useMemo(
     () => leafTableRows(rowModels).map((row) => row.id),
     [rowModels],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -14,7 +15,9 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.fields import ModelLabelField
 from angee.base.identity import SqidPublicIdentity, public_id_of
+from angee.base.jsonschema import relation_positions
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
@@ -35,7 +38,7 @@ from angee.resources.loader import (
     build_resource,
 )
 from angee.resources.mixins import ResourceLoadMixin
-from angee.resources.widgets import resolve_xref, split_xref
+from angee.resources.widgets import is_xref, resolve_xref, split_xref
 
 
 class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
@@ -104,6 +107,52 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
 
 class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # type: ignore[misc]
     """Orchestrate selected addon resources independently of ledger row filters."""
+
+    def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
+        """Resolve a ledger handle under the current actor, optionally checking its type."""
+
+        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
+
+    def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
+        """Resolve dotted xrefs only at schema-declared relation positions.
+
+        Public ids and ordinary strings remain literal. The ledger resolution
+        owner enforces target types, as it does for resource imports.
+        """
+
+        resolved = copy.deepcopy(value)
+        for path, relation, item in relation_positions(schema, value):
+            public_id = self.resolve_config_reference(item, relation=relation)
+            if not path:
+                resolved = public_id
+                continue
+            parent = resolved
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[path[-1]] = public_id
+        return resolved
+
+    def resolve_config_reference(self, value: str, *, relation: dict[str, Any]) -> str:
+        """Resolve one declared relation's xref, preserving literal public ids."""
+
+        if not is_xref(value):
+            return value
+        target = self.resolve(value, model=ModelLabelField.get_model(relation["resource"]))
+        return str(public_id_of(target))
+
+    def bind_instance(
+        self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,
+    ) -> None:
+        """Use the import ledger for owner-created installation identities."""
+
+        if instance.pk is None:
+            raise ResourceLoadError("Installation identities require a saved target.")
+        with transaction.atomic():
+            resource = build_resource(
+                type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
+                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()),
+            )
+            resource.bind_instance(xref, instance, replace=replace)
 
     def validate_addons(
         self,

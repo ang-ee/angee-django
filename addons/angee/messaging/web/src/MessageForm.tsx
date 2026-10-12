@@ -4,6 +4,7 @@ import {
   NavLink, registerForm, useResourceRecordHrefLookup,
   type ListColumn, type RecordPanelContext, type RecordTabDescriptor,
   type RegisteredFormProps, useTrashActions,
+  useResolvedWidget,
 } from "@angee/ui";
 import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
@@ -18,6 +19,7 @@ const PART_MODEL = "messaging.Part";
 // included) is the follow target for the attachment cell.
 const FILE_MODEL = "storage.File";
 const STAR_MODEL = "messaging.MessageStar";
+const MESSAGE_TAG_FIELDS = ["tags.id", "tags.name", "permissions"];
 
 // The structural tab defaults to grouping the part rows by role (title / header /
 // body / quoted / signature); regrouping by fragment.hash through the shared
@@ -166,20 +168,25 @@ export function messageRecordTabs(
 function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useMessagingT();
   const recordTabs = React.useMemo(() => messageRecordTabs(t), [t]);
+  const RecordTags = useResolvedWidget("angee.tags.recordTags")?.edit;
   // Moderation is the shared trash: channel managers move a message there and
   // back, offered by the message's projected `delete` permission.
   const trashActions = useTrashActions(useModelMetadata(MODEL)?.resource);
+  const returning = React.useMemo(() => [...(props.returning ?? []), ...MESSAGE_TAG_FIELDS], [props.returning]);
   return <Form
     {...props}
     resource={MODEL}
     readOnly={readOnly}
+    returning={returning}
     recordTabs={recordTabs}
-    formExtras={({ recordId }) => recordId ? <MessageRecordReader recordId={recordId} /> : null}
+    formExtras={({ recordId }) => recordId ? <>
+      {RecordTags ? <RecordTags readOnly={readOnly} /> : null}
+      <MessageRecordReader recordId={recordId} />
+    </> : null}
     title={({ record }) => messageSubject(record?.title, t("messages.noSubject"))}
   >
     <Field name="title" title readOnly />
     <Field name="status" readOnly />
-    <Field name="tags" />
     {/* The reader shows the sender and date; the envelope keeps the transport facts. */}
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
       <Field name="platform" readOnly />

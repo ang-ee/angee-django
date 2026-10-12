@@ -14,7 +14,8 @@ const pageMocks = vi.hoisted(() => ({
   setStarred: vi.fn(async () => ({})),
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/ui")>(),
   createNamespaceT: () => () => (key: string) => key,
   Action: () => { pageMocks.actions += 1; return null; },
   Alert: ({ children }: { children?: React.ReactNode }) => <div role="alert">{children}</div>,
@@ -59,20 +60,25 @@ vi.mock("@angee/ui", () => ({
   RelativeTime: ({ value }: { value: string }) => <time>{value}</time>,
   registerForm: (resource: string, Component: React.ComponentType<Record<string, unknown>>) => ({ resource, Component }),
   useTrashActions: () => [{ id: "trash", label: "Move to trash" }, { id: "restore", label: "Restore" }],
+  useResourceView: () => ({ state: { filter: {} }, baseFilter: {} }),
+  useToast: () => ({ danger: vi.fn() }),
 }));
 
-vi.mock("@angee/metadata", () => ({
+vi.mock("@angee/metadata", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/metadata")>(),
   useModelMetadata: () => null,
+  useResourceInvalidates: () => [],
 }));
 
-const sender = { id: "hdl-1", display_name: "Billing Desk", value: "billing@example.test", party_link_confirmed: false, party: null };
+const sender = vi.hoisted(() => ({ id: "hdl-1", display_name: "Billing Desk", value: "billing@example.test", party_link_confirmed: false, party: null }));
 
 vi.mock("@angee/parties", () => ({
   senderDisplayName: (sender: { display_name?: string; value?: string } | null, fallback = "") =>
     sender?.display_name || sender?.value || fallback,
 }));
 
-vi.mock("@angee/refine", () => ({
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@angee/refine")>(),
   useAuthoredQuery: () => ({
     data: { messages: [{
       id: "msg-1",

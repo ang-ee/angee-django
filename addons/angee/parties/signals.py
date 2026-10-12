@@ -11,6 +11,10 @@ or cascaded ``PartyHandle`` delete and a removed ``Handle``. They do **not** fir
 An account's person follows the account's name: every instance save of the user
 model that may change it renames the linked person in the same transaction.
 
+After every migrate, storage's image drive is provisioned with its grant, and party
+avatars stored before it move onto it (``PartyManager.rehome_avatars``), a no-op once
+none remain.
+
 Receivers run under ``system_context`` because the derived writes are server-owned
 bookkeeping that must land even when the triggering write ran under a bare actor.
 """
@@ -23,10 +27,10 @@ from typing import Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import post_delete, post_migrate, post_save
 from rebac import system_context
 
-from angee.base.signals import connect_for_models
+from angee.base.signals import connect_for_models, has_table, migrated_model
 from angee.iam.events import person_created
 from angee.parties.models import Handle, PartyHandle
 
@@ -37,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def connect() -> None:
-    """Wire person creation, account renames and concrete Handle/PartyHandle counter receivers."""
+    """Wire person creation, account renames, Handle/PartyHandle counters and the avatar rehome."""
 
     person_created.connect(_link_person, dispatch_uid="parties.person_created")
     post_save.connect(_follow_user_name, sender=get_user_model(), dispatch_uid="parties.user_name")
@@ -45,6 +49,25 @@ def connect() -> None:
                        dispatch_uid=f"{_DISPATCH_PREFIX}.phdel")
     connect_for_models(post_delete, _recount_handle_party, applies=lambda model: issubclass(model, Handle),
                        dispatch_uid=f"{_DISPATCH_PREFIX}.hdel")
+    post_migrate.connect(_rehome_avatars, dispatch_uid="parties.rehome_avatars")
+
+
+def _rehome_avatars(*, app_config: object, using: str, **kwargs: object) -> None:
+    """Provision storage's image drive and move avatars stored before it onto it, once per migrate.
+
+    Best-effort: it needs storage's tables as well as the party table, and no
+    failure, a storage outage included, ever fails the migrate; the next one retries.
+    """
+
+    party_model = migrated_model(app_config=app_config, using=using, app_label="parties", model_name="Party")
+    if party_model is None:
+        return
+    if not all(has_table(using, apps.get_model("storage", name)) for name in ("File", "Drive")):
+        return
+    try:
+        party_model._default_manager.rehome_avatars()
+    except Exception:
+        logger.exception("Moving party avatars onto the image drive failed; the next migrate retries.")
 
 
 def _link_person(sender: Any, instance: Any, **kwargs: Any) -> None:

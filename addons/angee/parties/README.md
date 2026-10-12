@@ -47,16 +47,29 @@ type. Email and phone contact points come only from the person's
 [asserted links](managers.py): those the card itself carries, those a person
 added, and confirmed suggestions. Unreviewed suggestions such as mined
 signature phones or display-name matches stay inside Angee and are never
-written to a card. Extraction fetches and pre-stores avatars through storage's
-idempotent `File.objects.ingest_bytes` before the page transaction. Apply only
-validates and links the prepared File under the row lock; it performs database
-work only.
+written to a card. Extraction fetches and pre-stores a card's `PHOTO` as the
+person's avatar through storage's idempotent `File.objects.ingest_image` before
+the page transaction. Inline or fetched, a `PHOTO` storage refuses (not a
+raster image, or over `ANGEE_STORAGE_IMAGE_MAX_BYTES`) quarantines its card
+while the rest of the page lands. Apply only validates and links the prepared
+avatar, found on storage's image drive, under the row lock; it performs database
+work only. Write-back refuses to send an avatar storage's image rule refuses (one
+stored before that rule) as a remote rejection, not a stuck write.
 Local comparisons use the stored hash without reading avatar bytes, and revisions
 retain the content address instead of base64 photo bytes. Collection order
 does not affect hashes. The remote and local bases are separate because domain
 fields may normalize values. Transport metadata, unmapped ORG department units,
 and other vCard properties remain outside the comparison. Conditional writes
 preserve those unmapped properties in the retained vCard.
+
+Only the person's own `avatar` is projected. A handle carries the avatar its own
+network shows (a messenger profile picture): live sessions report it as an
+`AvatarReport` through `Handle.objects.fill_avatar`, which never creates a
+handle. A party without a readable avatar of its own displays the avatar of its
+strongest handle the viewer can read (`Party.objects.display_avatar`); that
+fallback is derived for reading and is never stored on the party or written to a
+card. Avatars live on storage's image drive, which every signed-in user reads;
+which avatar a party or handle shows stays with that record's readers.
 
 Each cycle compares local projections with their last applied bases. Remote-only
 edits use the existing ingest verb; local-only edits use a conditional PUT with

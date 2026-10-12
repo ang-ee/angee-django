@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, ClassVar, cast
 
@@ -61,13 +61,14 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OptimisticLockMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
+from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
     ChannelManager,
     FragmentManager,
@@ -1054,7 +1055,7 @@ class Channel(Bridge):
     """
 
     runtime = True
-    rebac_grantable = {"reader": "write"}
+    rebac_grantable = {"reader": "write", "replier": "write"}
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
@@ -1079,6 +1080,22 @@ class Channel(Bridge):
 
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
+
+    def can_reconcile_delivery(self) -> bool:
+        """Read the concrete capability's backend declaration without opening it."""
+
+        capability = self.concrete_capability()
+        if capability._meta.concrete_model is not self._meta.concrete_model:
+            return bool(capability.can_reconcile_delivery())
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).reconciles_delivery()
+
+    def delivery_visibility_delay(self) -> timedelta:
+        """Read the selected transport's propagation margin without opening it."""
+
+        capability = self.concrete_capability()
+        if capability._meta.concrete_model is not self._meta.concrete_model:
+            return cast(timedelta, capability.delivery_visibility_delay())
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).delivery_visibility_delay
 
     def validate_webform_answers(self, answers: dict[str, Any]) -> None:
         """Validate domain meaning after the public form's scalar validation.
@@ -1279,7 +1296,8 @@ class Thread(TaggedModel, OwnerMixin, AngeeDataModel):
     thread's post link (``subject_url``) has no producer in this base slice, so the
     ``posts`` addon owns that column and folds it onto this same row through the
     same-row ``extends`` seam. ``message_count``/``last_message_at`` are
-    denormalised and maintained with ``F()`` deltas by the ingest write path.
+    denormalised: inserts use ``F()`` deltas; loss, restoration and delivery
+    settlement recount surviving rows under the thread lock.
 
     ``title`` is a pointer at the content-addressed :class:`Fragment` holding the
     thread's normalised subject — a denormalisation that duplicates nothing (the row
@@ -1727,7 +1745,9 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, AuditMixin, AngeeDataModel):
+class Message(
+    ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel,
+):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1774,6 +1794,14 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         SYNCED = "synced", "Synced"
         EDITED = "edited", "Edited"
         FAILED = "failed", "Failed"
+        UNCERTAIN = "uncertain", "Uncertain"
+
+    ACTIVE_OUTBOUND_STATUSES = (MessageStatus.DRAFT, MessageStatus.QUEUED, MessageStatus.SENT, MessageStatus.UNCERTAIN)
+    """Prepared, accepted or unresolved outbound messages that still answer their parent."""
+    PUBLISHED_STATUSES = (MessageStatus.SYNCED, MessageStatus.EDITED, MessageStatus.SENT)
+    """Provider-visible messages, whether ingested or sent locally."""
+    POSSIBLY_PUBLIC_STATUSES = (MessageStatus.SENT, MessageStatus.UNCERTAIN)
+    """Outbound states that may be provider-visible even after local trash."""
 
     class MessageKind(models.TextChoices):
         """Odoo-style functional kind of a message.
@@ -1838,10 +1866,136 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
     preview = models.CharField(max_length=512, blank=True, default="")
     sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
     received_at = models.DateTimeField(null=True, blank=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    """Draft release, queued retry, or idle UNCERTAIN recovery horizon."""
+    delivery_lease_until = models.DateTimeField(null=True, blank=True)
+    """Pending dispatch or live claim deadline; unleased queues stay inert."""
+    delivery_claim = models.UUIDField(null=True, blank=True, editable=False)
+    """Committed effect marker and settlement fence for the current provider attempt."""
+    delivery_started_at = models.DateTimeField(null=True, blank=True, editable=False)
+    """Current send horizon, retained after possible acceptance for tolerant lookup."""
+    delivery_possibly_accepted = models.BooleanField(default=False, editable=False)
+    """Only uncertain settlement or an expired effect claim sets this marker."""
+    delivery_operator_only = models.BooleanField(default=False, editable=False)
+    """Automatic reconciliation is unavailable or has exhausted its retry budget."""
+    delivery_reconcile_attempts = models.PositiveSmallIntegerField(default=0, editable=False)
+    acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    """Operator who explicitly acknowledged or retried this delivery."""
     edit_history = models.JSONField(blank=True, default=list)
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = MessageManager()
+
+    @classmethod
+    def protected_local_keys(cls) -> frozenset[str]:
+        """Trusted provenance and delivery facts contributed through autoconfig."""
+
+        return frozenset(settings.ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS)
+
+    @staticmethod
+    def held_draft_fields() -> dict[str, Any]:
+        """The shared held predicate, including approval-only unscheduled drafts."""
+
+        return {"direction": "outbound", "status": "draft", "is_trashed": False}
+
+    @staticmethod
+    def counted_in_thread_q() -> models.Q:
+        """All retained messages count, including local drafts, queues and failures."""
+
+        return models.Q(is_trashed=False)
+
+    @property
+    def is_held(self) -> bool:
+        """Whether this retained draft awaits its due time or operator approval."""
+
+        return all(getattr(self, key) == value for key, value in self.held_draft_fields().items())
+
+    hasura_filter_expressions = {
+        "is_held": lambda rows: models.ExpressionWrapper(
+            models.Q(**rows.model.held_draft_fields()), output_field=models.BooleanField(),
+        ),
+    }
+
+    @classmethod
+    def ingest_metadata(cls, incoming: dict[str, Any], *, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Replace provider metadata while retaining trusted local facts."""
+
+        metadata = dict(incoming)
+        protected = cls.protected_local_keys()
+        local = metadata.get("local")
+        local = (
+            {key: value for key, value in local.items() if key not in protected}
+            if isinstance(local, dict) else {}
+        )
+        retained = (previous or {}).get("local", {})
+        if isinstance(retained, dict):
+            local.update({key: value for key, value in retained.items() if key in protected})
+        if local:
+            metadata["local"] = local
+        else:
+            metadata.pop("local", None)
+        return metadata
+
+    @property
+    def local_metadata(self) -> dict[str, Any]:
+        """Copy the local facts; older untyped provider values are not local facts."""
+
+        local = (self.metadata or {}).get("local")
+        return dict(local) if isinstance(local, dict) else {}
+
+    @property
+    def is_locally_written(self) -> bool:
+        """Local delivery states distinguish authored envelopes from synced own mail."""
+
+        return self.status not in (self.MessageStatus.SYNCED, self.MessageStatus.EDITED)
+
+    @property
+    def delivery_needs_reconciliation(self) -> bool:
+        """A possibly accepted message needs reconciliation before another send."""
+
+        return bool(self.delivery_possibly_accepted)
+
+    @property
+    def delivery_blocked(self) -> bool:
+        """Whether removal, discard, or a provider identity collision prevents a send."""
+
+        return (self.is_trashed and not self.delivery_needs_reconciliation) or bool(
+            self.local_metadata.get("delivery_conflict")
+        )
+
+    @property
+    def delivery_held(self) -> bool:
+        """Whether this message's release time is still in the future."""
+
+        return (
+            self.status != self.MessageStatus.UNCERTAIN
+            and self.scheduled_at is not None and self.scheduled_at > timezone.now()
+        )
+
+    def validate_delivery(self) -> None:
+        """Require the persisted outbound envelope used by every delivery entrypoint."""
+
+        if self.direction != self.Direction.OUTBOUND or self.channel_id is None or not self.external_id.strip():
+            raise ValidationError("Delivery requires an outbound message, a channel, and a stable external id.")
+
+    def validate_held_draft(self) -> None:
+        """Require an outbound retained draft before an operator acts on it."""
+
+        self.validate_delivery()
+        if not self.is_held or self.delivery_blocked:
+            raise ValidationError("Only held outbound drafts may be sent or discarded.")
+
+    def body_text(self, *, max_bytes: int | None = None) -> str:
+        """Read plain-text BODY fragments in native order, optionally byte-bounded."""
+
+        if not self.has_access("read"):
+            raise PermissionDenied("Message read access is required.")
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("Text byte limit cannot be negative.")
+        text = apps.get_model("messaging", "Part").objects.plain_body_text(self)
+        return text if max_bytes is None else text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
 
     class Meta:
         """Django model options for the message source model."""
@@ -1862,6 +2016,17 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             ),
         )
         indexes = (
+            models.Index(
+                fields=("id",), condition=models.Q(status="uncertain", delivery_operator_only=False),
+                name="ix_message_uncertain",
+            ),
+            models.Index(
+                fields=("scheduled_at",), condition=models.Q(scheduled_at__isnull=False), name="ix_message_due_hold",
+            ),
+            models.Index(
+                fields=("delivery_lease_until",), condition=models.Q(delivery_lease_until__isnull=False),
+                name="ix_message_delivery_lease",
+            ),
             # The exact keyset the feed orders and cursors by
             # (``MessageQuerySet.chronological_time()`` + pk tiebreak): one expression index
             # serves the hot page query verbatim, trailing id for cursor scans.
@@ -1956,12 +2121,14 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
 
         return moderate_access and not self.is_trashed and self.trash_error() is None
 
-    def trash(self, *, reason: str = "", using: str | None = None) -> None:
-        """Trash this message and recount its thread without it."""
+    def trash(self, *, reason: str = "", using: str | None = None, recount: bool = True) -> None:
+        """Trash and cancel unsent delivery; restoring never re-arms a send."""
 
         with transaction.atomic(using=using):
+            type(self).objects.cancel_delivery(self, using=using)
             super().trash(reason=reason, using=using)
-            self._recount_thread()
+            if recount:
+                self._recount_thread()
 
     def restore(self, *, using: str | None = None) -> None:
         """Restore this message and recount its thread with it."""
@@ -1977,7 +2144,7 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
             return
         thread_model = self._meta.get_field("thread").related_model
         with system_context(reason="messaging.message.recount_thread"):
-            thread = thread_model._base_manager.select_for_update().get(pk=self.thread_id)
+            thread = thread_model._base_manager.get(pk=self.thread_id)
             type(self).objects._recount_thread(thread)
 
     def can_change_comment(self, *, post_access: bool, moderate_access: bool, actor_id: Any) -> bool:
@@ -2182,16 +2349,28 @@ class Message(ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin, Audi
         return part.fragment.text
 
     def deliver(self) -> bool:
-        """Queue this outbound message for idempotent channel delivery.
+        """Queue this outbound message through messaging's fenced delivery owner.
 
         This is the consumer seam: callers compose and persist the message,
         envelope participants, and parts, then call ``message.deliver()``. The
         transport always runs through ``angee.jobs``, never in the request.
         """
 
-        from angee.messaging.delivery import queue_message_delivery
-
         return queue_message_delivery(self)
+
+    def acknowledge_delivery(self, *, actor: Any, expected_revision: int) -> Any:
+        """Confirm an uncertain provider effect as sent without making another call."""
+
+        return type(self).objects.resolve_uncertain_delivery(
+            self, actor=actor, expected_revision=expected_revision, retry=False,
+        )
+
+    def retry_delivery(self, *, actor: Any, expected_revision: int) -> Any:
+        """Retry FAILED, or explicitly accept repeat-effect risk for UNCERTAIN."""
+
+        return type(self).objects.resolve_uncertain_delivery(
+            self, actor=actor, expected_revision=expected_revision, retry=True,
+        )
 
     def __str__(self) -> str:
         """Return a readable message label for Django displays."""

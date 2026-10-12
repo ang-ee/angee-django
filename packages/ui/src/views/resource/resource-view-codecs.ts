@@ -104,6 +104,8 @@ export function groupingStateFromResourceGroups<TRow extends object>(
   return tableGroupAxes(groupStack, metadata, columns, query).map((axis) => axis.id);
 }
 
+export const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
+
 export function idsFromRowSelectionState(
   state: RowSelectionState,
 ): ReadonlySet<string> {

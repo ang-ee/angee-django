@@ -9,6 +9,9 @@ category = "Data"
 depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.resources", "angee.storage", "angee.tags", "django.contrib.contenttypes", "django.contrib.postgres"]
 dependencies = [
   "django-anymail>=15.1",
+  # Classify Anymail's chained HTTP-ESP transport failures (email delivery).
+  "requests>=2.32",
+  "urllib3>=2.2",
 ]
 
 [resources]

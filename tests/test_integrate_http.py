@@ -3,7 +3,7 @@
 These exercise the real ``PinnedTransport`` / ``_PinnedBackend`` over httpx2. The
 backend tests stub only ``socket.getaddrinfo`` (resolution) and httpcore2's raw
 dial, so the address gate, the resolve-then-pin (DNS-rebind) protection, the
-dial-all fallback, and the ``OSError``-vs-``ValidationError`` distinction are
+dial-all fallback, and the not-sent-vs-``ValidationError`` distinction are
 asserted against the production path. End-to-end tests confirm those exceptions
 survive httpx2. Request and download tests inject httpx2's MockTransport through
 HttpClient's transport factory to assert redirect handling, byte budgets, address
@@ -23,6 +23,7 @@ import httpx2
 import pytest
 from django.core.exceptions import ValidationError
 
+from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import (
     HttpClient,
     OutboundBudget,
@@ -32,6 +33,7 @@ from angee.integrate.http import (
     _PinnedBackend,
     _request_headers,
 )
+from angee.integrate.net import AddressNotAllowedError, AddressResolutionError, resolved_addresses
 
 URL = "https://dav.example.test/path?x=1"
 
@@ -97,7 +99,7 @@ def test_metadata_and_escapes_blocked_in_both_modes(
     _resolve_to(monkeypatch, address)
     dialled = _record_dials(monkeypatch)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(AddressNotAllowedError):
         _PinnedBackend(allow_private=allow_private).connect_tcp("h", 443)
     assert dialled == []
 
@@ -109,7 +111,7 @@ def test_private_and_loopback_rejected_in_public_mode(monkeypatch: pytest.Monkey
     _resolve_to(monkeypatch, address)
     dialled = _record_dials(monkeypatch)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(AddressNotAllowedError):
         _PinnedBackend(allow_private=False).connect_tcp("h", 443)
     assert dialled == []
 
@@ -137,32 +139,39 @@ def test_dial_falls_back_to_the_next_validated_address(monkeypatch: pytest.Monke
     assert dialled == ["93.184.216.34", "93.184.216.35"]
 
 
-def test_all_addresses_unreachable_raises_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If every validated address fails, a transport ``OSError`` surfaces — not ``ValidationError``."""
+def test_all_addresses_unreachable_are_provably_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every dial failed before any HTTP request bytes were written."""
 
     _resolve_to(monkeypatch, "93.184.216.34", "93.184.216.35")
     _record_dials(monkeypatch, behaviors=[httpcore2.ConnectError("a"), httpcore2.ConnectError("b")])
 
-    with pytest.raises(OSError):
+    with pytest.raises(RequestNotSentError):
         _PinnedBackend(allow_private=False).connect_tcp("h", 443)
 
 
-def test_httpclient_surfaces_validation_error_for_an_unsafe_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The SSRF gate's ``ValidationError`` survives httpx2 end-to-end."""
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_httpclient_refuses_an_unsafe_host_permanently_before_dialling(
+    monkeypatch: pytest.MonkeyPatch, method: str,
+) -> None:
+    """The pre-connect SSRF refusal is a permanent gate refusal and never dials."""
 
     _resolve_to(monkeypatch, "169.254.169.254")
+    dialled = _record_dials(monkeypatch)
 
-    with pytest.raises(ValidationError):
-        HttpClient().get(URL)
+    with pytest.raises(AddressNotAllowedError) as refused:
+        HttpClient().request(method, URL)
+    assert isinstance(refused.value, ValidationError)
+    assert not isinstance(refused.value, RequestNotSentError)
+    assert dialled == []
 
 
-def test_httpclient_surfaces_os_error_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A transport failure surfaces as ``OSError`` end-to-end (webhook telemetry relies on it)."""
+def test_httpclient_surfaces_not_sent_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The typed connect refusal survives the production HTTP stack."""
 
     _resolve_to(monkeypatch, "93.184.216.34")
     _record_dials(monkeypatch, behaviors=[httpcore2.ConnectError("down")])
 
-    with pytest.raises(OSError):
+    with pytest.raises(RequestNotSentError):
         HttpClient().get(URL)
 
 
@@ -514,3 +523,98 @@ def test_same_origin_redirect_stops_at_bound_or_non_preserving_status(
     response = HttpClient().request("REPORT", "https://dav.example/start", same_origin_redirects=3)
     assert response.status_code == status
     assert len(requests) == count
+
+
+
+def test_real_client_refused_local_port_is_not_sent_and_retryable() -> None:
+    # Keep a port bound without listening: no race with another process taking it.
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        port = reserved.getsockname()[1]
+        with pytest.raises(RequestNotSentError) as raised:
+            HttpClient().post(f"http://127.0.0.1:{port}/deliver", body=b"payload", allow_private=True, timeout=1)
+    assert raised.value.transient and raised.value.retry_after is None
+    assert "not sent" in raised.value.public_message
+
+
+@pytest.mark.parametrize("failure", [
+    socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure"),
+    socket.gaierror(socket.EAI_SYSTEM, "resolver system failure"),
+    socket.gaierror(socket.EAI_FAIL, "resolver refused the query"),
+    socket.gaierror(socket.EAI_MEMORY, "resolver out of memory"),
+    TimeoutError(),
+])
+def test_temporary_dns_failure_is_not_sent(monkeypatch: pytest.MonkeyPatch, failure: OSError) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise failure
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
+    with pytest.raises(RequestNotSentError) as raised:
+        HttpClient().post("https://unresolved.example/deliver", body=b"payload")
+    assert raised.value.transient
+
+
+@pytest.mark.parametrize("errno", [socket.EAI_NONAME, socket.EAI_NODATA])
+def test_nonexistent_dns_host_is_a_permanent_target_error(monkeypatch: pytest.MonkeyPatch, errno: int) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise socket.gaierror(errno, "no such host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
+    dialled = _record_dials(monkeypatch)
+    with pytest.raises(AddressResolutionError):
+        resolved_addresses("absent.example", 443)
+    with pytest.raises(AddressResolutionError):
+        HttpClient().post("https://absent.example/deliver", body=b"payload")
+    assert dialled == []
+
+
+def test_tls_handshake_failure_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(self: Any, request: httpx2.Request) -> Any:
+        raise httpx2.ConnectError("TLS handshake diagnostic", request=request)
+
+    monkeypatch.setattr(httpx2.HTTPTransport, "handle_request", fail)
+    with PinnedTransport() as transport, pytest.raises(RequestNotSentError):
+        transport.handle_request(httpx2.Request("POST", URL, content=b"payload"))
+
+
+def test_write_failure_remains_uncertain(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(request: httpx2.Request) -> Any:
+        raise httpx2.WriteError("write diagnostic", request=request)
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(fail)))
+    with pytest.raises(httpx2.WriteError):
+        HttpClient().post(URL, body=b"payload")
+
+
+@pytest.mark.parametrize("native_redirects", [False, True])
+def test_connect_failure_after_a_redirect_remains_uncertain(monkeypatch: pytest.MonkeyPatch, native_redirects: bool):
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/first":
+            return httpx2.Response(307, headers={"Location": "/second"})
+        raise RequestNotSentError()
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    with pytest.raises(httpx2.TransportError):
+        if native_redirects:
+            HttpClient().post("https://provider.example/first", body=b"payload", follow_redirects=True)
+        else:
+            HttpClient().request("POST", "https://provider.example/first", body=b"payload", same_origin_redirects=1)
+
+
+def test_bounded_download_connect_failure_after_redirect_remains_uncertain(monkeypatch: pytest.MonkeyPatch):
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/first":
+            return httpx2.Response(307, headers={"Location": "/second"})
+        raise RequestNotSentError()
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    with pytest.raises(httpx2.TransportError):
+        HttpClient().download_bounded("https://provider.example/first")
+
+
+def test_empty_dns_result_is_a_typed_resolution_failure(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [])
+    with pytest.raises(AddressResolutionError):
+        resolved_addresses("unresolved.example", 443)
+    with pytest.raises(AddressResolutionError):
+        HttpClient().get("https://unresolved.example/")

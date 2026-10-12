@@ -24,9 +24,10 @@ from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
+from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, PROVIDER_UNAVAILABLE, OAuthFlowError
 from angee.integrate.schema import (
     ConnectableAccount,
     ConnectedExternalAccountType,
@@ -185,6 +186,11 @@ class OidcLoginMutation:
                 auth_login(request, result.user)
         except OAuthFlowError as error:
             return LoginCompletePayload(ok=False, error=error.public_message, error_code=error.code)
+        except IntegrationError as error:
+            if error.transient:
+                outage = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
+                return LoginCompletePayload(ok=False, error=outage.public_message, error_code=outage.code)
+            return LoginCompletePayload(ok=False, error=error.public_message, error_code="connection_refused")
         return LoginCompletePayload(
             ok=True,
             user=cast(UserType, result.user),
@@ -242,6 +248,11 @@ class OidcLoginMutation:
             )
         except OAuthFlowError as error:
             return LinkAccountResult(error=error.public_message, error_code=error.code)
+        except IntegrationError as error:
+            if error.transient:
+                outage = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
+                return LinkAccountResult(error=outage.public_message, error_code=outage.code)
+            return LinkAccountResult(error=error.public_message, error_code="connection_refused")
         return LinkAccountResult(
             account=cast(ConnectedExternalAccountType, result.account),
             user=cast(UserType, result.user),

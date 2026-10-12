@@ -1,5 +1,5 @@
 // @rebac_package: parties
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 5
 
 // A member's colleagues include the active people whose identity they read:
 // every record owner's identity arm on parties/person (thread followers, task

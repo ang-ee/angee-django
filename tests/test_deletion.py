@@ -26,7 +26,16 @@ from angee.graphql.deletion import (
     delete_by_public_id,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
+from angee.iam import signals as iam_signals
 from tests.tables import model_tables
+
+
+@pytest.fixture(autouse=True)
+def restore_sign_in_receivers():
+    """Temporary auth registries run ready hooks against Django's shared signal."""
+
+    yield
+    iam_signals.connect()
 
 
 @pytest.mark.django_db(transaction=True)

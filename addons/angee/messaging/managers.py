@@ -13,7 +13,7 @@ invariants a high-volume email sync depends on:
 - null bytes (``\\x00``) are stripped before every write (Postgres rejects them).
 - thread resolution is the 4-step RFC-5322 priority under ``select_for_update``,
   with the subject tier matching on the thread's title-fragment pointer.
-- denormalised counters bump with ``F()``, never read-modify-write; record read
+- denormalised counters use insert deltas and state-change recounts; record read
   progress is a follower cursor, while each delivered inbox item owns its acknowledgement.
 - the quotation graph FK-joins on shared fragments, skipping boilerplate quoted by
   more than :data:`_BOILERPLATE_CUTOFF` messages and the title/header roles.
@@ -29,12 +29,14 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import date, datetime, time
+from contextvars import Context
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from functools import reduce
 from itertools import batched
 from operator import or_
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from django.apps import apps
@@ -42,25 +44,45 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import IntegrityError, connections, models, transaction
+from django.db import IntegrityError, NotSupportedError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
 from django.utils import timezone
-from rebac import PermissionDenied, SubjectRef, current_actor, generic_target, system_context, to_subject_ref
+from rebac import (
+    PermissionDenied,
+    SubjectRef,
+    actor_context,
+    current_actor,
+    generic_target,
+    system_context,
+    to_subject_ref,
+)
 from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
+from angee.base.identity import instances_from_public_ids
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.scoping import system_queryset
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.base.serialization import strip_null_bytes
+from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
+from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
+from angee.integrate.net import AddressNotAllowedError
+from angee.jobs.timeouts import task_claim_lease
+from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedPart
+from angee.messaging.delivery import (
+    DELIVERY_TASK_EXPIRES,
+    MAX_DELIVERY_ATTEMPTS,
+    MAX_RECONCILE_ATTEMPTS,
+    RECONCILE_BACKOFF,
+)
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
@@ -68,7 +90,7 @@ from angee.parties.managers import Signing
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
-    from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
+    from angee.messaging.backends import ParsedMessage, ParsedThread
     from angee.messaging.models import Message, NotificationPolicy, Part
 
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
@@ -77,6 +99,14 @@ _BOILERPLATE_CUTOFF = 100
 _SIGNING_TEXT_BATCH = 2000
 """Signature fragments whose texts one query loads for signature mining."""
 logger = logging.getLogger(__name__)
+
+
+class DeliveryReconciliationBusy(ValidationError):
+    """An operator cannot supersede a live reconciliation worker."""
+
+    def __init__(self) -> None:
+        super().__init__("Delivery reconciliation is running; wait for it to finish.", code="delivery-reconciling")
+
 
 AUTOMATED_MAIL_HEADERS: Mapping[str, models.Q] = {
     "auto-submitted": ~models.Q(fragment__text__iexact="no"),
@@ -465,22 +495,25 @@ def _parsed_sync_hash(
     *,
     channel_id: Any,
     metadata: dict[str, Any],
+    received_at: datetime | None = None,
 ) -> str:
     """Return a stable digest of everything an ingest of ``parsed`` would write.
 
     Covers the message columns, its Part tree, and its participants for the given
     channel, so an identical re-sync hashes equal and can skip the rewrite. The thread
     is excluded — a re-thread must still reconcile counters even when nothing else
-    changed — and is compared separately by the caller.
+    changed — and is compared separately by the caller. ``received_at`` is the
+    effective receipt time ingest writes; it defaults to the parsed one.
     """
 
+    received_at = received_at if received_at is not None else parsed.received_at
     payload = {
         "channel_id": str(channel_id) if channel_id is not None else None,
         "direction": parsed.direction,
         "subject": strip_null_bytes(parsed.subject),
         "headers": [[name, value] for name, value in strip_null_bytes(list(parsed.headers))],
         "sent_at": parsed.sent_at.isoformat() if parsed.sent_at is not None else None,
-        "received_at": parsed.received_at.isoformat() if parsed.received_at is not None else None,
+        "received_at": received_at.isoformat() if received_at is not None else None,
         "metadata": metadata,
         "sender": (
             None
@@ -715,6 +748,29 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             {pk: wanted[external_id] for pk, external_id in untitled}, created_by_id=created_by_id,
         )
 
+    def referenced_thread(self, *, platform: str, in_reply_to: str, references: tuple[str, ...]) -> Any:
+        """Read the platform-wide reference winner without locking or creating a thread."""
+
+        message_model = apps.get_model("messaging", "Message")
+        if in_reply_to:
+            parent = message_model.objects.with_external_ids([in_reply_to]).filter(
+                platform=platform,
+            ).select_related("thread").first()
+            if parent is not None and parent.thread_id:
+                return parent.thread
+        if references:
+            ref_map = {
+                row.external_id: row
+                for row in message_model.objects.with_external_ids(list(references)).filter(
+                    platform=platform,
+                ).select_related("thread")
+            }
+            for external_id in reversed(references):
+                row = ref_map.get(external_id)
+                if row is not None and row.thread_id:
+                    return row.thread
+        return None
+
     def resolve(
         self,
         *,
@@ -792,30 +848,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             ):
                 named.refresh_from_db(fields=["title"])
             return named
-        message_model = apps.get_model("messaging", "Message")
-        if in_reply_to:
-            # Reference resolution is platform-wide (a reply through account B must
-            # find the parent account A ingested), served by the message table's
-            # non-unique MD5(external_id) index.
-            parent = (
-                message_model.objects.with_external_ids([in_reply_to])
-                .filter(platform=platform)
-                .select_related("thread")
-                .first()
-            )
-            if parent is not None and parent.thread_id:
-                return parent.thread
-        if references:
-            ref_map = {
-                row.external_id: row
-                for row in message_model.objects.with_external_ids(list(references))
-                .filter(platform=platform)
-                .select_related("thread")
-            }
-            for external_id in reversed(references):
-                row = ref_map.get(external_id)
-                if row is not None and row.thread_id:
-                    return row.thread
+        referenced = self.referenced_thread(platform=platform, in_reply_to=in_reply_to, references=references)
+        if referenced is not None:
+            return referenced
 
         normalized = normalize_subject(subject)
         with transaction.atomic():
@@ -2193,10 +2228,52 @@ class ReactionManager(AngeeManager):
 class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
 
+    def for_creation_key(self, scope: Any, key: str | None, fingerprint: str) -> Any | None:
+        """Refuse a discarded own receipt explicitly instead of reinserting its key."""
+
+        existing = super().for_creation_key(scope, key, fingerprint)
+        if existing is not None or scope is None or key is None:
+            return existing
+        actor = self.actor() or current_actor()
+        if actor is not None and scope == str(to_subject_ref(actor)):
+            with system_context(reason="messaging.reply.discarded_receipt"):
+                discarded = self.model._base_manager.filter(
+                    creation_actor=scope, client_creation_key=key, is_trashed=True,
+                ).first()
+            if discarded is not None:
+                discarded.require_creation_fingerprint(fingerprint)
+                raise ValidationError("This reply creation key belongs to a discarded reply.")
+        return None
+
     def trash_targets(self) -> MessageQuerySet:
         """Keep record chatter off the shared trash verbs; its record moderates it."""
 
         return self.inbox()
+
+    def due_deliveries(self, *, now: datetime) -> MessageQuerySet:
+        """Due unclaimed holds/retries and lost dispatches, never an uncertain effect."""
+
+        due = models.Q(scheduled_at__lte=now, **self.model.held_draft_fields()) | models.Q(
+            scheduled_at__lte=now, status="queued", delivery_lease_until__isnull=False,
+        )
+        lost = models.Q(status="queued", delivery_lease_until__lte=now)
+        return cast(MessageQuerySet, self.untrashed().filter(
+            due | lost, direction="outbound", channel__isnull=False, delivery_claim__isnull=True,
+        ).exclude(external_id="").filter(
+            models.Q(metadata__local__isnull=True) | ~models.Q(metadata__local__has_key="delivery_conflict"),
+        ))
+
+    def expired_delivery_claims(self, *, now: datetime) -> MessageQuerySet:
+        """Claims with no settlement before their deadline require acknowledgement."""
+
+        return cast(MessageQuerySet, self.filter(
+            direction="outbound", status="queued", delivery_claim__isnull=False, delivery_lease_until__lte=now,
+        ))
+
+    def counted_in_thread(self) -> MessageQuerySet:
+        """Use the model's retained-row predicate for reads and recounts."""
+
+        return cast(MessageQuerySet, self.filter(self.model.counted_in_thread_q()))
 
     @staticmethod
     def chronological_time(prefix: str = "") -> Any:
@@ -2480,7 +2557,498 @@ class MessageQuerySet(TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySe
 
 
 class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: ignore[misc]
-    """Owns the message ingest write path (idempotent, null-safe, F()-counted)."""
+    """Owns idempotent ingest, insert deltas and state-change thread recounts."""
+
+    def compose_reply(
+        self, parent: Any, *, body: str, sender: Any, actor: Any,
+        local: Mapping[str, Any] | None = None, creation_key: str | None = None,
+        scheduled_at: datetime | None = None, queued: bool = False,
+        admit: Callable[[Any], None] | None = None,
+    ) -> Any:
+        """Create an exact-once outbound reply under the channel's narrow reply grant.
+
+        Hold facts are final at insert. Every retained reply advances its thread
+        counter once; queueing does not change the count. Callers may contribute provenance, but not
+        messaging's delivery state. ``admit(parent)`` checks domain eligibility
+        only on insertion, after creation-key replay and fingerprint validation.
+        Admission and replay run under actor even for an elevated caller.
+        """
+
+        if is_sudo():
+            return Context().run(
+                self.compose_reply, parent, body=body, sender=sender, actor=actor,
+                local=local, creation_key=creation_key, scheduled_at=scheduled_at, queued=queued, admit=admit,
+            )
+        parent = parent.with_actor(actor)
+        body = strip_null_bytes(body).strip()
+        if not body:
+            raise ValidationError({"body": "Reply text is required."})
+        if parent.pk is None or parent.thread_id is None or parent.channel_id is None:
+            raise ValidationError("A reply requires a saved parent, thread, and channel.")
+        channel = parent.transport_channel(reason="messaging.reply.channel").with_actor(actor)
+        if actor is None or not parent.has_access("read") or not channel.has_access("reply"):
+            raise PermissionDenied("Comment read and channel reply access are required.")
+        if sender is None or sender.pk is None or sender.platform != parent.platform:
+            raise ValidationError({"sender": "The reply sender must use the comment's platform."})
+        values = dict(local or {})
+        if any(key.startswith("delivery_") for key in values):
+            raise ValidationError({"local": "Delivery facts are owned by messaging."})
+        scope = None
+        fingerprint = ""
+        if creation_key is not None:
+            self.model._meta.get_field("client_creation_key").clean(creation_key, None)
+            if not creation_key.strip() or "\x00" in creation_key:
+                raise ValidationError({"creation_key": "Creation key must be nonblank and contain no null bytes."})
+            scope = str(to_subject_ref(actor))
+            fingerprint = self.model.creation_fingerprint_for({
+                "parent": parent, "body": body, "sender": sender, "local": values,
+            })
+        created_by_id = actor_user_id(to_subject_ref(actor))
+        with actor_context(actor), transaction.atomic():
+            def insert() -> Any:
+                if admit is not None:
+                    admit(parent)
+                with system_context(reason="messaging.reply.compose"):
+                    return self.create(
+                        parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
+                        platform=parent.platform, direction=self.model.Direction.OUTBOUND,
+                        status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
+                        scheduled_at=scheduled_at, message_type=parent.message_type,
+                        external_id=str(uuid4()), preview=body[: self.model._meta.get_field("preview").max_length],
+                        metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
+                        creation_actor=scope, client_creation_key=creation_key, creation_fingerprint=fingerprint,
+                    )
+            reply, created = self.with_actor(actor).replay_or_insert(scope, creation_key, fingerprint, insert)
+            if created:
+                with system_context(reason="messaging.reply.compose"):
+                    self._build_parts(
+                        reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id,
+                    )
+                    self._bump_thread(reply)
+                    if queued:
+                        reply.deliver()
+        return reply.with_actor(actor)
+
+    def cancel_delivery(self, message: Any, *, using: str | None = None) -> None:
+        """Disarm a removed outbound draft/queue under the same settlement row lock."""
+
+        with system_context(reason="messaging.delivery.cancel"), transaction.atomic(using=using):
+            row = self.sudo(reason="messaging.delivery.cancel").using(using).lock_if_supported().get(pk=message.pk)
+            if row.direction == "outbound" and row.status != "uncertain" and (
+                row.delivery_needs_reconciliation
+                or (row.status in ("draft", "queued") and row.delivery_claim is not None)
+            ):
+                self._mark_delivery_uncertain(row)
+            elif row.direction == "outbound" and row.status in ("draft", "queued"):
+                row.status = self.model.MessageStatus.FAILED
+                row.scheduled_at = row.delivery_lease_until = None
+                row.metadata = {
+                    **(row.metadata or {}), "local": {**row.local_metadata, "delivery_error": "Delivery cancelled."},
+                }
+                row.save(update_fields=("status", "scheduled_at", "delivery_lease_until", "metadata", "updated_at"))
+            message.status = row.status
+            message.scheduled_at = row.scheduled_at
+            message.delivery_lease_until = row.delivery_lease_until
+            message.delivery_possibly_accepted = row.delivery_possibly_accepted
+            message.delivery_operator_only = row.delivery_operator_only
+            message.metadata = row.metadata
+
+    def claim_delivery(self, pk: Any, *, token: str, reconcile: bool = False) -> Any | None:
+        """Commit an effect marker under the authoritative row lock before network I/O.
+
+        A live claim cannot be replaced. Expiry becomes uncertain rather than
+        permitting another publish. Only a reconcile-capable transport can claim
+        an uncertain row; its new marker fences off any late prior settlement.
+        """
+
+        with system_context(reason="messaging.delivery.claim"), transaction.atomic():
+            row = self.sudo(reason="messaging.delivery.claim").lock_if_supported().filter(
+                pk=pk, external_id=token, status__in=("queued", "uncertain"),
+            ).first()
+            if row is None or row.delivery_blocked or row.delivery_held:
+                return None
+            now = timezone.now()
+            if row.status == "queued" and row.delivery_claim is not None:
+                if row.delivery_lease_until is not None and row.delivery_lease_until <= now:
+                    self._mark_delivery_uncertain(row)
+                return None
+            if row.status == "uncertain" and (
+                not reconcile or not row.delivery_possibly_accepted or row.delivery_operator_only
+                or (row.scheduled_at is not None and row.scheduled_at > now)
+                or (row.scheduled_at is None and row.delivery_lease_until is not None
+                    and row.delivery_lease_until > now)
+            ):
+                return None
+            if row.status == "uncertain":
+                if self._reconciliation_policy(row)[0]:
+                    self.model._base_manager.filter(pk=row.pk).update(
+                        delivery_operator_only=True, delivery_lease_until=None, scheduled_at=None,
+                    )
+                    return None
+                row.delivery_reconcile_attempts += 1
+                self.model._base_manager.filter(pk=row.pk).update(
+                    delivery_reconcile_attempts=row.delivery_reconcile_attempts,
+                )
+            try:
+                row.validate_delivery()
+            except ValidationError as error:
+                self.record_delivery(pk, token=token, claim=row.delivery_claim, error=error, pre_send_refusal=True)
+                return None
+            row.delivery_claim = uuid4()
+            if not row.delivery_possibly_accepted:
+                row.delivery_started_at = now
+            row.delivery_lease_until = now + task_claim_lease()
+            row.scheduled_at = None
+            fields: tuple[str, ...] = ("delivery_claim", "delivery_started_at", "delivery_lease_until", "scheduled_at")
+            if row.status == "uncertain":
+                self.model._base_manager.filter(pk=row.pk).update(**{field: getattr(row, field) for field in fields})
+            else:
+                row.save(update_fields=(*fields, "updated_at"))
+            return row
+
+    def _reconciliation_policy(self, row: Any) -> tuple[bool, timedelta]:
+        """Read operator admission and visibility once, including lost recovery claims."""
+        try:
+            channel = row.transport_channel(reason="messaging.delivery.capability")
+            capable = channel.can_reconcile_delivery()
+            visibility_delay = channel.delivery_visibility_delay()
+        except Exception:
+            capable = False
+            visibility_delay = timedelta()
+        return not capable or row.delivery_reconcile_attempts >= MAX_RECONCILE_ATTEMPTS, visibility_delay
+
+    def _set_reconciliation_horizon(self, row: Any, *, now: datetime) -> None:
+        """Schedule idle recovery after visibility/backoff, with no live lease.
+
+        Read the backend declaration without opening a transport. Claims use
+        _reconciliation_policy directly; their live deadline overwrites no
+        speculative idle horizon.
+        """
+
+        row.delivery_operator_only, visibility_delay = self._reconciliation_policy(row)
+        delay = (
+            RECONCILE_BACKOFF * 2 ** (row.delivery_reconcile_attempts - 1)
+            if row.delivery_reconcile_attempts else timedelta()
+        )
+        row.delivery_lease_until = None
+        row.scheduled_at = (
+            None if row.delivery_operator_only else max(
+                now + delay,
+                row.delivery_started_at + visibility_delay if row.delivery_started_at is not None else now,
+            )
+        )
+
+    def _mark_delivery_uncertain(self, row: Any, *, now: datetime | None = None) -> None:
+        """Retain the effect fence and answer reservation after a lost settlement."""
+
+        if row.delivery_claim is None and not row.delivery_needs_reconciliation:
+            raise ValueError("An uncertain delivery requires a committed claim.")
+        row.status = self.model.MessageStatus.UNCERTAIN
+        row.delivery_possibly_accepted = True
+        moment = now or timezone.now()
+        if (row.delivery_claim is not None and row.delivery_lease_until is not None
+                and row.delivery_lease_until > moment):
+            # Trashing cannot supersede a provider call still protected by its lease.
+            row.delivery_operator_only = self._reconciliation_policy(row)[0]
+            row.scheduled_at = None
+        else:
+            self._set_reconciliation_horizon(row, now=moment)
+        row.metadata = {**(row.metadata or {}), "local": {
+            **row.local_metadata,
+            "delivery_attempts": int(row.local_metadata.get("delivery_attempts", 0)) + 1,
+            "delivery_error": "Delivery may have succeeded; reconcile or acknowledge before retrying.",
+        }}
+        row.save(update_fields=(
+            "status", "scheduled_at", "delivery_lease_until", "delivery_possibly_accepted",
+            "delivery_operator_only", "metadata", "updated_at",
+        ))
+
+    def confirm_delivery_absent(self, message: Any) -> None:
+        """Fence an authoritative lookup's absence before permitting a fresh POST.
+
+        Only the base reconciling backend calls this after a complete lookup.
+        Refusals before that evidence cannot erase an earlier possible effect.
+        The fresh attempt is an ordinary claimed send: QUEUED under the same
+        claim and lease, so a lost worker expires into uncertainty that covers
+        the new POST, and UNCERTAIN always means possibly accepted. It starts
+        its own provider visibility window.
+        """
+
+        with system_context(reason="messaging.delivery.absent"), transaction.atomic():
+            row = self.sudo(reason="messaging.delivery.absent").lock_if_supported().get(pk=message.pk)
+            if row.delivery_claim != message.delivery_claim or row.external_id != message.external_id:
+                raise DeliveryUncertain("The delivery claim changed during reconciliation.")
+            row.status = self.model.MessageStatus.QUEUED
+            row.delivery_possibly_accepted = False
+            row.delivery_started_at = timezone.now()
+            row.save(update_fields=("status", "delivery_possibly_accepted", "delivery_started_at", "updated_at"))
+            message.status = row.status
+            message.delivery_possibly_accepted = False
+            message.delivery_started_at = row.delivery_started_at
+
+    def record_delivery(
+        self, pk: Any, *, token: str, claim: UUID | None, outcome: DeliveryOutcome | None = None,
+        error: Exception | None = None, contention: bool = False, sent_at: datetime | None = None,
+        pre_send_refusal: bool = False,
+    ) -> str:
+        """Settle acceptance or refusal once; contention does not consume an attempt.
+
+        A collision is a successful publish with evidence, never a resend cue.
+        The already ingested provider row owns the visible identity and payload;
+        retain the local attempt as a trashed SENT audit row, with delivery_conflict
+        pointing to that provider id. Its creation key and operator provenance
+        remain available, but it contributes no second visible message or count.
+        Acceptance racing with trash is still sent: removal cannot undo a publish.
+        A settlement must carry its committed claim marker. Native transient
+        IntegrationError refusals retry; unclassified post-send failures and
+        DeliveryUncertain retain the parent answer reservation for acknowledgement.
+        """
+
+        provider_id = outcome.provider_id if outcome is not None else None
+        with system_context(reason="messaging.delivery.settle"), transaction.atomic():
+            row = self.sudo(reason="messaging.delivery.settle").lock_if_supported().filter(
+                pk=pk, external_id=token, delivery_claim=claim, status__in=("queued", "uncertain"),
+            ).first()
+            if row is None:
+                return "stale-delivery-token"
+            now = sent_at or timezone.now()
+            reconciling = row.delivery_needs_reconciliation
+            local = row.local_metadata
+            row.delivery_lease_until = None
+            fields = [
+                "status", "scheduled_at", "delivery_lease_until", "delivery_claim", "metadata", "updated_at",
+                "delivery_possibly_accepted", "delivery_reconcile_attempts", "delivery_operator_only",
+            ]
+            # The SSRF policy refuses before any byte is sent: a definite refusal.
+            uncertain_error = error is not None and (
+                isinstance(error, DeliveryUncertain)
+                or (
+                    not pre_send_refusal
+                    and not isinstance(error, (IntegrationError, AddressNotAllowedError))
+                )
+            )
+            if reconciling and not (outcome is not None and outcome.accepted):
+                status_changed = row.status != "uncertain"
+                row.status = self.model.MessageStatus.UNCERTAIN
+                self._set_reconciliation_horizon(row, now=now)
+                local["delivery_error"] = (
+                    safe_integration_failure(error).message if error
+                    else "The prior delivery still needs reconciliation."
+                )
+                row.metadata = {**(row.metadata or {}), "local": local}
+                # Recovery bookkeeping does not invalidate an operator's observed revision.
+                if status_changed:
+                    row.save(update_fields=fields)
+                else:
+                    self.model._base_manager.filter(pk=row.pk).update(**{
+                        field: getattr(row, field) for field in fields if field != "updated_at"
+                    })
+                return "uncertain"
+            if contention:
+                row.status = self.model.MessageStatus.QUEUED
+                row.delivery_claim = None
+                row.scheduled_at = now + timedelta(seconds=30)
+                row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                result = "retry"
+            else:
+                attempts = int(local.get("delivery_attempts", 0)) + (0 if reconciling else 1)
+                local["delivery_attempts"] = attempts
+                if error is not None and uncertain_error:
+                    if row.delivery_claim is None:
+                        raise ValueError("An uncertain delivery requires a committed claim.")
+                    row.status = self.model.MessageStatus.UNCERTAIN
+                    row.delivery_possibly_accepted = True
+                    row.scheduled_at = None
+                    self._set_reconciliation_horizon(row, now=now)
+                    local["delivery_error"] = safe_integration_failure(error).message
+                    result = "uncertain"
+                elif (isinstance(error, IntegrationError) and error.transient
+                        and attempts < MAX_DELIVERY_ATTEMPTS and not row.delivery_blocked):
+                    row.status = self.model.MessageStatus.QUEUED
+                    row.delivery_possibly_accepted = False
+                    row.delivery_claim = None
+                    delay = (error.retry_after if error.retry_after is not None
+                             else timedelta(seconds=60 * 2 ** (attempts - 1)))
+                    row.scheduled_at = now + max(delay, timedelta(seconds=1))
+                    row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+                    local["delivery_error"] = safe_integration_failure(error).message
+                    result = "retry"
+                else:
+                    row.scheduled_at = None
+                    accepted = outcome is not None and outcome.accepted
+                    row.status = self.model.MessageStatus.SENT if accepted else self.model.MessageStatus.FAILED
+                    row.delivery_possibly_accepted = False
+                    result = "sent" if accepted else "failed"
+                    if accepted:
+                        local.pop("delivery_error", None)
+                        row.sent_at = now
+                        fields.append("sent_at")
+                        if provider_id:
+                            local["delivery_token"] = token
+                            row.external_id = provider_id
+                            fields.append("external_id")
+                    else:
+                        local["delivery_error"] = (
+                            safe_integration_failure(error).message if error else "Delivery was declined."
+                        )
+            row.metadata = {**(row.metadata or {}), "local": local}
+            try:
+                with transaction.atomic():
+                    row.save(update_fields=fields)
+            except IntegrityError:
+                collision = provider_id is not None and _external_id_annotated(
+                    self.sudo(reason="messaging.delivery.collision"),
+                ).filter(_external_id_q(provider_id), channel_id=row.channel_id).exclude(pk=pk).exists()
+                if not collision:
+                    raise
+                row.external_id = token
+                local["delivery_conflict"] = provider_id
+                row.save(update_fields=[field for field in fields if field != "external_id"])
+                # An operator may already have trashed the reconciled attempt.
+                if not row.is_trashed:
+                    row.trash(reason="Delivery settled onto the already ingested provider message.", recount=False)
+            if result == "sent" and row.thread_id:
+                row._recount_thread()
+            return result
+
+    def resolve_uncertain_delivery(
+        self, message: Any, *, actor: Any, expected_revision: int, retry: bool,
+    ) -> Any:
+        """Acknowledge sent or explicitly retry under the same grant as held replies.
+
+        Retry asserts that the operator accepts the repeat-effect risk. It clears
+        the old fence and supersedes late settlements, preserving the first claim
+        time so a reconcile-capable backend still searches the original attempt.
+        FAILED rows can also be retried; retry resets both attempt budgets.
+        """
+
+        if actor is None:
+            raise PermissionDenied("Authentication required.")
+        with transaction.atomic():
+            row = read_scoped_queryset(self.model, actor, action="send_held").lock_if_supported().get(pk=message.pk)
+            row.require_revision(expected_revision)
+            if (row.status == "uncertain" and row.scheduled_at is None
+                    and row.delivery_lease_until is not None and row.delivery_lease_until > timezone.now()):
+                raise DeliveryReconciliationBusy()
+            allowed = ("uncertain", "failed") if retry else ("uncertain",)
+            if row.status not in allowed or row.delivery_blocked:
+                raise ValidationError(
+                    "Retry requires a retained failed or uncertain delivery; acknowledgement requires uncertainty."
+                )
+            with system_context(reason="messaging.delivery.acknowledge"):
+                row.acknowledged_by_id = actor_user_id(to_subject_ref(actor))
+                if retry:
+                    if row.is_trashed:
+                        row.restore()
+                    row.delivery_reconcile_attempts = 0
+                    row.delivery_operator_only = False
+                    row.metadata = {**(row.metadata or {}), "local": {**row.local_metadata, "delivery_attempts": 0}}
+                    row.status = self.model.MessageStatus.DRAFT
+                    row.delivery_claim = None
+                    row.scheduled_at = row.delivery_lease_until = None
+                    row.save(update_fields=(
+                        "status", "delivery_claim", "scheduled_at", "delivery_lease_until", "updated_at",
+                        "acknowledged_by", "metadata", "delivery_reconcile_attempts", "delivery_operator_only",
+                    ))
+                    row.deliver()
+                else:
+                    row.save(update_fields=("acknowledged_by", "updated_at"))
+                    self.record_delivery(
+                        row.pk, token=row.external_id, claim=row.delivery_claim, outcome=DeliveryOutcome(accepted=True),
+                    )
+                    row.refresh_from_db()
+        return row.with_actor(actor)
+
+    def send_held_drafts(self, selection: list[ActionSelectionInput], *, actor: Any) -> list[ActionResult]:
+        """Send an operator's revision-checked selection through many_actions."""
+
+        return self._act_on_held_drafts(selection, actor=actor, discard=False)
+
+    def discard_held_drafts(self, selection: list[ActionSelectionInput], *, actor: Any) -> list[ActionResult]:
+        """Discard an operator's revision-checked selection and recount threads once."""
+
+        return self._act_on_held_drafts(selection, actor=actor, discard=True)
+
+    def _act_on_held_drafts(
+        self, selection: list[ActionSelectionInput], *, actor: Any, discard: bool,
+    ) -> list[ActionResult]:
+        validate_action_selection(selection)
+        if actor is None:
+            raise PermissionDenied("Authentication required.")
+        with transaction.atomic():
+            # send_held is precisely channel write, including for discard. The
+            # identity owner decodes once and performs one scoped pk__in query.
+            scoped = (
+                read_scoped_queryset(self.model, actor, action="send_held").inbox().lock_if_supported().order_by("pk")
+            )
+            rows = instances_from_public_ids(self.model, [str(item.id) for item in selection], queryset=scoped)
+            threads = []
+            if discard:
+                thread_model = apps.get_model("messaging", "Thread")
+                with system_context(reason="messaging.held.recount"):
+                    threads = list(thread_model._base_manager.select_for_update().filter(
+                        pk__in={row.thread_id for row in rows.values() if row.thread_id is not None},
+                    ).order_by("pk"))
+            def run(item: ActionSelectionInput) -> ActionResult:
+                row = rows.get(str(item.id))
+                if row is None:
+                    raise ValidationError("A selected held draft is unavailable.")
+                row.require_revision(item.expected_revision)
+                row.validate_held_draft()
+                with system_context(reason="messaging.held.discard" if discard else "messaging.held.send"):
+                    if discard:
+                        row.trash(reason="Discarded held draft.", recount=False)
+                    else:
+                        row.scheduled_at = None
+                        row.save(update_fields=("scheduled_at", "updated_at"))
+                        row.deliver()
+                return ActionResult(ok=True, message="Held draft discarded." if discard else "Held draft queued.")
+            results = many_actions(selection, run)
+            with system_context(reason="messaging.held.recount"):
+                for thread in threads:
+                    self._recount_thread(thread)
+            return results
+
+    def release_held_messages(self, *, now: datetime | None = None, limit: int = 200) -> int:
+        """SQL-scoped skip-locked release, with a savepoint for every row."""
+
+        moment = now or timezone.now()
+        if not 1 <= limit <= 1000:
+            raise ValueError("Release limit must be between 1 and 1000.")
+        count = 0
+        with system_context(reason="messaging.delivery.release"), transaction.atomic():
+            expired = self.sudo(reason="messaging.delivery.reap").expired_delivery_claims(now=moment).lock_if_supported(
+                skip_locked=True,
+            ).order_by("pk")[:limit]
+            for row in expired:
+                self._mark_delivery_uncertain(row, now=moment)
+            uncertain = self.sudo(reason="messaging.delivery.reconcile").filter(
+                status="uncertain", delivery_operator_only=False, delivery_possibly_accepted=True,
+            ).filter(
+                models.Q(delivery_lease_until__isnull=True) | models.Q(delivery_lease_until__lte=moment),
+            ).filter(models.Q(scheduled_at__isnull=True) | models.Q(scheduled_at__lte=moment))
+            for row in uncertain.lock_if_supported(skip_locked=True).order_by("pk")[:limit]:
+                try:
+                    with transaction.atomic():
+                        count += row.deliver()
+                except Exception as error:
+                    logger.warning("Delivery reconciliation unavailable (%s).", type(error).__name__)
+                if count >= limit:
+                    break
+            rows = self.sudo(reason="messaging.delivery.release").due_deliveries(now=moment).lock_if_supported(
+                skip_locked=True,
+            ).order_by("pk")[:limit]
+            for row in rows:
+                try:
+                    with transaction.atomic():
+                        count += row.deliver()
+                except ValidationError as error:
+                    row.status = self.model.MessageStatus.QUEUED
+                    row.save(update_fields=("status", "updated_at"))
+                    self.record_delivery(
+                        row.pk, token=row.external_id, claim=row.delivery_claim, error=error, pre_send_refusal=True,
+                    )
+        return count
 
     def for_record(
         self,
@@ -2640,7 +3208,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 "recipient_user_ids": sorted({str(user_id) for user_id in recipient_user_ids}),
                 "autofollow_recipients": autofollow_recipients,
             }
-            fingerprint = canonical_json_sha256(content)
+            fingerprint = self.model.creation_fingerprint_for(content)
         if not body and not attachments and not tracking_rows:
             raise ValueError("Message body, attachment, or tracking value is required.")
         if parent is not None and parent.thread_id != thread.pk:
@@ -2742,7 +3310,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                             follower_model.objects.subscribe(record, user=account, role=attachment.role)
             if created_by_id is not None:
                 follower_model.objects.mark_read_up_to(thread, user_id=created_by_id, message=message)
-            self._advance_thread(thread, sent_at)
+            with system_context(reason="messaging.thread.count"):
+                self._advance_thread(thread, message.sent_at)
             message._meta.get_field("thread").set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)
         return message
@@ -2922,14 +3491,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
     def _recount_thread(self, thread: Any) -> None:
         """Recompute a thread's denormalised counters from its surviving messages.
 
-        Shared by the paths where a thread *loses* or regains a message: a delete
-        (``unlink_from_thread``), a trash or restore, and a re-threading re-sync
-        (``_ingest_one``). Trashed messages never count. An ``F()`` delta cannot
-        repair a subtraction whose true total is unknown, so the losing thread is
-        recounted by aggregate. Call with the locked ``thread`` row.
+        Loss, restoration, re-threading and accepted settlement use this owner.
+        All retained rows count; insert paths use an F() increment instead.
+        Call within a transaction; this owner locks the
+        thread before reading the aggregate, including for explicit threads.
         """
 
-        untrashed = models.Q(is_trashed=False)
+        type(thread)._base_manager.select_for_update().values_list("pk", flat=True).get(pk=thread.pk)
+        untrashed = self.model.counted_in_thread_q()
         summary = self.model._base_manager.filter(thread=thread).aggregate(
             total=models.Count("pk"),
             count=models.Count("pk", filter=untrashed),
@@ -2947,67 +3516,35 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread.last_message_at = summary["last_sent_at"]
         thread.save(update_fields=("message_count", "last_message_at", "updated_at"))
 
-    def _thread_advance_values(self, sent_at: Any) -> dict[str, Any]:
-        """Return the monotonic counter advances shared by the post and ingest bumps.
-
-        ``message_count`` rides an ``F()`` delta (never read-modify-write) and
-        ``last_message_at`` advances via ``Greatest``/``Coalesce`` so out-of-order
-        ingest never regresses it. The advances are save-time expressions, so the
-        same values drive an instance ``save`` and a queryset ``.update()``.
-        """
+    @staticmethod
+    def _thread_advance_values(sent_at: Any) -> dict[str, Any]:
+        """Monotonic count/time deltas shared by ingest and streamed chatter."""
 
         values: dict[str, Any] = {"message_count": models.F("message_count") + 1}
         if sent_at is not None:
-            values["last_message_at"] = Greatest(
-                Coalesce(models.F("last_message_at"), sent_at),
-                sent_at,
-            )
+            values["last_message_at"] = Greatest(Coalesce(models.F("last_message_at"), sent_at), sent_at)
         return values
 
+    def _bump_thread(self, message: Any) -> None:
+        """Increment a counted insert without a thread save or ingest change event."""
+
+        if message.thread_id is None:
+            return
+        counted = self.model._base_manager.filter(self.model.counted_in_thread_q(), pk=message.pk)
+        apps.get_model("messaging", "Thread")._base_manager.filter(
+            pk=message.thread_id,
+        ).filter(models.Exists(counted)).update(
+            **self._thread_advance_values(message.sent_at), updated_at=timezone.now(),
+        )
+
     def _advance_thread(self, thread: Any, sent_at: Any) -> None:
-        """Advance the posted-to thread via an instance ``save`` so ``post_save`` fires.
-
-        The ingest path bumps a thread by id with a queryset ``.update()``
-        (:meth:`_bump_thread`), which fires no ``post_save`` — so a record-attached
-        thread never reached the ``changes`` publisher on a new post. A fresh comment
-        already holds the loaded thread, so it saves the instance instead: ``post_save``
-        fires once and a host whose :meth:`~angee.messaging.models.Thread.broadcasts_changes`
-        is ``True`` streams one ``threadChanged`` event (a silent thread still emits
-        nothing — the publisher short-circuits on ``broadcasts_changes()``).
-
-        The counter advance is a system denormalisation, not an actor write on the
-        thread row: a poster holds the record's *post* access, not the thread's
-        ``write``, so the save runs under ``system_context`` — the same elevation the
-        queryset ``.update()`` bypassed the write gate to get, and the pattern the
-        follower verbs already use for bookkeeping writes. ``updated_at`` rides the
-        ``auto_now`` save hook. The ``F()``/``Greatest`` advances are resolved back onto
-        the instance by Django 6's ``UPDATE ... RETURNING`` before ``post_save`` fires,
-        so the row carries its DB-true counters into the publisher with no manual restore
-        — one that recomputed ``prior_count + 1`` would stomp the true value whenever a
-        concurrent post advanced it further.
-        """
+        """Stream a newly posted record comment through the native thread save hook."""
 
         values = self._thread_advance_values(sent_at)
         for field, expression in values.items():
             setattr(thread, field, expression)
         with system_context(reason="messaging.thread.bump"):
             thread.save(update_fields=tuple(values))
-
-    def _bump_thread(self, thread_model: Any, thread_id: Any, sent_at: Any) -> None:
-        """Advance a thread's counters by id with a queryset ``.update()`` (the ingest path).
-
-        ``updated_at`` is stamped to the current time because an ``.update()`` bypasses
-        the ``auto_now`` save hook — the same stamp :meth:`_recount_thread` applies via
-        ``save`` — so the row's modified time never lags the counters it just changed.
-        It is the *current* time, never the (possibly null, possibly backfilled)
-        ``sent_at``. Used by the ingest write path, which resolves the thread that
-        *gains* a re-threaded message by id and does not stream chatter; a fresh comment
-        advances its loaded thread through :meth:`_advance_thread` so ``post_save`` fires.
-        """
-
-        updates = self._thread_advance_values(sent_at)
-        updates["updated_at"] = timezone.now()
-        thread_model._base_manager.filter(pk=thread_id).update(**updates)
 
     def ingest(
         self,
@@ -3020,6 +3557,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         quote_edges: bool = True,
         explicit_thread: Any = None,
         historical: bool = False,
+        after_landing: Callable[[Any], None] | None = None,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
 
@@ -3029,8 +3567,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         by external id.
 
         Idempotent on ``(channel, external_id)``; null bytes stripped; thread
-        counters bumped with ``F()``. ``in_reply_to`` lands twice, each through its
-        owner: thread membership via :meth:`ThreadManager.resolve` and the
+        counters incremented with F() deltas on insertion and recounted on loss. ``in_reply_to`` lands twice,
+        each through its owner: thread membership via :meth:`ThreadManager.resolve` and the
         single-parent reply pointer via :meth:`_resolve_reply_parent` onto
         ``Message.parent``. ``modality``/``visibility`` land each resolved
         thread under a non-email :class:`~angee.messaging.models.Thread.Modality` /
@@ -3053,6 +3591,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         external ID into a different explicit thread is rejected. ``historical``
         suppresses the live message event and party-suggestion side effects while
         retaining original timestamps, content history and thread counters.
+        ``after_landing`` writes an addon's overlay and moderation before counters
+        and live events; it also runs on unchanged observations without re-emitting.
         """
 
         created_by_id = created_by_id if created_by_id is not None else channel.owner_id
@@ -3077,6 +3617,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     visibility=visibility,
                     explicit_thread=explicit_thread,
                     historical=historical,
+                    after_landing=after_landing,
                 )
                 ingested.append(message)
                 for handle in handles:
@@ -3167,14 +3708,69 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         visibility: Any = None,
         explicit_thread: Any = None,
         historical: bool = False,
+        after_landing: Callable[[Any], None] | None = None,
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
-        envelope_metadata = _bounded_message_metadata(parsed.metadata)
-        thread = (
-            explicit_thread
-            if explicit_thread is not None
-            else thread_model.objects.resolve(
+        envelope_metadata = self.model.ingest_metadata(_bounded_message_metadata(parsed.metadata))
+        # Resolve identity before provider facts can create a thread or sender:
+        # an outbound echo belongs to the locally authored envelope.
+        prior = (
+            _external_id_annotated(self.model._base_manager)
+            .filter(_external_id_q(parsed.external_id), channel=channel)
+            .select_related("thread")
+            .first()
+        )
+        received_at = parsed.received_at if parsed.received_at is not None else prior.received_at if prior else None
+        content_hash = _parsed_sync_hash(
+            parsed, channel_id=channel.pk, metadata=envelope_metadata, received_at=received_at,
+        )
+        unchanged = (
+            prior is not None and prior.thread_id is not None
+            and (explicit_thread is None or prior.thread_id == explicit_thread.pk)
+            and (prior.metadata or {}).get(_SYNC_HASH_KEY) == content_hash
+        )
+        if unchanged and not prior.is_locally_written and explicit_thread is None and parsed.thread is None:
+            referenced = thread_model.objects.referenced_thread(
+                platform=parsed.platform, in_reply_to=parsed.in_reply_to, references=parsed.references,
+            )
+            unchanged = referenced is None or referenced.pk == prior.thread_id
+        if unchanged and (
+            prior.is_locally_written or not parsed.in_reply_to or prior.parent_id is not None
+            or self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread) is None
+        ):
+            if after_landing is not None:
+                after_landing(prior)
+            return prior, ()
+        # Lock Message before any thread resolution, but only for a mutation.
+        if prior is not None:
+            # Lock only the message row: the thread is a nullable (outer) join.
+            prior = self.model._base_manager.select_for_update(of=("self",)).select_related("thread").get(pk=prior.pk)
+        created = prior is None
+        if created:
+            try:
+                # Reserve the provider identity before resolving/locking Thread.
+                # The transaction exposes only the completed envelope, and the
+                # reservation must not publish an incomplete change event.
+                with transaction.atomic(), mute_changes():
+                    message = self.create(
+                        external_id=parsed.external_id, channel=channel, created_by_id=created_by_id,
+                        platform=parsed.platform, direction=parsed.direction,
+                    )
+            except IntegrityError:
+                prior = _external_id_annotated(self.model._base_manager).filter(
+                    _external_id_q(parsed.external_id), channel=channel,
+                ).select_for_update(of=("self",)).select_related("thread").first()
+                if prior is None:
+                    raise
+                created = False
+        authored_message = prior if prior is not None and prior.is_locally_written else None
+        if authored_message is not None:
+            thread = authored_message.thread
+        elif explicit_thread is not None:
+            thread = explicit_thread
+        else:
+            thread = thread_model.objects.resolve(
                 platform=parsed.platform,
                 channel=channel,
                 subject=parsed.subject,
@@ -3186,9 +3782,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 visibility=visibility,
                 thread=parsed.thread,
             )
-        )
         sender = None
-        if parsed.sender is not None:
+        if parsed.sender is not None and authored_message is None:
             sender = handle_model.objects.upsert(
                 platform=parsed.sender.platform,
                 value=parsed.sender.value,
@@ -3197,25 +3792,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 external_id=parsed.sender.external_id,
                 metadata=parsed.sender.metadata,
             )
-        # Capture the message's prior state before the upsert moves it: the prior
-        # thread (a re-sync that re-resolves to a different thread must reconcile both
-        # threads' counters below) and the digest its last sync stored (an identical
-        # re-sync is a no-op). The read rides the channel-scoped MD5 identity index.
-        prior = (
-            _external_id_annotated(self.model._base_manager)
-            .filter(_external_id_q(parsed.external_id), channel=channel)
-            .values("pk", "thread_id", "parent_id", "metadata")
-            .first()
-        )
-        content_hash = _parsed_sync_hash(
-            parsed,
-            channel_id=channel.pk,
-            metadata=envelope_metadata,
-        )
         if (
             prior is not None
-            and prior["thread_id"] == thread.pk
-            and (prior["metadata"] or {}).get(_SYNC_HASH_KEY) == content_hash
+            and prior.thread_id == (thread.pk if thread is not None else None)
+            and (prior.metadata or {}).get(_SYNC_HASH_KEY) == content_hash
         ):
             # Idempotent re-sync into the same thread with identical content: nothing
             # to rebuild — skipping the part rebuild avoids churning Part primary keys,
@@ -3223,17 +3803,20 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # precise exception: a reply that landed before its parent keeps NULL, so
             # the re-sync backfills the pointer once its parent exists (this is how a
             # resumed backup import heals reply order across batches).
-            message = self.model._base_manager.select_related("thread").get(pk=prior["pk"])
-            if parsed.in_reply_to and prior["parent_id"] is None:
+            message = authored_message or self.model._base_manager.select_related("thread").get(pk=prior.pk)
+            if authored_message is None and parsed.in_reply_to and prior.parent_id is None:
                 parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
                 if parent is not None:
-                    message.parent = parent
+                    message = self.model._base_manager.select_for_update().get(pk=prior.pk)
+                    message.parent = message.parent or parent
                     message.save(update_fields=("parent", "updated_at"))
+            if after_landing is not None:
+                after_landing(message)
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
         defaults = {
-            "thread_id": thread.pk,
+            "thread_id": thread.pk if thread is not None else None,
             "channel_id": channel.pk if channel is not None else None,
             "sender_id": sender.pk if sender is not None else None,
             "parent_id": parent.pk if parent is not None else None,
@@ -3243,57 +3826,63 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             # Record chatter and public posts share the native COMMENT kind.
             "message_type": (
                 self.model.MessageKind.COMMENT
-                if thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
+                if thread is not None and (
+                    thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
+                )
                 else self.model.MessageKind.CHAT
                 if parsed.thread is not None or explicit_thread is not None
                 else self.model.MessageKind.EMAIL
             ),
             "preview": strip_null_bytes(_preview(parsed.body))[: self.model._meta.get_field("preview").max_length],
             "sent_at": parsed.sent_at,
-            "received_at": parsed.received_at,
+            "received_at": received_at,
             "metadata": metadata,
         }
-        created = prior is None
         if created:
-            try:
-                with transaction.atomic():
-                    message = self.create(external_id=parsed.external_id, created_by_id=created_by_id, **defaults)
-            except IntegrityError:
-                # A concurrent ingest of the same provider event landed first;
-                # converge on its row and fall through to the update path.
-                prior = (
-                    _external_id_annotated(self.model._base_manager)
-                    .filter(_external_id_q(parsed.external_id), channel=channel)
-                    .values("pk", "thread_id", "metadata")
-                    .first()
-                )
-                if prior is None:
-                    raise
-                created = False
+            for field, value in defaults.items():
+                setattr(message, field, value)
+            message.save()
         prior_hashes: list[str] = []
+        retain_authored_parts = False
         if not created:
-            message = self.model._base_manager.select_for_update().get(pk=prior["pk"])
-            if explicit_thread is not None and message.thread_id != thread.pk:
+            message = authored_message or self.model._base_manager.select_for_update().get(pk=prior.pk)
+            defaults["metadata"] = _bounded_message_metadata(
+                self.model.ingest_metadata(metadata, previous=message.metadata),
+            )
+            if message.is_locally_written:
+                # Provider echoes cannot change locally authored envelope identity.
+                defaults["direction"] = message.direction
+                defaults["sender_id"] = message.sender_id
+                defaults["message_type"] = message.message_type
+                defaults["status"] = message.status
+                for field in ("thread_id", "parent_id", "platform", "preview", "sent_at"):
+                    defaults[field] = getattr(message, field)
+                thread = message.thread
+                retain_authored_parts = True
+            if explicit_thread is not None and message.thread_id != explicit_thread.pk:
                 raise ValueError("Source message already belongs to a different explicit thread.")
             prior_hashes = self._content_fragment_hashes(part_model, message)
             for field, value in defaults.items():
                 setattr(message, field, value)
             message.save()
-        message.parts.all().delete()
-        position = self._write_envelope_parts(message, parsed, created_by_id=created_by_id)
-        if parsed.body is not None:
-            self._build_parts(message, parsed.body, parent=None, position=position, created_by_id=created_by_id)
-        if not created:
-            new_hashes = self._content_fragment_hashes(part_model, message)
-            if new_hashes != prior_hashes:
-                # A provider edit: the row survives, the parts relinked — record what
-                # was replaced by hash (the old text lives on as shared fragments).
-                message.edit_history = [
-                    _edit_history_entry(edited_by_id=None, prev_fragment_hashes=prior_hashes),
-                    *(message.edit_history or []),
-                ]
-                message.save(update_fields=("edit_history", "updated_at"))
-        handles = self._write_participants(message, thread, parsed, sender, created_by_id)
+        if not retain_authored_parts:
+            message.parts.all().delete()
+            position = self._write_envelope_parts(message, parsed, created_by_id=created_by_id)
+            if parsed.body is not None:
+                self._build_parts(message, parsed.body, parent=None, position=position, created_by_id=created_by_id)
+            if not created:
+                new_hashes = self._content_fragment_hashes(part_model, message)
+                if new_hashes != prior_hashes:
+                    # A provider edit: the row survives, the parts relinked — record what
+                    # was replaced by hash (the old text lives on as shared fragments).
+                    message.edit_history = [
+                        _edit_history_entry(edited_by_id=None, prev_fragment_hashes=prior_hashes),
+                        *(message.edit_history or []),
+                    ]
+                    message.save(update_fields=("edit_history", "updated_at"))
+        handles = (
+            () if retain_authored_parts else self._write_participants(message, thread, parsed, sender, created_by_id)
+        )
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -3302,13 +3891,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # the winner still gains the message and there is no
         # loser to recount. Gating the winner's bump on ``created`` alone dropped exactly
         # that NULL-prior re-home; an idempotent re-sync into the same thread is a no-op.
-        thread_changed = prior is not None and prior["thread_id"] != thread.pk
-        if thread_changed and prior["thread_id"] is not None:
-            losing_thread = thread_model._base_manager.select_for_update().get(pk=prior["thread_id"])
+        thread_changed = prior is not None and prior.thread_id != message.thread_id
+        if thread_changed and prior.thread_id is not None:
+            losing_thread = thread_model._base_manager.select_for_update().get(pk=prior.thread_id)
             self._recount_thread(losing_thread)
-        if created or thread_changed:
-            self._bump_thread(thread_model, thread.pk, parsed.sent_at)
-            if not historical:
+        if after_landing is not None:
+            after_landing(message)
+        if (created or thread_changed) and not message.is_trashed and thread is not None:
+            self._bump_thread(message)
+            if not historical and not message.is_trashed:
                 message_ingested.send(sender=self.model, instance=message)
         return message, handles
 
@@ -3698,6 +4289,49 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
     Incomplete caches fall back to that single joined read. Prefetch the relation with
     those joins for repeated queries without SQL; no separate tree cache is kept.
     """
+
+    BODY_SEPARATOR = "\n\n"
+
+    def plain_body_text(self, message: Message) -> str:
+        """Join plain BODY fragments in the same depth-first order as the tree reader."""
+
+        return self.BODY_SEPARATOR.join(
+            part.fragment.text for part in self.reading_order_for_message(message)
+            if part.role == self.model.PartRole.BODY and part.type == "text/plain" and part.fragment_id is not None
+        )
+
+    def plain_body_sql(self, message_id_sql: str, *, connection: Any) -> tuple[str, list[Any]]:
+        """Project the tree reader's plain body in SQL for a trusted message-id expression.
+
+        Sibling ranks order each depth-first path by (position, pk). Only rooted
+        parts of this message participate, matching reading_order_for_message's
+        treatment of foreign parents and unrooted cycles. SQL consumers supply
+        identifiers/expressions, never user text; the separator is a bound value.
+        The aggregate's own ORDER BY fixes the join order on every backend,
+        which needs Django's aggregate ORDER BY feature (SQLite 3.44+).
+        """
+
+        if not connection.features.supports_aggregate_order_by_clause:
+            raise NotSupportedError("The plain-body projection needs ordered string aggregation.")
+        quote = connection.ops.quote_name
+        parts = quote(self.model._meta.db_table)
+        fragments = quote(self.model._meta.get_field("fragment").related_model._meta.db_table)
+        rank = "printf('%%020d', sibling_rank)" if connection.vendor == "sqlite" else (
+            "LPAD(CAST(sibling_rank AS text), 20, '0')"
+        )
+        aggregate = (
+            f"SELECT STRING_AGG(f.text, %s ORDER BY t.path) FROM tree t "
+            f"JOIN {fragments} f ON f.id = t.fragment_id WHERE t.role = 'body' AND t.type = 'text/plain'"
+        )
+        return f"""(WITH RECURSIVE siblings AS (
+            SELECT p.*, ROW_NUMBER() OVER (PARTITION BY parent_id ORDER BY position, id) AS sibling_rank
+            FROM {parts} p WHERE message_id = {message_id_sql}
+        ), tree AS (
+            SELECT id, fragment_id, role, type, {rank} AS path FROM siblings WHERE parent_id IS NULL
+            UNION ALL
+            SELECT s.id, s.fragment_id, s.role, s.type, t.path || '/' || {rank}
+            FROM siblings s JOIN tree t ON s.parent_id = t.id
+        ) SELECT COALESCE(({aggregate}), ''))""", [self.BODY_SEPARATOR]
 
     def create(self, **fields: Any) -> Any:
         """Bound source text and discard malformed Content-IDs before writing.

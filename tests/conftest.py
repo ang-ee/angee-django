@@ -36,6 +36,7 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
+from angee.integrate.streams import StreamDefinition, StreamPage
 from angee.integrate.testing.integration import Integration
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
@@ -72,7 +73,10 @@ from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 from angee.workflows_integrate.testing import models as sync_cycle_models  # noqa: F401 -- register bridge test subject
-from tests import extraction_models  # noqa: F401 -- register shared FK targets before database setup
+from tests import (
+    extraction_models,  # noqa: F401 -- register shared FK targets before database setup
+    integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
+)
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
@@ -319,6 +323,8 @@ def make_integration(
             slug=slug,
             display_name=slug.title(),
             client_id=f"{slug}-cid",
+            authorize_endpoint="https://provider.example/auth",
+            token_endpoint="https://provider.example/token",
         )
         credential = Credential.objects.upsert_for_user(user, oauth_client, kind, material)
         vendor = Vendor.objects.create(slug=slug, display_name=slug.title())
@@ -414,13 +420,14 @@ class StubFeedBackend(FeedBackend):
     """In-memory feed backend for tests; canned posts are queued per feed row.
 
     Registered as the ``stub`` key in the test ``ANGEE_POSTS_FEED_BACKEND_CLASSES`` so
-    a ``Feed(backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
+    a ``Feed(feed_backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
     dataclasses (not JSON), so a test queues the posts through :meth:`queue` keyed by
-    the feed row rather than riding them on the JSON ``config``; ``fetch_posts`` returns
+    the feed row rather than riding them on the JSON ``config``; ``extract`` returns
     what was queued for the bound feed.
     """
 
     key = "stub"
+    requires_connection_discovery = False
     label = "Stub"
     _posts: dict[Any, list[ParsedPost]] = {}
 
@@ -436,10 +443,19 @@ class StubFeedBackend(FeedBackend):
 
         cls._posts.clear()
 
-    def fetch_posts(self) -> list[ParsedPost]:
-        """Return the posts queued for the bound feed row."""
+    def streams(self, *, deadline=None):
+        """Expose the native independently committed feed partition."""
 
-        return type(self)._posts.get(self.bridge.pk, [])
+        return (StreamDefinition(key="activity", partition=str(self.bridge.pk)),)
+
+    def extract(self, stream, page_bound, *, deadline=None):
+        """Return one bounded deterministic page through integrate's driver."""
+
+        posts = type(self)._posts.get(self.bridge.pk, [])
+        offset = stream.cursor.get("offset", 0)
+        end = offset + page_bound
+        exhausted = end >= len(posts)
+        return StreamPage(records=posts[offset:end], cursor={} if exhausted else {"offset": end}, exhausted=exhausted)
 
 
 class Link(AbstractLink):

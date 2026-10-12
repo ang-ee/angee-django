@@ -27,6 +27,8 @@ from xml.sax.saxutils import escape
 
 import vobject
 from django.apps import apps
+from django.conf import settings
+from django.core.exceptions import ValidationError
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
@@ -43,6 +45,7 @@ from angee.parties.backends import (
     contact_from_projection,
     contact_projection,
 )
+from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 _NS = {
     "d": "DAV:",
@@ -53,13 +56,12 @@ _MULTIGET_CHUNK = 100
 _DAV_RESPONSE_CAP = 16 * 1024 * 1024
 """Limit accepted DAV bodies to 16 MiB before XML tree construction.
 
-A card whose inline photo is as large as the fetched-photo limit (``_PHOTO_CAP``) is about 6.7 MiB once
-base64-encoded, so the cap admits such a card with room to spare while bounding the memory of one parse.
-Multigets split to fit; oversized singletons are quarantined.
+A card whose inline photo is as large as storage's default image cap (``ANGEE_STORAGE_IMAGE_MAX_BYTES``,
+5 MiB) is about 6.7 MiB once base64-encoded, so the cap admits such a card with room to spare while
+bounding the memory of one parse. Multigets split to fit; oversized singletons are quarantined.
 """
 _XML_FEED_BYTES = 64 * 1024
 """Bound each Expat feed so a document type refusal stops before the rest of the body."""
-_PHOTO_CAP = 5 * 1024 * 1024
 # vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
 _NO_YEAR_SENTINEL = 1604
 
@@ -265,9 +267,18 @@ class CardDavDirectoryBackend(DirectoryBackend):
         photo_data = None
         photo = contact_from_projection(projection).photo
         if photo is not None:
-            file = apps.get_model("parties", "Party").objects.resolve_contact_photo(photo)
-            with file.open_stream() as content:
-                photo_data = content.read()
+            avatar = link.target.avatar if link.target is not None else None
+            try:
+                if avatar is None:
+                    raise ValidationError("The projected contact photo is no longer available.")
+                # Still the projected photo; one stored before storage's image rule
+                # may be a type or size it now refuses.
+                photo_data = avatar.read_image(expected_digest=photo.content_hash)
+            except (UploadTooLarge, UploadTypeRefused) as error:
+                raise RemoteRejected("unsupported_photo", conflict=False) from error
+            except ValidationError as error:
+                # The avatar changed or its bytes no longer verify: set the write aside.
+                raise RemoteRejected("photo_unavailable", conflict=False) from error
         raw = _render_vcard(projection, source=source, uid=link.external_key, photo_data=photo_data)
         response = self._request(
             "PUT",
@@ -307,17 +318,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
         if not same_origin(photo.uri, collection):
             raise CardDavError("The vCard photo must share the address book's origin.")
         try:
-            data = self.http.download_capped(
-                photo.uri,
-                cap=_PHOTO_CAP,
-                allow_private=False,
-                follow_redirects=False,
+            response = self.http.request(
+                "GET", photo.uri, allow_private=False, max_bytes=int(settings.ANGEE_STORAGE_IMAGE_MAX_BYTES)
             )
+        except ResponseTooLargeError as error:
+            # Storage's image cap refuses it, as it refuses an inline photo that size.
+            raise UploadTooLarge("The vCard photo is larger than the image size cap.") from error
         except Exception as error:  # noqa: BLE001 — do not promote a partial comparison base.
             raise CardDavError("The vCard photo could not be retrieved.") from error
-        if not data:
+        if not response.is_success or not response.content:
             raise CardDavError("The vCard photo could not be retrieved.")
-        return replace(contact, photo=ParsedPhoto(data=data, mime=photo.mime or "application/octet-stream"))
+        return replace(contact, photo=ParsedPhoto(data=response.content, mime=photo.mime or "application/octet-stream"))
 
     # --- transport ---
 
@@ -555,7 +566,18 @@ class CardDavDirectoryBackend(DirectoryBackend):
                     remote_version=etag,
                 )
                 continue
-            contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
+            try:
+                contacts[href] = self._prepare_contact(self._resolve_photo(contact, collection=collection))
+            except (UploadTooLarge, UploadTypeRefused):
+                # A photo storage refuses to render (an SVG, an oversized image)
+                # quarantines its card rather than syncing it without the photo,
+                # which a later write-back would then strip from the card. Storage
+                # that cannot take it yet (no image drive) fails the page, which retries.
+                contacts[href] = _quarantined(
+                    href,
+                    {"href": href, "source_digest": canonical_json_sha256(data), "error": "unsupported_photo"},
+                    remote_version=etag,
+                )
         if set(contacts) != set(hrefs):
             raise CardDavError("The CardDAV multiget omitted a requested resource.")
         return contacts

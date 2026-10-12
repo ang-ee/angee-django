@@ -29,8 +29,10 @@ import httpx2
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import OAuth2Client
 
+from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import PinnedTransport
 from angee.integrate.oauth.errors import (
+    CLIENT_NOT_CONFIGURED,
     MISSING_ENDPOINT,
     TOKEN_EXCHANGE_FAILED,
     USERINFO_FAILED,
@@ -120,7 +122,7 @@ class OAuthClientProtocol:
             grant["code_verifier"] = code_verifier
         if self._uses_json_token_request() and state:
             grant["state"] = state
-        return self._token_request("authorization_code", grant)
+        return self.exchange_grant("authorization_code", **grant)
 
     def refresh_token(self, *, refresh_token: str) -> dict[str, Any]:
         """Exchange a stored refresh token for fresh token material (RFC 6749 §6).
@@ -129,24 +131,47 @@ class OAuthClientProtocol:
         caller persists it. Raises ``OAuthFlowError`` when the grant is rejected.
         """
 
-        return self._token_request("refresh_token", {"refresh_token": refresh_token})
+        return self.exchange_grant("refresh_token", refresh_token=refresh_token)
 
-    def fetch_userinfo(self, access_token: str) -> dict[str, Any]:
+    def exchange_identity(
+        self, *, code: str, redirect_uri: str, code_verifier: str | None = None, state: str = "",
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
+        """Return refined material, userinfo and the code exchange's OIDC proof.
+
+        Refinement may replace or omit an ID token; only the authorization-code
+        exchange's token proves the login against the flow's nonce.
+        """
+
+        tokens = self.exchange_code(
+            code=code, redirect_uri=redirect_uri, code_verifier=code_verifier, state=state,
+        )
+        id_token = str(tokens.get("id_token", "") or "")
+        tokens = self.oauth_client.refine_grant(self, tokens)
+        access_token = str(tokens.get("access_token", "") or "")
+        claims = self.fetch_userinfo(
+            access_token, params=self.oauth_client.userinfo_params(self, access_token),
+        )
+        return tokens, claims, id_token
+
+    def fetch_userinfo(self, access_token: str, *, params: Mapping[str, str] | None = None) -> dict[str, Any]:
         """Best-effort fetch of profile claims with one OAuth access token.
 
         Reads the access-token-protected ``userinfo_endpoint`` to label a connected
-        account (connect needs no ID token). The OIDC layer overrides this to resolve
-        the endpoint from discovery first.
+        account (connect needs no ID token). Blank endpoints use client-owned
+        discovery for OAuth and OIDC alike.
         """
 
         if not access_token:
             return {}
-        userinfo_endpoint = str(getattr(self.oauth_client, "userinfo_endpoint", "") or "")
-        if not userinfo_endpoint:
-            return {}
         try:
+            userinfo_endpoint = str(self.oauth_client.userinfo_endpoint or "")
+            if not userinfo_endpoint and self.oauth_client.discovery_url:
+                self.ensure_endpoints()
+                userinfo_endpoint = str(self.oauth_client.userinfo_endpoint or "")
+            if not userinfo_endpoint:
+                return {}
             return _get_json(
-                userinfo_endpoint,
+                with_query(userinfo_endpoint, params or {}),
                 headers={"Authorization": f"Bearer {access_token}"},
                 error_code=USERINFO_FAILED,
                 _transport=self._transport,
@@ -163,6 +188,8 @@ class OAuthClientProtocol:
         session = self._session()
         try:
             session.revoke_token(revoke_endpoint, token=token, token_type_hint="access_token")
+        except RequestNotSentError as exc:
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
         except OAuthError, httpx2.HTTPError:
             # Revocation is best-effort: a provider that rejects or omits the endpoint
             # does not block disconnect.
@@ -171,15 +198,15 @@ class OAuthClientProtocol:
             session.close()
 
     def ensure_endpoints(self) -> dict[str, Any]:
-        """Ask the OAuth client row to fill endpoint fields from discovery."""
+        """Ask the OAuth client row to fill endpoints from OIDC metadata discovery."""
 
         discover = getattr(self.oauth_client, "discover_endpoints", None)
         if not callable(discover):
             return {}
         return dict(discover())
 
-    def _token_request(self, grant_type: str, grant: Mapping[str, Any]) -> dict[str, Any]:
-        """Dispatch one grant to the token endpoint and return validated material.
+    def exchange_grant(self, grant_type: str, **grant: Any) -> dict[str, Any]:
+        """Exchange a standard or provider-specific grant for validated material.
 
         Standard providers go through Authlib's ``OAuth2Client`` (form-encoded per
         RFC 6749). A provider that declares ``token_request_format == "json"`` —
@@ -221,7 +248,7 @@ class OAuthClientProtocol:
                 token = session.fetch_token(endpoint, grant_type=grant_type, **grant, **extra)
         except OAuthError as exc:
             body = {"error": exc.error, "error_description": exc.description}
-            self._log_token_failure(exc.error, body)
+            self._log_token_failure("oauth_refusal", None)
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body=body) from exc
         except httpx2.HTTPStatusError as exc:
             # Authlib raises this only for >=500 (it raise_for_status()es server errors).
@@ -231,13 +258,15 @@ class OAuthClientProtocol:
                 exc.response.status_code,
                 body=_response_body(exc.response),
             ) from exc
+        except RequestNotSentError as exc:
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
         except (httpx2.HTTPError, ValueError) as exc:
             # Authlib parses the token body as JSON before checking the status, so a
             # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
             # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
             # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
             self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
             session.close()
         response = dict(token)
@@ -274,8 +303,10 @@ class OAuthClientProtocol:
                 exc.response.status_code,
                 body=_response_body(exc.response),
             ) from exc
+        except RequestNotSentError as exc:
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503) from exc
         except (httpx2.HTTPError, ValueError) as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
             client.close()
         if not isinstance(data, dict):
@@ -303,19 +334,36 @@ class OAuthClientProtocol:
         )
 
     def _client_secret(self) -> str:
-        """Return confidential-client material without reading it for fixed public clients.
+        """Use the stored token-endpoint secret, skipping storage for fixed public clients.
 
         ``manual_redirect_uri`` declares the RFC 8252-style fixed public client
         whose callback allow-list Angee cannot extend.  Such a client authenticates
         its authorization-code grant with PKCE and has no client secret, so touching
         the encrypted field is both unnecessary and wrong: an unreadable historical
-        encrypted blank must not block its public-client exchange.  Confidential
-        clients retain the encrypted descriptor's fail-closed behavior.
+        encrypted blank must not block its public-client exchange. Other rows use
+        their stored secret when present and auth ``none`` when blank. Unreadable
+        secrets retain the encrypted descriptor's fail-closed behavior.
         """
 
-        if str(getattr(self.oauth_client, "manual_redirect_uri", "") or ""):
+        if self.oauth_client.is_public_client:
             return ""
-        return str(getattr(self.oauth_client, "client_secret", "") or "")
+        return str(self.oauth_client.client_secret or "")
+
+    def confidential_client_secret(self) -> str:
+        """Return confidential material for server-side request signing.
+
+        Public clients are refused before touching encrypted secret storage.
+        Confidential clients require a secret and retain the encrypted field's
+        fail-closed behavior.
+        Never log or expose the returned value.
+        """
+
+        if self.oauth_client.is_public_client:
+            raise IntegrationError("Public OAuth clients cannot sign requests with a client secret.")
+        secret = str(self.oauth_client.client_secret or "")
+        if not secret:
+            raise IntegrationError("The confidential OAuth client has no client secret.")
+        return secret
 
     def _http_client(self) -> httpx2.Client:
         """Return a plain httpx2 client carrying the outbound headers (JSON-shim transport)."""
@@ -341,8 +389,16 @@ class OAuthClientProtocol:
         scopes: Iterable[str],
         code_challenge: str | None,
     ) -> dict[str, str]:
-        """Return the shared authorize query parameters (OIDC adds ``nonce``/``openid``)."""
+        """Return the shared authorize query parameters (OIDC adds ``nonce``/``openid``).
 
+        A flow needs PKCE or a client secret: with neither, nothing would
+        authenticate the code exchange, so a misconfigured confidential client
+        is refused before the provider redirect.
+        """
+
+        challenge = code_challenge if getattr(self.oauth_client, "supports_pkce", False) else None
+        if not challenge and not self._client_secret():
+            raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
         query: dict[str, str] = {
             **_string_param_values(self.oauth_client, "authorize_param_values"),
             "client_id": str(getattr(self.oauth_client, "client_id", "")),
@@ -351,8 +407,8 @@ class OAuthClientProtocol:
             "scope": " ".join(scopes),
             "state": state,
         }
-        if getattr(self.oauth_client, "supports_pkce", False) and code_challenge:
-            query["code_challenge"] = code_challenge
+        if challenge:
+            query["code_challenge"] = challenge
             query["code_challenge_method"] = "S256"
         return query
 
@@ -409,7 +465,7 @@ def with_query(url: str, query: Mapping[str, str]) -> str:
 
     parts = parse.urlsplit(url)
     existing = parse.parse_qsl(parts.query, keep_blank_values=True)
-    encoded = parse.urlencode([*existing, *query.items()])
+    encoded = parse.urlencode([*(pair for pair in existing if pair[0] not in query), *query.items()])
     return parse.urlunsplit((parts.scheme, parts.netloc, parts.path, encoded, parts.fragment))
 
 
@@ -428,8 +484,9 @@ def _get_json(
             response = client.get(url, headers=request_headers)
             response.raise_for_status()
             data = response.json()
-    except (httpx2.HTTPError, ValueError) as exc:
-        raise OAuthFlowError(error_code, 400) from exc
+    except (RequestNotSentError, httpx2.HTTPError, ValueError) as exc:
+        status = 503 if isinstance(exc, (RequestNotSentError, httpx2.TransportError)) else 400
+        raise OAuthFlowError(error_code, status) from exc
     if not isinstance(data, dict):
         raise OAuthFlowError(error_code, 400)
     return data
