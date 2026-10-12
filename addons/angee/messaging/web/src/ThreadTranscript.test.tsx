@@ -60,6 +60,7 @@ function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscript
       value: "ada@example.com",
       party_link_confirmed: false,
       party: null,
+      avatar: null,
     },
     parts: [{ role: "BODY", fragment: { text: "Hi there" }, file: null }],
     reaction_groups: [],
@@ -95,7 +96,7 @@ describe("ThreadTranscript", () => {
   test("renders inbound, outbound, and internal turns with their distinct treatments", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
-      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
+      message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null, avatar: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
       message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ];
     mocks.total = mocks.transcriptRows.length;
