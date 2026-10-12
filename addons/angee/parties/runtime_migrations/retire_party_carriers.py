@@ -151,6 +151,10 @@ def plan(apps, db, *, folded=True):
                 problems.append(Problem("MergeVeto", veto.pk, "anti-link parity is unproven"))
         # Dropping copied legacy columns may not erase earlier wire evidence.
         for name in ("HistoricalParty", "HistoricalPerson", "HistoricalOrganization"):
+            try:
+                apps.get_model("parties", name)
+            except LookupError:
+                continue  # Party history begins with the statement schema: a pre-upgrade database has none.
             for row in _rows(apps, "parties." + name, db).order_by("history_id").iterator():
                 if not row.folder_id and not any((row.source_uid, row.raw_vcard, row.extensions)):
                     continue

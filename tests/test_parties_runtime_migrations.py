@@ -17,7 +17,7 @@ import pytest
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, models
+from django.db import connection, migrations, models
 from django.db.migrations.state import ModelState, ProjectState
 from django.utils import timezone
 from rebac import SubjectRef, app_settings
@@ -704,9 +704,32 @@ def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
     assert "raw_vcard" not in {field.name for field in legacy.model("parties.Party")._meta.fields}
 
 
+def _created_after_the_preflight() -> frozenset[str]:
+    """Every model a chain declaration planned in a later round than the preflight creates.
+
+    None exists when the preflight runs on a database at main, so a preflight that
+    looks one up fails there; deriving the set from the chain's own rounds pins every
+    future lookup, not only the ones known today. Declarations sharing the preflight's
+    round may run on either side of it, and the preflight reads the shape it finds.
+    """
+
+    rounds = _rounds(_main_like_state())
+    labels = {module: addon.rsplit(".", 1)[1] for addon, modules in CHAIN.items() for module in modules}
+    return frozenset(
+        f"{labels[module]}.{operation.name}".lower()
+        for module, number in rounds.items()
+        if number > rounds[preflight_party_folds]
+        for operation in module.Migration.operations
+        if isinstance(operation, migrations.CreateModel)
+    )
+
+
 @pytest.mark.django_db(transaction=True)
 def test_preflight_reads_only_the_pre_upgrade_shape(legacy: LegacyHost, seeded: dict[str, Any]) -> None:
-    """The preflight runs before the parties statement schema: it never reads statement history."""
+    """The preflight never looks up a model a later round creates: none exists yet at main."""
+
+    hidden = _created_after_the_preflight()
+    assert {"parties.historicalparty", "parties.historicalpartystatement"} <= hidden
 
     class PreUpgradeApps:
         """The legacy host's apps without the models only later declarations create."""
@@ -716,17 +739,17 @@ def test_preflight_reads_only_the_pre_upgrade_shape(legacy: LegacyHost, seeded: 
 
         def get_model(self, app_label: str, model_name: str | None = None) -> Any:
             label = app_label if model_name is None else f"{app_label}.{model_name}"
-            if label.lower().startswith("parties.historical") and label.lower().endswith("statement"):
+            if label.lower() in hidden:
                 raise LookupError(label)
             return self.apps.get_model(label)
 
         def get_models(self) -> Any:
-            return self.apps.get_models()
+            return [model for model in self.apps.get_models() if model._meta.label_lower not in hidden]
 
-    problems, notices = retire_party_carriers.plan(PreUpgradeApps(legacy.apps), connection.alias, folded=False)
-    assert problems == []
-    rows, _notices = preflight_party_folds.blockers(legacy.apps, connection.alias)
+    rows, notices = preflight_party_folds.blockers(PreUpgradeApps(legacy.apps), connection.alias)
     assert rows == []
+    problems, _notices = retire_party_carriers.plan(PreUpgradeApps(legacy.apps), connection.alias, folded=False)
+    assert problems == []
 
 
 def test_vcard_lines_ignore_order_and_revision_stamps() -> None:
