@@ -85,7 +85,7 @@ describe("MessagePartsView", () => {
     expect(screen.getByText("document.pdf")).toBeTruthy();
   });
 
-  test("splits inline CID images from downloadable attachment chips", () => {
+  test("splits inline CID images from attachment chips the file server opens", () => {
     render(
       <MessagePartsView
         resolveFileUrl={fileUrl}
@@ -126,6 +126,10 @@ describe("MessagePartsView", () => {
 
     const attachment = screen.getByRole("link", { name: /report\.pdf/ });
     expect(attachment.getAttribute("href")).toBe("/files/doc_1");
+    // The server's disposition decides between showing and downloading the file;
+    // a `download` attribute would force a download of a PDF it serves inline.
+    expect(attachment.hasAttribute("download")).toBe(false);
+    expect(attachment.getAttribute("target")).toBe("_blank");
     expect(screen.getByText("4 KB")).toBeTruthy();
   });
 

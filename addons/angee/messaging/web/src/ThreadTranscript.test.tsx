@@ -165,6 +165,28 @@ describe("ThreadTranscript", () => {
     expect(screen.getByRole("button", { name: "👍 reaction, 2" })).toBeTruthy();
   });
 
+  test("opens an attachment in the host's preview with its message", () => {
+    const attachment = {
+      id: "prt_pdf",
+      name: "contract.pdf",
+      role: "BODY",
+      disposition: "ATTACHMENT",
+      fragment: null,
+      file: { id: "fil_pdf", filename: "contract.pdf", url: "/files/fil_pdf" },
+    };
+    mocks.transcriptRows = [message({ parts: [attachment] as never })];
+    const preview = vi.fn();
+
+    render(<ThreadTranscript threadId="thr_1" onPreviewFile={preview} />);
+
+    expect(screen.queryByRole("link", { name: /contract\.pdf/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /contract\.pdf/ }));
+    expect(preview).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg_1" }),
+      expect.objectContaining({ id: "prt_pdf" }),
+    );
+  });
+
   test("offers Load older using the server continuation", () => {
     mocks.transcriptRows = [message()];
     mocks.total = 120;
