@@ -308,12 +308,15 @@ def run(args: argparse.Namespace) -> None:
                         else:
 
                             def set_up(test=test, original=test.setUp) -> None:
-                                if isinstance(test, TransactionTestCase):
-                                    statement_sources()
                                 test.enterContext(
                                     changeset(fresh=True, change_reason=f"manage.{args.action}.{test.id()}.fixtures")
                                 )
                                 original()
+                                # After the test's own setUp: a transactional test re-syncs the REBAC
+                                # schema its flush emptied, so the principal bootstrap finds it synced
+                                # and only loads the Rule/Seed rows instead of syncing a second time.
+                                if isinstance(test, TransactionTestCase):
+                                    statement_sources()
 
                             setattr(test, "setUp", set_up)
 
