@@ -1949,6 +1949,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         phases.append("apply")
         return original_apply(stream, record)
 
+    monkeypatch.setattr(type(Drive.objects), "image_drive", lambda manager: drive)
     monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
     monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
