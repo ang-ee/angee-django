@@ -68,7 +68,8 @@ network shows (a messenger profile picture): live sessions report it as an
 handle. A party without a readable avatar of its own displays the avatar of its
 strongest handle the viewer can read (`Party.objects.display_avatar`); that
 fallback is derived for reading and is never stored on the party or written to a
-card.
+card. Avatars live on storage's image drive, which every signed-in user reads;
+which avatar a party or handle shows stays with that record's readers.
 
 Each cycle compares local projections with their last applied bases. Remote-only
 edits use the existing ingest verb; local-only edits use a conditional PUT with

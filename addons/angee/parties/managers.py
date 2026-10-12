@@ -1787,11 +1787,13 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         materialised on the handle: a human-confirmed winner
         (``party_link_confirmed``) first, then the oldest handle. Link confidence
         does not rank, so among unconfirmed handles an older inferred one shows
-        before a newer one a card asserts. Only the handles
-        and avatars ``actor`` can read count, which is what a party shared with its
-        handles grants. Derived for display only: never stored, and never part of
-        the directory projection, so no address book receives it. A page of
-        parties batches the same reads with :meth:`display_avatar_prefetches`.
+        before a newer one a card asserts. Only the handles ``actor`` can read count,
+        which is what a party shared with its handles grants, and only avatars it can
+        read: storage's image drive, which every signed-in user reads, holds every
+        avatar stored since that drive existed. Derived for display only: never
+        stored, and never part of the directory projection, so no address book
+        receives it. A page of parties batches the same reads with
+        :meth:`display_avatar_prefetches`.
         """
 
         if hasattr(party, _DISPLAY_OWN_AVATAR):
@@ -1823,21 +1825,26 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         """Move party avatars stored before storage's image drive onto it; return how many moved.
 
         A contact photo used to be stored with a file's ordinary deduplication, so
-        it could land on a user's own file, which the avatar read rule would share
-        with the party's readers. Each such avatar's bytes are re-ingested as an
-        image and its party re-pointed; the old row stays untouched, since it may be
-        someone's own file. Idempotent and isolated per party: an avatar that cannot
-        move (storage refuses it as an image, its bytes cannot be read, storage is
-        down) keeps its pointer (clearing a synced person's avatar would strip the
-        photo from their card on the next push) and is counted in a warning. With
-        nothing to move, or no image drive (a fresh database before resources load,
-        or a refused drive of that name), it returns at once.
+        it could land on a user's own file, which only that file's readers can read.
+        Each such avatar's bytes are re-ingested as an image and its party
+        re-pointed; the old row stays untouched, since it may be someone's own file.
+        Idempotent and isolated per party: an avatar that cannot move (storage
+        refuses it as an image, its bytes cannot be read, storage is down) keeps its
+        pointer (clearing a synced person's avatar would strip the photo from their
+        card on the next push) and is counted in a warning. It provisions the image
+        drive first (storage's ``Drive.objects.image_drive``, which writes its grant),
+        so each run leaves the drive readable to every signed-in user, and returns at
+        once without one (a fresh database before resources load, or a refused drive
+        of that name) or with nothing to move.
         """
 
         files = apps.get_model("storage", "File").objects
         with system_context(reason="parties.rehome_avatars"):
+            # Provisioned first, so each run leaves the image drive with its grant, avatars to move or not.
+            if apps.get_model("storage", "Drive").objects.image_drive() is None:
+                return 0
             legacy = self.model._base_manager.exclude(avatar=None).exclude(avatar__in=files.images().values("pk"))
-            if not legacy.exists() or apps.get_model("storage", "Drive").objects.image_drive() is None:
+            if not legacy.exists():
                 return 0
             moved = 0
             for party in legacy.select_related("avatar").iterator():
@@ -1853,7 +1860,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             remaining = legacy.count()
         if remaining:
             logger.warning(
-                "%s party avatars remain off the image drive, readable by their parties' readers.", remaining
+                "%s party avatars remain off the image drive, shown only to their files' readers.", remaining
             )
         return moved
 

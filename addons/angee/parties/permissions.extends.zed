@@ -1,19 +1,5 @@
 // @rebac_package: parties
-// @rebac_schema_revision: 4
-
-// A party's own avatar and a handle's network avatar are readable by whoever
-// reads the party (as any of its kinds) or the handle. The reverse paths are
-// live-backed by Party.avatar and Handle.avatar, so replacing an avatar removes
-// its read reach, and none of them grants access to the drive. Avatars live on
-// storage's image drive, so this reach never covers a user's own file.
-definition storage/file {
-    relation avatar_party: parties/party // rebac:field=party_avatars
-    relation avatar_person: parties/person // rebac:field=party_avatars__person
-    relation avatar_organization: parties/organization // rebac:field=party_avatars__organization
-    relation avatar_handle: parties/handle // rebac:field=handle_avatars
-
-    permission read = avatar_party->read + avatar_person->read + avatar_organization->read + avatar_handle->read
-}
+// @rebac_schema_revision: 5
 
 // A member's colleagues include the active people whose identity they read:
 // every record owner's identity arm on parties/person (thread followers, task
