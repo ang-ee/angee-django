@@ -57,6 +57,27 @@ class ChatterDoc(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
         return self.title
 
 
+class ChatterMemo(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
+    """A gated record that opens its record tasks, not its chatter thread, to its readers."""
+
+    sqid_prefix = "cmo_"
+
+    title = models.CharField(max_length=160)
+
+    class Meta:
+        """Django model options for the record-task-only test record."""
+
+        abstract = False
+        app_label = "chatterdemo"
+        db_table = "test_chatterdemo_memo"
+        rebac_resource_type = "chatterdemo/memo"
+
+    def __str__(self) -> str:
+        """Return the memo title for the thread's title fragment."""
+
+        return self.title
+
+
 class TrackedRecordParent(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
     """Concrete threaded parent standing in for a materialized ``extends`` target.
 

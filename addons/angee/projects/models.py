@@ -282,6 +282,9 @@ class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[mis
 
         if not isinstance(record, ThreadedModelMixin):
             raise ValidationError(f"{record._meta.label} keeps no chatter, so it takes no tasks.")
+        if isinstance(record, self.model) and record.subject_id is not None:
+            # Its access is its record's: a task about it would answer to nobody's.
+            raise ValidationError("A record task takes no record tasks of its own.")
         title = strip_null_bytes(title or "").strip()
         if not title:
             raise ValidationError({"title": "A record task needs a title."})
@@ -1240,6 +1243,39 @@ class Task(
             subtype_key="activity_done",
             creation_actor=current_actor(),
         )
+
+    @classmethod
+    def subject_pointer_annotations(cls) -> dict[str, models.Expression]:
+        """The record pointer columns of each row's subject, read through the join.
+
+        Whoever reads a record task reads its record, so the pointer needs no gate
+        of its own; the chatter edge row itself is never loaded.
+        """
+
+        return {
+            "_subject_label": F("subject__label"),
+            "_subject_content_type_id": F("subject__content_type_id"),
+            "_subject_object_id": F("subject__object_id"),
+        }
+
+    def subject_pointer(self) -> models.Model | None:
+        """Return an unsaved chatter edge carrying the record this task is about, or ``None``.
+
+        It reads the annotated pointer columns, else the edge by its id under
+        system context (a structural read: a record task's reader reads its record).
+        """
+
+        if self.subject_id is None:
+            return None
+        edge = self._meta.get_field("subject").related_model
+        if hasattr(self, "_subject_label"):
+            return edge(
+                label=self._subject_label,
+                content_type_id=self._subject_content_type_id,
+                object_id=self._subject_object_id,
+            )
+        with system_context(reason="projects.task.subject_pointer"):
+            return edge._base_manager.only("label", "content_type_id", "object_id").get(pk=self.subject_id)
 
     def _message_after_create(self) -> None:
         """A record task keeps its conversation on the record, not a thread of its own."""

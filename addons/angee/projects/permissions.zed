@@ -51,11 +51,12 @@ definition projects/task {
     relation reader: auth/user | auth/group#member
     relation editor: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
-    // Const-backed on the row's own subject: `unbound->free` holds exactly for a
-    // task about no record.
+    // Const-backed on the row's own subject: the relation exists only on a task
+    // about no record, so `unbound->free` holds exactly there.
     relation unbound: projects/task // rebac:const={"target_id":"unbound","filters":{"subject_id__isnull":true}}
 
-    // Arrow-only through `unbound`: never check `free` directly.
+    // The sentinel's target, held by everyone: it gates nothing alone. Arrow-only
+    // through `unbound`: never check `free` directly.
     permission free = authenticated
     permission create = (authenticated - subject->attached) + subject->record_write + admin->member
     permission read_granted = inherited_project->read + owner + assignee + reader + editor
@@ -70,10 +71,10 @@ definition projects/task {
     permission share_granted = inherited_project->share + owner + editor
     permission share = (((share_granted & unbound->free) + subject->record_write) - withheld) + admin->member
     permission narrow = write
-    permission widen = project->share + owner + admin->member
+    permission widen = ((project->share + owner) & unbound->free) + subject->record_write + admin->member
     permission delete_granted = inherited_project->write + owner
     permission delete = (((delete_granted & unbound->free) + subject->record_write) - withheld) + admin->member
-    permission transfer = owner + admin->member
+    permission transfer = (owner & unbound->free) + subject->record_write + admin->member
     permission write__owner = transfer
     permission comment_granted = write_granted
     permission comment_withheld = nil

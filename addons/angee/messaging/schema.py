@@ -54,7 +54,7 @@ from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
-from angee.messaging.models import ThreadedModelMixin
+from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -1293,7 +1293,7 @@ class MessagingQuery:
         """Return the existing chatter thread attached to a model record."""
 
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1317,7 +1317,7 @@ class MessagingQuery:
         if _request_user(info) is None:
             return RecordRemovedMessagesPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordRemovedMessagesPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1352,7 +1352,7 @@ class MessagingQuery:
         if user is None:
             return 0
         try:
-            record = threaded_record(
+            record = _threaded_record(
                 RecordReferenceInput(
                     model_label=model_label,
                     record_id=record_id,
@@ -1402,7 +1402,7 @@ class MessagingMutation:
         """Post an internal comment to the record's chatter thread."""
 
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordMessagePostPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1446,7 +1446,7 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageUpdatePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageUpdatePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1474,7 +1474,7 @@ class MessagingMutation:
         if _request_user(info) is None:
             return RecordMessageDeletePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDeletePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1522,7 +1522,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageReactionPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageReactionPayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1551,7 +1551,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageStarPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageStarPayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1575,7 +1575,7 @@ class MessagingMutation:
         if user is None:
             return RecordMessageDonePayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
             message = _message(input.message_id)
         except ValueError as error:
             return RecordMessageDonePayload(error=str(error), error_code="BAD_MESSAGE")
@@ -1605,7 +1605,7 @@ class MessagingMutation:
         if user is None:
             return RecordFollowPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordFollowPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -1639,7 +1639,7 @@ class MessagingMutation:
         if user is None:
             return RecordThreadPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
         try:
-            record = threaded_record(input)
+            record = _threaded_record(input)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
         if record is None:
@@ -2037,20 +2037,10 @@ schemas = {
 }
 
 
-def threaded_record(input: RecordReferenceInput) -> Any | None:
+def _threaded_record(input: RecordReferenceInput) -> Any | None:
     """Return the record addressed by ``input`` when its model opts into chatter."""
 
-    try:
-        model = apps.get_model(input.model_label)
-    except (LookupError, ValueError) as error:
-        raise ValueError(f"Unknown model {input.model_label!r}.") from error
-    if not issubclass(model, ThreadedModelMixin):
-        raise ValueError(f"{model._meta.label} does not inherit ThreadedModelMixin.")
-    try:
-        queryset = model._default_manager.all()
-        return instance_from_public_id(model, str(input.record_id), queryset=queryset)
-    except ImproperlyConfigured as error:
-        raise ValueError(str(error)) from error
+    return chatter_record(input.model_label, str(input.record_id))
 
 
 def _referenced_record(input: RecordReferenceInput) -> Any | None:
@@ -2177,7 +2167,7 @@ def _moderate_record_message(
     if not input.confirm:
         return RecordMessageTrashPayload(error="Confirm the change to apply it.", error_code="CONFIRMATION_REQUIRED")
     try:
-        record = threaded_record(input)
+        record = _threaded_record(input)
     except ValueError as error:
         return RecordMessageTrashPayload(error=str(error), error_code="BAD_MESSAGE")
     if record is None:

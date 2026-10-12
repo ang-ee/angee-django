@@ -11,8 +11,11 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.core.management.base import CommandError
+from django.db import connection, migrations, models
+from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.state import ModelState, ProjectState
+from django.utils import timezone
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -24,11 +27,14 @@ from rebac import (
 )
 
 from angee.base.errors import RecordAccessSubjectRefused
+from angee.base.fields import SqidField
+from angee.compose.migrations import DropGuardAutodetector
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
 from angee.projects.runtime_migrations import record_tasks
-from angee.projects.testing.models import Task
-from tests.chatterdemo.models import ChatterDoc
+from angee.projects.testing.models import Project, Task
+from tests.chatterdemo.models import ChatterDoc, ChatterMemo, TrackedRecordParent
 from tests.conftest import create_platform_admin
+from tests.test_runtime_migrations import seed_ledger
 
 User = get_user_model()
 pytestmark = [
@@ -84,6 +90,49 @@ def test_record_tasks_answer_to_their_records_readers_and_writers() -> None:
         assert not Task.objects.filter(pk=task.pk).exists()
 
 
+def test_a_records_reader_loads_its_tasks_with_their_subject() -> None:
+    """A memo's reader reads its tasks' subject pointer, though the memo opens no chatter thread."""
+
+    owner, reader = _user("memo-owner"), _user("memo-reader")
+    with system_context(reason="test.record_tasks.memo"):
+        memo = ChatterMemo.objects.create(title="Supplier memo")
+    _grant(memo, "owner", owner)
+    _grant(memo, "reader", reader)
+    with actor_context(owner):
+        task = Task.objects.schedule(_as(owner, memo), title="Answer the memo")
+    with actor_context(reader):
+        (row,) = Task.objects.for_record(_as(reader, memo)).annotate(**Task.subject_pointer_annotations())
+        pointer = row.subject_pointer()
+    reference = pointer.record_ref
+    assert (row.pk, pointer.label) == (task.pk, "Supplier memo")
+    assert (reference.model_label, reference.public_id) == ("chatterdemo.ChatterMemo", memo.sqid)
+
+
+def test_a_record_tasks_own_grants_reach_nothing_past_its_record() -> None:
+    """A direct grant, an assignment, ownership and a project reach a record task only with the record."""
+
+    writer = _user("unbound-writer")
+    grantee, assignee, owner, member = (_user(f"unbound-{name}") for name in ("grantee", "assignee", "owner", "member"))
+    doc = _doc()
+    _grant(doc, "writer", writer)
+    with system_context(reason="test.record_tasks.unbound"):
+        task = Task.objects.schedule(doc, title="Kept on the record", assignee=assignee)
+        project = Project.objects.create(title="Elsewhere")
+        Task._base_manager.filter(pk=task.pk).update(owner=owner, project=project)
+    _grant(task, "reader", grantee)
+    _grant(project, "reader", member)
+
+    for user in (grantee, assignee, owner, member):
+        with actor_context(user):
+            assert not Task.objects.filter(pk=task.pk).exists(), user
+        assert not Task._base_manager.get(pk=task.pk).with_actor(user).has_access("read"), user
+    assert not Task._base_manager.get(pk=task.pk).with_actor(owner).has_access("transfer")
+    with actor_context(writer):
+        assert Task.objects.filter(pk=task.pk).exists()
+    for permission in ("write", "transfer", "widen"):
+        assert Task._base_manager.get(pk=task.pk).with_actor(writer).has_access(permission), permission
+
+
 def test_a_task_takes_record_tasks_under_its_own_grants() -> None:
     owner, watcher, stranger = _user("subject-owner"), _user("subject-watcher"), _user("subject-stranger")
     with actor_context(owner):
@@ -99,6 +148,8 @@ def test_a_task_takes_record_tasks_under_its_own_grants() -> None:
     with actor_context(stranger):
         assert not Task.objects.filter(pk=follow_up.pk).exists()
     with actor_context(owner):
+        with pytest.raises(ValidationError, match="takes no record tasks of its own"):
+            Task.objects.schedule(_as(owner, follow_up), title="Nested")
         _as(owner, follow_up).complete()
     assert _posts() == ["Done: Call the supplier"]
 
@@ -222,7 +273,17 @@ def _released(*, owners: bool = True) -> ProjectState:
         ("xref", models.CharField(max_length=120)),
         ("target_model", models.CharField(max_length=120)),
     ])
-    _add(state, "messaging", "ThreadAttachment", [("id", models.BigAutoField(primary_key=True))])
+    # The installed content-type table, which the released attachments name their records through.
+    state.add_model(ModelState("contenttypes", "ContentType", [
+        ("id", models.AutoField(primary_key=True)),
+        ("app_label", models.CharField(max_length=100)),
+        ("model", models.CharField(max_length=100)),
+    ], options={"db_table": "django_content_type"}))
+    _add(state, "messaging", "ThreadAttachment", [
+        ("id", models.BigAutoField(primary_key=True)),
+        ("content_type", models.ForeignKey("contenttypes.contenttype", models.CASCADE, null=True, related_name="+")),
+        ("object_id", models.CharField(max_length=64, default="")),
+    ])
     _add(state, "messaging", "ActivityType", [
         ("id", models.BigAutoField(primary_key=True)),
         ("key", models.SlugField(max_length=64, unique=True)),
@@ -310,11 +371,21 @@ def _released_tables(state: ProjectState) -> Iterator[None]:
                     cursor.execute(f"DROP TABLE {connection.ops.quote_name(table)}")
 
 
-def _seed(registry: Any) -> dict[str, Any]:
-    """Create the released rows the cutover converts."""
+def _create(registry: Any, editor: Any) -> None:
+    """Create the released tables; the content-type table is the installed one."""
+
+    for model in registry.get_models():
+        if model._meta.db_table != "django_content_type":
+            editor.create_model(model)
+
+
+def _seed(registry: Any, record_model: type[models.Model] = ChatterDoc) -> dict[str, Any]:
+    """Create the released rows the cutover converts, about records of ``record_model``."""
 
     account = registry.get_model("projects", "Account")._base_manager.create()
-    attachment = registry.get_model("messaging", "ThreadAttachment")._base_manager.create()
+    attachment = registry.get_model("messaging", "ThreadAttachment")._base_manager.create(
+        content_type_id=ContentType.objects.get_for_model(record_model).pk, object_id="1",
+    )
     kinds = registry.get_model("messaging", "ActivityType")._base_manager
     kinds.create(key="todo", name="To do")
     call = kinds.create(key="call", name="Call", glyph="phone")
@@ -328,8 +399,13 @@ def _seed(registry: Any) -> dict[str, Any]:
     activities.create(attachment=attachment, user=account, activity_type_id="todo", summary="Stale",
                       status="canceled")
     activities.create(attachment=attachment, user=account, activity_type_id="todo", summary=LONG_SUMMARY)
-    registry.get_model("projects", "Task")._base_manager.create(
+    planned = activities.create(attachment=attachment, user=account, activity_type_id="call", summary="Planned")
+    task_model = registry.get_model("projects", "Task")
+    task_model._base_manager.create(
         title="Promoted", sort_order=1024.0, sub_sort_order=1024.0, converted_from_activity=promoted,
+    )
+    task_model._base_manager.create(
+        title="Project work", project=7, sort_order=1024.0, sub_sort_order=2048.0, converted_from_activity=planned,
     )
     ledgers = registry.get_model("resources", "Resource")._base_manager
     ledgers.create(source_addon="angee.messaging", source_path="resources/master/010_messaging.activitytype.yaml",
@@ -346,10 +422,10 @@ def test_released_activities_become_record_tasks_and_messaging_retires_them(owne
     released = _released(owners=owners)
     assert record_tasks.applies(released)
     registry = released.apps
+    started = timezone.now()
     with _released_tables(released):
         with connection.schema_editor() as editor:
-            for model in registry.get_models():
-                editor.create_model(model)
+            _create(registry, editor)
             seeded = _seed(registry)
             upgraded = record_tasks.Migration("0099_record_tasks", "projects").apply(released, editor)
 
@@ -366,24 +442,28 @@ def test_released_activities_become_record_tasks_and_messaging_retires_them(owne
         long_title = LONG_SUMMARY[:239] + "…"
         assert [(task.title, task.status, task.activity_type_id, task.subject_id) for task in tasks] == [
             ("Promoted", "open", "todo", attachment.pk),
+            # Project work keeps its own access: typed by its activity, not attached to the record.
+            ("Project work", "open", "call", None),
             ("Call", "done", "call", attachment.pk),
             ("Stale", "dropped", "todo", attachment.pk),
             (long_title, "open", "todo", attachment.pk),
         ]
-        promoted, logged, stale, long = tasks
+        promoted, _project_work, logged, stale, long = tasks
         assert logged.assignee_id == account.pk
         assert getattr(logged, "owner_id", account.pk) == account.pk
         assert logged.note == "Walked through.\n\nAgreed."
         assert logged.created_at == logged.updated_at == seeded["logged_at"]
         assert stale.dropped_reason == "obsolete"
         assert long.note == LONG_SUMMARY
-        assert len({task.sort_order for task in tasks}) == 4
+        assert len({task.sort_order for task in (promoted, logged, stale, long)}) == 4
 
         history = upgraded.apps.get_model("projects", "HistoricalTask")._base_manager.order_by("id")
         assert [(row.id, row.history_type, row.subject_id) for row in history] == [
+            (promoted.pk, "~", attachment.pk),
             (logged.pk, "+", attachment.pk), (stale.pk, "+", attachment.pk), (long.pk, "+", attachment.pk),
         ]
-        assert history.get(id=logged.pk).history_date == seeded["logged_at"]
+        # Each row records the state the conversion leaves, so it is dated at the conversion.
+        assert all(row.history_date >= started for row in history)
 
         ledgers = upgraded.apps.get_model("resources", "Resource")._base_manager
         assert sorted(ledgers.values_list("xref", "source_addon", "source_path", "target_model")) == [
@@ -397,14 +477,56 @@ def test_released_activities_become_record_tasks_and_messaging_retires_them(owne
         assert promoted.pk
 
 
+def test_a_stack_without_projects_drops_its_seeded_catalog_and_refuses_live_activities() -> None:
+    released = _released()
+    for name in ("task", "historicaltask"):
+        released.remove_model("projects", name)
+    current = released.clone()
+    for name in ("threadactivity", "activitytype"):
+        current.remove_model("messaging", name)
+    graph = MigrationGraph()
+    graph.add_node(("messaging", "0001_initial"), migrations.Migration("0001_initial", "messaging"))
+    registry = released.apps
+    with _released_tables(released):
+        with connection.schema_editor() as editor:
+            _create(registry, editor)
+        todo = registry.get_model("messaging", "ActivityType")._base_manager.create(key="todo", name="To do")
+        codec = SqidField(real_field_name="id", min_length=8, prefix="act")
+        seed_ledger("messaging.ActivityType", codec.public_id_from_value(todo.pk), addon="angee.messaging", xref="todo")
+
+        changes = DropGuardAutodetector(released, current).changes(graph=graph)
+        deleted = {operation.name.lower() for migration in changes["messaging"] for operation in migration.operations
+                   if isinstance(operation, migrations.DeleteModel)}
+        assert deleted == {"threadactivity", "activitytype"}
+
+        account = registry.get_model("projects", "Account")._base_manager.create()
+        attachment = registry.get_model("messaging", "ThreadAttachment")._base_manager.create()
+        registry.get_model("messaging", "ThreadActivity")._base_manager.create(
+            attachment=attachment, user=account, activity_type_id="todo", summary="Live",
+        )
+        # The activity's own columns or its table refuse first; either way nothing is written.
+        with pytest.raises(CommandError, match=r"unsafe autodetected (column|table) drop: messaging\.threadactivity"):
+            DropGuardAutodetector(released, current).changes(graph=graph)
+
+
+def test_the_cutover_refuses_activities_on_record_types_that_take_no_tasks() -> None:
+    released = _released()
+    registry = released.apps
+    refused = pytest.raises(RuntimeError, match=r"chatterdemo\.trackedrecordparent \(5 activities, 1 assignees\)")
+    with _released_tables(released):
+        with refused, connection.schema_editor() as editor:
+            _create(registry, editor)
+            _seed(registry, TrackedRecordParent)
+            record_tasks.Migration("0099_record_tasks", "projects").apply(released, editor)
+
+
 def test_the_cutover_refuses_activity_metadata_a_task_cannot_hold() -> None:
     released = _released()
     registry = released.apps
     refused = pytest.raises(RuntimeError, match="1 record activities carry metadata")
     with _released_tables(released):
         with refused, connection.schema_editor() as editor:
-            for model in registry.get_models():
-                editor.create_model(model)
+            _create(registry, editor)
             seeded = _seed(registry)
             registry.get_model("messaging", "ThreadActivity")._base_manager.create(
                 attachment=seeded["attachment"], user=seeded["account"], activity_type_id="todo", summary="Imported",

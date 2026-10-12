@@ -320,6 +320,30 @@ Commits stay on the agent's workspace branch; publish with
 `angee ws source push`. From here you are modifying Angee itself — the
 workspace slots are the real framework repos.
 
+### Upgrading to record tasks
+
+Activities became record tasks: `projects.Task` rows about a record, owned by
+`angee.projects`. The `projects:record_tasks` cutover converts them in place.
+
+- **Back up and plan a maintenance window.** The cutover is irreversible and
+  holds the task tables' lock throughout (about 17 s per 20,000 activities on
+  PostgreSQL).
+- **Provision `angee.projects` first.** A stack that holds activities composes
+  and provisions `angee.projects` on its current release, then upgrades.
+  Otherwise `makemigrations` refuses to drop the populated activity tables and
+  writes nothing; adding projects in the same upgrade is refused the same way.
+  A stack without activities needs nothing: its seeded catalog retires with
+  messaging's models.
+- **Declare the record types that take tasks.** A record task answers to its
+  record alone, so a record type's owner unions `record_read` and
+  `record_write` for it into `messaging/thread_attachment` in its
+  `permissions.extends.zed`. The cutover refuses activities on undeclared types
+  and names them. A consumer carrying the declaration needs this framework.
+- **Sync the permission schema.** The system check reports `rebac.E009` for the
+  retired `messaging/thread_activity` and `messaging/activity_type` until the
+  schema is synced. `angee provision` syncs; after a chained restart run
+  `manage.py rebac sync`.
+
 ### Upgrading a stack rendered before the monorepo
 
 Stacks rendered while the framework lived in split repositories declare

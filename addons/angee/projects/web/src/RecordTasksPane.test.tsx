@@ -21,8 +21,6 @@ function operationName(document: unknown): string {
 const RESULT_FIELDS: Record<string, string> = {
   ProjectsScheduleRecordTask: "schedule_record_task",
   ProjectsLogRecordTask: "log_record_task",
-  ProjectsCompleteRecordTask: "complete_task",
-  ProjectsCancelRecordTask: "drop_task",
 };
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -30,6 +28,14 @@ vi.mock("@angee/ui", async (importOriginal) => {
   return {
     ...actual,
     useActionResultRun: () => async (fire: () => Promise<unknown>) => fire(),
+    // The shared task verbs: (id, arguments) in, the action outcome out.
+    useActionOutcomeMutation: (field: string) => [
+      vi.fn(async (id: string, args: Record<string, unknown> = {}) => {
+        mocks.calls.push({ op: field, vars: { id, ...args } });
+        return { ok: true, message: "Done." };
+      }),
+      { fetching: false, error: null },
+    ],
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
@@ -123,7 +129,7 @@ describe("RecordTasksPane", () => {
     fireEvent.change(screen.getByLabelText("Completion note"), { target: { value: "Supplier confirmed." } });
     fireEvent.click(screen.getByRole("button", { name: "Mark done" }));
     await waitFor(() => expect(mocks.calls).toEqual([
-      { op: "ProjectsCompleteRecordTask", vars: { id: "tsk_1", feedback: "Supplier confirmed." } },
+      { op: "complete_task", vars: { id: "tsk_1", feedback: "Supplier confirmed." } },
     ]));
   });
 
@@ -131,7 +137,7 @@ describe("RecordTasksPane", () => {
     mocks.data = payload([task()]);
     renderPane();
     fireEvent.click(screen.getByRole("button", { name: "Cancel task" }));
-    await waitFor(() => expect(mocks.calls).toEqual([{ op: "ProjectsCancelRecordTask", vars: { id: "tsk_1" } }]));
+    await waitFor(() => expect(mocks.calls).toEqual([{ op: "drop_task", vars: { id: "tsk_1", reason: "OBSOLETE" } }]));
   });
 
   test("offers no hand verbs where the task's own verbs admit none", () => {

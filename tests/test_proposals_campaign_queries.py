@@ -224,8 +224,8 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
                     for row in waiting[1:]
                 )
             assert categories[0] == categories[1], categories
-            # A record task's subject reaches its attachment and record types: two arrow sources.
-            assert categories[0].total() <= 21, categories
+            # A record task's subject reaches its attachment and record types: four arrow sources.
+            assert categories[0].total() <= 23, categories
     with actor_context(manager):
         as_actor(round, manager).remove_responder(c.person("third"))
         waiting = as_actor(questions[0], manager).clarification_waiting()
@@ -348,4 +348,4 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
             assert len(rows) == limit
             counts.append(len(queries))
         # Constant in rows; a record task's subject adds its arrow sources to each verb's check.
-        assert counts == [51, 51], counts
+        assert counts == [59, 59], counts

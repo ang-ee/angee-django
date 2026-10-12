@@ -37,7 +37,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.models.functions import MD5, Coalesce
@@ -59,6 +59,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
+from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, TrashMixin
 from angee.base.models import AngeeDataModel
@@ -170,6 +171,25 @@ class ThreadAudienceMixin(models.Model):
         """Return the team's current members and their notification preferences."""
 
         raise NotImplementedError
+
+
+def chatter_record(model_label: str, public_id: str) -> models.Model | None:
+    """Return the record ``public_id`` names, read under the actor, when ``model_label`` keeps chatter.
+
+    An unknown label or a model without chatter raises ``ValueError``; a missing or
+    unreadable record is ``None``.
+    """
+
+    try:
+        model = apps.get_model(model_label)
+    except (LookupError, ValueError) as error:
+        raise ValueError(f"Unknown model {model_label!r}.") from error
+    if not issubclass(model, ThreadedModelMixin):
+        raise ValueError(f"{model._meta.label} does not inherit ThreadedModelMixin.")
+    try:
+        return instance_from_public_id(model, str(public_id), queryset=model._default_manager.all())
+    except ImproperlyConfigured as error:
+        raise ValueError(str(error)) from error
 
 
 class ThreadedModelMixin(models.Model):
@@ -1587,6 +1607,8 @@ class MessageSubtype(AuditMixin, AngeeDataModel):
         ("note", "Note", "Internal note"),
         ("record_created", "Record created", "Record created"),
         ("record_updated", "Record updated", "Record updated"),
+        # Named debt: the key names a done record task (projects' completion post).
+        # Renaming it means migrating stored subtypes and follower choices.
         ("activity_done", "Activity done", "Activity done"),
     )
 

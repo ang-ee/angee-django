@@ -137,7 +137,8 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
       "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
       "messaging.history": {
         sequence: 20,
-        // "activity" and "messaging.activity" are the former ids, kept in `?chatterTab=` links for one release.
+        // "activity" and "messaging.activity" are the former ids, kept in `?chatterTab=` links until angee 0.3.0
+        // removes them (.changeset/chatter-history-tab.md).
         content: {
           label: "History", icon: "activity", aliases: ["history", "activity", "messaging.activity"],
           render: (context) => <RecordHistoryPane context={context} />,

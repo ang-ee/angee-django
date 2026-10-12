@@ -27,8 +27,9 @@ from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
 from django.db.migrations.writer import MigrationWriter
 from django.db.models.functions import Lower
+from django.utils import timezone
 
-from angee.base.fields import StateField
+from angee.base.fields import SqidField, StateField
 from angee.compose.history import HistoricalRuntimeConfig
 from angee.compose.migrations import DropGuardAutodetector, RetiredTableOperation, RuntimeMigrations
 from angee.storage.models import Folder
@@ -428,6 +429,64 @@ def test_autodetected_table_drop_requires_an_empty_table(rows: int) -> None:
         "'default'. "
     )
     assert "[[migrations]]" in message
+
+
+def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref: str = "seeded") -> None:
+    """Record a resource-ledger row naming ``model_label``, as its addon's resource files once seeded it.
+
+    The ledger's label field refuses models no longer in code, so the row is
+    written raw, as it survives in a database whose model was since removed.
+    """
+
+    ledger = apps.get_model("resources", "Resource")
+    if ledger._meta.db_table not in connection.introspection.table_names():
+        with connection.schema_editor() as editor:
+            editor.create_model(ledger)
+    values = {
+        "source_addon": addon, "source_path": f"resources/master/010_{xref}.yaml", "tier": "master",
+        "xref": xref, "content_hash": "sha256:" + "0" * 64, "target_model": model_label,
+        "target_id": public_id, "loaded_at": timezone.now(),
+    }
+    fields = [field for field in ledger._meta.local_concrete_fields if not field.primary_key]
+    row = [
+        values[field.attname] if field.attname in values
+        else timezone.now() if isinstance(field, models.DateTimeField) and not field.null
+        else field.get_default() if field.has_default() else None
+        for field in fields
+    ]
+    columns = ", ".join(connection.ops.quote_name(field.column) for field in fields)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {connection.ops.quote_name(ledger._meta.db_table)} ({columns}) "
+            f"VALUES ({', '.join(['%s'] * len(fields))})",
+            [field.get_db_prep_value(value, connection) if field.attname not in ("target_model",) else value
+             for field, value in zip(fields, row, strict=True)],
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_autodetected_table_drop_ignores_rows_its_resources_seeded() -> None:
+    """Seeded rows retire with their model's declarations; any other row still refuses the drop."""
+
+    history, current = ProjectState(), ProjectState()
+    for state in (history, current):
+        state.add_model(ModelState("probe", "Kept", [("id", models.AutoField(primary_key=True))]))
+    history.add_model(ModelState("probe", "Retired", [("id", models.AutoField(primary_key=True))]))
+    graph = MigrationGraph()
+    graph.add_node(("probe", "0001_initial"), migrations.Migration("0001_initial", "probe"))
+    retired = history.apps.get_model("probe", "Retired")
+    with connection.schema_editor() as editor:
+        editor.create_model(retired)
+    seeded = retired._base_manager.create()
+    codec = SqidField(real_field_name="id", min_length=8, prefix="ret")
+    seed_ledger("probe.Retired", codec.public_id_from_value(seeded.pk))
+
+    (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
+    assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
+    retired._base_manager.create()
+    with pytest.raises(CommandError, match=r"probe\.retired: table probe_retired holds data in 1 row\(s\)"):
+        DropGuardAutodetector(history, current).changes(graph=graph)
 
 
 @pytest.mark.parametrize(("name", "wrapper"), [

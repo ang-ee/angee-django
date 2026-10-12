@@ -40,7 +40,8 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
-from angee.messaging.schema import RecordPointerType, RecordReferenceInput, threaded_record
+from angee.messaging.models import chatter_record
+from angee.messaging.schema import RecordPointerType
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
@@ -329,19 +330,17 @@ class TaskProjectionMixin:
 
         return cast(Any, self).activity_type_id
 
-    @strawberry_django.field(
-        only=["subject__label", "subject__content_type_id", "subject__object_id"], select_related=["subject"],
-    )
+    @strawberry_django.field(only=["subject_id"], annotate=Task.subject_pointer_annotations())
     def subject(self) -> RecordPointerType | None:
         """Return the record this task is about as a minimal pointer.
 
-        The label, model label and public id come from the record's chatter
-        attachment; the task schema admits only the record's readers to
-        a record task, and following the link re-gates through the record's read.
+        The label, model label and public id come from the record's chatter edge
+        through the join; the task schema admits only the record's readers to a
+        record task, and following the link re-gates through the record's read.
         """
 
-        attachment = cast(Any, self).subject
-        return None if attachment is None else RecordPointerType.from_attachment(attachment)
+        pointer = cast(Any, self).subject_pointer()
+        return None if pointer is None else RecordPointerType.from_attachment(pointer)
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
@@ -566,7 +565,7 @@ class RecordTaskLogInput:
 def _record(model_label: str, record_id: strawberry.ID) -> Any:
     """Resolve a record with chatter under the actor's read scope, or refuse like a missing row."""
 
-    record = threaded_record(RecordReferenceInput(model_label=model_label, record_id=record_id))
+    record = chatter_record(model_label, str(record_id))
     if record is None:
         raise ObjectDoesNotExist("Record not found.")
     return record
@@ -575,7 +574,7 @@ def _record(model_label: str, record_id: strawberry.ID) -> Any:
 def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool) -> Any:
     """Return the record's tasks the actor reads, optimized for the selected task fields."""
 
-    record = threaded_record(RecordReferenceInput(model_label=model_label, record_id=record_id))
+    record = chatter_record(model_label, str(record_id))
     if record is None:
         return Task.objects.none()
     return optimize(Task.objects.for_record(record, include_done=include_done), info)

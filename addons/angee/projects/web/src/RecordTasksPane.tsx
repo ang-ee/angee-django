@@ -19,16 +19,16 @@ import {
   formatDateStorage,
   textRoleVariants,
   useActionForm,
+  useActionOutcomeMutation,
   useActionResultRun,
   useUiT,
   useWatch,
   type ResolverResult,
 } from "@angee/ui";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 
 import {
-  CancelRecordTaskDocument,
-  CompleteRecordTaskDocument,
   LogRecordTaskDocument,
   RECORD_TASK_MODELS,
   RecordTasksDocument,
@@ -37,6 +37,7 @@ import {
   type RecordTaskRow,
 } from "./documents";
 import { useProjectsT } from "./i18n";
+import { isOpenTask, offersTaskAction } from "./task-actions";
 
 export interface RecordTasksPaneProps {
   context: ChatterViewContext;
@@ -71,10 +72,11 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   const tasksQuery = useAuthoredQuery(RecordTasksDocument, variables, { enabled, models: RECORD_TASK_MODELS });
   const [scheduleTask] = useAuthoredMutation(ScheduleRecordTaskDocument, { invalidateModels: RECORD_TASK_MODELS });
   const [logTask] = useAuthoredMutation(LogRecordTaskDocument, { invalidateModels: RECORD_TASK_MODELS });
-  const [completeTask, completeState] = useAuthoredMutation(CompleteRecordTaskDocument, {
+  // The generic task verbs close record tasks; the schema admits only the record's writers.
+  const [completeTask, completeState] = useActionOutcomeMutation<ActionFieldName>("complete_task", {
     invalidateModels: RECORD_TASK_MODELS,
   });
-  const [cancelTask, cancelState] = useAuthoredMutation(CancelRecordTaskDocument, {
+  const [dropTask, dropState] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: RECORD_TASK_MODELS,
   });
   const settle = useActionResultRun();
@@ -122,9 +124,9 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   const kindByKey = React.useMemo(() => new Map(kinds.map((kind) => [kind.key, kind])), [kinds]);
   // The server orders them: open first, then by due date and title.
   const tasks = tasksQuery.data?.record_tasks ?? [];
-  const open = tasks.filter((task) => task.status === "OPEN");
-  const closed = tasks.filter((task) => task.status !== "OPEN");
-  const busy = form.submitting || completeState.fetching || cancelState.fetching;
+  const open = tasks.filter(isOpenTask);
+  const closed = tasks.filter((task) => !isOpenTask(task));
+  const busy = form.submitting || completeState.fetching || dropState.fetching;
 
   if (!enabled) {
     return (
@@ -156,13 +158,12 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   }
 
   async function handleComplete(id: string): Promise<void> {
-    const outcome = await settle(async () =>
-      extractActionOutcome(await completeTask({ id, feedback: feedbackById[id] ?? "" }), "complete_task"));
+    const outcome = await settle(() => completeTask(id, { feedback: feedbackById[id] ?? "" }));
     if (outcome?.ok) setFeedbackById(({ [id]: _removed, ...rest }) => rest);
   }
 
   async function handleCancel(id: string): Promise<void> {
-    await settle(async () => extractActionOutcome(await cancelTask({ id }), "drop_task"));
+    await settle(() => dropTask(id, { reason: "OBSOLETE" }));
   }
 
   const kindOptions = kinds.map((kind) => ({ value: kind.key, label: kind.name }));
@@ -308,9 +309,9 @@ function TaskItem({
   onCancel?: () => void;
 }): React.ReactElement {
   const t = useProjectsT();
-  const isOpen = task.status === "OPEN";
+  const isOpen = isOpenTask(task);
   // The task's own verbs admit each control: only the record's writers close its tasks.
-  const offers = (action: string) => isOpen && task.task_actions.includes(action);
+  const offers = (action: string) => isOpen && offersTaskAction(task, action);
   const assignee = task.assignee ? task.assignee.display_name || task.assignee.username : "";
   return (
     <article className="rounded-6 border border-border-subtle bg-surface p-3">

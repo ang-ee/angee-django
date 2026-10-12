@@ -7,17 +7,26 @@ each activity becomes a projects ``Task`` about the same record (its chatter
 attachment): the summary is the title (a summary longer than a title also opens
 the note), note and feedback are the note, the assignee keeps it, the creator owns
 it where the history already has task owners, to-do is open, done keeps its
-completion time and canceled is dropped as obsolete. Each new
-task gets a creation history row dated at the activity's creation. An activity
-already promoted to a task makes that task the record's task instead of a second
-one. Activity public ids (``tac_``) are not mapped: they name rows that no
-longer exist. Activity metadata has no task field, so the cutover refuses while
-any activity carries some. Resource ledgers that name the catalog follow it.
-Messaging's two models are retired here, after the copy, so no autodetected
-deletion can run first.
+completion time and canceled is dropped as obsolete. Each new task gets a
+creation history row dated at the conversion. An activity already promoted to a
+task makes that task the record's task instead of a second one (with a change
+history row), unless the task is project or queue work: that task keeps its own
+access and takes only the activity's type. Activity public ids (``tac_``) are not
+mapped: they name rows that no longer exist.
 
-The cutover is irreversible: it moves rows and drops messaging's tables. Back the
-database up before migrating.
+A record task answers to its record alone, so the cutover refuses while any
+activity sits on a record type whose owner has not declared ``record_read`` and
+``record_write`` on ``messaging/thread_attachment``; it names the types, their
+activities and their assignees. An assignee who cannot read the record keeps the
+task but no longer sees it: access is evaluated only once the schema is synced.
+Activity metadata has no task field, so the cutover refuses while any activity
+carries some. Resource ledgers that name the catalog follow it. Messaging's two
+models are retired here, after the copy, so no autodetected deletion can run
+first.
+
+The cutover is irreversible: it moves rows and drops messaging's tables, holding
+the task tables' lock throughout (about 17 s per 20,000 activities on
+PostgreSQL). Back the database up and plan a maintenance window.
 """
 
 from django.core.management.color import no_style
@@ -91,16 +100,21 @@ def convert_activities(apps, schema_editor):
             f"{len(carrying)} record activities carry metadata a task has no field for (ids {shown}"
             f"{', …' if len(carrying) > 5 else ''}); export or clear it, then migrate again."
         )
+    _refuse_undeclared_record_types(apps, activities)
     field_names = {field.name for field in task_model._meta.get_fields()}
-    promoted = {}
-    if "converted_from_activity" in field_names:
-        # Released models order by fields this migration's state lacks; never inherit their ordering.
-        promoted = dict(
-            tasks.filter(converted_from_activity__isnull=False).order_by()
-            .values_list("converted_from_activity_id", "pk")
-        )
-    # Audit and owner columns arrive in different releases: set those this history has.
+    # Audit, owner and queue columns arrive in different releases: use those this history has.
     columns = {field.attname for field in task_model._meta.concrete_fields}
+    promoted, project_work = {}, set()
+    if "converted_from_activity" in field_names:
+        work = [task_model._meta.get_field(name).attname for name in ("project", "queue") if name in field_names]
+        # Released models order by fields this migration's state lacks; never inherit their ordering.
+        for activity_id, task_id, *placement in (
+            tasks.filter(converted_from_activity__isnull=False).order_by()
+            .values_list("converted_from_activity_id", "pk", *work)
+        ):
+            promoted[activity_id] = task_id
+            if any(value is not None for value in placement):
+                project_work.add(task_id)
     # The released timestamps are the facts to keep; this migration's model is its own.
     for name in {"created_at", "updated_at"} & columns:
         field = task_model._meta.get_field(name)
@@ -110,11 +124,15 @@ def convert_activities(apps, schema_editor):
     top_sub_rank = tasks.filter(parent__isnull=True).aggregate(rank=models.Max("sub_sort_order"))["rank"] or 0.0
     index = 0
     batch = []
+    reused = []
     for row in activities.order_by("pk").iterator(chunk_size=BATCH_SIZE):
         if row.pk in promoted:
-            tasks.filter(pk=promoted[row.pk]).update(
-                subject_id=row.attachment_id, activity_type_id=row.activity_type_id,
-            )
+            task_id = promoted[row.pk]
+            if task_id in project_work:
+                tasks.filter(pk=task_id).update(activity_type_id=row.activity_type_id)
+            else:
+                tasks.filter(pk=task_id).update(subject_id=row.attachment_id, activity_type_id=row.activity_type_id)
+                reused.append(task_id)
             continue
         index += 1
         status, done_at, dropped_at, dropped_reason = "open", None, None, None
@@ -150,6 +168,14 @@ def convert_activities(apps, schema_editor):
             batch = []
     if batch:
         _insert(apps, tasks, batch)
+    if reused:
+        _record_history(apps, tasks, list(tasks.filter(pk__in=reused).order_by("pk")), "~",
+                        "Became its record's task in the activity cutover")
+    if project_work:
+        print(
+            f"  record_tasks: {len(project_work)} task(s) promoted from activities stay project or queue work "
+            "(their own access), typed by their activity but not attached to its record."
+        )
     if schema_editor.connection.vendor == "postgresql":
         # Fire the deferred foreign-key checks these rows queued: PostgreSQL refuses
         # to alter projects_task below while trigger events are pending.
@@ -160,28 +186,86 @@ def _insert(apps, tasks, batch):
     """Insert one batch of converted tasks and their creation history rows."""
 
     created = tasks.bulk_create(batch, batch_size=BATCH_SIZE)
-    now = timezone.now()
+    _record_history(apps, tasks, created, "+", "Converted from a record activity")
+
+
+def _record_history(apps, tasks, rows, history_type, reason):
+    """Write one history row per task, as of now: the state the conversion leaves."""
+
     try:
         history_model = apps.get_model("projects", "HistoricalTask")
     except LookupError:
         return
+    if not rows:
+        return
+    now = timezone.now()
     copied = [
         field.attname for field in history_model._meta.concrete_fields
-        if not field.name.startswith("history_") and hasattr(created[0], field.attname)
+        if not field.name.startswith("history_") and hasattr(rows[0], field.attname)
     ]
     history_model._base_manager.using(tasks.db).bulk_create(
         [
             history_model(
                 **{attname: getattr(task, attname) for attname in copied},
-                history_date=getattr(task, "created_at", None) or now,
-                history_type="+",
-                history_user_id=getattr(task, "created_by_id", None),
-                history_change_reason="Converted from a record activity",
+                history_date=now,
+                history_type=history_type,
+                history_user_id=None,
+                history_change_reason=reason,
             )
-            for task in created
+            for task in rows
         ],
         batch_size=BATCH_SIZE,
     )
+
+
+def _refuse_undeclared_record_types(apps, activities):
+    """Refuse activities on record types whose readers no declared record arm reaches.
+
+    The composed ``messaging/thread_attachment`` schema on disk (base plus every
+    installed extension) names the record types that take tasks; the synced
+    store still holds the released schema while this runs.
+    """
+
+    from django.apps import apps as installed
+    from django.db.models import Count
+    from rebac.resources import model_resource_type
+    from rebac.schema import PermArrow, PermBinOp
+
+    from angee.base.permissions import effective_rebac_definition
+
+    counts = list(
+        activities.order_by()
+        .values_list("attachment__content_type__app_label", "attachment__content_type__model")
+        .annotate(activities=Count("pk"), assignees=Count("user", distinct=True))
+    )
+    if not counts:
+        return
+    definition = effective_rebac_definition(installed.get_model("messaging", "ThreadAttachment"))
+    relations = {relation.name: relation for relation in definition.relations} if definition else {}
+    permission = next((item for item in definition.permissions if item.name == "record_read"), None) \
+        if definition else None
+    declared, pending = set(), [permission.expression] if permission else []
+    while pending:
+        expression = pending.pop()
+        if isinstance(expression, PermBinOp):
+            pending += [expression.left, expression.right]
+        elif isinstance(expression, PermArrow) and expression.via in relations:
+            declared.update(subject.type for subject in relations[expression.via].allowed_subjects)
+    undeclared = []
+    for app_label, model_name, count, assignees in counts:
+        try:
+            resource_type = model_resource_type(installed.get_model(app_label, model_name))
+        except LookupError:
+            resource_type = None
+        if resource_type not in declared:
+            undeclared.append(f"{app_label}.{model_name} ({count} activities, {assignees} assignees)")
+    if undeclared:
+        raise RuntimeError(
+            "record activities sit on record types that take no record tasks: " + "; ".join(undeclared)
+            + ". A record task answers to its record alone, so these would reach only administrators. "
+            "Declare record_read and record_write for these types on messaging/thread_attachment in their "
+            "owner's permissions.extends.zed (or delete the activities), then migrate again."
+        )
 
 
 def retarget_ledgers(apps, schema_editor):

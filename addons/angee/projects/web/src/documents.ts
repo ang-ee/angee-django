@@ -67,18 +67,6 @@ export const LogRecordTaskDocument = graphql(`
   }
 `);
 
-export const CompleteRecordTaskDocument = graphql(`
-  mutation ProjectsCompleteRecordTask($id: ID!, $feedback: String = "") {
-    complete_task(id: $id, feedback: $feedback) { ok message validation_errors id }
-  }
-`);
-
-export const CancelRecordTaskDocument = graphql(`
-  mutation ProjectsCancelRecordTask($id: ID!) {
-    drop_task(id: $id, reason: OBSOLETE) { ok message validation_errors id }
-  }
-`);
-
 export type RecordTasksPayload = DocumentType<typeof RecordTasksDocument>;
 export type RecordTaskRow = RecordTasksPayload["record_tasks"][number];
 export type ActivityTypeRow = RecordTasksPayload["activity_types"][number];
