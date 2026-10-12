@@ -262,6 +262,8 @@ def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of
             rows = result_data(execute_schema(schema, query, user=owner))["people"]
         return len(queries.captured_queries), rows
 
+    # A first execution fills process-wide caches, such as the content types the compiled scopes name.
+    execute_schema(schema, query, user=owner)
     one, rows = count_for(1, 0)
     three, rows = count_for(2, 1)
     assert three == one

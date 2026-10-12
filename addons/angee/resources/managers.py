@@ -16,8 +16,9 @@ from rebac import system_context
 
 from angee.base.changesets import changeset, current_changeset
 from angee.base.fields import ModelLabelField
-from angee.base.identity import public_id_of
+from angee.base.identity import SqidPublicIdentity, public_id_of
 from angee.base.jsonschema import relation_positions
+from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
@@ -29,6 +30,7 @@ from angee.resources.entries import (
     ResourceGroup,
     ValidationResult,
     resource_manifest_for,
+    retired_models_for,
 )
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import materialize_grant_groups
@@ -62,6 +64,47 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         """Return the ledger rows whose target is ``record``, by its model label and public id."""
 
         return self.filter(target_model=record._meta.label, target_id=public_id_of(record))
+
+    def seeded_target_keys(self, model_label: str, *, source_addons: Iterable[str]) -> set[Any]:
+        """Return the primary keys of ``model_label`` rows ``source_addons``' resource files seeded.
+
+        The model's code may already be gone, so a ledger's public id decodes without
+        it: a sqid id through :class:`SqidPublicIdentity` under its own prefix, kept
+        only when it re-encodes to itself; any other id is the row's primary key as
+        text (:func:`public_id_of`). Callers convert keys to the model's key type.
+        """
+
+        sqid = SqidMixin._meta.get_field("sqid")
+        public_ids = list(
+            self.filter(target_model__iexact=model_label, source_addon__in=list(source_addons))
+            .exclude(target_id="")
+            .values_list("target_id", flat=True)
+        )
+        keys: set[Any] = set()
+        for public_id in public_ids:
+            prefix, separator, _encoded = public_id.partition("_")
+            if separator:
+                identity = SqidPublicIdentity(prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet)
+                value = identity.public_id_to_pk(public_id)
+                if value is not None and identity.public_id_from_pk(value) == public_id:
+                    keys.add(value)
+                    continue
+            keys.add(public_id)
+        return keys
+
+    def retired_seed_keys(self, model_label: str) -> set[Any]:
+        """Return the keys of ``model_label`` rows seeded by the installed addons that retire the model.
+
+        Those addons name it under ``retired_models`` in their addon.toml
+        ``[resources]`` (:func:`retired_models_for`); with none, no row is seeded.
+        """
+
+        label = model_label.lower()
+        owners = [
+            config.name for config in apps.get_app_configs()
+            if label in {retired.lower() for retired in retired_models_for(config)}
+        ]
+        return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
 
 
 def seeded_record_merge_guard(record: models.Model) -> str | None:

@@ -1009,11 +1009,14 @@ and current contracts before applying a historical example to a new deployment.
   facts (sqid prefixes, principal id attributes) rather than importing live owners.
   The reversion drop loses every revision by ruling: back up first, then
   `remove_stale_contenttypes` afterwards.
-- **Removing a field or donor addon whose column holds data needs a declared
-  cutover.** `makemigrations` refuses the autodetected drop through the
+- **Removing a field, model or donor addon whose storage holds data needs a
+  declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
   addon that stays installed declares a runtime migration that preserves or
-  retires the data and removes the field; an empty column needs nothing.
+  retires the data and removes the field or model; an empty column needs
+  nothing, and neither does a table holding only rows its own resource files
+  seeded once the addon names the model under `retired_models` in its
+  `addon.toml` `[resources]`.
 - **Record-sync hash bases retire through the declared cutover.**
   [`retire_record_sync_hash_bases`](../../addons/angee/integrate/runtime_migrations/retire_record_sync_hash_bases.py)
   removes the superseded live and historical hash columns after the applied-history

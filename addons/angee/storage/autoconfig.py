@@ -22,6 +22,15 @@ SETTINGS = {
         "image/tiff",
         "image/webp",
     ],
+    # Types a browser opens in its own viewer, served inline when a file is
+    # opened directly (``major/*`` names a whole major type). Raster images
+    # above render inline too; every other type downloads as an attachment.
+    "ANGEE_STORAGE_VIEWER_TYPES": [
+        "application/pdf",
+        "audio/*",
+        "text/plain",
+        "video/*",
+    ],
     "ANGEE_STORAGE_DRAFT_TTL_HOURS": 24,
     "ANGEE_STORAGE_TRASH_TTL_DAYS": 30,
     # The ``Backend.backend_class`` registry: each key a ``Backend`` row may name

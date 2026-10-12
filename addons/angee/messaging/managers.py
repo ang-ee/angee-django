@@ -610,7 +610,6 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
         (apps.get_model("messaging", "Participant"), by_message | by_thread),
         (apps.get_model("messaging", "ThreadNotification"), by_message | by_thread),
         (apps.get_model("messaging", "ThreadFollower"), by_thread),
-        (apps.get_model("messaging", "ThreadActivity"), by_thread),
         (apps.get_model("messaging", "ThreadAttachment"), by_thread),
     )
 
@@ -933,7 +932,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         channel row alone would leave its conversation rows behind pointing at nothing.
         This deletes messages first (including messages without a thread), then threads,
         so their ``CASCADE`` subtrees (parts, reactions, participants, followers,
-        activities, notifications, attachments) go with them. Only *this*
+        notifications, attachments) go with them. Only *this*
         channel's ``(channel, external_id)`` message rows are touched, so the same
         logical message reached through another channel — a separate row in that
         channel — survives, and a body ``Fragment`` shared with it is spared (parts FK it
@@ -1970,244 +1969,6 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         return len(new_rows)
 
 
-class ThreadActivityQuerySet(AngeeQuerySet[Any]):
-    """Chainable read scopes for scheduled chatter activities."""
-
-    def open(self) -> ThreadActivityQuerySet:
-        """Return activities still to do (not yet done or cancelled)."""
-
-        return cast(ThreadActivityQuerySet, self.filter(status=self.model.ActivityStatus.TODO))
-
-    def agenda(
-        self,
-        user: models.Model,
-        window_start: date,
-        window_end: date,
-        *,
-        include_done: bool = False,
-    ) -> ThreadActivityQuerySet:
-        """Return ``user``'s activities due within ``[window_start, window_end)``, by due date.
-
-        The actor's own agenda across records: the window is the whole bound (no
-        pagination), ``window_start`` inclusive and ``window_end`` exclusive. Done and
-        canceled rows are excluded unless ``include_done``. Overdue is neither stored
-        nor filtered here — it rides each row's :attr:`ThreadActivity.activity_state`
-        derivation, so the agenda inherits ``state`` unchanged.
-        """
-
-        queryset = self.filter(user=user, due_date__gte=window_start, due_date__lt=window_end)
-        if not include_done:
-            queryset = queryset.open()
-        return cast(ThreadActivityQuerySet, queryset.order_by("due_date", "sqid"))
-
-    def with_record_pointers(self) -> list[Any]:
-        """Materialize the agenda with each row's record-pointer ``attachment`` primed.
-
-        The agenda projects a *minimal* record pointer (label + model_label + record_id)
-        computed from each row's ``ThreadAttachment`` alone — never the target record and
-        never the parent thread. Priming the ``attachment`` FK once, elevated and keyed by
-        ``attachment_id``, turns the per-row pointer lazy-load into a single query, without
-        ``select_related`` on the REBAC-guarded relation (which fails live under the
-        actor-scoped optimizer). Each pointer's ``ContentType`` is process-cached by
-        ``ContentType.objects.get_for_id`` on :class:`ThreadAttachment`, so the whole
-        agenda costs one attachment query regardless of row count.
-        """
-
-        rows = list(self)
-        attachment_ids = [row.attachment_id for row in rows if row.attachment_id is not None]
-        if attachment_ids:
-            attachment_model = self.model._meta.get_field("attachment").related_model
-            with system_context(reason="agenda record pointers"):
-                attachments = attachment_model._base_manager.in_bulk(attachment_ids)
-            for row in rows:
-                attachment = attachments.get(row.attachment_id)
-                if attachment is not None:
-                    row.attachment = attachment
-        return rows
-
-
-class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):  # type: ignore[misc]
-    """Owns scheduled activities attached to model chatter threads."""
-
-    def for_record(self, record: Any, *, role: str = "chatter", include_done: bool = True) -> Any:
-        """Read activities through the record's gate; agenda keeps its own scope."""
-
-        if not record._message_read_allowed():
-            raise PermissionDenied("Reading activities requires record read access.")
-        attachment = _record_attachment(record, role=role)
-        if attachment is None:
-            return self.none()
-        queryset = self.sudo(reason="messaging.activity.for_record").filter(attachment=attachment)
-        if not include_done:
-            queryset = queryset.open()
-        return queryset
-
-    def for_record_window(
-        self,
-        record: Any,
-        *,
-        role: str,
-        search: str,
-        limit: int,
-        messages: list[Any],
-        message_count: int,
-        bounded: bool,
-    ) -> list[Any]:
-        """Return at most one page of activities within the displayed message dates.
-
-        The latest page has no upper cut, so newly logged exchanges can appear
-        before a subsequent message. Cursor pages stay inside their message dates;
-        an empty cursor page has no activities. A search also matches activity text.
-        """
-
-        if bounded and not messages:
-            return []
-        queryset = self.for_record(record, role=role).annotate(
-            _occurred_on=models.functions.Coalesce(
-                "due_date",
-                models.functions.TruncDate("completed_at"),
-                models.functions.TruncDate("created_at"),
-            ),
-        )
-        for term in strip_null_bytes(search or "").split():
-            queryset = queryset.filter(models.Q(summary__icontains=term) | models.Q(note__icontains=term))
-        if messages:
-            if bounded or message_count > len(messages):
-                queryset = queryset.filter(_occurred_on__gte=timezone.localdate(messages[0].chronological_key[0]))
-            if bounded:
-                queryset = queryset.filter(_occurred_on__lte=timezone.localdate(messages[-1].chronological_key[0]))
-        rows = list(queryset.order_by("-_occurred_on", "-completed_at", "-pk")[: max(1, min(limit or 50, 200))])
-        return list(reversed(rows))
-
-    def schedule(
-        self,
-        record: Any,
-        *,
-        user: Any = None,
-        user_id: Any = None,
-        role: str = "chatter",
-        summary: str,
-        note: str = "",
-        due_date: Any = None,
-        activity_type: str = "todo",
-        metadata: dict[str, Any] | None = None,
-    ) -> Any:
-        """Create a scheduled activity for ``record``."""
-
-        summary = strip_null_bytes(summary or "").strip()
-        if not summary:
-            raise ValueError("Activity summary cannot be empty.")
-        resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
-        if resolved_user_id is None:
-            raise ValueError("An assigned user is required for an activity.")
-        created_by_id = actor_user_id(current_actor())
-        attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
-            record,
-            role=role,
-            title=_record_thread_title(record),
-        )
-        activity = self.model(
-            thread_id=attachment.thread.pk,
-            attachment_id=attachment.pk if attachment is not None else None,
-            user_id=resolved_user_id,
-            activity_type_id=strip_null_bytes(activity_type or "todo"),
-            summary=summary,
-            note=strip_null_bytes(note or ""),
-            due_date=due_date or timezone.localdate(),
-            metadata=metadata or {},
-            created_by_id=created_by_id,
-        )
-        activity.clean()
-        activity.save()
-        return activity
-
-    def log(self, record: Any, *, activity_type: str, occurred_on: date, note: str, role: str = "chatter") -> Any:
-        """Insert one completed exchange under the record's activity authority."""
-
-        user_id = actor_user_id(current_actor())
-        if user_id is None:
-            raise PermissionDenied("Logging an activity requires an account.")
-        note = strip_null_bytes(note or "")
-        summary = note.splitlines()[0].strip()[:256] if note else ""
-        if not summary:
-            raise ValidationError({"note": "An activity note needs a nonempty first line."})
-        if occurred_on is None:
-            raise ValidationError({"due_date": "The occurrence date is required."})
-        activity = self.model(
-            activity_type_id=strip_null_bytes(activity_type),
-            due_date=occurred_on,
-            summary=summary,
-            note=note,
-            user_id=user_id,
-            status=self.model.ActivityStatus.DONE,
-            completed_at=timezone.now(),
-            created_by_id=user_id,
-        )
-        activity.clean()
-        with transaction.atomic(), system_context(reason="messaging.activity.log"):
-            attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
-                record,
-                role=role,
-                title=_record_thread_title(record),
-            )
-            activity.thread_id = attachment.thread_id
-            activity.attachment_id = attachment.pk
-            activity.save()
-        return activity
-
-    def complete(self, activity: Any, *, feedback: str = "", post_message: bool = True) -> Any:
-        """Mark an activity done and optionally log that completion to the thread."""
-
-        if activity.status == self.model.ActivityStatus.DONE:
-            return activity
-        created_by_id = actor_user_id(current_actor())
-        feedback = strip_null_bytes(feedback or "").strip()
-        activity.status = self.model.ActivityStatus.DONE
-        activity.completed_at = timezone.now()
-        activity.feedback = feedback
-        # The record's thread_activity_access is the authority — checked on the
-        # record before this manager runs (ThreadedModelMixin.activity_feedback);
-        # the activity's own write (assignee/thread-owner) would deny a record
-        # writer who is neither, so the save rides the record preflight under
-        # system_context, the shared bookkeeping-write elevation pattern.
-        with system_context(reason="messaging.activity.complete"):
-            activity.save(update_fields=("status", "completed_at", "feedback", "updated_at"))
-            if not post_message:
-                return activity
-            body = activity.completion_message()
-            if feedback:
-                body = f"{body}\n\n{feedback}"
-            attachment_field = activity._meta.get_field("attachment")
-            attachment = attachment_field.related_model._base_manager.select_related("content_type", "thread").get(
-                pk=activity.attachment_id
-            )
-            model_class = attachment.content_type.model_class()
-            message_model = apps.get_model("messaging", "Message")
-            message_model.objects.post_to_thread(
-                attachment.thread,
-                body=body,
-                created_by_id=created_by_id,
-                attachment=attachment,
-                message_type=message_model.MessageKind.AUTO_COMMENT,
-                subtype_key="activity_done",
-                subtype_model_label=model_class._meta.label if model_class is not None else "",
-            )
-        return activity
-
-    def cancel(self, activity: Any) -> Any:
-        """Cancel an activity without posting a completion message."""
-
-        if activity.status == self.model.ActivityStatus.CANCELED:
-            return activity
-        activity.status = self.model.ActivityStatus.CANCELED
-        activity.completed_at = timezone.now()
-        # Authority rides the record's thread_activity_access (checked on the record
-        # before this runs); elevate the activity's own write like complete().
-        with system_context(reason="messaging.activity.cancel"):
-            activity.save(update_fields=("status", "completed_at", "updated_at"))
-        return activity
-
-
 def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type: Any) -> None:
     """Fail fast on a child-composed / parent-uncomposed threaded MTI split.
 
@@ -2240,7 +2001,7 @@ def _record_attachment(record: Any, *, role: str = "chatter") -> Any | None:
 
     The resolution logic (content-type lookup, ``select_related`` on the thread,
     unscoped read) lives once on :meth:`ThreadAttachmentManager.for_record`; the
-    follower/notification/activity managers resolve their bookkeeping edge through
+    follower and notification managers resolve their bookkeeping edge through
     that owner rather than each re-deriving it.
     """
 

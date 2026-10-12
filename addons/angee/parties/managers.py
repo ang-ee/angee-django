@@ -687,6 +687,17 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
 
         return self.untrashed().filter(merged_into__isnull=True)
 
+    def with_display_avatars(self, actor: Any) -> Self:
+        """Batch :meth:`PartyManager.display_avatar` for these parties, through ``actor``'s readable files.
+
+        For a read owner that hands parties to a page outside the GraphQL
+        optimizer (a navigator row, a same_as pair), so no party reads its
+        avatar on its own.
+        """
+
+        avatars = read_scoped_queryset(apps.get_model("storage", "File"), actor)
+        return self.prefetch_related(*self.model._default_manager.display_avatar_prefetches(actor, avatars=avatars))
+
     def named(self, name: str) -> Self:
         """Return canonical candidates with an exact display or legal name.
 
@@ -842,9 +853,14 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
             )
             .untrashed()
             .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
-            .select_related("left", "right")
             .prefetch_related(
-                Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements")
+                Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements"),
+                *(
+                    Prefetch(side, queryset=self.canonical().with_display_avatars(actor))
+                    for side in ("left", "right")
+                    if not unscoped
+                ),
+                *(Prefetch(side, queryset=self.canonical()) for side in ("left", "right") if unscoped),
             )
             .order_by("left_id", "right_id")
         )[: max(0, min(int(limit), 101))]

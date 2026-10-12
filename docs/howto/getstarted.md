@@ -320,6 +320,34 @@ Commits stay on the agent's workspace branch; publish with
 `angee ws source push`. From here you are modifying Angee itself — the
 workspace slots are the real framework repos.
 
+### Upgrading to angee 0.3.0: record tasks
+
+This applies to stacks on angee 0.2.0, which every framework tag through v0.1.36
+carries: their messaging activities become record tasks owned by `angee.projects`.
+angee 0.4.0 removes this section.
+The cutover, [`projects:record_tasks`](../../addons/angee/projects/runtime_migrations/record_tasks.py),
+documents what it converts, what it refuses and how long it holds its lock;
+[the projects README](../../addons/angee/projects/README.md) describes record tasks.
+
+- **Back up and plan a maintenance window.** The cutover is irreversible and
+  locks the task tables while it runs.
+- **Provision `angee.projects` first.** A stack that holds activities composes
+  and provisions `angee.projects` on its current release, then upgrades.
+  Otherwise `makemigrations` refuses to drop the populated activity tables and
+  writes nothing. A stack without activities needs nothing.
+- **Declare the record types that take tasks.** Each record type's owner unions
+  `record_read` and `record_write` for it into `messaging/thread_attachment`
+  in its `permissions.extends.zed`; `migrate` (`--fake` included) refuses the
+  cutover while activities sit on undeclared types and names them. A consumer
+  carrying the declaration needs angee 0.3.0 or a framework tag that includes
+  record tasks.
+- **Let provision sync the permission schema.** Until it is synced, the system
+  checks report `rebac.E009` for the retired `messaging/thread_activity` and
+  `messaging/activity_type`. `angee provision` (which an operator restart job
+  that reruns provision also runs) migrates without checks and syncs before it
+  checks, so it needs no manual step. A stack migrated by hand runs
+  `manage.py migrate --skip-checks`, then `manage.py rebac --skip-checks sync`.
+
 ### Upgrading a stack rendered before the monorepo
 
 Stacks rendered while the framework lived in split repositories declare

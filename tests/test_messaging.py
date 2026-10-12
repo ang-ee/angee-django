@@ -15,7 +15,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -74,12 +74,12 @@ from angee.messaging.testing.models import (
     Person,
     Reaction,
     Thread,
-    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
     TrackingValue,
 )
+from angee.projects.testing.models import Task as ProjectTask
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -746,7 +746,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
     The record's chatter thread is private to it, so deleting the record must remove its
-    thread, attachment, messages, followers, notifications, and activities rather than
+    thread, attachment, messages, followers, notifications, and record tasks rather than
     orphaning them (a leftover attachment on a reused primary key would mis-resolve). A
     sibling record's chatter is untouched.
     """
@@ -759,7 +759,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
         ticket = ThreadedTicket.objects.create(title="Cascade case")
         ticket.message_subscribe(user=watcher)
         ticket.message_post("Body to be collected.")
-        ticket.activity_schedule(user=author, summary="Follow up", due_date=_AT.date())
+        task = ProjectTask.objects.schedule(ticket, title="Follow up", assignee=author, due_date=_AT.date())
         survivor = ThreadedTicket.objects.create(title="Survivor case")
         survivor_message = survivor.message_post("Untouched body.")
 
@@ -769,7 +769,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     attachment_pk = ThreadAttachment._base_manager.get(object_id=ticket.pk).pk
     assert Message._base_manager.filter(thread_id=thread_pk).exists()
     assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+    assert ProjectTask._base_manager.filter(pk=task.pk).exists()
 
     with system_context(reason="test threaded model delete cascade"):
         ticket.delete(*delete_args)
@@ -779,7 +779,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadNotification._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ProjectTask._base_manager.filter(pk=task.pk).exists()
     survivor_thread = survivor.message_thread(create=False)
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
@@ -812,13 +812,13 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
         )
         doc.message_subscribe(user=watcher)
         doc.message_post("Body to be collected by owner delete.")
-        doc.activity_schedule(user=watcher, summary="Follow up", due_date=_AT.date())
+        task = ProjectTask.objects.schedule(doc, title="Follow up", assignee=watcher, due_date=_AT.date())
 
     thread = doc.message_thread(create=False)
     assert thread is not None
     thread_pk = thread.pk
     assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+    assert ProjectTask._base_manager.filter(pk=task.pk).exists()
 
     with actor_context(owner):
         doc.delete()
@@ -828,7 +828,7 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
     assert not ThreadAttachment._base_manager.filter(object_id=doc.pk).exists()
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ProjectTask._base_manager.filter(pk=task.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -876,7 +876,7 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     delete collector can never cascade from a deleted record up to its private ``Thread``
     or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
     row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message, follower, or activity behind.
+    chattered record leaves no orphaned thread, message, follower, or record task behind.
     """
 
     del composed_tables
@@ -885,7 +885,7 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
         author = user_model.objects.create_user(username="bulk-author", email="bulk-author@example.com")
         ticket = ThreadedTicket.objects.create(title="Bulk cascade case")
         ticket.message_post("Body to be collected in bulk.")
-        ticket.activity_schedule(user=author, summary="Follow up", due_date=_AT.date())
+        task = ProjectTask.objects.schedule(ticket, title="Follow up", assignee=author, due_date=_AT.date())
         survivor = ThreadedTicket.objects.create(title="Bulk survivor case")
         survivor_message = survivor.message_post("Untouched bulk body.")
 
@@ -893,7 +893,7 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert thread is not None
     thread_pk = thread.pk
     assert Message._base_manager.filter(thread_id=thread_pk).exists()
-    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+    assert ProjectTask._base_manager.filter(pk=task.pk).exists()
 
     with system_context(reason="test threaded model bulk delete"):
         deleted, _details = ThreadedTicket.objects.filter(pk=ticket.pk).delete()
@@ -904,7 +904,10 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert not ThreadAttachment._base_manager.filter(object_id=ticket.pk).exists()
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ProjectTask._base_manager.filter(pk=task.pk).exists()
+    # The teardown's own capturing delete wrote the task's deletion once; the collector's
+    # later pre_delete for the same GenericRelation-collected row adds nothing.
+    assert ProjectTask.history.filter(id=task.pk, history_type="-").count() == 1
     survivor_thread = survivor.message_thread(create=False)
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
@@ -935,140 +938,6 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     assert not ThreadAttachment._base_manager.filter(pk=attachment_pk).exists()
     assert not ThreadAttachment._base_manager.filter(object_id=record.pk).exists()
     assert not Thread._base_manager.filter(pk=thread_pk).exists()
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_lists_assignee_activities_across_records(composed_tables: None) -> None:
-    """The actor's assigned activities across records, ordered by due date, windowed (F-act).
-
-    The agenda rides the ``messaging/thread_activity.read`` ``user`` (assignee) arm: the
-    activities are scheduled elevated (``created_by`` is not the assignee), so the actor
-    reaches its own rows through the assignee arm alone, with no parent-record grant. The
-    window is the whole bound — ``window_start`` inclusive, ``window_end`` exclusive — and
-    another actor's assignment, plus an unassigned actor, see nothing of
-    it. Each row carries its parent pointer (label + sqid + model_label) through the
-    attachment's owning model, computed without loading the target row.
-    """
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
-    with system_context(reason="agenda across-records setup"):
-        assignee = user_model.objects.create_user(username="agenda-assignee", email="agenda-assignee@example.com")
-        other = user_model.objects.create_user(username="agenda-other", email="agenda-other@example.com")
-        unassigned = user_model.objects.create_user(username="agenda-unassigned", email="agenda-unassigned@example.com")
-        alpha = ThreadedTicket.objects.create(title="Alpha")
-        beta = ThreadedTicket.objects.create(title="Beta")
-        # Assignee's activities across two records, out of due-date order.
-        beta.activity_schedule(user=assignee, summary="Call Beta", due_date=date(2026, 3, 10))
-        alpha.activity_schedule(user=assignee, summary="Email Alpha", due_date=date(2026, 3, 5))
-        # Window boundaries: start is inclusive, end is exclusive.
-        alpha.activity_schedule(user=assignee, summary="Kickoff", due_date=window_start)
-        alpha.activity_schedule(user=assignee, summary="Boundary", due_date=window_end)
-        # Out of window, another assignee, and an unassigned actor — all absent.
-        alpha.activity_schedule(user=assignee, summary="Later", due_date=date(2026, 4, 15))
-        alpha.activity_schedule(user=other, summary="Other task", due_date=date(2026, 3, 7))
-
-    with actor_context(assignee):
-        rows = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
-        empty = list(ThreadActivity.objects.agenda(unassigned, window_start, window_end))
-
-    assert [row.summary for row in rows] == ["Kickoff", "Email Alpha", "Call Beta"]
-    assert {row.attachment.object_id for row in rows} == {alpha.pk, beta.pk}
-    assert empty == []
-
-    email_alpha = next(row for row in rows if row.summary == "Email Alpha")
-    assert email_alpha.attachment.label == "Alpha"
-    assert email_alpha.attachment.record_model_label == "messaging.ThreadedTicket"
-    assert email_alpha.attachment.record_public_id == alpha.public_id
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_excludes_done_unless_included(composed_tables: None) -> None:
-    """Done/canceled rows drop out of the agenda by default and return under include_done (F-act)."""
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2026, 5, 1), date(2026, 6, 1)
-    with system_context(reason="agenda done-filter setup"):
-        assignee = user_model.objects.create_user(username="agenda-done", email="agenda-done@example.com")
-        ticket = ThreadedTicket.objects.create(title="Case")
-        ticket.activity_schedule(user=assignee, summary="Open task", due_date=date(2026, 5, 10))
-        done = ticket.activity_schedule(user=assignee, summary="Done task", due_date=date(2026, 5, 12))
-        ThreadActivity.objects.complete(done, post_message=False)
-
-    with actor_context(assignee):
-        default_summaries = [row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end)]
-        with_done_summaries = [
-            row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end, include_done=True)
-        ]
-
-    assert default_summaries == ["Open task"]
-    assert with_done_summaries == ["Open task", "Done task"]
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_row_reports_overdue_state_without_stored_flag(composed_tables: None) -> None:
-    """An overdue agenda row derives ``state == "overdue"`` from its due date, storing no flag (F-act)."""
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2019, 1, 1), date(2021, 1, 1)
-    with system_context(reason="agenda overdue setup"):
-        assignee = user_model.objects.create_user(username="agenda-overdue", email="agenda-overdue@example.com")
-        ticket = ThreadedTicket.objects.create(title="Escalation")
-        ticket.activity_schedule(user=assignee, summary="Chase", due_date=date(2020, 6, 1))
-
-    with actor_context(assignee):
-        (row,) = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
-
-    assert row.status == ThreadActivity.ActivityStatus.TODO
-    assert row.activity_state == "overdue"
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_activity_agenda_record_pointer_batches_without_per_row_fanout(composed_tables: None) -> None:
-    """Projecting the agenda's record pointer is one batch, not a per-row lazy-load (D5).
-
-    ``with_record_pointers`` primes every row's ``attachment`` in a single elevated query
-    and each pointer field reads the process-cached ``ContentType``, so projecting the
-    label + model_label + record_id for the whole agenda costs a constant query count —
-    not the 1+2N a per-row ``attachment``/``content_type`` lazy-load would. Doubling the
-    row count keeps the projection query count flat.
-    """
-
-    del composed_tables
-    user_model = get_user_model()
-    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
-    with system_context(reason="agenda n+1 setup"):
-        assignee = user_model.objects.create_user(username="agenda-n1", email="agenda-n1@example.com")
-        for index in range(6):
-            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
-            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
-
-    def project_query_count() -> tuple[int, int]:
-        with system_context(reason="agenda n+1 measure"), CaptureQueriesContext(connection) as captured:
-            rows = ThreadActivity.objects.agenda(assignee, window_start, window_end).with_record_pointers()
-            for row in rows:
-                _ = (row.attachment.label, row.attachment.record_model_label, row.attachment.record_public_id)
-        return len(rows), len(captured.captured_queries)
-
-    # Warm the process-cached ContentType so the flat comparison isolates the attachment batch.
-    ContentType.objects.get_for_model(ThreadedTicket)
-    small_rows, small_queries = project_query_count()
-
-    with system_context(reason="agenda n+1 grow"):
-        for index in range(6, 12):
-            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
-            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
-    large_rows, large_queries = project_query_count()
-
-    assert (small_rows, large_rows) == (6, 12)
-    assert large_queries == small_queries
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1577,22 +1446,32 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
     assert ThreadNotification.objects.error_count_for_record(ticket, user=recipient) == 0
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_threaded_model_activity_completion_notifies_activity_followers(composed_tables: None) -> None:
-    """Activity completion delivers to email followers subscribed to that subtype."""
+def _record_holders(doc: Any, **holders: Any) -> None:
+    """Grant ``doc``'s relations to users, keyed by relation name."""
 
-    del composed_tables
+    write_relationships([
+        RelationshipTuple(resource=to_object_ref(doc), relation=relation, subject=to_subject_ref(user))
+        for relation, user in holders.items()
+    ])
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_record_task_completion_notifies_the_records_activity_followers() -> None:
+    """Completing a record task delivers to the record's followers of that subtype."""
+
     user_model = get_user_model()
     with system_context(reason="test threaded model activity notification setup"):
         author = user_model.objects.create_user(username="activity-author", email="activity-author@example.com")
         watcher = user_model.objects.create_user(username="activity-watcher", email="activity-watcher@example.com")
-        ticket = ThreadedTicket.objects.create(title="Activity notification")
-        ticket.message_subscribe(user=watcher, notification_policy="email", subtype_keys=("activity_done",))
+        doc = ChatterDoc.objects.create(title="Activity notification")
+        _record_holders(doc, writer=author, reader=watcher)
+        doc.message_subscribe(user=watcher, notification_policy="email", subtype_keys=("activity_done",))
 
     with actor_context(author):
-        activity = ticket.activity_schedule(user=author, summary="Call customer", due_date=_AT.date())
-        ticket.activity_feedback(activity, feedback="Done.")
+        record = ChatterDoc.objects.get(pk=doc.pk)
+        task = ProjectTask.objects.schedule(record, title="Call customer", due_date=_AT.date())
+        task.complete(feedback="Done.")
 
     notification = ThreadNotification._base_manager.select_related("message", "message__subtype").get(user=watcher)
     assert notification.notification_type == "email"
@@ -1602,14 +1481,10 @@ def test_threaded_model_activity_completion_notifies_activity_followers(composed
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_agent_activity_completion_posts_system_message_with_service_user(
-    composed_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An agent completing an activity posts messaging-private logs as its service user."""
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_agent_record_task_completion_posts_system_message_with_service_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An agent completing a record task posts the record's log as its service user."""
 
-    del composed_tables
     user_model = get_user_model()
     with system_context(reason="test.messaging.agent_activity.setup"):
         owner = user_model.objects.create_user(
@@ -1618,8 +1493,9 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
         )
         agent = Agent.objects.create(name="Activity Agent", owner=owner)
         service_user_id = agent.user_id
-        ticket = ThreadedTicket.objects.create(title="Agent activity")
-        activity = ticket.activity_schedule(user=owner, summary="Close the loop", due_date=_AT.date())
+        doc = ChatterDoc.objects.create(title="Agent activity")
+        _record_holders(doc, reader=owner, writer=agent.user)
+        task = ProjectTask.objects.schedule(doc, title="Close the loop", assignee=owner, due_date=_AT.date())
 
     post_context: dict[str, Any] = {}
     manager_type = type(Message.objects)
@@ -1633,16 +1509,16 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
     monkeypatch.setattr(manager_type, "post_to_thread", spy_post_to_thread)
 
     with actor_context(agent.principal_subject()):
-        ticket.activity_feedback(activity, feedback="Handled by agent.")
+        ProjectTask.objects.get(pk=task.pk).complete(feedback="Handled by agent.")
 
     message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
-    assert post_context == {"is_sudo": True, "reason": "messaging.activity.complete"}
+    assert post_context == {"is_sudo": True, "reason": "messaging.system_post"}
     assert message.created_by_id == service_user_id
     assert message.message_type == Message.MessageKind.AUTO_COMMENT
     assert message.subtype is not None
     assert message.subtype.key == "activity_done"
     assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
-        "Activity done: Close the loop\n\nHandled by agent."
+        "Done: Close the loop\n\nHandled by agent."
     )
 
 
@@ -1908,66 +1784,44 @@ def test_threaded_model_autotracking_respects_update_fields(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("activity_catalog")
-def test_threaded_model_schedules_and_completes_activity(composed_tables: None) -> None:
-    """A threaded model row owns Odoo-style scheduled activities."""
+@pytest.mark.usefixtures("composed_permissions", "activity_catalog")
+def test_threaded_model_schedules_and_completes_a_record_task() -> None:
+    """A threaded record carries record tasks; completing one logs it on the record."""
 
-    del composed_tables
     user_model = get_user_model()
-    with system_context(reason="test threaded model activity setup"):
+    with system_context(reason="test threaded model record task setup"):
         user = user_model.objects.create_user(username="assignee", email="assignee@example.com")
-        ticket = ThreadedTicket.objects.create(title="Activity case")
+        ticket = ChatterDoc.objects.create(title="Record task case")
+        _record_holders(ticket, writer=user)
 
     with actor_context(user):
-        activity = ticket.activity_schedule(
-            summary="Call customer",
+        ticket = ChatterDoc.objects.get(pk=ticket.pk)
+        task = ProjectTask.objects.schedule(
+            ticket,
+            title="Call customer",
             note="Ask about the rollout.",
             due_date=_AT.date(),
             activity_type="call",
         )
 
-    activity.refresh_from_db()
-    assert activity.user_id == user.pk
-    assert activity.thread_id == ThreadAttachment._base_manager.get().thread_id
-    assert activity.summary == "Call customer"
-    assert activity.note == "Ask about the rollout."
-    assert activity.due_date == _AT.date()
-    assert activity.activity_type_id == "call"
-    assert activity.status == "todo"
+    task.refresh_from_db()
+    assert task.assignee_id == user.pk
+    assert task.subject_id == ThreadAttachment._base_manager.get(object_id=ticket.pk).pk
+    assert (task.title, task.note, task.due_date) == ("Call customer", "Ask about the rollout.", _AT.date())
+    assert task.activity_type_id == "call"
+    assert task.status == "open"
     with actor_context(user):
-        assert list(ticket.activity_ids()) == [activity]
-
-    with actor_context(user):
-        completed = ticket.activity_feedback(activity, feedback="Customer confirmed.")
+        assert list(ProjectTask.objects.for_record(ticket)) == [task]
+        completed = task.complete(feedback="Customer confirmed.")
 
     completed.refresh_from_db()
     assert completed.status == "done"
-    assert completed.activity_state == "done"
-    assert completed.feedback == "Customer confirmed."
-    assert completed.completed_at is not None
-    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
-    assert message.thread_id == completed.thread_id
-    assert message.direction == "internal"
-    assert message.message_type == "auto_comment"
-    assert message.subtype is not None
-    assert message.subtype.key == "activity_done"
-    assert message.preview.startswith("Activity done: Call customer")
+    assert completed.done_at is not None
+    message = Message._base_manager.get(subtype__key="activity_done")
+    assert message.thread_id == ThreadAttachment._base_manager.get(object_id=ticket.pk).thread_id
     assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
-        "Activity done: Call customer\n\nCustomer confirmed."
+        "Call done: Call customer\n\nCustomer confirmed."
     )
-    before = Message._base_manager.count()
-    note = "  Agreed next steps.\nKeep the original spacing.\n"
-    with actor_context(user):
-        logged = ticket.activity_log("call", _AT.date(), note)
-        with pytest.raises(ValidationError, match="activity_type"):
-            ticket.activity_log("undeclared", _AT.date(), note)
-    assert logged.status == "done"
-    assert logged.user_id == logged.created_by_id == user.pk
-    assert logged.due_date == _AT.date()
-    assert logged.completed_at is not None
-    assert logged.summary == "Agreed next steps."
-    assert logged.note == note
-    assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)

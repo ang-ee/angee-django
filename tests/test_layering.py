@@ -186,6 +186,20 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
+def test_addons_never_import_the_build_time_composer() -> None:
+    """Serving code never loads ``angee.compose``; addons share its facts through ``angee.base``."""
+    root = PROJECT_ROOT / "addons/angee"
+    violations = {
+        path.relative_to(PROJECT_ROOT).as_posix(): sorted(
+            name for name in _module_imports(path)
+            if name == "angee.compose" or name.startswith("angee.compose.")
+        )
+        for path in root.rglob("*.py")
+        if "tests" not in path.relative_to(root).parts
+    }
+    assert not {path: names for path, names in violations.items() if names}
+
+
 def test_addon_test_harness_does_not_import_the_composer() -> None:
     """Build-time permission composition belongs to core test support."""
     root = PROJECT_ROOT / "addons/angee/workflows/testing"

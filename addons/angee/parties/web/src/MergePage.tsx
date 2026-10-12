@@ -160,7 +160,11 @@ function SurvivorOption({
       variant="card"
       label={
         <span className="flex min-w-0 items-center gap-3">
-          <Avatar size="lg" initials={avatarInitials(record.display_name)} />
+          <Avatar
+            size="lg"
+            src={record.display_avatar?.url || undefined}
+            initials={avatarInitials(record.display_name)}
+          />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold text-fg">{record.display_name}</span>
             <span className="block truncate text-xs text-fg-muted">{origin}</span>

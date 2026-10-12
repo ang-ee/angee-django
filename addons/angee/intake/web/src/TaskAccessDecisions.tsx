@@ -1,22 +1,16 @@
+import type { DocumentType } from "@angee/gql/console";
 import {
   Avatar, Badge, Card, CardContent, CardFooter, CardHeader, InlineEmpty, NavLink, Skeleton, SkeletonText,
-  avatarInitials, useRouteHref, useStatusTone, type JsonValue, type StringIdRow,
+  avatarInitials, useRouteHref, useStatusTone,
 } from "@angee/ui";
 import type { ReactElement } from "react";
 
+import type { TaskAccessNeedsDocument } from "./documents";
 import { useIntakeT } from "./i18n";
 import { TaskAccessActions } from "./TaskAccessActions";
 
-export interface CurrentAccessRow extends StringIdRow {
-  revision: number;
-  permissions: readonly string[];
-  claimed_name: string;
-  claimed_email: string | null;
-  access_verdict: JsonValue | null;
-  requester_access_granted: boolean;
-  party: { id: string; display_name: string } | null;
-  access_decision: { id: string; verdict: JsonValue | null; is_open: boolean } | null;
-}
+/** One Need as the Task's access query selects it. */
+export type CurrentAccessRow = DocumentType<typeof TaskAccessNeedsDocument>["intake_needs"][number];
 
 export function TaskAccessCardSkeleton(): ReactElement {
   return <Card>
@@ -60,7 +54,7 @@ export function TaskAccessDecisions({
     const state = STATE_COPY[stateKey];
     return <Card key={need.id}>
       <CardHeader className="flex-row flex-wrap items-center gap-2">
-        <Avatar size="sm" initials={avatarInitials(name)} />
+        <Avatar size="sm" src={need.party?.display_avatar?.url || undefined} initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
         <Badge shape="pill" tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>

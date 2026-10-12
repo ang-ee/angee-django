@@ -9,13 +9,13 @@ always allows) cannot:
 - **part 1** — an actor granted ``writer`` may change a tracked field (``write``)
   but may not post comments (``post``), so an automatic tracked-field log must land
   without consulting ``can_post``.
-- **part 3** — a user with no grant cannot read the record, so an activity attached
-  to it is unreachable through complete/cancel (authorization rides the record
-  read, not the activity's own permission).
+- **part 3** — a user with no grant cannot read the record, so its record tasks are
+  unreachable: the task schema derives them from the record's chatter read and
+  write (``tests.extcontrib``), not from the task's own grants.
 
 ``thread_post_access`` is overridden to ``"post"`` so post access diverges from the
-``"write"`` that authorizes saving a tracked field; the mixin's other access verbs
-keep their defaults (``thread_read_access="read"``, ``thread_activity_access="write"``).
+``"write"`` that authorizes saving a tracked field; ``thread_read_access`` keeps its
+``"read"`` default.
 """
 
 from __future__ import annotations

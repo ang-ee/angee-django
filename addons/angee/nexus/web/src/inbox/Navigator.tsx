@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { senderAvatarUrl } from "@angee/parties";
 import {
   Avatar,
   Button,
@@ -197,7 +198,7 @@ function NavigatorRow({
     <div
       className={`flex min-w-0 items-start gap-2 py-2 ${selected ? "text-brand" : ""}`}
     >
-      <Avatar size="sm" initials={avatarInitials(label)} />
+      <Avatar size="sm" src={senderAvatarUrl(row.handle)} initials={avatarInitials(label)} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{label}</span>

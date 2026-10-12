@@ -1103,6 +1103,12 @@ class ModelHistory(HistoricalRecords):
             try:
                 snapshot = model._base_manager.using(alias).only(*names).get(pk=instance.pk)
             except model.DoesNotExist as error:
+                if history_type == "-":
+                    # Django's collector sends pre_delete for every collected row before
+                    # deleting any; a receiver on an earlier row (messaging's chatter
+                    # teardown) may already have deleted this one through its own capturing
+                    # delete, which wrote the "-" snapshot. Nothing is left to capture.
+                    return
                 raise model.DoesNotExist(f"Cannot capture missing {model._meta.label} row {instance.pk!r}.") from error
             if hasattr(instance, "_history_date"):
                 snapshot._history_date = instance._history_date

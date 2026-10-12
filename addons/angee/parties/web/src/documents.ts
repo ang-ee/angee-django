@@ -136,6 +136,7 @@ export const PartyMergeComparison = graphql(`
     left: parties_by_pk(id: $left) {
       id
       display_name
+      display_avatar { id url }
       notes
       first_met_note
       handles {
@@ -163,6 +164,7 @@ export const PartyMergeComparison = graphql(`
     right: parties_by_pk(id: $right) {
       id
       display_name
+      display_avatar { id url }
       notes
       first_met_note
       handles {
@@ -217,10 +219,12 @@ export const SameAsPairs = graphql(`
       left {
         id
         display_name
+        display_avatar { id url }
       }
       right {
         id
         display_name
+        display_avatar { id url }
       }
     }
   }

@@ -2,6 +2,7 @@
 
 from django.db import models
 
+from angee.projects.models import ActivityType as AbstractActivityType
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Participant as AbstractParticipant
@@ -92,6 +93,16 @@ class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
         app_label = "projects"
         db_table = "test_projects_project"
         rebac_resource_type = "projects/project"
+
+
+class ActivityType(AbstractActivityType):
+    """Concrete activity-type catalog for record tasks."""
+
+    class Meta(AbstractActivityType.Meta):
+        abstract = False
+        app_label = "projects"
+        db_table = "test_projects_activity_type"
+        rebac_resource_type = "projects/activity_type"
 
 
 class ProjectBinding(AbstractProjectBinding):

@@ -1,14 +1,14 @@
 // Authorization schema for the record-chatter REBAC demo (test-only).
 // @rebac_package: chatterdemo
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // A gated threaded record whose post access diverges from write, so the F-v
 // messaging tests can drive a poster who may change a tracked field (`write`) but
 // not post comments (`post`): `writer` grants read+write yet not `post`, and `post`
 // is owner/admin only. `reader` grants read without write. The record read (`read`)
 // is the one gate every record-chatter surface rides (F-v parts 2/3), so an actor
-// without it cannot reach the record's threads, messages, or activities.
+// without it cannot reach the record's threads, messages, or tasks.
 definition chatterdemo/doc {
     relation owner: auth/user
     relation writer: auth/user
@@ -21,3 +21,4 @@ definition chatterdemo/doc {
     permission post   = owner + admin->member
     permission delete = owner + admin->member
 }
+

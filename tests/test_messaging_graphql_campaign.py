@@ -19,7 +19,6 @@ from angee.messaging.testing.models import (
     Party,
     Reaction,
     Thread,
-    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
@@ -211,7 +210,6 @@ def test_notification_acknowledgement_returns_validation_for_foreign_or_missing_
 @pytest.mark.parametrize("projection,fields", [
     ("ThreadAttachmentType", ("thread",)),
     ("ThreadFollowerType", ("thread", "attachment", "last_read_message")),
-    ("ThreadActivityType", ("thread", "attachment")),
     ("MessageEdgeType", ("src", "dst")),
     ("MessageStarType", ("message",)),
     ("ParticipantType", ("handle",)),
@@ -235,7 +233,6 @@ def test_unlisted_projection_types_regate_sudo_cached_relations(activity_catalog
         rows = {
             "ThreadAttachmentType": attachment,
             "ThreadFollowerType": follower,
-            "ThreadActivityType": ThreadActivity.objects.create(thread=thread, attachment=attachment, user=viewer),
             "MessageEdgeType": MessageEdge.objects.create(src=message, dst=other, kind="quote"),
             "MessageStarType": MessageStar.objects.create(message=message, user=viewer),
             "ParticipantType": Participant.objects.create(message=message, handle=handle),

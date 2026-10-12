@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 18
+// @rebac_schema_revision: 19
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -73,6 +73,18 @@ definition messaging/message {
 // chatter edge is the record's own thread, which the record's verbs materialize
 // under system context; its access rides on the thread. Files carry source
 // conversations, declared here.
+//
+// A row elsewhere can be about a record through the record's chatter edge. It
+// inherits the record's access from `record_read` and `record_write`, which the
+// record type's owner unions in beside its `target` relation:
+//
+//     permission record_read = doc->read
+//     permission record_write = doc->write
+//
+// They stay apart from `target_write`, which also names record types whose own
+// access may depend on such rows. `record_withheld` names whom a record withholds
+// its rows from (a concealed record conceals them too). `authenticated - row->attached` holds exactly
+// while a row points at no edge.
 definition messaging/thread_attachment {
     relation thread: messaging/thread // rebac:field=thread
     relation file: storage/file // rebac:field=target
@@ -84,9 +96,14 @@ definition messaging/thread_attachment {
     relation admin: angee/role // rebac:const=admin
 
     permission target_write = file->write
+    permission record_read = nil
+    permission record_write = nil
+    permission record_withheld = nil
 
     // Arrow-only through `source`: never check `retains` directly.
     permission retains = authenticated
+    // Arrow-only from a row about a record: never check `attached` directly.
+    permission attached = authenticated
     permission create = source->retains & target_write
     permission read   = thread->read + editor + reader + admin->member
     permission write  = thread->write + editor + admin->member
@@ -97,27 +114,6 @@ definition messaging/thread_follower {
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation user: auth/user // rebac:field=party__person__user
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = user + thread->read + attachment->read + admin->member
-    permission write  = user + thread->write + attachment->write + admin->member
-    permission delete = user + thread->write + attachment->write + admin->member
-}
-
-definition messaging/activity_type {
-    relation admin: angee/role // rebac:const=admin
-
-    permission read = authenticated
-    permission create = admin->member
-    permission write = admin->member
-    permission delete = admin->member
-}
-
-definition messaging/thread_activity {
-    relation thread: messaging/thread // rebac:field=thread
-    relation attachment: messaging/thread_attachment // rebac:field=attachment
-    relation user: auth/user // rebac:field=user
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated

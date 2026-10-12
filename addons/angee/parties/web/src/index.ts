@@ -95,7 +95,7 @@ const parties = defineBaseAddon({
   // Relationship-aware addons add Overview items; contact-consuming addons add Person and Organization form fields.
   containers: { "parties.overview#items": {}, "parties.person#fields": {}, "parties.organization#fields": {} },
 });
-export { senderDisplayName, type SenderIdentity } from "./identity";
+export { senderAvatarUrl, senderDisplayName, type SenderIdentity } from "./identity";
 export { addressFields, PartyAddresses } from "./PartyAddresses";
 export { useOrganizationFields } from "./OrganizationForm";
 export {
