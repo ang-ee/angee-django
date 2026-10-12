@@ -114,9 +114,9 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
         _execute(
             console,
             """
-            mutation CreateAgent($owner: ID!) {
+            mutation CreateAgent {
               insert_agents_one(
-                object: {name: "InProcess", owner: $owner, runtime_class: "PYDANTIC"}
+                object: {name: "InProcess", runtime_class: "PYDANTIC"}
               ) {
                 id
                 runtime_class
@@ -125,7 +125,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) ->
               }
             }
             """,
-            {"owner": str(admin.sqid)},
+            {},
             user=admin,
         )
     )["insert_agents_one"]
@@ -276,8 +276,8 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
         _execute(
             console,
             """
-            mutation CreateAgent($owner: ID!) {
-              insert_agents_one(object: {name: "Composer", owner: $owner}) {
+            mutation CreateAgent {
+              insert_agents_one(object: {name: "Composer"}) {
                 id
                 name
                 lifecycle
@@ -291,10 +291,11 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
               }
             }
             """,
-            {"owner": str(admin.sqid)},
+            {},
             user=admin,
         )
     )["insert_agents_one"]
+    # The insert takes the acting user as owner; ownership changes only by transfer.
     assert created == {
         "id": created["id"],
         "name": "Composer",
@@ -311,11 +312,11 @@ def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     rejected_insert = _execute(
         console,
         """
-        mutation SeedState($owner: ID!) {
-          insert_agents_one(object: {name: "Bypass", owner: $owner, lifecycle: "ready"}) { id }
+        mutation SeedState {
+          insert_agents_one(object: {name: "Bypass", lifecycle: "ready"}) { id }
         }
         """,
-        {"owner": str(admin.sqid)},
+        {},
         user=admin,
     )
     assert rejected_insert.errors
@@ -1032,7 +1033,6 @@ def test_transcript_queryset_delete_refuses_active_turns(
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
-@pytest.mark.parametrize("cascade", ["agent_owner", "session_owner"])
 @pytest.mark.parametrize("status", ["running", "awaiting_approval"])
 @pytest.mark.parametrize(
     ("mutation", "is_preview"),
@@ -1047,12 +1047,11 @@ def test_transcript_queryset_delete_refuses_active_turns(
 )
 def test_user_delete_refuses_active_turn_cascades(
     composed_tables: None,
-    cascade: str,
     status: str,
     mutation: str,
     is_preview: bool,
 ) -> None:
-    """IAM cannot delete an active turn through either user-owned cascade."""
+    """IAM cannot delete an active turn through the session owner's cascade."""
 
     owner = User.objects.create_user(username="agt-user-cascade-agent-owner")
     other = User.objects.create_user(username="agt-user-cascade-session-owner")
@@ -1062,21 +1061,17 @@ def test_user_delete_refuses_active_turn_cascades(
         session = AgentSession.objects.create(agent=agent, owner=other)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status=status)
         principal = agent.user
-    target = owner if cascade == "agent_owner" else other
-    result = _execute(_schema(), mutation, {"id": str(target.sqid)}, user=admin)
+    result = _execute(_schema(), mutation, {"id": str(other.sqid)}, user=admin)
     turn_message = "An agent turn is still running or awaiting approval; stop it first."
-    agent_message = "Stop all active turns before deleting this agent."
     if is_preview:
         preview = _data(result)["delete_user"]
         assert preview["has_blockers"] is True
         assert preview["blocked"] == []
-        assert preview["refusals"] == ([agent_message, turn_message] if cascade == "agent_owner" else [turn_message])
+        assert preview["refusals"] == [turn_message]
     else:
         assert result.errors is not None
         assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-        assert result.errors[0].message == (
-            f"{agent_message} {turn_message}" if cascade == "agent_owner" else turn_message
-        )
+        assert result.errors[0].message == turn_message
     with system_context(reason="test.agents.user_cascade.verify"):
         assert User.objects.filter(pk__in=[owner.pk, other.pk, principal.pk]).count() == 3
         assert User.objects.filter(pk=principal.pk, is_active=True).exists()
@@ -1221,25 +1216,30 @@ def test_agent_delete_after_stop_uses_current_capability(composed_tables: None) 
         assert not AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
-def test_user_delete_requires_owned_agent_deprovisioning(composed_tables: None) -> None:
-    """Deleting an owner cannot bypass teardown merely because their agent is idle."""
+@pytest.mark.parametrize("lifecycle", ["ready", "deprovisioned"])
+def test_user_delete_leaves_their_agents_ownerless_with_running_work(composed_tables: None, lifecycle: str) -> None:
+    """Deleting an agent's owner clears the owner; the agent, its principal and active turns remain."""
 
-    owner = User.objects.create_user(username="agt-user-provisioned-owner")
-    admin = _platform_admin("agt-user-provisioned-admin")
-    with system_context(reason="test.agents.user_provisioned.seed"):
-        agent = Agent.objects.create(name="Assistant", owner=owner, lifecycle="ready", workspace="ws-agent")
+    owner = User.objects.create_user(username="agt-user-agent-owner")
+    other = User.objects.create_user(username="agt-user-agent-session-owner")
+    admin = _platform_admin("agt-user-agent-admin")
+    with system_context(reason="test.agents.user_agent_owner.seed"):
+        agent = Agent.objects.create(
+            name="Assistant", owner=owner, lifecycle=lifecycle, workspace="ws-agent" if lifecycle == "ready" else "",
+        )
+        session = AgentSession.objects.create(agent=agent, owner=other)
+        turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
         principal = agent.user
     result = _execute(
         _schema(), "mutation Delete($id: String!) { delete_users_by_pk(id: $id) { id } }",
         {"id": str(owner.sqid)}, user=admin,
     )
-    assert result.errors is not None
-    assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-    assert result.errors[0].message == "Deprovision this agent before deleting it."
-    with system_context(reason="test.agents.user_provisioned.verify"):
-        assert User.objects.filter(pk__in=[owner.pk, principal.pk]).count() == 2
+    assert result.errors is None
+    with system_context(reason="test.agents.user_agent_owner.verify"):
+        assert not User.objects.filter(pk=owner.pk).exists()
+        assert Agent.objects.filter(pk=agent.pk, owner__isnull=True, lifecycle=lifecycle).exists()
         assert User.objects.filter(pk=principal.pk, is_active=True).exists()
-        assert Agent.objects.filter(pk=agent.pk).exists()
+        assert AgentTurn.objects.filter(pk=turn.pk, session=session, status="running").exists()
 
 
 def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> None:

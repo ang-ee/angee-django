@@ -165,17 +165,19 @@ def test_agent_instance_delete_deactivates_service_user(composed_tables: None) -
         assert User.objects.get(pk=user_id).is_active is False
 
 
-def test_agent_owner_delete_cascade_deactivates_service_user(composed_tables: None) -> None:
-    """Owner-user cascades still run the Agent service-user lifecycle side effect."""
+def test_agent_owner_delete_clears_ownership_and_keeps_the_service_user(composed_tables: None) -> None:
+    """Deleting the owner clears it and leaves the agent and its active principal to administrators."""
 
-    owner = User.objects.create_user(username="principal-owner-cascade", email="principal-cascade@example.com")
-    with system_context(reason="test.agent.service_user.cascade_setup"):
-        agent = Agent.objects.create(name="Cascade Deleted", owner=owner)
+    owner = User.objects.create_user(username="principal-owner-cleared", email="principal-cleared@example.com")
+    with system_context(reason="test.agent.service_user.owner_delete_setup"):
+        agent = Agent.objects.create(name="Owner Deleted", owner=owner)
         user_id = agent.user_id
         owner.delete()
 
-    with system_context(reason="test.agent.service_user.assert_cascade"):
-        assert User.objects.get(pk=user_id).is_active is False
+    with system_context(reason="test.agent.service_user.assert_owner_delete"):
+        agent.refresh_from_db()
+        assert agent.owner_id is None
+        assert User.objects.get(pk=user_id).is_active is True
 
 
 def test_agent_bulk_delete_deactivates_service_user(composed_tables: None) -> None:
