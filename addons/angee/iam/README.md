@@ -49,9 +49,9 @@ confirmed opening verb.
   query. Their search and ordering use the sign-in name and email only where
   the viewer reads them.
 - **Query axes.** Gated columns are never filters, sorts or groups. The `users`
-  resource filters activity through its `active` expression, which
-  `angee.base.scoping.gated_field_expression` makes NULL wherever the viewer
-  cannot read the field. The `iam.users.active` and `iam.users.deactivated`
+  resource filters activity through its `active` expression, REBAC's
+  `readable("is_active")`, which is NULL wherever the viewer cannot read the
+  field. The `iam.users.active` and `iam.users.deactivated`
   presets use it.
 
 ## Managed people
