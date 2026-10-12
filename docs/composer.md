@@ -57,7 +57,7 @@ below.
 | Artifact assembly and explicit build/check/cleanup orchestration | [`Runtime`](../angee/compose/runtime.py) |
 | Atomic writes, drift and guarded filesystem cleanup | [`GeneratedTree`](../angee/fs.py) |
 | Addon migration materialization and dependency projection | [`RuntimeMigrations`](../angee/compose/migrations.py), [`AddonDependencyGroup`](../angee/compose/dependencies.py) |
-| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column in `makemigrations` |
+| Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column or table in `makemigrations`, apart from rows the retiring addon declares seeded |
 | Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
@@ -277,17 +277,31 @@ read-only filesystem probe. After a successful build, normal `makemigrations` ma
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
-`makemigrations` never drops a column that still holds data. `angee.compose`
-gives Django's `makemigrations` and `migrate` the shared
-[`DropGuardAutodetector`](../angee/compose/migrations.py), which refuses an
-autodetected `RemoveField` before any file is written when a row differs from
-the field's empty value (NULL, or a non-null field's default) in a database that
-may receive the migration, or when such a database cannot be checked. Empty
-columns drop automatically, so toggling a layer in development stays free.
-Retire populated data with a cutover: an addon runtime migration, declared by an
-addon that stays installed, that preserves or retires the data and removes the
-field. Build materializes it first, so the reviewed removal is never
-autodetected.
+`makemigrations` never drops a column or a table that still holds data.
+`angee.compose` gives Django's `makemigrations` and `migrate` the shared
+[`DropGuardAutodetector`](../angee/compose/migrations.py), which refuses before
+any file is written:
+
+- an autodetected `RemoveField` when a row differs from the field's empty value
+  (NULL, or a non-null field's default);
+- an autodetected `DeleteModel` when its table holds a row. An addon that removes
+  a model may name it under `retired_models` in its `addon.toml` `[resources]`
+  (for example `retired_models = ["messaging.ActivityType"]`): the rows its own
+  resource files seeded then retire with the model, read through the resource
+  ledger (`ResourceQuerySet.retired_seed_keys`); other addons' seeded rows still
+  count. The ledger rows stay as `angee.resources` history; the loader skips a
+  model it cannot resolve. Retirements of migration-only historical labels are
+  guarded the same way.
+
+Both proofs run on every database that may receive the migration; without
+`DATABASE_ROUTERS` that is `default` alone, as in Django's history consistency
+check. A database that cannot be checked refuses the drop. The guard runs only
+inside `makemigrations` and `migrate`, which need the database anyway;
+`angee build` never probes it. Empty columns and tables drop automatically, so
+toggling a layer in development stays free. Retire populated data with a
+cutover: an addon runtime migration, declared by an addon that stays installed,
+that preserves or retires the data and removes the field or model. Build
+materializes it first, so the reviewed removal is never autodetected.
 
 Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) for
 the upgrade floor, carried-forward history, and consumer reset authorization.
@@ -299,8 +313,8 @@ Keep that post-build boundary; native command loaders and cache invalidation
 allow subsequent database preparation, checks and schema output to share the
 initialized registry. Each command retains its own transactions and failures
 stop later steps. Provision runs `makemigrations --noinput`; missing required
-migration defaults and populated column drops fail immediately so their defaults
-or cutovers can be authored before retrying.
+migration defaults and populated column or table drops fail immediately so their
+defaults or cutovers can be authored before retrying.
 
 ### Composed addon dependencies
 

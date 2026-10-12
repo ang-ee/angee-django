@@ -6,7 +6,7 @@ import hashlib
 import importlib
 import json
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -15,7 +15,7 @@ from typing import Any, cast
 from django.apps import AppConfig, apps
 from django.apps.registry import Apps
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management.base import CommandError
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
@@ -31,11 +31,11 @@ from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config
+from angee.base.runtime_migrations import ORIGIN_ATTR
 from angee.compose.history import HistoricalRuntimeConfig, historical_labels
 from angee.fs import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
-ORIGIN_ATTR = "angee_origin"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
 BASELINE_ATTR = "angee_fresh_baseline"
 logger = logging.getLogger(__name__)
@@ -606,7 +606,7 @@ class RetiredTableOperation(SeparateDatabaseAndState):
 
 
 class DropGuardAutodetector(MigrationAutodetector):
-    """Django's autodetector, refusing to drop a column that still holds data.
+    """Django's autodetector, refusing to drop a column or table that still holds data.
 
     ``makemigrations`` detects changes before writing, so a refusal leaves no
     migration file behind; ``migrate`` shares the autodetector, so its pending
@@ -619,7 +619,11 @@ class DropGuardAutodetector(MigrationAutodetector):
     through model and a generated column store nothing of their own. Every
     database that may receive the migration, selected like Django's history
     consistency check, must prove the column empty; an unreachable or
-    unconfigured database cannot, so the drop is refused.
+    unconfigured database cannot, so the drop is refused. A deleted model's table
+    holds data when it has a row, under the same proof, retired historical labels
+    included; an addon that names the model under ``retired_models`` in its
+    addon.toml ``[resources]`` vouches for the rows its own resource files seeded,
+    which retire with the model.
 
     A reviewed drop is an addon runtime migration: ``angee build`` materializes it
     into the history first, so its removal is never autodetected here.
@@ -636,7 +640,7 @@ class DropGuardAutodetector(MigrationAutodetector):
         convert_apps: set[str] | None = None,
         migration_name: str | None = None,
     ) -> dict[str, list[Migration]]:
-        """Return Django's changes, or refuse when a removed column holds data."""
+        """Return Django's changes, or refuse when a removed column or table holds data."""
 
         changes = super().changes(graph, trim_to_apps, convert_apps, migration_name)
         refusals = [
@@ -659,6 +663,23 @@ class DropGuardAutodetector(MigrationAutodetector):
             config.label for config in apps.get_app_configs()
             if isinstance(config, HistoricalRuntimeConfig)
         }
+        refusals = [
+            refusal
+            for app_label, app_migrations in sorted(changes.items())
+            for migration in app_migrations
+            for operation in migration.operations
+            if isinstance(operation, DeleteModel)
+            for refusal in self._populated_table(app_label, operation)
+        ]
+        if refusals:
+            raise CommandError(
+                "unsafe autodetected table drop: " + "; ".join(refusals)
+                + ". A deleted model's table is dropped automatically only when every database that may "
+                "receive the migration proves it holds nothing but rows its retiring addon's resource files seeded "
+                "(addon.toml [resources] retired_models). Declare a cutover "
+                "migration that preserves or retires its rows and deletes the model in an installed addon's "
+                "addon.toml [[migrations]], then run `angee build` before makemigrations."
+            )
         for app_label in sorted(retired_labels & changes.keys()):
             for migration in changes[app_label]:
                 for index, operation in enumerate(migration.operations):
@@ -697,8 +718,31 @@ class DropGuardAutodetector(MigrationAutodetector):
             table, column = model._meta.db_table, field.column
         else:
             return
+        yield from self._holding(model, lambda alias: rows, f"{model._meta.label_lower}.{field.name}", table, column)
+
+    def _populated_table(self, app_label: str, operation: DeleteModel) -> Iterator[str]:
+        """Describe each target database where the deleted model's table holds unseeded rows."""
+
+        model = self.from_state.apps.get_model(app_label, operation.name)
+        if model._meta.proxy or not model._meta.managed or model._meta.swapped:
+            return
+
+        def unseeded(alias: str) -> Any:
+            return model._base_manager.exclude(pk__in=_seeded_primary_keys(model, alias))
+
+        yield from self._holding(model, unseeded, model._meta.label_lower, model._meta.db_table, None)
+
+    @staticmethod
+    def _holding(
+        model: type[Any], rows_for: Callable[[str], Any], name: str, table: str, column: str | None,
+    ) -> Iterator[str]:
+        """Describe each database that may receive ``model``'s migration where its ``rows_for`` exist.
+
+        Like Django's history consistency check, a host without routers proves
+        only ``default``.
+        """
+
         storage = f"table {table}" if column is None else f"column {table}.{column}"
-        name = f"{model._meta.label_lower}.{field.name}"
         aliases = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
         for alias in sorted(aliases):
             if not router.allow_migrate_model(alias, model):
@@ -711,9 +755,36 @@ class DropGuardAutodetector(MigrationAutodetector):
                         column is None
                         or column in {info.name for info in introspection.get_table_description(cursor, table)}
                     )
-                count = rows.using(alias).count() if present else 0
+                count = rows_for(alias).using(alias).count() if present else 0
             except (DatabaseError, ImproperlyConfigured) as error:
                 yield f"{name}: cannot prove {storage} empty on database {alias!r} ({error})"
                 continue
             if count:
                 yield f"{name}: {storage} holds data in {count} row(s) on database {alias!r}"
+
+
+def _seeded_primary_keys(model: type[Any], alias: str) -> set[Any]:
+    """Return the keys of ``model``'s rows its retiring addon's resource files seeded on ``alias``.
+
+    The resource ledger (``angee.resources``) owns which rows those are: an addon
+    that removes a model names it under ``retired_models`` in its addon.toml
+    ``[resources]``, and only its own seeded rows retire with the model; rows other
+    addons seeded, and models no addon names, still count as data. A key the
+    model's primary key cannot hold is not a seeded row of it.
+    """
+
+    try:
+        ledger = apps.get_model("resources", "Resource")
+    except LookupError:
+        return set()
+    try:
+        candidates = ledger.objects.using(alias).retired_seed_keys(model._meta.label)
+    except DatabaseError:
+        return set()
+    keys = set()
+    for candidate in candidates:
+        try:
+            keys.add(model._meta.pk.to_python(candidate))
+        except ValidationError:
+            continue
+    return keys

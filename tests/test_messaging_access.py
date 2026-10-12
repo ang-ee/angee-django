@@ -92,7 +92,7 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
         assert scoped.filter(pk=chatter.pk).exists()
         assert not scoped.filter(pk=source.pk).exists()
         # These paths include attachment -> thread -> task -> project -> group.
-        for name in ("ThreadFollower", "ThreadNotification", "ThreadActivity", "Part", "Reaction"):
+        for name in ("ThreadFollower", "ThreadNotification", "Part", "Reaction"):
             model = apps.get_model("messaging", name)
             sql = model.objects.with_actor(reader).scoped().query.sql_with_params()[0]
             assert "SELECT" in sql, (messaging_access_schema, name)

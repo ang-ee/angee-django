@@ -56,7 +56,6 @@ class FreshnessTask(TaskWork, AbstractTask):
     stage = models.ForeignKey(FreshnessStage, null=True, blank=True, on_delete=models.SET_NULL)
     cycle = None
     cycle_id = None
-    converted_from_activity = None
     links = None
     file_attachments = None
     thread_attachments = None

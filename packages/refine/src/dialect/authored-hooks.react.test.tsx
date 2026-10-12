@@ -142,7 +142,7 @@ describe("useAuthoredMutation", () => {
           invalidateModels: [
             "notes.Note",
             "messaging.ThreadFollower",
-            "messaging.ThreadActivity",
+            "messaging.ThreadNotification",
           ],
         }),
       { wrapper: ConsoleProvider },

@@ -7,6 +7,7 @@ import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 import { enProjectsMessages } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 import { ProjectPhaseControl } from "./project-phase";
+import { RecordTasksPane } from "./RecordTasksPane";
 
 export {
   MILESTONE_MODEL,
@@ -92,6 +93,19 @@ const projects = defineBaseAddon({
   menus: projectsMenu,
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
+  containers: {
+    // Every record with chatter offers its record tasks beside its comments and history; the task
+    // schema takes them only on record types whose owner declares them.
+    "record#aside": {
+      "projects.tasks": {
+        sequence: 15,
+        content: {
+          label: "Tasks", icon: "project-task", aliases: ["tasks"],
+          render: (context) => <RecordTasksPane context={context} />,
+        },
+      },
+    },
+  },
   icons: {
     projects: Briefcase,
     "project-task": ListChecks,
