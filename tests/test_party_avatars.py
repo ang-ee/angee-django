@@ -1,4 +1,4 @@
-"""Party and handle avatars: one write verb, a derived display avatar, and the record's readers read it."""
+"""Party and handle avatars: one write verb, and a display avatar derived from what the reader reads."""
 
 from __future__ import annotations
 
@@ -11,14 +11,14 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.identity import public_id_of
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging import session as messaging_session
 from angee.messaging.session import LiveChannelSession
-from angee.messaging.testing.models import Handle, Organization, Party, PartyHandle, Person
+from angee.messaging.testing.models import Handle, Party, PartyHandle, Person
 from angee.parties import signals as parties_signals
 from angee.parties.backends import AvatarReport, ParsedPhoto
 from angee.parties.mixins import LinkSource
@@ -209,28 +209,6 @@ def test_the_display_avatar_never_reaches_the_address_book() -> None:
         person = Person._base_manager.get(pk=person.pk)
         assert Party.objects.display_avatar(person, actor=owner) is not None
         assert Party.objects.project_contact(person).photo is None
-
-
-def test_readers_of_a_party_or_handle_read_its_avatar_and_a_stranger_does_not() -> None:
-    owner = _user("avatar-read-owner")
-    reader = _user("avatar-read-reader")
-    stranger = _user("avatar-read-stranger")
-    avatars = [_avatar(PNG_BYTES + bytes([index])) for index in range(4)]
-    with system_context(reason="test avatar read"):
-        records = [
-            Party._base_manager.create(display_name="Ada", avatar=avatars[0], created_by=owner),
-            Person._base_manager.create(display_name="Grace", avatar=avatars[1], created_by=owner),
-            Organization._base_manager.create(display_name="Analytical", avatar=avatars[2], created_by=owner),
-            Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk),
-        ]
-    Handle.objects.set_avatar(records[3], avatars[3])
-    for record in records:
-        _grant_reader(record, reader)
-
-    ids = {avatar.pk for avatar in avatars}
-    for actor, readable in ((reader, ids), (stranger, set())):
-        with actor_context(actor):
-            assert set(File.objects.filter(pk__in=ids).values_list("pk", flat=True)) == readable
 
 
 def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of_queries() -> None:

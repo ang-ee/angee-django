@@ -84,7 +84,7 @@ class Party(TaggedModel, AuditMixin, AngeeDataModel):
         on_delete=models.SET_NULL,
         related_name="party_avatars",
     )
-    """The party's own avatar (a directory card's ``PHOTO``); readers of the party may read it."""
+    """The party's own avatar (a directory card's ``PHOTO``), on storage's image drive every signed-in user reads."""
     handle_count = models.PositiveIntegerField(default=0, db_index=True)
     merged_into = models.ForeignKey(
         "self",
@@ -545,7 +545,7 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     )
     """The avatar the handle's own network shows for it (a messenger profile picture).
 
-    Written only by :meth:`HandleManager.set_avatar`; readers of the handle may read it.
+    Written only by :meth:`HandleManager.set_avatar`, onto storage's image drive every signed-in user reads.
     """
 
     objects = HandleManager()

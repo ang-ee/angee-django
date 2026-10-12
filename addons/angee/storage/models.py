@@ -60,6 +60,7 @@ from rebac import (
     GenericTarget,
     NoActorResolvedError,
     PermissionDenied,
+    SubjectRef,
     current_actor,
     generic_target,
     require_permission,
@@ -73,7 +74,7 @@ from rebac.managers import RebacManager
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, user_subject_type
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.impl import ImplClassField
@@ -87,7 +88,14 @@ from angee.base.mixins import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager, role_anchor
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AngeeUnscopedManager,
+    DirectRecordAccess,
+    role_anchor,
+)
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
@@ -263,27 +271,34 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
 
         An ownerless volume on the default backend (:meth:`create_on_default_backend`),
         so images land wherever the deployment keeps its files, apart from any user
-        file. A drive already holding the slug serves only while it keeps that
-        shape, with no grant and no file anyone owns: an operator's drive of the
-        name is refused and logged, so images never deduplicate onto its files nor
-        become readable to its grantees. ``None`` then, and while there is no
-        default drive to provision it beside (a fresh database before resources load).
+        file. Its one grant, ``viewer`` to every signed-in user (``auth/user:*``),
+        is written when it is provisioned: whoever holds an image's id reads it,
+        while which image a record shows stays with that record's readers. A drive
+        already holding the slug serves only while it keeps that shape, with no
+        other grant and no file anyone owns: an operator's drive of the name is
+        refused and logged, so images never deduplicate onto its files nor open it
+        to every user. ``None`` then, and while there is no default drive to
+        provision it beside (a fresh database before resources load).
         """
 
         slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
+        everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
         with system_context(reason="storage.drive.image_drive"):
             drive = system_queryset(self.model).filter(slug=slug).first()
             if drive is None:
                 try:
-                    return self.create_on_default_backend(slug=slug, name="Images")
+                    drive = self.create_on_default_backend(slug=slug, name="Images")
                 except ValidationError:
                     # A concurrent first use created it, or no default drive exists yet.
                     drive = system_queryset(self.model).filter(slug=slug).first()
             if drive is None:
                 return None
-            if drive.direct_record_access() or drive.files.exclude(owner=None).exists():
+            grants = set(drive.direct_record_access())
+            if grants - {everyone} or drive.files.exclude(owner=None).exists():
                 logger.error("Drive %r holds grants or owned files, so it cannot serve as the image drive.", slug)
                 return None
+            if not grants:
+                drive.system_grant_record_access(everyone.relation, everyone.subject)
             return drive
 
 
@@ -853,8 +868,8 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         The bytes must pass :func:`require_image`. The stored filename takes the
         sniffed type's extension. Images land ownerless on the image drive
         (:meth:`DriveManager.image_drive`), so deduplication only ever returns
-        another such image, never a user's file, and read access comes from the
-        records that show the image. Raises :class:`exceptions.UploadTooLarge` or
+        another such image, never a user's file, and every signed-in user reads it
+        through the drive's grant. Raises :class:`exceptions.UploadTooLarge` or
         :class:`exceptions.UploadTypeRefused` before anything is stored, and
         :class:`exceptions.UploadTargetNotFound` while no image drive can exist.
         """
