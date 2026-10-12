@@ -57,7 +57,6 @@ from angee.base.querysets import (
     _AngeeQuerySetMixin,
     model_history,
 )
-from angee.base.refs import concrete_child_models, generic_pointer_model
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
@@ -938,6 +937,10 @@ class ModelHistory(HistoricalRecords):
             if previous is None and first.history_type != "+":
                 raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
             yield first, last, previous
+        # Deferred: angee.data's contract closure imports this module and must stay
+        # transport-neutral (refs imports contenttypes models; tests/test_layering.py).
+        from angee.base.refs import generic_pointer_model
+
         # An unchanged merge survivor has no new snapshot. Its touched owner and
         # origin still define a boundary, without an artificial stamp-only save.
         origin = changeset.record_ref
@@ -1077,6 +1080,9 @@ class ModelHistory(HistoricalRecords):
                 for record, snapshot in zip(records, snapshots, strict=True):
                     self.create_historical_record_m2ms(record, snapshot)
                 self.record_rows(model, len(records), using=history_using)
+            # Deferred for the same transport-neutral closure as generic_pointer_model above.
+            from angee.base.refs import concrete_child_models
+
             for child in concrete_child_models(model):
                 history = model_history(child)
                 if history is not None:
