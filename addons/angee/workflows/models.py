@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -50,7 +51,7 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import Step
-from angee.workflows.triggers import TriggerEventManager, TriggerManager, TriggerSource
+from angee.workflows.triggers import TriggerEventManager, TriggerGrantTarget, TriggerManager, TriggerSource
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,12 @@ class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
         """Parse the immutable document once for this model instance."""
 
         return Definition.model_validate(self.document)
+
+    def require_publisher_access(self, targets: Iterable[TriggerGrantTarget]) -> None:
+        """Recheck human publication authority; system-installed versions are trusted."""
+        if self.published_by_id is not None:
+            for target in targets:
+                target.require_publisher_access(self.published_by, self)
 
 class WorkflowRun(RecordRefMixin, AngeeDataModel):
     """One actor's execution of one immutable graph against an optional record."""

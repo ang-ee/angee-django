@@ -15,6 +15,8 @@ from django.core.management import call_command
 from rebac import ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
 
+from angee.integrate.errors import RequestNotSentError
+from angee.integrate.http import HttpClient
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import (
@@ -490,6 +492,24 @@ def test_mint_token_none_on_transport_error(
     monkeypatch.setattr(OperatorDaemon, "_post_json", boom)
 
     assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+
+
+def test_not_sent_transport_failure_preserves_daemon_unavailability(
+    settings: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+
+    def refuse(self: HttpClient, *args: object, **kwargs: object) -> httpx2.Response:
+        raise RequestNotSentError()
+
+    monkeypatch.setattr(HttpClient, "request", refuse)
+    daemon = OperatorDaemon.from_settings()
+    assert daemon.mint_token("auth/user:abc") is None
+    assert daemon.introspect_sdl() is None
+    with pytest.raises(OperatorDaemonError) as raised:
+        daemon.read_file("app", "settings.yaml")
+    assert isinstance(raised.value.__cause__, RequestNotSentError)
 
 
 def test_mint_token_none_on_daemon_http_error(

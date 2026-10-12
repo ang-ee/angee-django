@@ -1,5 +1,17 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+/** many_actions retains each selected row's revision and outcome. */
+export const SendHeldDraftsDocument = graphql(`
+  mutation MessagingSendHeldDrafts($selection: [ActionSelectionInput!]!) {
+    send_held_drafts(selection: $selection) { id ok message code }
+  }
+`);
+export const DiscardHeldDraftsDocument = graphql(`
+  mutation MessagingDiscardHeldDrafts($selection: [ActionSelectionInput!]!) {
+    discard_held_drafts(selection: $selection) { id ok message code }
+  }
+`);
+
 /** The model every messaging-owned channel surface binds to. */
 export const CHANNEL_MODEL = "messaging.Channel";
 /** The edge a record carries its chatter and source conversations through. */

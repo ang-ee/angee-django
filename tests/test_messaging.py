@@ -55,6 +55,7 @@ from angee.messaging.backends import (
     ParsedRecipient,
     ParsedThread,
 )
+from angee.messaging.events import message_ingested
 from angee.messaging.managers import derived_part_name, normalize_subject
 from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.testing.models import (
@@ -195,6 +196,81 @@ def _ingest(messages: list[ParsedMessage], *, channel: Any) -> int:
 
     with system_context(reason="test messaging ingest"):
         return len(Message.objects.ingest(messages, channel=channel))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_commits_each_message_and_does_not_lock_an_unchanged_observation(channel: Any) -> None:
+    """A later bad envelope cannot roll back the previous message's committed work."""
+
+    def overlay(message: Any) -> None:
+        if message.external_id == "bad-second":
+            raise ValidationError("Rejected overlay")
+
+    with system_context(reason="per-message ingest transactions"), pytest.raises(ValidationError):
+        Message.objects.ingest(
+            [_parsed("committed-first", sent_at=_AT), _parsed("bad-second", sent_at=_AT)],
+            channel=channel, quote_edges=False, after_landing=overlay,
+        )
+    first = Message._base_manager.get(external_id="committed-first")
+    assert not Message._base_manager.filter(external_id="bad-second").exists()
+    with system_context(reason="unchanged ingest lock intent"), CaptureQueriesContext(connection) as queries:
+        (replayed,) = Message.objects.ingest(
+            [_parsed("committed-first", sent_at=_AT)], channel=channel, quote_edges=False,
+        )
+    assert replayed.pk == first.pk
+    assert not any("FOR UPDATE" in query["sql"] for query in queries)
+    assert not any(query["sql"].lstrip().startswith("UPDATE") for query in queries)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_synced_own_message_edits_and_late_parent_land_and_emit(channel: Any) -> None:
+    """Direction is provider evidence, not proof that messaging authored an envelope."""
+
+    seen = []
+
+    def observe(sender: Any, instance: Any, **kwargs: Any) -> None:
+        seen.append(instance.external_id)
+
+    original = replace(_parsed("own-reply", sent_at=_AT, text="Original", in_reply_to="late-parent"),
+                       direction="outbound")
+    message_ingested.connect(observe)
+    try:
+        _ingest([original], channel=channel)
+        row = Message._base_manager.get(external_id="own-reply")
+        assert row.status == "synced"
+        assert row.parent_id is None
+        assert seen == ["own-reply"]
+        original_hashes = list(Part._base_manager.filter(message=row, role="body").values_list(
+            "fragment__hash", flat=True,
+        ))
+        _ingest([_parsed("late-parent", sent_at=_AT)], channel=channel)
+        edited = replace(original, body=ParsedPart(text="Provider edit"),
+                         sender=ParsedHandle(platform="email", value="new@example.com"))
+        _ingest([edited], channel=channel)
+        row.refresh_from_db()
+        with system_context(reason="test own-message projection"):
+            assert row.body_text() == "Provider edit"
+        assert row.edit_history[0]["prev_fragment_hashes"] == original_hashes
+        parent = Message._base_manager.get(external_id="late-parent")
+        assert row.parent_id == parent.pk
+        assert row.sender_id == Handle._base_manager.get(value="new@example.com").pk
+        assert row.thread_id == parent.thread_id
+        # The identical follow-up remains idempotent after the provider edit.
+        _ingest([edited], channel=channel)
+        row.refresh_from_db()
+        assert len(row.edit_history) == 1
+    finally:
+        message_ingested.disconnect(observe)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identical_synced_own_reply_repairs_a_late_parent(channel: Any) -> None:
+    own = replace(_parsed("own-late", in_reply_to="own-root", sent_at=_AT), direction="outbound")
+    _ingest([own], channel=channel)
+    _ingest([_parsed("own-root", sent_at=_AT)], channel=channel)
+    _ingest([own], channel=channel)
+    row = Message._base_manager.get(external_id="own-late")
+    assert row.parent_id == Message._base_manager.get(external_id="own-root").pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2420,6 +2496,38 @@ def test_identical_resync_does_not_churn_message_or_parts(channel: Any) -> None:
     assert Fragment._base_manager.count() == fragment_count
     assert Message._base_manager.filter(external_id="m1").count() == 1
     assert Thread._base_manager.get().message_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identical_resync_without_receipt_time_does_not_save_or_rebuild_parts(channel: Any, monkeypatch) -> None:
+    received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
+    assert _ingest([received], channel=channel) == 1
+    message = Message._base_manager.get(external_id="m1")
+    part_pks = set(Part._base_manager.filter(message=message).values_list("pk", flat=True))
+    saves = []
+    original = Message.save
+
+    def save(row, *args, **kwargs):
+        saves.append(row.pk)
+        return original(row, *args, **kwargs)
+
+    monkeypatch.setattr(Message, "save", save)
+    assert _ingest([replace(received, received_at=None)], channel=channel) == 1
+    assert saves == []
+    message.refresh_from_db()
+    assert message.received_at == received.received_at
+    assert set(Part._base_manager.filter(message=message).values_list("pk", flat=True)) == part_pks
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resync_without_receipt_time_keeps_the_known_one(channel: Any) -> None:
+    received = replace(_parsed("m1", sent_at=_AT), received_at=_AT + timedelta(minutes=5))
+    assert _ingest([received], channel=channel) == 1
+    assert _ingest([_parsed("m1", sent_at=_AT, text="Edited body")], channel=channel) == 1
+    message = Message._base_manager.get(external_id="m1")
+    assert message.received_at == received.received_at
+    with system_context(reason="test receipt time body"):
+        assert message.body_text() == "Edited body"
 
 
 @pytest.mark.django_db(transaction=True)

@@ -31,9 +31,11 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.memberships import containers_of
 
 from angee.agents import signals as agent_signals
 from angee.agents.context import render_view_context
+from angee.agents.grants import RESOURCE_READER_ROLE
 from angee.agents.models import MCPPlacement
 from angee.agents.testing.models import (
     Agent,
@@ -157,6 +159,111 @@ def test_agent_chat_readiness_requires_its_runtime_transport(
     agent = Agent(runtime_class=runtime_class, runtime_status=runtime_status, service=service)
     assert agent.can_chat is expected
     assert agent.expects_service is expects_service
+
+
+def test_agent_hasura_reader_policy_reconciles_membership_with_the_write(composed_tables: None) -> None:
+    """Hasura patches revoke immediately and grant only a provisioned in-process agent."""
+    admin = _platform_admin("agent-reader-admin")
+    console = _schema()
+    with system_context(reason="agent reader policy fixture"):
+        agent = Agent.objects.create(name="Reader policy", owner=admin, runtime_class="pydantic")
+        assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+        assert RESOURCE_READER_ROLE in set(containers_of(agent.user))
+
+    query = """
+        mutation ReaderPolicy($id: String!, $enabled: Boolean!) {
+          update_agents_by_pk(pk_columns: {id: $id}, _set: {resource_reader: $enabled}) {
+            resource_reader
+          }
+        }
+    """
+    for enabled in (False, True):
+        result = _data(_execute(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=admin))
+        assert result["update_agents_by_pk"]["resource_reader"] is enabled
+        with system_context(reason="agent reader policy assertion"):
+            agent.refresh_from_db()
+            assert agent.resource_reader is enabled
+            assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) is enabled
+
+    with pytest.raises(RuntimeError, match="Roll back policy"):
+        with transaction.atomic():
+            _data(_execute(console, query, {"id": str(agent.sqid), "enabled": False}, user=admin))
+            with system_context(reason="reader policy transaction assertion"):
+                assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+            raise RuntimeError("Roll back policy")
+    with system_context(reason="reader policy rollback assertion"):
+        agent.refresh_from_db()
+        assert agent.resource_reader
+        assert RESOURCE_READER_ROLE in set(containers_of(agent.user))
+
+
+@pytest.mark.parametrize("change", ["lifecycle", "runtime"])
+def test_agent_reader_membership_is_revoked_when_readiness_or_runtime_changes(
+    composed_tables: None, change: str,
+) -> None:
+    admin = _platform_admin("reader-revocation-admin")
+    with system_context(reason="agent reader revocation fixture"):
+        agent = Agent.objects.create(name="Reader", owner=admin, runtime_class="pydantic")
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+        assert RESOURCE_READER_ROLE in set(containers_of(agent.user))
+        if change == "lifecycle":
+            agent.mark_deprovisioning()
+        else:
+            agent.runtime_class = "claude_code"
+            agent.save(update_fields=("runtime_class", "updated_at"))
+        assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+
+
+@pytest.mark.parametrize("relation", ["owner", "editor"])
+def test_only_admin_can_change_resource_reader_policy(composed_tables: None, relation: str) -> None:
+    admin = _platform_admin("reader-field-admin")
+    with system_context(reason="reader field authority fixture"):
+        owner = User.objects.create_user(username="reader-field-owner")
+        editor = User.objects.create_user(username="reader-field-editor")
+        agent = Agent.objects.create(name="Restricted reader", owner=owner, runtime_class="pydantic",
+                                     resource_reader=False)
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+    with system_context(reason="reader field editor fixture"):
+        write_relationships([
+            RelationshipTuple(resource=to_object_ref(agent), relation="editor", subject=to_subject_ref(editor)),
+        ])
+    actor = owner if relation == "owner" else editor
+    query = """mutation ReaderPolicy($id: String!, $enabled: Boolean!) {
+      update_agents_by_pk(pk_columns: {id: $id}, _set: {resource_reader: $enabled}) { resource_reader }
+    }"""
+    console = _schema()
+    for enabled in (True, False):
+        _data(_execute(console, query, {"id": str(agent.sqid), "enabled": not enabled}, user=admin))
+        result = _execute(console, query, {"id": str(agent.sqid), "enabled": enabled}, user=actor)
+        assert result.errors
+        with system_context(reason="refused reader policy"):
+            agent.refresh_from_db()
+            assert agent.resource_reader is not enabled
+            assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) is not enabled
+    assert _data(_execute(console, query, {"id": str(agent.sqid), "enabled": True}, user=admin))[
+        "update_agents_by_pk"
+    ]["resource_reader"] is True
+
+
+def test_stale_full_save_reconciles_reader_membership_from_locked_policy(composed_tables: None) -> None:
+    admin = _platform_admin("stale-reader-admin")
+    with system_context(reason="stale reader policy"):
+        agent = Agent.objects.create(name="Stale reader", owner=admin, runtime_class="pydantic")
+        agent.mark_provisioning()
+        agent.mark_provisioned(workspace="")
+        stale = Agent.objects.get(pk=agent.pk)
+        agent.mark_deprovisioning()
+        assert RESOURCE_READER_ROLE not in set(containers_of(agent.user))
+        stale.description = "A full save from an earlier read"
+        stale.save()
+        agent.refresh_from_db()
+        assert (RESOURCE_READER_ROLE in set(containers_of(agent.user))) == (
+            agent.lifecycle == "ready" and agent.runs_in_process and agent.resource_reader
+        )
 
 
 def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
@@ -1449,13 +1556,17 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
     """Provider connect resolves OAuth from provider.backend."""
 
     del composed_tables
-    provider = _provider("agt-provider-connect", backend_class="anthropic", name="Anthropic")
+    provider = _provider(
+        "agt-provider-connect", backend_class="anthropic", name="Anthropic", credential=None, lifecycle="disconnected",
+    )
     provider_id = _public_id(provider.sqid)
     with system_context(reason="test.agents.provider_connect.seed"):
         oauth_client = OAuthClient.objects.create(
             slug="anthropic-personal",
             display_name="Anthropic Personal",
             client_id="anthropic-client",
+            authorize_endpoint="https://provider.example/authorize",
+            token_endpoint="https://provider.example/token",
         )
         credential = Credential.objects.upsert_for_user(
             provider.owner,
@@ -1463,6 +1574,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
             str(CredentialKind.OAUTH),
             {"access_token": "anthropic-token"},
         )
+        assert provider.connect_oauth_client("Inference provider").pk == oauth_client.pk
     mutation = """
         mutation ConnectProvider($id: ID!) {
           connect_inference_provider(id: $id) {
@@ -1487,6 +1599,23 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_
     }
     provider.refresh_from_db()
     assert provider.credential_id == credential.pk
+
+
+def test_inference_provider_projects_shared_connection_readiness(composed_tables: None) -> None:
+    provider = _provider("provider-readiness", backend_class="anthropic")
+    with system_context(reason="test provider ready registration"):
+        OAuthClient.objects.create(
+            slug="anthropic-personal", display_name="Personal", client_id="application",
+            authorize_endpoint="https://provider.example/auth", token_endpoint="https://provider.example/token",
+        )
+    row = _data(_execute(_schema(), """
+        query($id: String!) {
+          inference_providers_by_pk(id: $id) {
+            credential_status is_reconnect_required is_oauth_connectable
+          }
+        }
+    """, {"id": _public_id(provider.sqid)}, user=provider.owner))["inference_providers_by_pk"]
+    assert row == {"credential_status": "active", "is_reconnect_required": False, "is_oauth_connectable": True}
 
 
 def test_connect_inference_provider_uses_shared_oauth_client_error_code(

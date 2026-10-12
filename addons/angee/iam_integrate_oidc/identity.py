@@ -134,15 +134,15 @@ class OidcLoginCompletion:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Return ``(tokens, claims)``: verified ID-token claims enriched by userinfo."""
 
-        tokens = self.protocol.exchange_code(
+        tokens, userinfo, id_token = self.protocol.exchange_identity(
             code=code,
             redirect_uri=redirect_uri,
             code_verifier=record.code_verifier,
             state=state_token,
         )
-        claims = self.protocol.verify_id_token(str(tokens.get("id_token", "")), nonce=record.nonce)
-        userinfo = self.protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
-        if userinfo:
+        claims = self.protocol.verify_id_token(id_token, nonce=record.nonce)
+        # OIDC Core §5.3.2: userinfo may enrich only the verified token's subject.
+        if userinfo.get("sub") and userinfo["sub"] == claims.get("sub"):
             claims = {**userinfo, **claims}
         return tokens, claims
 

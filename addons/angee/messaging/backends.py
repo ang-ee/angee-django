@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from django.apps import apps
 
+from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
@@ -31,6 +33,30 @@ from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 logger = logging.getLogger(__name__)
+
+
+class DeliveryUncertain(IntegrationError):
+    """A provider may have accepted an effect; retry needs reconciliation or acknowledgement.
+
+    Backends raise this for lost post-send acknowledgements, including an unreadable
+    success response. A transient IntegrationError instead promises non-acceptance.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryOutcome:
+    """Definitive provider acceptance; transient refusals raise instead.
+
+    A nonblank provider_id belongs only to an accepted publish. Messaging
+    settles that identity on the original message; no backend writes status.
+    """
+
+    accepted: bool
+    provider_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.provider_id is not None and (not self.accepted or not self.provider_id.strip()):
+            raise TypeError("Provider identity requires an accepted delivery and a nonblank id.")
 
 
 @dataclass(frozen=True)
@@ -134,6 +160,7 @@ class ParsedMessage:
     recipients: tuple[ParsedRecipient, ...] = ()
     sent_at: datetime | None = None
     received_at: datetime | None = None
+    """When this copy was received; ``None`` on a re-sync keeps the stored time."""
     in_reply_to: str = ""
     references: tuple[str, ...] = ()
     thread: ParsedThread | None = None
@@ -195,6 +222,18 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     shared SSRF-pinned client. Incremental state lives on each ``SyncStream``.
     """
     registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
+    delivery_visibility_delay: ClassVar[timedelta] = timedelta()
+    """Minimum age of a possibly accepted claim before reconciliation; feeds extend it."""
+
+    @classmethod
+    def reconciles_delivery(cls) -> bool:
+        """Whether deliver() can resolve a possibly accepted attempt before repeating it.
+
+        Read this capability without constructing a transport. Opt in only when
+        reconciliation uses the persisted claim horizon and message identity.
+        """
+
+        return False
 
     category = "channel"
     label = "Channel"
@@ -246,12 +285,17 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
         return self.bridge.probe_credential()
 
-    def deliver(self, message: Any) -> bool:
-        """Deliver one outbound message; return whether a transport accepted it.
+    def delivery_lock(self) -> AbstractContextManager[bool]:
+        """Optional transport serialization, held through provider-id settlement."""
+
+        return nullcontext(True)
+
+    def deliver(self, message: Any) -> DeliveryOutcome:
+        """Deliver one outbound message and return its transport settlement.
 
         Inbound-only backends inherit this safe, explicit decline so adding the
         outbound seam does not turn an existing source into a crashing worker.
-        The message delivery owner records the ``False`` result as ``failed``.
+        The message manager records the declined result as ``failed``.
         """
 
         logger.warning(
@@ -259,7 +303,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
             type(self).__name__,
             getattr(message, "pk", None),
         )
-        return False
+        return DeliveryOutcome(accepted=False)
 
     def start_live(self) -> None:
         """Dispatch this source's live ingest (start a session, renew a subscription).

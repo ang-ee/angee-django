@@ -6,7 +6,9 @@ import hmac
 import socket
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import Mock
 
+import httpcore2
 import httpx2
 import pytest
 from django.contrib.auth import get_user_model
@@ -17,24 +19,25 @@ from django.test.utils import isolate_apps
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
+from angee.integrate.testing.integration import Integration
 from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
     WebhookSubscription,
     make_integration,
 )
+from tests.tables import model_tables
 
 
 @pytest.fixture
-def dispatch_bridge() -> Iterator[Bridge]:
-    """Keep the in-memory dispatch fixture out of installed bridge discovery."""
+def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
+    """Persist an isolated bridge so inbound dispatch has a real lock identity."""
 
     with isolate_apps():
 
-        class DispatchBridge(Bridge, AngeeModel):
+        class DispatchBridge(Bridge, Integration):
             """Concrete bridge fixture used only for inbound dispatch tests."""
 
             class Meta(Bridge.Meta):
@@ -67,7 +70,9 @@ def dispatch_bridge() -> Iterator[Bridge]:
             def stop_live(self) -> None:
                 """No-op live subscription stop for the fixture."""
 
-        yield DispatchBridge()
+        with model_tables((DispatchBridge,)):
+            bridge = make_integration("inbound-dispatch", model=DispatchBridge)
+            yield bridge
 
 
 @pytest.mark.django_db(transaction=True)
@@ -125,6 +130,32 @@ def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch)
     _resolve_to(monkeypatch, "93.184.216.34")
 
     validate_public_url("https://hooks.example.test/events")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("empty_answer", [False, True])
+def test_webhook_nonexistent_host_is_an_invalid_target(monkeypatch: pytest.MonkeyPatch, empty_answer: bool) -> None:
+    call_command("rebac", "sync", verbosity=0)
+
+    def resolve(*args: Any, **kwargs: Any) -> list[Any]:
+        if empty_answer:
+            return []
+        raise socket.gaierror(socket.EAI_NONAME, "no such host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    dial = Mock(side_effect=AssertionError("Absent host must never be dialled."))
+    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", dial)
+    user = get_user_model().objects.create_user(username="webhook-absent-host")
+    with system_context(reason="test webhook absent host"):
+        subscription = WebhookSubscription.objects.create(
+            owner=user, target_url="https://absent.example.test/events", secret="test",
+            event_kinds=[EventKind.BRIDGE_ERRORED.value],
+        )
+    result = WebhookSubscription.objects.deliver_event(kind=EventKind.BRIDGE_ERRORED, payload={"bridge": "br_1"})
+    subscription.refresh_from_db()
+    assert result == {"delivered": 0, "errors": 1}
+    assert subscription.last_error == "Webhook target is invalid."
+    dial.assert_not_called()
 
 
 def test_runtime_marker_is_per_class() -> None:
@@ -383,11 +414,13 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     monkeypatch: pytest.MonkeyPatch,
     address: str,
 ) -> None:
-    """Delivery fails closed when DNS resolves a webhook target to an unsafe address."""
+    """Unsafe DNS refuses before dialling and records the gate's invalid-target telemetry."""
 
     del transactional_db
     call_command("rebac", "sync", verbosity=0)
     _resolve_to(monkeypatch, address)
+    dial = Mock(side_effect=AssertionError("Unsafe webhook target must never be dialled."))
+    monkeypatch.setattr(httpcore2.SyncBackend, "connect_tcp", dial)
 
     user = get_user_model().objects.create_user(
         username=f"webhook-ssrf-{address.replace('.', '-')}",
@@ -411,6 +444,7 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     assert subscription.consecutive_failures == 1
     assert subscription.last_delivery_status == ""
     assert subscription.last_error == "Webhook target is invalid."
+    dial.assert_not_called()
 
 
 @pytest.mark.django_db(transaction=True)

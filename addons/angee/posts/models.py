@@ -6,13 +6,13 @@ idempotent ``Message.objects.ingest`` write path (a public post *is* a
 
 - :class:`Feed` — a ``messaging.Channel`` child that polls an external platform
   for public posts. Its ``FeedBackend`` does transport and parsing, and ``sync()``
-  maps each post onto messaging ingest before overlaying engagement.
+  uses integrate streams to land each post through messaging and engagement.
 - :class:`FeedFollow` — the following / timeline subscription edge.
 - :class:`PostMetrics` — rolled-up public engagement counts for a message.
 - per-actor post reactions (like / repost / emoji) reuse the single
   ``messaging.Reaction`` table — posts writes ``like``/``repost`` as reaction values
   on the shared ``messaging.Message`` rather than owning a parallel table.
-- :class:`Quota` — the per-integration API-unit ledger feed backends spend.
+- :class:`Quota` — the provider-scoped API-unit ledger feed backends spend.
 - :class:`ThreadPublic` / :class:`MessagePublic` — the public-thread fields posts
   contributes **onto** ``messaging.Thread`` / ``messaging.Message`` through the
   same-row ``extends`` seam.
@@ -23,21 +23,43 @@ posts never edits or forks messaging.
 
 from __future__ import annotations
 
-from typing import cast
+from collections.abc import Mapping
+from datetime import datetime, timedelta
+from math import isfinite
+from typing import TYPE_CHECKING, Any, cast
 
-from django.db import models
+from django.apps import apps
+from django.core.exceptions import ValidationError
+from django.db import connections, models, transaction
+from django.utils import timezone
+from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
+from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
-from angee.posts.ingest import land_posts
 from angee.posts.managers import (
     FeedFollowManager,
     PostMetricsManager,
     QuotaManager,
 )
+
+if TYPE_CHECKING:
+    from angee.messaging.models import Message
+
+
+def validate_reply_hold(hours: float | None) -> None:
+    """Validate the operator's nullable, finite duration in hours."""
+
+    if hours is not None and (not isfinite(hours) or hours < 0):
+        raise ValidationError("Reply hold must be null or finite nonnegative hours.")
+    if hours is not None:
+        try:
+            timezone.now() + timedelta(hours=hours)
+        except OverflowError as error:
+            raise ValidationError("Reply hold is too large.") from error
 
 
 class Feed(models.Model, metaclass=RebacModelBase):
@@ -55,7 +77,7 @@ class Feed(models.Model, metaclass=RebacModelBase):
 
     runtime = True
     extends = "messaging.Channel"
-    integration_create_mode = None
+    integration_create_mode = IntegrationCreateMode.FORM
     live_impl_field = None
 
     feed_backend_class = ImplClassField(
@@ -74,6 +96,10 @@ class Feed(models.Model, metaclass=RebacModelBase):
         on_delete=models.SET_NULL,
         related_name="monitored_feeds",
     )
+    reply_hold = models.FloatField(null=True, blank=True, default=None, validators=(validate_reply_hold,))
+    """Hours until release; null is approval-only with no expiry; zero queues now."""
+    live_since = models.DateTimeField(null=True, blank=True)
+    """Discovery-finish horizon; record timestamps before it are historical."""
 
     class Meta:
         """Django model options for the feed child model."""
@@ -89,6 +115,16 @@ class Feed(models.Model, metaclass=RebacModelBase):
         backend_class = cast("type[FeedBackend]", self.resolve_impl("feed_backend_class"))
         return backend_class(self)
 
+    def can_reconcile_delivery(self) -> bool:
+        """Read the provider hook declaration without constructing its transport."""
+
+        return cast("type[FeedBackend]", self.resolve_impl("feed_backend_class")).reconciles_delivery()
+
+    def delivery_visibility_delay(self) -> timedelta:
+        """Read the feed provider's propagation margin from its backend class."""
+
+        return cast("type[FeedBackend]", self.resolve_impl("feed_backend_class")).delivery_visibility_delay
+
     @property
     def capability_impl(self) -> FeedBackend:
         """Use the feed selector when Integration dispatches a capability."""
@@ -100,22 +136,29 @@ class Feed(models.Model, metaclass=RebacModelBase):
 
         return self.probe_credential()
 
-    def sync(self) -> int:
-        """Fetch new posts, ingest their message core, and overlay engagement.
+    def discovery_finished(self) -> None:
+        """Stamp once after discovery, also called by landing to recover a lost receiver."""
 
-        The message core (thread/message/parts) is the messaging owner's job, so a
-        public post shares email's one idempotent write path; posts only writes the
-        overlay it owns (public payload / metrics / reactions / post edges). The
-        ingest is told the structural facts a public feed differs on: every thread
-        is born a ``PUBLIC_THREAD`` with ``PUBLIC`` visibility — the ingest owner
-        derives the ``COMMENT`` kind from that shape — and the RFC-5322 quotation
-        builder is skipped (``quote_edges=False``) so a post's short shared text
-        does not mint spurious email ``quote`` edges.
-        """
+        with transaction.atomic():
+            row = type(self)._base_manager.select_for_update().get(pk=self.pk)
+            if row.live_since is None:
+                row.live_since = row.discovery_completed_at or timezone.now()
+                row.save(update_fields=("live_since", "updated_at"))
+            self.live_since = row.live_since
 
-        posts = self.backend.fetch_posts()
-        # last_sync_items reports messages ingested, consistent with Channel.sync.
-        return len(land_posts(self, posts, owner_id=self.owner_id))
+    def is_historical(self, record: Any) -> bool:
+        """Classify each post independently while history and live streams overlap."""
+
+        return record.message.sent_at is None or self.live_since is None or record.message.sent_at < self.live_since
+
+    def reply_schedule(self) -> datetime | None:
+        """Compute an aware release instant from this feed's validated hold policy."""
+
+        hours = self.reply_hold
+        validate_reply_hold(hours)
+        if hours is None or hours == 0:
+            return None
+        return timezone.now() + timedelta(hours=hours)
 
 
 class FeedFollow(AuditMixin, AngeeDataModel):
@@ -204,7 +247,7 @@ class PostMetrics(AuditMixin, AngeeDataModel):
 
 
 class Quota(AuditMixin, AngeeDataModel):
-    """A per-integration API-unit ledger for one billing period.
+    """A provider-scoped API-unit ledger for one billing period.
 
     Feed backends spend platform API units (search, list, insert) against a per-period
     budget; :meth:`~angee.posts.managers.QuotaManager.consume` atomically debits this
@@ -217,13 +260,19 @@ class Quota(AuditMixin, AngeeDataModel):
 
     integration = models.ForeignKey(
         "integrate.Integration",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="quotas",
     )
+    """Authorization anchor; deleting one spender must not reset a shared scope's budget."""
+    scope = models.CharField(max_length=512, null=True, blank=True)
+    """Backend-declared budget identity; historical NULL rows are never reopened."""
     period_start = models.DateTimeField(db_index=True)
     period_end = models.DateTimeField()
     quota_used = models.PositiveIntegerField(default=0)
     quota_limit = models.PositiveIntegerField(default=10000)
+    """Legacy per-integration ceiling; scoped checks never read or overwrite it."""
     last_updated = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)
 
@@ -238,14 +287,19 @@ class Quota(AuditMixin, AngeeDataModel):
         constraints = (
             models.UniqueConstraint(
                 fields=("integration", "period_start"),
+                condition=models.Q(scope__isnull=True),
                 name="uq_quota_integration_period",
+            ),
+            models.UniqueConstraint(
+                fields=("scope", "period_start"), condition=models.Q(scope__isnull=False),
+                name="uq_quota_scope_period",
             ),
         )
 
     def __str__(self) -> str:
         """Return a readable quota label for Django displays."""
 
-        return f"{self.integration_id}: {self.quota_used}/{self.quota_limit}"
+        return f"{self.scope or self.integration_id}: {self.quota_used} units"
 
 
 # --- Same-row extensions onto messaging (the public-post payload) ---------------
@@ -279,6 +333,10 @@ class ThreadPublic(models.Model):
         abstract = True
 
 
+class CommentAnswered(ValidationError):
+    """The comment already has an answer; a new reply is unnecessary."""
+
+
 class MessagePublic(models.Model):
     """Public-post fields posts contributes onto ``messaging.Message`` (same row).
 
@@ -289,7 +347,149 @@ class MessagePublic(models.Model):
 
     extends = "messaging.Message"
 
+    hasura_filterable_fields = ("is_original_post",)
+
     is_original_post = models.BooleanField(default=False)
+
+    @property
+    def provider_hidden(self) -> bool:
+        """Whether this row's current trash is the provider's moderation, stamped at ingest."""
+
+        message = cast("Message", self)
+        return message.is_trashed and message.local_metadata.get("provider_hidden") == message.trashed_at.isoformat()
+
+    def top_level_comment(self) -> Any:
+        """Resolve the provider anchor once within this feed's parent chain."""
+
+        message = cast("Message", self)
+        parent = message.parent
+        visited = {message.pk}
+        while parent is not None:
+            if parent.pk in visited or parent.channel_id != message.channel_id or not parent.external_id:
+                raise ValidationError("The comment parent chain is invalid.")
+            visited.add(parent.pk)
+            ancestor = parent.parent
+            if parent.is_original_post or (
+                ancestor is not None and ancestor.is_original_post and ancestor.channel_id == message.channel_id
+            ):
+                return parent
+            parent = ancestor
+        raise ValidationError("The comment's original post is unavailable.")
+
+    def has_ambiguous_delivery_reply(self, *, since: datetime) -> bool:
+        """Compare anchors and bodies in one query, regardless of window size.
+
+        UNION bounds cyclic parent walks. Invalid or cross-channel chains produce
+        no anchor and cannot wedge recovery of an unrelated reply. The part owner
+        projects the exact plain body without per-candidate reads. Candidates are
+        reply_state's answer evidence: active replies, plus possibly public ones
+        even when trashed, such as a SENT attempt settled onto an ingested reply.
+        """
+
+        message = cast("Message", self)
+        connection = connections[message._state.db or "default"]
+        table = connection.ops.quote_name(message._meta.db_table)
+        body_sql, body_params = apps.get_model("messaging", "Part").objects.plain_body_sql(
+            "c.id", connection=connection,
+        )
+        active, possible = message.ACTIVE_OUTBOUND_STATUSES, message.POSSIBLY_PUBLIC_STATUSES
+        active_in, possible_in = (", ".join(["%s"] * len(statuses)) for statuses in (active, possible))
+        lower_bound = message._meta.get_field("created_at").get_db_prep_value(since, connection)
+        sql = f"""WITH RECURSIVE candidates AS (
+            SELECT id, parent_id FROM {table}
+            WHERE id = %s OR (
+                channel_id = %s AND direction = 'outbound' AND parent_id IS NOT NULL
+                AND (created_at >= %s OR delivery_started_at >= %s)
+                AND ((NOT is_trashed AND status IN ({active_in}))
+                     OR status IN ({possible_in}) OR delivery_possibly_accepted)
+            )
+        ), chain AS (
+            SELECT c.id AS candidate_id, p.id AS parent_id
+            FROM candidates c JOIN {table} p ON p.id = c.parent_id
+            WHERE p.channel_id = %s AND p.external_id <> ''
+            UNION
+            SELECT c.candidate_id, a.id
+            FROM chain c JOIN {table} p ON p.id = c.parent_id
+            JOIN {table} a ON a.id = p.parent_id
+            WHERE NOT p.is_original_post AND NOT a.is_original_post
+                AND a.channel_id = %s AND a.external_id <> ''
+        ), anchors AS (
+            SELECT c.candidate_id, p.id AS anchor_id
+            FROM chain c JOIN {table} p ON p.id = c.parent_id
+            LEFT JOIN {table} a ON a.id = p.parent_id
+            WHERE p.is_original_post OR (a.is_original_post AND a.channel_id = %s)
+        ), bodies AS (
+            SELECT c.id, {body_sql} AS body FROM candidates c
+        ) SELECT 1 FROM anchors own
+            JOIN anchors other ON other.anchor_id = own.anchor_id AND other.candidate_id <> own.candidate_id
+            JOIN bodies own_body ON own_body.id = own.candidate_id
+            JOIN bodies other_body ON other_body.id = other.candidate_id AND other_body.body = own_body.body
+            WHERE own.candidate_id = %s LIMIT 1"""
+        params = [message.pk, message.channel_id, lower_bound, lower_bound, *active, *possible,
+                  message.channel_id, message.channel_id, message.channel_id, *body_params, message.pk]
+        with system_context(reason="posts.reply.reconciliation"):
+            with connection.cursor() as cursor:
+                cursor.execute(sql, params)
+                return cursor.fetchone() is not None
+
+    def reply_state(self) -> bool:
+        """Whether this comment is channel-authored or already has an active reply.
+
+        Answer evidence is checked elevated: another author's held reply still
+        excludes a second reply even when the caller cannot read that draft.
+        """
+
+        message = cast("Message", self)
+        with system_context(reason="posts.reply.evidence"):
+            sender_id, channel_id = type(message)._base_manager.filter(pk=message.pk).values_list(
+                "sender_id", "channel_id",
+            ).get()
+            handle_id = apps.get_model("posts", "Feed")._base_manager.filter(
+                pk=channel_id,
+            ).values_list("handle_id", flat=True).first()
+            if handle_id is not None and sender_id == handle_id:
+                return True
+            replies = type(message)._base_manager.filter(parent_id=message.pk, channel_id=channel_id)
+            active = models.Q(direction=message.Direction.OUTBOUND, status__in=message.ACTIVE_OUTBOUND_STATUSES)
+            if handle_id is not None:
+                active |= models.Q(sender_id=handle_id, status__in=message.PUBLISHED_STATUSES)
+            possible = models.Q(direction=message.Direction.OUTBOUND) & (
+                models.Q(status__in=message.POSSIBLY_PUBLIC_STATUSES) | models.Q(delivery_possibly_accepted=True)
+            )
+            return replies.filter((models.Q(is_trashed=False) & active) | possible).exists()
+
+    def reply_to_comment(
+        self, *, body: str, actor: Any, local: Mapping[str, Any] | None = None,
+        creation_key: str | None = None,
+    ) -> Message:
+        """Apply feed reply policy over messaging's idempotent Python-only factory.
+
+        The actor needs readable comment context and channel reply, never feed
+        write. None holds for approval indefinitely; positive hours schedule a
+        draft; zero queues now. Replays keep the original hold and settlement.
+        """
+
+        if actor is None:
+            raise PermissionDenied("Comment read access is required.")
+        with transaction.atomic():
+            parent = type(self).objects.with_actor(actor).lock_if_supported(no_key=True).filter(pk=self.pk).first()
+            if parent is None:
+                raise PermissionDenied("Comment read access is required.")
+            if (parent.is_trashed or parent.direction != parent.Direction.INBOUND
+                    or parent.is_original_post or parent.parent_id is None):
+                raise ValidationError("Reply requires an inbound comment with an available parent.")
+            feed = apps.get_model("posts", "Feed").objects.with_actor(actor).filter(pk=parent.channel_id).first()
+            if feed is None or feed.handle_id is None:
+                raise ValidationError("The comment's feed has no publishing identity.")
+            def admit(comment: Any) -> None:
+                if comment.reply_state():
+                    raise CommentAnswered("The comment is already answered.")
+
+            return apps.get_model("messaging", "Message").objects.compose_reply(
+                parent, body=body, sender=feed.handle, actor=actor, local=local, creation_key=creation_key,
+                scheduled_at=feed.reply_schedule(), queued=feed.reply_hold == 0,
+                admit=admit,
+            )
 
     class Meta:
         """Abstract same-row extension composed into ``messaging.Message``."""

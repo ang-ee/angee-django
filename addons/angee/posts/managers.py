@@ -1,18 +1,10 @@
-"""Managers that own the posts write path and its chainable read scopes.
-
-Following the repo's Manager/QuerySet canon (``storage.FileQuerySet``/``FileManager``
-via ``from_queryset``; the very split the messaging ORM review flagged as **H3**):
-read predicates are chainable scopes on a ``*QuerySet``; the managers own the
-writes. The feed-ingest overlay reuses ``messaging.Message.objects.ingest`` for the
-message core, and per-actor reactions reuse the single ``messaging.Reaction`` table,
-so these managers own only the remaining posts layer — engagement counts, following,
-and the per-integration API quota ledger.
-"""
+"""Posts factories, engagement writes, following scopes, and API quota accounting."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from django.db import models, transaction
 from django.utils import timezone
@@ -72,8 +64,7 @@ class PostMetricsManager(AngeeManager):
         """Write the rolled-up engagement counters for ``message`` (idempotent).
 
         ``metrics`` is a :class:`~angee.posts.backends.ParsedMetrics`. Counters are a
-        platform-reported snapshot, so the latest fetch overwrites the row — no
-        ``F()`` delta (unlike thread counters, which the ingest owner increments).
+        platform-reported snapshot, so the latest fetch overwrites the row.
         """
 
         row, _created = self.update_or_create(
@@ -92,24 +83,7 @@ class PostMetricsManager(AngeeManager):
         return row
 
 
-class QuotaQuerySet(AngeeQuerySet[Any]):
-    """REBAC-scoped read scopes for the per-integration API budget."""
-
-    def for_integration(self, integration: Any) -> QuotaQuerySet:
-        """Return the quota ledgers of one credentialed integration."""
-
-        return cast(QuotaQuerySet, self.filter(integration=integration))
-
-    def current(self, *, now: datetime) -> QuotaQuerySet:
-        """Return the ledger rows whose period contains ``now``."""
-
-        return cast(
-            QuotaQuerySet,
-            self.filter(period_start__lte=now, period_end__gt=now),
-        )
-
-
-class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[misc]
+class QuotaManager(AngeeManager):
     """Owns the API-unit ledger: opening a period and atomic consumption.
 
     A backend calls :meth:`consume` before spending platform API units; enforcement is
@@ -117,40 +91,48 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
     backend that knows its API, not here.
     """
 
-    _DEFAULT_WINDOW = timedelta(days=1)
-
     def open_period(
-        self, *, integration: Any, limit: int, now: datetime | None = None, window: timedelta | None = None
+        self, *, integration: Any, now: datetime | None = None, scope: str, reset_timezone: str = "UTC",
     ) -> Any:
-        """Return the current ledger row for ``integration``, opening one if due."""
+        """Open the backend's daily scope at midnight in its declared reset timezone.
 
-        moment = now or timezone.now()
-        span = window or self._DEFAULT_WINDOW
-        epoch = datetime(1970, 1, 1, tzinfo=moment.tzinfo)
-        period_start = epoch + ((moment - epoch) // span) * span
+        A scope must include the provider namespace and its true budget identity
+        (for a project-wide allowance, the OAuth client rather than the feed).
+        The integration FK retains an authorization anchor, not the budget key.
+        The row stores usage only; each ``consume`` check brings its own limit.
+        """
+
+        if not scope.strip():
+            raise ValueError("Quota needs a nonblank scope.")
+        moment = (now or timezone.now()).astimezone(ZoneInfo(reset_timezone))
+        period_start = datetime.combine(moment.date(), time.min, tzinfo=moment.tzinfo)
         row, _created = self.get_or_create(
-            integration_id=integration.pk,
+            scope=scope,
             period_start=period_start,
-            defaults={"period_end": period_start + span, "quota_limit": limit},
+            defaults={"integration_id": integration.pk, "period_end": period_start + timedelta(days=1)},
         )
         return row
 
-    def consume(self, *, integration: Any, units: int, limit: int, now: datetime | None = None) -> bool:
-        """Atomically consume ``units`` from the current period; ``False`` if it would exceed.
+    def consume(
+        self, *, period: Any, units: int, limit: int, now: datetime | None = None, reserve: int = 0,
+    ) -> bool:
+        """Atomically debit an already opened period; ``False`` if it would exceed.
 
         Bumps ``quota_used`` with an ``F()`` delta under a row lock so concurrent
-        spenders never lose an increment, and refuses (leaving the ledger untouched)
-        when the budget is insufficient.
+        spenders never lose an increment. Refusal leaves usage untouched while
+        retaining usage only. Limits belong to each check, never to the shared row.
         """
 
+        if units < 0 or not 0 <= reserve < limit:
+            raise ValueError("Quota units must be nonnegative and reserve smaller than limit.")
         moment = now or timezone.now()
         with transaction.atomic():
-            period = self.open_period(integration=integration, limit=limit, now=moment)
             locked = self.locked_get(pk=period.pk)
-            if locked.quota_used + units > locked.quota_limit:
+            ceiling = limit - reserve
+            if locked.quota_used + units > ceiling:
                 return False
-            self.filter(pk=locked.pk).update(
+            consumed = self.filter(pk=locked.pk, quota_used__lte=ceiling - units).update(
                 quota_used=models.F("quota_used") + units,
                 last_updated=moment,
             )
-        return True
+        return consumed == 1

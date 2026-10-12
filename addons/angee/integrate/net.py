@@ -16,6 +16,8 @@ from urllib.parse import SplitResult, urlsplit
 
 from django.core.exceptions import ValidationError
 
+from .errors import RequestNotSentError
+
 ALLOWED_HTTP_SCHEMES = frozenset({"http", "https"})
 """URL schemes accepted for outbound HTTP calls."""
 
@@ -32,6 +34,27 @@ _SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
 ``100.100.100.200`` inside it, so it is treated as metadata, not as a private LAN."""
 
 _IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+# The name does not exist, or exists without an address. EAI_NODATA is
+# platform-dependent in Python's socket module.
+_ABSENT_HOST_ERRORS = frozenset({socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)})
+
+
+class AddressResolutionError(ValidationError):
+    """The URL host definitively has no address; a permanent target refusal."""
+
+    def __init__(self) -> None:
+        super().__init__("URL host could not be resolved.")
+
+
+class AddressNotAllowedError(ValidationError):
+    """The URL host resolves to an address the SSRF policy refuses.
+
+    Raised before any connection or request byte, and permanent: retrying the same
+    target cannot succeed. Delivery owners settle it as a definite refusal.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("URL host resolves to an address that is not allowed.")
 
 
 def parse_http_url(url: str) -> SplitResult:
@@ -64,7 +87,7 @@ def validate_public_url(value: object) -> None:
 
 
 def resolved_addresses(hostname: str, port: int | None) -> tuple[_IpAddress, ...]:
-    """Return every IP address currently resolved for ``hostname``."""
+    """Resolve addresses, separating absent hosts from temporary resolver failures."""
 
     try:
         return (ipaddress.ip_address(hostname),)
@@ -77,12 +100,20 @@ def resolved_addresses(hostname: str, port: int | None) -> tuple[_IpAddress, ...
             port,
             type=socket.SOCK_STREAM,
         )
+    except socket.gaierror as error:
+        # Only a definitive answer proves the host absent. Any other resolver
+        # failure, including EAI_FAIL (often a resolver-side refusal), leaves
+        # its existence unknown.
+        if error.errno in _ABSENT_HOST_ERRORS:
+            raise AddressResolutionError() from error
+        raise RequestNotSentError() from error
     except OSError as error:
-        raise ValidationError("URL host could not be resolved.") from error
+        # Timeouts and resolver system failures leave the host's existence unknown.
+        raise RequestNotSentError() from error
 
     addresses = [ipaddress.ip_address(result[4][0]) for result in results]
     if not addresses:
-        raise ValidationError("URL host could not be resolved.")
+        raise AddressResolutionError()
     return tuple(dict.fromkeys(addresses))
 
 
