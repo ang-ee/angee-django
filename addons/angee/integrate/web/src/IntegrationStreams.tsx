@@ -123,7 +123,7 @@ export function IntegrationStreamsPane(): ReactElement {
     { field: "cursor", sortable: false },
     { field: "last_advanced_at" },
     { field: "last_reconciled_at" },
-    { field: "openFailureCount", header: t("streams.openFailures") },
+    { field: "open_failure_count", header: t("streams.openFailures") },
     { field: "link_count", header: t("streams.links") },
     { field: "resync_required" },
   ], [t]);

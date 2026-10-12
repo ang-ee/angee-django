@@ -143,6 +143,61 @@ one-shot import and `seed` for seed loads. The
 deduplication ends with the dispatch; successive writes in one changeset remain
 distinct history events.
 
+**Statement** — one source's current stance on one aspect of one subject row
+(Wikibase's statement: claim, references, rank). Each canonical model declaring
+`statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
+beside its history table, read through the subject like history rows and
+written only by `statements.set()` and the status verbs
+([owner](../angee/base/mixins.py)).
+
+**Aspect** — a declared field group of a canonical model, optionally with a
+typed member (a Handle, a counterparty), carrying its survivorship strategy and
+source precedence. The aspect is the unit of resolution; a value field belongs
+to exactly one aspect, and consumer donors contribute aspects additively.
+
+**Survivorship** — how an aspect's asserted normal-rank statements resolve onto
+the operational row: `SOURCE_PRIORITY`, `MOST_RECENT(date_field)`,
+`MOST_COMPLETE`, `HIGHEST_TRUST` (MDM names). Preferred person statements always
+precede it; the winner is marked **applied** and its values materialise on the
+row. A re-derivation, never a migration, when a knob flips.
+
+**SourceKind** — the assertion-time classification of the asserting principal:
+`PERSON`, `SYSTEM_OF_RECORD`, `DIRECTORY`, `NETWORK`, `IMPORT`, `SEED`,
+`DOCUMENT`, `EXTRACTION`, `RULE`. Resolved through
+`StatementSourceMixin.source_kind` and retained on the statement; precedence is
+declared per aspect, never globally.
+
+**Authoritative** — the per-stream knob (`SyncStream.authoritative`) that makes a
+`SYSTEM_OF_RECORD` source the system of record for the aspects naming its kind,
+ahead of people's normal-rank statements; unset, the stream is a system of
+reference below people (DAMA). A person's confirm or dismiss stays on top.
+
+**Rank / snak / status** — a statement's three facts (Wikibase): rank
+`preferred`/`normal` (only a PERSON source writes `preferred`), snak
+`value`/`some_value`/`no_value`, and status `asserted`/`withdrawn`/
+`quarantined`/`deprecated` — the source's current stance. Canonical candidates
+are asserted; `confirm()` writes a preferred value, `dismiss()` a preferred
+no-value that clears the aspect's values and keeps a removal durable.
+
+**Applied** — the statement survivorship chose for its aspect and member: one per
+current key, the row `provenance(field)` returns, flagged on the statement so a
+trace is one indexed read.
+
+**Withdraw / quarantine** — `withdraw` is a source retracting its stance
+(`status=withdrawn`; the row and its history stay); `quarantined` is a stance
+held back from resolution (PREMIS). Sync's quarantine of a failed inbound
+application is a **SyncFailure**, not a statement status.
+
+**SyncFailure** — one failed inbound application or refused write-back, retained
+on its `RecordLink` (or on the `SyncStream` when no link exists) with kind, code,
+source hash, mapping version, details, attempts, retry and resolution. The one
+noun for that state; "discrepancy" is retired.
+
+**Rule / Seed** — provenance's persisted non-user principals: `Rule` (one row per
+registered rule or matcher, kind RULE, created by the owning resource
+declaration) and `Seed` (one row per seed load, kind SEED). They assert the
+statements no person or integration made.
+
 **User (row)** — the database-layer principal record. Not synonymous with "a
 human" or "a login": `kind` distinguishes `person` from `service`, and only
 person rows authenticate. Real-world faces link to it one way, one shape:

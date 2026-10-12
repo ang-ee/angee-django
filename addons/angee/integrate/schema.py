@@ -1505,6 +1505,7 @@ class SyncStreamType(AngeeNode):
     kind: auto
     direction: auto
     snapshot: auto
+    authoritative: auto
     generation: auto
     phase: auto
     state: auto
@@ -1518,7 +1519,6 @@ class SyncStreamType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(
-        name="openFailureCount",
         only=["inbound"],
         prefetch_related=[_OPEN_FAILURE_LINKS],
     )
@@ -1594,6 +1594,7 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "kind",
         "direction",
         "snapshot",
+        "authoritative",
         "phase",
         "state",
         "generation",
@@ -1607,6 +1608,7 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "kind",
         "direction",
         "snapshot",
+        "authoritative",
         "phase",
         "state",
         "generation",
@@ -1614,7 +1616,17 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "last_reconciled_at",
     ],
     aggregatable=["id"],
-    groupable=["key", "partition", "kind", "direction", "snapshot", "phase", "state", "resync_required"],
+    groupable=[
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "snapshot",
+        "authoritative",
+        "phase",
+        "state",
+        "resync_required",
+    ],
     insert=False,
     update=False,
     delete=False,

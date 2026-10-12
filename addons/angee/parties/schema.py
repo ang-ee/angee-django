@@ -18,6 +18,7 @@ from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch
 from rebac import SubjectRef, system_context
 from rebac.graphql.strawberry_django import optimize
+from rebac.resources import model_for_subject_type
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
@@ -241,9 +242,22 @@ class PartyStatementType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["asserted_by"])
-    def asserted_by(self) -> str:
-        return str(public_subject_ref(SubjectRef.parse(cast(Any, self).asserted_by)))
+    @strawberry_django.field(only=["asserted_by", "source_kind"])
+    def asserted_by(self, info: strawberry.Info) -> str:
+        """The asserting principal when the reader may read it; otherwise only its source kind.
+
+        A statement read never widens what the party reader sees: the principal
+        resolves through its own read gate, like ``handle`` and ``subject``.
+        """
+
+        row = cast(Any, self)
+        source = SubjectRef.parse(row.asserted_by)
+        resolved = model_for_subject_type(source.subject_type)
+        if resolved is not None:
+            model, id_attr = resolved
+            if read_scoped_queryset(model, session_user(info)).filter(**{id_attr: source.subject_id}).exists():
+                return str(public_subject_ref(source))
+        return str(row.source_kind)
 
     @strawberry_django.field(only=["rank", "snak"])
     def is_confirmed(self) -> bool:
@@ -254,7 +268,7 @@ class PartyStatementType(AngeeNode):
         return bool(cast(Any, self).is_dismissed)
 
     @strawberry_django.field(only=["subject_id", "evidence"])
-    def evidence_refs(self, info: strawberry.Info) -> list[StatementEvidenceType]:
+    def evidence(self, info: strawberry.Info) -> list[StatementEvidenceType]:
         refs = cast(Any, self).readable_evidence(session_user(info))
         return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id)) for ref in refs]
 
@@ -483,19 +497,19 @@ class PartiesIdentityMutation:
 
         actor = session_user(info)
         party = authorized_action_target(info, Party, party_id, "write")
-        link = Party.objects.propose_manual_contact(
+        statement = Party.objects.propose_manual_contact(
             party,
             platform=platform,
             value=value,
             label=label,
             actor=actor,
         )
-        if link.is_dismissed:
+        if statement.is_dismissed:
             return ActionResult(
                 ok=False,
                 message=("This contact remains dismissed. Confirm it in Identity if it should be restored."),
             )
-        return ActionResult(ok=True, message="Contact is available in Identity for review.", id=link.sqid)
+        return ActionResult(ok=True, message="Contact is available in Identity for review.", id=statement.sqid)
 
     @strawberry.mutation
     def confirm_party_statement(self, info: strawberry.Info, id: strawberry.ID) -> PartyStatementType:
@@ -854,7 +868,9 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
     },
     sortable=["confidence", "rank", "created_at", "updated_at"],
     aggregatable=["id", "confidence"],
-    groupable=["handle", "handle__value", "subject", "subject__display_name", "source_kind"],
+    # No handle-field axis: a group key would read handle rows the party reader may
+    # not read; ``handle`` resolves through its own gate.
+    groupable=["handle", "subject", "subject__display_name", "source_kind"],
     insert=False,
     update=False,
     delete=False,

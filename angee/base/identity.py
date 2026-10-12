@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from django.apps import apps
-from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from jsonschema.exceptions import ValidationError as SchemaValidationError
-from pydantic import BaseModel, ConfigDict
 from rebac import SubjectRef
-from rebac.resources import model_for_resource_type, model_resource_type
+from rebac.resources import model_for_resource_type
 
 from angee.base.fields import SqidField
 from angee.base.scoping import read_scoped_queryset
@@ -292,39 +291,16 @@ def public_subject_ref(subject: SubjectRef) -> SubjectRef:
     )
 
 
-class EvidenceReference(BaseModel):
-    """Frozen public identity required by evidence admission."""
+def __getattr__(name: str) -> Any:
+    """Historical import of ``EvidenceReference`` for the unreleased parties fold module.
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    model: str
-    id: str
+    The evidence owner is :mod:`angee.base.evidence`, which this module cannot import
+    eagerly (it composes the mixins that import this module). Remove with the fold's
+    import migration.
+    """
 
+    if name == "EvidenceReference":
+        from angee.base.evidence import EvidenceReference
 
-def readable_records(
-    refs: Sequence[EvidenceReference],
-    actors: Sequence[Any],
-    *,
-    permission: str = "read",
-) -> list[Any]:
-    """Check a standing permission in one scoped query per actor and model."""
-
-    if not actors:
-        raise ValidationError("Evidence admission requires a reader.")
-    grouped: dict[str, set[str]] = {}
-    for ref in refs:
-        grouped.setdefault(ref.model.lower(), set()).add(ref.id)
-    records: list[Any] = []
-    for label, ids in sorted(grouped.items()):
-        try:
-            model = apps.get_model(label)
-        except (LookupError, ValueError) as error:
-            raise ValidationError({"context": "Unknown referenced model."}) from error
-        if not model_resource_type(model):
-            raise PermissionDenied("Referenced records require a standing permission.")
-        for actor in actors:
-            scoped = read_scoped_queryset(model, actor, action=permission)
-            found = instances_from_public_ids(model, ids, queryset=scoped)
-            if set(found) != ids:
-                raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
-        records.extend(found.values())
-    return records
+        return EvidenceReference
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -224,10 +224,10 @@ describe("relationRepresentationForPath", () => {
 
   test("treats an object list without a relation target as a plain value list", () => {
     const handle = testDataResource("parties.PartyStatement", {
-      fields: [field("evidence_refs", "list", { scalar: null })],
+      fields: [field("evidence", "list", { scalar: null })],
     });
     const resources = schemaFieldMetadataFromDataResources([handle]);
-    expect(relationRepresentationForPath("evidence_refs", resources.labels["parties.PartyStatement"]!, resources)).toBeNull();
+    expect(relationRepresentationForPath("evidence", resources.labels["parties.PartyStatement"]!, resources)).toBeNull();
   });
 
 });

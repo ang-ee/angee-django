@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
@@ -512,3 +513,68 @@ def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(c
     with system_context(reason="test.parties.confirmed_statement.read"):
         producer.refresh_from_db()
     assert (producer.source_kind, producer.confidence, producer.is_confirmed) == ("rule", 0.4, False)
+
+
+def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables: None) -> None:
+    """``asserted_by`` names a principal only when the reader may read it; evidence keeps its own gates."""
+
+    from angee.base.mixins import SourceKind
+    from tests.conftest import make_integration
+
+    admin = _platform_admin("statement-visibility-admin")
+    reader = User.objects.create_user(username="statement-visibility-reader")
+    with system_context(reason="test.parties.statement_visibility.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        private = messaging_models.Party.objects.create(display_name="Private", created_by_id=admin.pk)
+        _grant_reader(party, reader)
+        directory = make_integration("statement-visibility-directory", model=messaging_models.Directory)
+        card_handle = Handle.objects.create(platform="email", value="card@example.com", created_by_id=admin.pk)
+        own_handle = Handle.objects.create(platform="email", value="own@example.com", created_by_id=admin.pk)
+        for handle in (card_handle, own_handle):
+            _grant_reader(handle, reader)
+        statement_model = messaging_models.Party.statements.model
+        card = statement_model._base_manager.create(
+            subject=party,
+            handle=card_handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(directory)),
+            source_kind=SourceKind.DIRECTORY,
+        )
+        own = statement_model._base_manager.create(
+            subject=party,
+            handle=own_handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(reader)),
+            source_kind=SourceKind.PERSON,
+            evidence=[
+                {"model": "parties.Party", "id": party.public_id},
+                {"model": "parties.Party", "id": private.public_id},
+            ],
+        )
+
+    query = """
+        query Statements { party_statements(order_by: [{created_at: asc}]) { id asserted_by evidence { model id } } }
+    """
+    as_reader = _data(execute_schema(_schema("public"), query, user=reader))["party_statements"]
+    assert as_reader == [
+        {"id": card.sqid, "asserted_by": "directory", "evidence": []},
+        {
+            "id": own.sqid,
+            "asserted_by": str(public_subject_ref(to_subject_ref(reader))),
+            "evidence": [{"model": "parties.Party", "id": party.public_id}],
+        },
+    ]
+    as_admin = _data(execute_schema(_schema("public"), query, user=admin))["party_statements"]
+    assert as_admin[0]["asserted_by"] == str(public_subject_ref(to_subject_ref(directory)))
+    assert as_admin[1]["evidence"] == [
+        {"model": "parties.Party", "id": party.public_id},
+        {"model": "parties.Party", "id": private.public_id},
+    ]
+
+
+def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:
+    """No handle-column axis: its group keys would read handle rows the reader may not read."""
+
+    sdl = str(_schema("public"))
+    assert "HANDLE__VALUE" not in sdl
+    assert "SUBJECT__DISPLAY_NAME" in sdl

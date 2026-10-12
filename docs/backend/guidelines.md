@@ -1843,28 +1843,46 @@ Their docstrings own the exact behavior.
 copying into typed statement models. Their [manager](../../angee/base/managers.py)
 owns locked assertion writes and survivorship; the canonical subject owns source
 eligibility and application. Like history tables, statements have no independent
-REBAC resource or ORM read policy. Use the subject-bound `instance.statements`
-accessor after reading the subject; serving surfaces own gated-field redaction.
-Writes use the asserting source's native REBAC write scope on the subject. Merge
-collisions remain retained as superseded rows outside the current per-aspect key.
-The Statement owner ranks collisions and highest-trust resolution by preferred
-rank, confidence, update time and primary key, in that order.
+REBAC resource or ORM read policy. Read them through their subject: the
+subject-bound `instance.statements` accessor once the subject row is in hand, or
+`StatementQuerySet.readable(actor)` for a cross-record surface such as Review,
+which scopes rows to the subjects the actor may read. A statement read never
+widens what the subject reader may see: related rows (the member, the asserting
+principal) resolve through their own read gates at the serving seam, no group or
+filter axis reads a related row's columns, and serving surfaces own gated-field
+redaction. Writes use the asserting source's native REBAC write scope on the
+subject. Merge collisions remain retained as superseded rows outside the current
+per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
+rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
+class's `tie_break()`, update time, primary key — shared by survivorship,
+cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
+`Survivorship` strategies only reorder its components and `trust_ordering` is the
+SQL display order of the same stances.
 Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
 classifies eligible sources; `set()` refuses missing or unknown classifications.
 Statements retain the assertion-time classification across source edits and
 deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`;
-core defaults to `None`. Composer extensions do not reach generated models.
+core defaults to `None`, and the named model composes `StatementLinkMixin`: its
+`authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
+places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both
+kinds, for normal-rank statements only. `SyncStream.objects.set_authoritative`
+flips it and re-derives the linked subjects. Composer extensions do not reach
+generated models.
 
 Ordinary person saves on aspect-backed fields assert normal statements, including
 separate MTI child tables; parent declarations keep their shared-pk owner.
-Consumers contribute domain aspects through the descriptor's abstract donors;
-`Aspect.precedence` owns source ordering. Preferred person decisions precede
-normal source ordering.
+Consumers contribute domain aspects through the descriptor's abstract donors: the
+subject source's own declaration finalizes the one statement table (bases, prefix,
+queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
+ordering. Preferred person decisions precede normal source ordering; a winning
+preferred no-value clears the aspect's operational values so a dismissal sticks.
 Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
 the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
 
 The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
-revert and deterministic lossless export. Revert uses native history ordering and
+revert and deterministic lossless export. Closing a boundary writes one bookkeeping
+row; `document()` computes and records the hash through the one hash owner, so a
+request never re-reads its history. Revert uses native history ordering and
 diffs, refuses later touches, retains withdrawn/superseded statements, and reuses
 trash for created subjects. Without trash, retained references block removal.
 Restoring database state does not undo HTTP effects; record sync detects the

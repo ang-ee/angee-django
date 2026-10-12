@@ -17,7 +17,7 @@ import {
 
 type LinkRow = PartyStatementActionRow & {
   confidence?: number;
-  evidence_refs?: Array<{ model: string; id: string }>;
+  evidence?: Array<{ model: string; id: string }>;
   evidence_truncated?: boolean;
 };
 
@@ -47,10 +47,10 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
       { field: "confidence" },
       { field: "source_kind", header: t("identity.claim") },
       {
-        field: "evidence_refs",
+        field: "evidence",
         header: t("identity.evidence"),
-        render: (row) => row.evidence_refs?.length
-          ? <span className="flex flex-wrap gap-2">{row.evidence_refs.map((ref, index) => {
+        render: (row) => row.evidence?.length
+          ? <span className="flex flex-wrap gap-2">{row.evidence.map((ref, index) => {
             const href = recordHref(ref.model, ref.id);
             return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
               {t("identity.evidenceSource", { number: index + 1 })}
@@ -79,8 +79,8 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
           "handle.platform",
           "confidence",
           "source_kind",
-          "evidence_refs.model",
-          "evidence_refs.id",
+          "evidence.model",
+          "evidence.id",
           "evidence_truncated",
           "is_confirmed",
           "is_dismissed",

@@ -60,6 +60,11 @@ name = "record_link_failure_status"
 app_label = "integrate"
 module = "runtime_migrations.record_link_failure_status"
 
+[[migrations]]
+name = "sync_stream_authoritative"
+app_label = "integrate"
+module = "runtime_migrations.sync_stream_authoritative"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

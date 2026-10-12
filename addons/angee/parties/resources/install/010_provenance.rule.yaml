@@ -1,4 +1,4 @@
-# Persist each built-in matcher once at resource bootstrap. Producers use the
+# Persist each built-in matcher once at resource bootstrap. Sources use the
 # same key through lookup only; users remain person principals.
 - xref: normalized_twin
   key: parties.normalized_twin

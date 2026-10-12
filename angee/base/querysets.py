@@ -224,11 +224,14 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         return self.filter(superseded__isnull=True)
 
     def readable(self, actor: Any) -> Any:
-        """Scope shadow rows through their subject's standing read permission."""
+        """Scope shadow rows through their subject's standing read permission.
 
-        return self.filter(
-            subject_id__in=models.Subquery(read_scoped_queryset(self.model.statement_subject_model, actor).values("pk"))
-        )
+        The subject scope is applied eagerly (``scoped()``): a lazily scoped
+        queryset embedded as a subquery compiles without the actor's scope.
+        """
+
+        subjects = read_scoped_queryset(self.model.statement_subject_model, actor)
+        return self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
 
     def canonical(self) -> Any:
         return self.current().filter(

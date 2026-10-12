@@ -442,16 +442,16 @@ class TieQuerySet(AngeeQuerySet[Any]):
             if len(statements) > edge_limit:
                 statements = statements[:edge_limit]
                 truncated = True
-            handle_ids = {link.handle_id for link in statements}
+            handle_ids = {statement.handle_id for statement in statements}
             handles = {
                 handle.pk: handle
                 for handle in handle_model.objects.filter(pk__in=handle_ids)
                 .scoped()
                 .order_by("platform", "normalized_value", "sqid")
             }
-            for link in statements:
-                handle = handles.get(link.handle_id)
-                if link.subject_id not in parties or handle is None:
+            for statement in statements:
+                handle = handles.get(statement.handle_id)
+                if statement.subject_id not in parties or handle is None:
                     continue
                 node_id = public_id(handle)
                 if node_id not in nodes:
@@ -469,10 +469,10 @@ class TieQuerySet(AngeeQuerySet[Any]):
                             "record_id": node_id,
                             "platform": str(handle.platform),
                             "confirmed": bool(handle.party_link_confirmed),
-                            "resolved": handle.party_id == link.subject_id,
+                            "resolved": handle.party_id == statement.subject_id,
                         },
                     }
-                edge_id = public_id(link)
+                edge_id = public_id(statement)
                 if len(edges) >= edge_limit:
                     truncated = True
                     break
@@ -482,17 +482,17 @@ class TieQuerySet(AngeeQuerySet[Any]):
                 edges.append(
                     {
                         "id": edge_id,
-                        "source": public_id(parties[link.subject_id]),
+                        "source": public_id(parties[statement.subject_id]),
                         "target": node_id,
                         "kind": "identity",
                         "meta": {
                             "model": "parties.PartyStatement",
                             "record_id": edge_id,
                             "handle_id": node_id,
-                            "confidence": float(link.confidence),
-                            "source": str(link.asserted_by),
-                            "is_confirmed": bool(link.is_confirmed),
-                            "is_resolved": handle.party_id == link.subject_id,
+                            "confidence": float(statement.confidence),
+                            "source": str(statement.asserted_by),
+                            "is_confirmed": bool(statement.is_confirmed),
+                            "is_resolved": handle.party_id == statement.subject_id,
                         },
                     }
                 )

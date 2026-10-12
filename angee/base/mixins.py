@@ -957,15 +957,9 @@ class ModelHistory(HistoricalRecords):
                 yield boundary, boundary, boundary
 
     def lock_revert(self, first: Any, last: Any, previous: Any) -> None:
-        """Acquire the subject's lock owner before its operational row."""
+        """Lock through the tracked row's own hook; owners lock their dependents first."""
 
-        target = last.instance
-        using = first._state.db
-        if isinstance(target, StatementsMixin):
-            for manager in target.statement_managers():
-                if manager.model.statement_subject_model._base_manager.using(using).filter(pk=target.pk).exists():
-                    manager.db_manager(using).lock_subject(manager.instance, {})
-        list(system_queryset(type(target), lock=("self",)).using(using).filter(pk=target.pk))
+        last.instance.lock_for_revert(using=first._state.db)
 
     def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
         """Authorize before staging or replaying any history."""
@@ -1042,7 +1036,7 @@ class ModelHistory(HistoricalRecords):
                 setattr(row, field.attname, getattr(previous, field.attname))
             if changed:
                 row.save(using=using, update_fields=sorted(changed))
-        return [row] if isinstance(row, StatementsMixin) else []
+        return row.revert_subjects()
 
     def bulk_history_create(
         self,
@@ -1208,6 +1202,16 @@ class HistoryMixin(models.Model):
         with write_group():
             return super().delete(*args, **kwargs)
 
+    def lock_for_revert(self, *, using: str) -> None:
+        """Lock this row before a revert replays it; owners with dependents lock those first."""
+
+        list(system_queryset(type(self), lock=("self",)).using(using).filter(pk=self.pk))
+
+    def revert_subjects(self) -> list[Any]:
+        """Rows whose derived state re-runs after a revert; ordinary rows have none."""
+
+        return []
+
 
 class SourceKind(models.TextChoices):
     """Source classification, never a global precedence order."""
@@ -1254,6 +1258,25 @@ class StatementSourceMixin(models.Model):
             return None
 
 
+class StatementLinkMixin(models.Model):
+    """Contract of the model a ``StatementRecords(link=…)`` declaration names.
+
+    The link carries the stream fact survivorship reads: ``authoritative`` says
+    whether the asserting system-of-record stream outranks people for the aspects
+    that list its kind. ``authority_related`` names the relations ``resolve()``
+    preloads to read it without a query per statement.
+    """
+
+    authority_related: ClassVar[tuple[str, ...]] = ()
+
+    class Meta:
+        abstract = True
+
+    @property
+    def authoritative(self) -> bool:
+        return False
+
+
 class Survivorship(StrEnum):
     """Strategies within an aspect, after preferred person decisions."""
 
@@ -1270,17 +1293,15 @@ class Survivorship(StrEnum):
         return RecentSurvivorship(date_field)
 
     def sort_key(self, aspect: Aspect, row: Any) -> tuple[Any, ...]:
-        priority = (
-            aspect.precedence.index(row.source_kind) if row.source_kind in aspect.precedence else len(aspect.precedence)
-        )
-        rank, *trust = row.sort_key()
-        tie = (rank, priority, *trust)
+        """Reorder the row's one trust ordering: rank, precedence, confidence, ties, recency, identity."""
+
+        rank, priority, confidence, *tie = row.sort_key(aspect)
         if self == self.HIGHEST_TRUST:
-            return row.sort_key()
+            return (rank, confidence, priority, *tie)
         if self == self.MOST_COMPLETE:
             complete = sum(row._meta.get_field(name).value_from_object(row) not in (None, "") for name in aspect.fields)
-            return (rank, -complete, priority, *trust)
-        return tie
+            return (rank, -complete, priority, confidence, *tie)
+        return (rank, priority, confidence, *tie)
 
 
 @dataclass(frozen=True)
@@ -1292,7 +1313,7 @@ class RecentSurvivorship:
     def sort_key(self, aspect: Aspect, row: Any) -> tuple[Any, ...]:
         value = row._meta.get_field(self.date_field).value_from_object(row)
         recency = value.timestamp() if isinstance(value, datetime) else value.toordinal() if value else 0
-        rank, *tie = Survivorship.SOURCE_PRIORITY.sort_key(aspect, row)
+        rank, *tie = row.sort_key(aspect)
         return (rank, value is None, -recency, *tie)
 
 
@@ -1319,6 +1340,22 @@ class Aspect:
         if isinstance(self.member, str):
             return (self.member,)
         return tuple(sorted(self.member or ()))
+
+    def priority(self, row: Any) -> int:
+        """Place the row's source in this precedence; unlisted kinds sort last.
+
+        A statement from an ``authoritative`` system-of-record stream precedes
+        PERSON wherever this aspect lists both kinds: the stream is the system of
+        record for the aspect, a plain stream is a system of reference below
+        people. Preferred rank is decided before this, so a person's confirm or
+        dismiss stays on top.
+        """
+
+        kinds = list(self.precedence)
+        if row.authoritative and SourceKind.SYSTEM_OF_RECORD in kinds and SourceKind.PERSON in kinds:
+            kinds.remove(SourceKind.SYSTEM_OF_RECORD)
+            kinds.insert(kinds.index(SourceKind.PERSON), SourceKind.SYSTEM_OF_RECORD)
+        return kinds.index(row.source_kind) if row.source_kind in kinds else len(kinds)
 
     def coerce_members(
         self, model: type[models.Model], source: SubjectRef, key: dict[str, Any], *, kind: SourceKind
@@ -1380,6 +1417,19 @@ class StatementsMixin(models.Model):
         """Lock this subject through the native model scope."""
 
         return system_queryset(type(self), lock=("self",)).using(using).get(pk=self.pk)
+
+    def lock_for_revert(self, *, using: str) -> None:
+        """Acquire the statement owners' locks before this operational row's."""
+
+        for manager in self.statement_managers():
+            if manager.model.statement_subject_model._base_manager.using(using).filter(pk=self.pk).exists():
+                manager.db_manager(using).lock_subject(manager.instance, {})
+        cast(Any, super()).lock_for_revert(using=using)
+
+    def revert_subjects(self) -> list[Any]:
+        """A restored subject re-derives its aspects after the whole replay."""
+
+        return [self]
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Ordinary person edits assert normal statements; resolved saves stay ordinary."""
@@ -1451,8 +1501,9 @@ class StatementsMixin(models.Model):
         if declaration.apply is not None:
             declaration.apply(self, member=member, values=values, statement=statement)
             return
-        # Unknown, withdrawn and no-value stances retain the operational values.
-        if statement is None or statement.snak != statement.StatementSnak.VALUE:
+        # No statement or an unknown value retains the operational values; a
+        # winning no-value (a person's dismissal) clears them so removal sticks.
+        if statement is None or statement.snak == statement.StatementSnak.SOME_VALUE:
             return
         if member:
             raise ImproperlyConfigured("Member aspects require the subject's apply_resolved hook.")
@@ -1654,6 +1705,10 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
         if not issubclass(cls.statement_subject_model, StatementsMixin) or not cls.statement_aspects:
             error("StatementRecords requires StatementsMixin and at least one aspect.", "E039")
+        if cls.statement_link:
+            link_model = cls._meta.get_field("link").remote_field.model
+            if not isinstance(link_model, type) or not issubclass(link_model, StatementLinkMixin):
+                error(f"Statement link model {cls.statement_link!r} must compose StatementLinkMixin.", "E044")
         claimed: set[str] = set()
         member_fields: dict[str, Any] = {}
         for key, aspect in sorted(cls.statement_aspects.items()):
@@ -1696,17 +1751,78 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         return errors
 
     trust_ordering: ClassVar[tuple[str, ...]] = ("-rank", "-confidence", "-updated_at", "-pk")
+    """SQL display order of stances (after ``-applied``); precedence is not a column, see :meth:`sort_key`."""
 
-    def sort_key(self) -> tuple[Any, ...]:
-        """Best rank, confidence, recency and identity first, including collisions."""
+    EVIDENCE_LIMIT: ClassVar[int] = 20
 
-        values = {
-            "rank": self.rank == self.StatementRank.PREFERRED,
-            "confidence": self.confidence,
-            "updated_at": self.updated_at.timestamp(),
-            "pk": self.pk,
-        }
-        return tuple(-values[name.removeprefix("-")] for name in self.trust_ordering)
+    def sort_key(self, aspect: Aspect | None = None) -> tuple[Any, ...]:
+        """The one trust ordering: preferred rank, source precedence, confidence, ties, recency, identity.
+
+        Survivorship, cross-subject member resolution and merge collapse all sort
+        by this key; :class:`Survivorship` strategies reorder its components.
+        """
+
+        declaration = self.statement_aspects[self.aspect] if aspect is None else aspect
+        return (
+            self.rank != self.StatementRank.PREFERRED,
+            declaration.priority(self),
+            -self.confidence,
+            *self.tie_break(),
+            -self.updated_at.timestamp(),
+            -self.pk,
+        )
+
+    def tie_break(self) -> tuple[Any, ...]:
+        """Domain tie-breaks between equally trusted stances, before recency."""
+
+        return ()
+
+    @property
+    def authoritative(self) -> bool:
+        """Whether the asserting stream is the system of record for this statement's aspects."""
+
+        link = self.link if self.statement_link else None
+        return link is not None and bool(link.authoritative)
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.VALUE
+
+    @property
+    def is_dismissed(self) -> bool:
+        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.NO_VALUE
+
+    def member_values(self) -> dict[str, Any]:
+        """This stance's member identity, as the subject verbs take it."""
+
+        return {name: getattr(self, name) for name in self.statement_aspects[self.aspect].members}
+
+    def confirm(self) -> Any:
+        """Write the acting person's preferred statement for this stance's values."""
+
+        values = {name: getattr(self, name) for name in self.statement_aspects[self.aspect].fields}
+        return self.subject.with_actor(instance_actor(self)).confirm(
+            aspect=self.aspect, values=values, **self.member_values()
+        )
+
+    def dismiss(self) -> Any:
+        """Write the acting person's preferred no-value statement for this stance."""
+
+        return self.subject.with_actor(instance_actor(self)).dismiss(aspect=self.aspect, **self.member_values())
+
+    @property
+    def evidence_truncated(self) -> bool:
+        return len(self.evidence) > self.EVIDENCE_LIMIT
+
+    def readable_evidence(self, actor: Any) -> list[Any]:
+        """The bounded origins ``actor`` may read; each origin keeps its own read gate."""
+
+        # The evidence owner composes this module's mixins.
+        from angee.base.evidence import EvidenceReference, readable_evidence
+
+        self.subject.require_access("read", actor)
+        refs = [EvidenceReference.model_validate(value) for value in self.evidence[: self.EVIDENCE_LIMIT]]
+        return readable_evidence(refs, actor)
 
     def same_values(self, other: Statement, names: Iterable[str]) -> bool:
         return all(
@@ -1847,13 +1963,29 @@ class StatementRecords(HistoricalRecords):
                     aspects[key] = None if key in aspects and aspects[key] != aspect else aspect
         return aspects
 
+    def declaration_for(self, model: Any) -> StatementRecords | None:
+        """The declaration owning ``model``'s one statement table, or None when a parent's table serves it.
+
+        Declarations are read down the MRO until an inherited concrete table's
+        descriptor. The composer orders donors before the subject source in the
+        composed bases (``angee.compose.rendering``), so the last declaration at
+        this level is the source's own: it owns bases, prefix, queryset and link,
+        while every donor contributes its aspects through :meth:`aspects_for`.
+        """
+
+        declarations = []
+        for owner in model.__mro__:
+            declared = owner.__dict__.get(self.manager_name)
+            if isinstance(declared, StatementRecords):
+                declarations.append(declared)
+            elif declared is not None and owner is not model:
+                break
+        return declarations[-1] if declarations else None
+
     def finalize(self, sender: Any, **kwargs: Any) -> None:
         if sender._meta.abstract or sender._meta.proxy or not issubclass(sender, self.cls):
             return
-        declaration = next(
-            donor.__dict__[self.manager_name] for donor in sender.__mro__ if self.manager_name in donor.__dict__
-        )
-        if declaration is not self:
+        if self.declaration_for(sender) is not self:
             return
         module = importlib.import_module(sender.__module__)
         name = self.get_history_model_name(sender)

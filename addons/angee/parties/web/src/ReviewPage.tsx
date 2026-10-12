@@ -7,7 +7,7 @@ import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
 type SuggestionRow = StringIdRow & {
   source_kind?: string;
-  evidence_refs?: Array<{ model: string; id: string }>;
+  evidence?: Array<{ model: string; id: string }>;
   evidence_truncated?: boolean;
 };
 
@@ -35,9 +35,9 @@ export function ReviewPage(): React.ReactElement {
       { field: "confidence" },
       { field: "source_kind", header: t("identity.claim") },
       {
-        field: "evidence_refs",
+        field: "evidence",
         header: t("identity.evidence"),
-        render: (row) => <span className="flex flex-wrap gap-2">{row.evidence_refs?.map((ref, index) => {
+        render: (row) => <span className="flex flex-wrap gap-2">{row.evidence?.map((ref, index) => {
           const href = recordHref(ref.model, ref.id);
           return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
             {t("identity.evidenceSource", { number: index + 1 })}
@@ -74,8 +74,8 @@ export function ReviewPage(): React.ReactElement {
                 "subject.display_name",
                 "confidence",
                 "source_kind",
-                "evidence_refs.model",
-                "evidence_refs.id",
+                "evidence.model",
+                "evidence.id",
                 "evidence_truncated",
               ]}
               baseFilter={{

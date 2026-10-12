@@ -56,7 +56,6 @@ from angee.base.mixins import (
     SourceKind,
     StatementRecords,
     StatementsMixin,
-    Survivorship,
     TrashMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, StatementSubjectManager
@@ -115,7 +114,16 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             ),
             "handle": Aspect(
                 member={"handle": models.ForeignKey("parties.Handle", on_delete=models.PROTECT)},
-                survivorship=Survivorship.HIGHEST_TRUST,
+                precedence=cast(
+                    tuple[SourceKind, ...],
+                    (
+                        SourceKind.PERSON,
+                        SourceKind.SYSTEM_OF_RECORD,
+                        SourceKind.DIRECTORY,
+                        SourceKind.IMPORT,
+                        SourceKind.RULE,
+                    ),
+                ),
                 candidates=handle_candidates,
                 apply=apply_handle,
             ),

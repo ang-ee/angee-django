@@ -46,7 +46,7 @@ ProvenanceRole = role_anchor("provenance/role")
 
 
 class StatementPrincipalManager(AngeeManager):
-    """Resolve a producer's durable identity without creating duplicate principals."""
+    """Resolve a source's durable identity without creating duplicate principals."""
 
     def for_key(self, key: str) -> Any:
         """Return the principal bootstrapped by its owning resource declaration."""
@@ -204,19 +204,20 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                 )
 
     def close(self, outcome: str) -> None:
-        """Close persisted attribution as model bookkeeping, outside actor gates."""
+        """Close persisted attribution as model bookkeeping, outside actor gates.
+
+        Closing writes one row and never re-reads the boundary's history: the
+        document digest belongs to export (:meth:`document`).
+        """
 
         self.state = self.State(self.State.CLOSED)
         self.outcome = self.Outcome(outcome)
         self.touched = sorted(set(self.touched))
-        with system_context(reason="changeset.close"):
-            self.hash = canonical_json_sha256(chunks=self._document_chunks())
         type(self)._base_manager.filter(pk=self.pk).update(
             state=self.state,
             outcome=self.outcome,
             touched=self.touched,
             counts=self.counts,
-            hash=self.hash,
         )
 
     def history_rows(self) -> Any:
@@ -247,16 +248,25 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         yield "}}"
 
     def document(self) -> str:
-        """Canonical cold-store document, excluding its own digest.
+        """Canonical cold-store document of a closed changeset, excluding its own digest.
 
-        This lossless seam requires a trusted system boundary. User-facing export
-        must authorize and redact through each touched subject, like history.
-        No sink, router, pruning or external write is performed here.
+        Export owns the digest: the first export records ``hash`` through the one
+        hash owner, and later exports reproduce it. This lossless seam requires a
+        trusted system boundary. User-facing export must authorize and redact
+        through each touched subject, like history. No sink, router, pruning or
+        external write is performed here.
         """
 
         if not is_sudo():
             raise PermissionDenied("Lossless history export requires a system boundary.")
-        return "".join(self._document_chunks())
+        if self.state != self.State.CLOSED:
+            raise ValidationError("Only a closed changeset has a document.")
+        text = "".join(self._document_chunks())
+        digest = canonical_json_sha256(chunks=(text,))
+        if self.hash != digest:
+            self.hash = digest
+            type(self)._base_manager.filter(pk=self.pk).update(hash=digest)
+        return text
 
     def revert(self) -> Any:
         """Undo the first-to-last boundary atomically as a new changeset.

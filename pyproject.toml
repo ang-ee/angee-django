@@ -41,7 +41,7 @@ dependencies = [
   "django-celery-beat>=2.9",
   "channels>=4.0",
   "cryptography>=44",
-  "django-simple-history>=3.7",
+  "django-simple-history>=3.13",
   "django-sqids>=0.1",
   "django-zed-rebac>=0.26.0",
   # <6.1: Django 6.1 adds fetch_mode to Model.from_db and django-zed-rebac's

@@ -842,7 +842,7 @@ requires-dist = [
     { name = "django-celery-beat", specifier = ">=2.9" },
     { name = "django-choices-field", specifier = ">=4.0.0" },
     { name = "django-environ", specifier = ">=0.12" },
-    { name = "django-simple-history", specifier = ">=3.7" },
+    { name = "django-simple-history", specifier = ">=3.13" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", specifier = ">=0.26.0" },

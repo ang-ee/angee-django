@@ -209,7 +209,7 @@ describe("Integration Streams contribution", () => {
     expect(listProps().defaultGroup).toMatchObject({ field: "key" });
     expect(listProps().columns.map((column) => column.field)).toEqual([
       "key", "partition", "kind", "direction", "generation", "phase", "state", "cursor",
-      "last_advanced_at", "last_reconciled_at", "openFailureCount", "link_count", "resync_required",
+      "last_advanced_at", "last_reconciled_at", "open_failure_count", "link_count", "resync_required",
     ]);
     expect(listProps().columns.find((column) => column.field === "cursor")?.widget)
       .toBeUndefined();

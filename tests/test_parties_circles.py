@@ -13,7 +13,9 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
+from rebac.actors import to_subject_ref
 
+from angee.base.mixins import SourceKind
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import (
@@ -1115,3 +1117,99 @@ def test_seed_vocabulary_matches_model_contract() -> None:
     assert "inverse_name" not in by_slug["friend"], "friend is symmetric"
     # Employment kinds pin the counterparty to an organisation.
     assert by_slug["employee"]["other_party_kind"] == "organization"
+
+
+def _system_of_record_statement(party: Any, source: Any, link: Any, **values: Any) -> Any:
+    """A retained SYSTEM_OF_RECORD stance backed by ``link``, as an Odoo companion asserts it."""
+
+    return Party.statements.model._base_manager.create(
+        subject=party,
+        aspect="identity",
+        asserted_by=str(to_subject_ref(source)),
+        source_kind=SourceKind.SYSTEM_OF_RECORD,
+        link=link,
+        **values,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(composed_tables: None) -> None:
+    """Flipping ``SyncStream.authoritative`` re-derives the subjects; preferred stays on top (§11.2)."""
+
+    del composed_tables
+    with system_context(reason="test authoritative stream"):
+        owner = _user("authority-owner")
+        party = Party._base_manager.create(display_name="Ada (me)", created_by=owner)
+        source = make_integration("authority-system-of-record", model=Directory)
+        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "partner-1", target=party)
+        party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})
+        _system_of_record_statement(party, source, link, display_name="Ada (odoo)")
+        Party.statements.resolve(subject=party, aspect="identity")
+        party.refresh_from_db()
+        assert party.display_name == "Ada (me)"
+
+        SyncStream.objects.set_authoritative(stream, True)
+        party.refresh_from_db()
+        assert party.display_name == "Ada (odoo)"
+        assert Party.statements.model._base_manager.get(link=link).applied
+
+        SyncStream.objects.set_authoritative(stream, False)
+        party.refresh_from_db()
+        assert party.display_name == "Ada (me)"
+
+        party.with_actor(owner).confirm(aspect="identity", values={"display_name": "Ada"})
+        SyncStream.objects.set_authoritative(stream, True)
+        party.refresh_from_db()
+        assert party.display_name == "Ada"
+        assert SyncStream.objects.bump_generation(stream).authoritative is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(composed_tables: None) -> None:
+    """A person's older, weaker normal statement outranks a directory's newer full-confidence one."""
+
+    del composed_tables
+    with system_context(reason="test handle precedence"):
+        owner = _user("precedence-owner")
+        handle = Handle._base_manager.create(platform="email", value="shared@example.com", created_by=owner)
+        person_party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        card_party = Party._base_manager.create(display_name="Ada Card", created_by=owner)
+        directory = make_integration("precedence-directory", model=Directory)
+        Party.objects.assert_handle(person_party, handle, asserted_by=owner, confidence=0.9)
+        Party.statements.model._base_manager.create(
+            subject=card_party,
+            handle=handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(directory)),
+            source_kind=SourceKind.DIRECTORY,
+            confidence=1.0,
+        )
+        Party.statements.resolve(subject=card_party, aspect="handle", members={"handle": handle})
+        handle.refresh_from_db()
+        assert handle.party_id == person_party.pk
+
+        # Within one kind, confidence still decides before recency.
+        stronger = Party._base_manager.create(display_name="Ada Stronger", created_by=owner)
+        Party.objects.assert_handle(stronger, handle, asserted_by=owner, confidence=1.0)
+        handle.refresh_from_db()
+        assert handle.party_id == stronger.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restores_it(composed_tables: None) -> None:
+    """A preferred no-value applies: the removal sticks; ``Statement.confirm`` re-applies the retained values."""
+
+    del composed_tables
+    with system_context(reason="test identity dismissal"):
+        owner = _user("dismiss-owner")
+        party = Party._base_manager.create(display_name="Ada", created_by=owner)
+        stance = party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada"})
+        party.with_actor(owner).dismiss(aspect="identity")
+        party.refresh_from_db()
+        assert party.display_name == ""
+        assert party.statements.provenance("display_name").get().is_dismissed
+        restored = stance.with_actor(owner).confirm()
+        party.refresh_from_db()
+        assert party.display_name == "Ada"
+        assert (restored.is_confirmed, restored.applied) == (True, True)

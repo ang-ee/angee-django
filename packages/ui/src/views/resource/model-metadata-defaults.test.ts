@@ -909,22 +909,22 @@ describe("relation column read expansion", () => {
   });
 
   test("an object-list column without a related resource stays a value column", () => {
-    const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
+    const handle = canonicalModel({ evidence: { name: "evidence", kind: "list", scalar: null } },
       testDataResource("parties.PartyStatement"));
-    const [column] = columnsWithMetadataDefaults<Row>([{ field: "evidence_refs" }], handle);
-    expect(column?.field).toBe("evidence_refs");
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "evidence" }], handle);
+    expect(column?.field).toBe("evidence");
     expect(column && "relationList" in column).toBe(false);
   });
 
   test("an object-list subline without a relation representation fails during resolution", () => {
-    const handle = canonicalModel({ evidence_refs: { name: "evidence_refs", kind: "list", scalar: null } },
+    const handle = canonicalModel({ evidence: { name: "evidence", kind: "list", scalar: null } },
       testDataResource("parties.PartyStatement"));
     const schema = schemaFieldMetadataFromDataResources([handle.resource]);
     expect(() => columnsWithMetadataDefaults<Row>(
-      [{ field: "label", subline: "evidence_refs" }],
+      [{ field: "label", subline: "evidence" }],
       handle,
       schema,
-    )).toThrow(/Column subline "evidence_refs" is an object list without a resolved relation representation/);
+    )).toThrow(/Column subline "evidence" is an object list without a resolved relation representation/);
   });
 
   test("an authored to-many selection and renderer need no target resource metadata", () => {

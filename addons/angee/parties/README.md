@@ -11,7 +11,7 @@ in RecordLink history and survive conditional writes.
 [PartyManager.ingest_contact](managers.py) asserts directory facts; Address and
 Relationship keep their own identities and statements. Missing members withdraw
 only that source. Canonical scopes retain unasserted rows and exclude trash and
-wholly withdrawn rows. [Handle producers](managers.py) compose `Party.statements`
+wholly withdrawn rows. [Handle sources](managers.py) compose `Party.statements`
 through the shared Handle, Party lock order; resolution owns the cross-party
 winner and derived counters outside Party history.
 
@@ -35,7 +35,7 @@ merge performs: collisions stay inspectable as superseded, so every decision and
 its evidence survive.
 
 Ordinary person edits assert normal statements; confirm/dismiss writes preferred
-statements without rewriting the producer or copying evidence. Person preferences
+statements without rewriting the source or copying evidence. Person preferences
 survive remote removal: confirmed handles can be republished; dismissal makes
 removal stick. Revert restores local state; sync retains its remote preconditions.
 Consumers declare domain aspects; losing statements stay inspectable, and normal

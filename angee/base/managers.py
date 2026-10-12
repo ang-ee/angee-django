@@ -13,7 +13,6 @@ from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import PermissionDenied
 
 from angee.base.actors import instance_actor
-from angee.base.identity import EvidenceReference, readable_records
 from angee.base.querysets import AngeeUnscopedQuerySet, StatementQuerySet
 from angee.base.scoping import by_key, query_batch_size, read_scoped_queryset, system_queryset
 from angee.base.validation import validate_value
@@ -119,6 +118,9 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         snak: str | None,
         basis_hash: str,
     ) -> tuple[SubjectRef, dict[str, Any], dict[str, Any]]:
+        # The evidence owner composes the mixins that import this module.
+        from angee.base.evidence import EvidenceReference, readable_records
+
         source = self.asserting_source(asserted_by)
         kind = self.model.source_kind_for(source)
         if kind is None:
@@ -231,9 +233,6 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             self.model.StatementStatus.WITHDRAWN, asserted_by=asserted_by, supported=supported, aspect=aspect, link=link
         )
 
-    def quarantine(self, asserted_by: Any, subjects: Sequence[Any] | None = None) -> int:
-        return self._transition(self.model.StatementStatus.QUARANTINED, asserted_by=asserted_by, subjects=subjects)
-
     def withdraw_changeset(self, changeset: Any) -> int:
         with transaction.atomic():
             sources = (
@@ -269,6 +268,9 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             rows = self.model._base_manager.using(using).filter(subject=subject, superseded__isnull=True)
             if aspect is not None:
                 rows = rows.filter(aspect=aspect, **(members or {}))
+            if self.model.statement_link:
+                link_model = self.model._meta.get_field("link").remote_field.model
+                rows = rows.select_related("link", *(f"link__{name}" for name in link_model.authority_related))
             member_names = sorted(
                 {name for declaration in self.model.statement_aspects.values() for name in declaration.members}
             )
@@ -288,7 +290,7 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 asserted = [row for row in candidates if row.status == self.model.StatementStatus.ASSERTED]
                 preferred = sorted(
                     (row for row in asserted if row.rank == self.model.StatementRank.PREFERRED),
-                    key=lambda row: row.sort_key(),
+                    key=lambda row: row.sort_key(declaration),
                 )
                 normal: Sequence[Any] = [row for row in asserted if row.rank == self.model.StatementRank.NORMAL]
                 if declaration.candidates is not None:
@@ -340,6 +342,8 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
         target = reference.lookup(survivor) if reference is not None else {"subject_id": survivor.pk}
         columns = reference.columns if reference is not None else ("subject",)
         subjects = set()
+        if self.model.statement_link:
+            rows = rows.select_related("link")
         for row in rows.order_by("pk"):
             if row.superseded_id is None:
                 key = dict(row.current_key(), superseded__isnull=True)

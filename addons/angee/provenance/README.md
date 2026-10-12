@@ -39,8 +39,8 @@ entrypoint has no boundary; its first captured write fails naming the remedy
 
 `Changeset.revert()` restores the state before each row's first write, refusing
 any later touch. It authorizes writes on the subjects, restores parents before
-MTI children, delegates assertion restoration to `StatementManager.revert`, and
-re-runs survivorship. First assertions withdraw; subjects with a trash owner use
+MTI children, replays statement rows through the statement tables' own history
+owner (`StatementHistory`, a `ModelHistory`), and re-runs survivorship. First assertions withdraw; subjects with a trash owner use
 retained removal. Without one, retained references block deletion by row. Reverting
 the revert restores trash and assertions under another changeset. A completed
 remote write remains remote; the next sync observes local differences and uses
@@ -76,9 +76,10 @@ renders one line per changeset linking to the tab) and `useRecordHistory` for
 pages that count or embed the same entries, such as integrate's link history
 drill-down and the notes example's activity chatter.
 
-`Changeset.document()` exports deterministic canonical JSON for a trusted
-archive caller under a system boundary. It includes native history rows indexed
-by `touched` and excludes its own hash, which closure computes through the shared
-hash owner. This is the cold-store seam; no sink, pruning, routing or sealing job
-ships here. User-facing history exports must authorize and redact through each
+`Changeset.document()` exports deterministic canonical JSON of a closed changeset
+for a trusted archive caller under a system boundary. It includes native history
+rows indexed by `touched` and excludes its own `hash`, which this export computes
+through the shared hash owner and records on first export; closing a boundary
+writes one bookkeeping row and never re-reads its history. This is the cold-store
+seam; no sink, pruning, routing or sealing job ships here. User-facing history exports must authorize and redact through each
 touched subject; direct changeset access does not grant those records' reads.

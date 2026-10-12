@@ -258,7 +258,7 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
     query = """
         query Counts($bridge: String!) {
           sync_streams(where: {integration: {_eq: $bridge}}, limit: 20, order_by: [{partition: asc}]) {
-            openFailureCount link_count
+            open_failure_count link_count
           }
         }
     """
@@ -266,13 +266,13 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
     _data(_execute(schema, query, variables, user=owner))
     with CaptureQueriesContext(connection) as one:
         initial = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
-    assert initial == [{"openFailureCount": 2, "link_count": 3}]
+    assert initial == [{"open_failure_count": 2, "link_count": 3}]
     with system_context(reason="test extra zero-count streams"):
         for index in range(5):
             SyncStream.objects.current(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
     with TestCase().assertNumQueries(len(one)):
         many = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
-    assert many == [*initial, *[{"openFailureCount": 0, "link_count": 0}] * 5]
+    assert many == [*initial, *[{"open_failure_count": 0, "link_count": 0}] * 5]
 
 
 def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tables: None) -> None:
@@ -384,7 +384,7 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
         (
             "SyncStream",
             "sync_streams",
-            {"key", "partition", "kind", "direction", "snapshot", "phase", "state", "resync_required"},
+            {"key", "partition", "kind", "direction", "snapshot", "authoritative", "phase", "state", "resync_required"},
         ),
         ("RecordLink", "record_links", {"status", "origin"}),
     ):
@@ -1001,7 +1001,10 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
 
 def test_connection_admissions_project_ownership_without_loading_credentials(composed_tables: None) -> None:
     bridge = make_integration(
-        "connect-admissions", kind=CredentialKind.OAUTH, backend_class="stub", model=VcsBridge,
+        "connect-admissions",
+        kind=CredentialKind.OAUTH,
+        backend_class="stub",
+        model=VcsBridge,
     )
     admin = _platform_admin("connect-admissions-admin")
     with system_context(reason="test.integrate.connect_admissions"):
@@ -1013,10 +1016,14 @@ def test_connection_admissions_project_ownership_without_loading_credentials(com
     """
     variables = {"id": _public_id(bridge)}
     assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"] == {
-        "can_connect": True, "can_resume": False, "can_retry_discovery": False,
+        "can_connect": True,
+        "can_resume": False,
+        "can_retry_discovery": False,
     }
     assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"] == {
-        "can_connect": False, "can_resume": False, "can_retry_discovery": False,
+        "can_connect": False,
+        "can_resume": False,
+        "can_retry_discovery": False,
     }
     with system_context(reason="test.integrate.resume_admissions"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=bridge.credential, lifecycle="paused")
@@ -1852,21 +1859,27 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     assert len(calls) == 1
 
 
-
 def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(composed_tables: None) -> None:
     integration = make_integration("credential-patch-owner")
     foreign = make_integration("credential-patch-foreign").credential
     with system_context(reason="test own replacement credential"):
         own = Credential.objects.create_local_credential(
-            integration.owner, kind="static_token", name="Replacement", material={"api_key": "fake"},
+            integration.owner,
+            kind="static_token",
+            name="Replacement",
+            material={"api_key": "fake"},
         )
     schema = _schema()
 
     def patch(credential: Any) -> Any:
-        return _execute(schema, f'''mutation {{
+        return _execute(
+            schema,
+            f'''mutation {{
           update_integrations_by_pk(pk_columns: {{id: "{_public_id(integration)}"}},
             _set: {{credential: "{_public_id(credential)}"}}) {{ id }}
-        }}''', user=integration.owner)
+        }}''',
+            user=integration.owner,
+        )
 
     denied = patch(foreign)
     assert denied.errors and "not found" in denied.errors[0].message.lower()
@@ -1883,9 +1896,15 @@ def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(comp
     bridge = make_integration("parent-admission", model=VcsBridge, backend_class="stub")
     with system_context(reason="test parent admission needs consent"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
-    result = _data(_execute(_schema(), f'''query {{
+    result = _data(
+        _execute(
+            _schema(),
+            f'''query {{
       integrations_by_pk(id: "{_public_id(bridge)}") {{ can_connect can_resume can_retry_discovery }}
-    }}''', user=bridge.owner))["integrations_by_pk"]
+    }}''',
+            user=bridge.owner,
+        )
+    )["integrations_by_pk"]
     assert result == {"can_connect": True, "can_resume": False, "can_retry_discovery": False}
 
 
@@ -1901,8 +1920,11 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
     assert len(rows) == 1 and rows[0]["can_resume"] == (actor_kind == "admin")
     for index in range(1, 6):
         make_integration(
-            f"batched-admission-{index}", model=VcsBridge, backend_class="stub",
-            owner=first.owner, lifecycle="paused",
+            f"batched-admission-{index}",
+            model=VcsBridge,
+            backend_class="stub",
+            owner=first.owner,
+            lifecycle="paused",
         )
     with CaptureQueriesContext(connection) as many_queries:
         rows = _data(_execute(schema, query, user=actor))["integrations"]
@@ -1911,23 +1933,33 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
 
 
 def test_connect_completion_returns_account_switch_as_a_typed_result(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     integration = make_integration("account-switch-result")
     monkeypatch.setattr(
-        integrate_schema.flow, "remembered_oauth_client", lambda *args: integration.credential.oauth_client,
+        integrate_schema.flow,
+        "remembered_oauth_client",
+        lambda *args: integration.credential.oauth_client,
     )
 
     def refuse(*args: Any, **kwargs: Any) -> None:
         raise integrate_schema.OAuthFlowError("account_switch_refused", 409)
 
     monkeypatch.setattr(integrate_schema._connect, "complete_account_connect", refuse)
-    result = _data(_execute(_schema(), '''mutation {
+    result = _data(
+        _execute(
+            _schema(),
+            """mutation {
       connect_account_complete(code: "code", state: "state", redirect_uri: "https://app.example/callback") {
         error error_code account { id }
       }
-    }''', user=integration.owner))["connect_account_complete"]
+    }""",
+            user=integration.owner,
+        )
+    )["connect_account_complete"]
     assert result == {
         "error": "Detach this credential from its integrations before changing the external account.",
-        "error_code": "account_switch_refused", "account": None,
+        "error_code": "account_switch_refused",
+        "account": None,
     }

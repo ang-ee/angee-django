@@ -61,7 +61,14 @@ from angee.base.changesets import current_changeset
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.merge import references
-from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, Statement, StatementSourceMixin
+from angee.base.mixins import (
+    AuditMixin,
+    HistoryMixin,
+    SourceKind,
+    Statement,
+    StatementLinkMixin,
+    StatementSourceMixin,
+)
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
@@ -3767,6 +3774,7 @@ class SyncStreamManager(AngeeManager):
                 kind=latest.kind,
                 direction=latest.direction if direction is None else direction,
                 snapshot=latest.snapshot if snapshot is None else snapshot,
+                authoritative=latest.authoritative,
                 generation=latest.generation + 1,
                 cursor={} if cursor is None else cursor,
                 last_advanced_at=timezone.now() if cursor else None,
@@ -3794,6 +3802,33 @@ class SyncStreamManager(AngeeManager):
             if not latest.resync_required:
                 latest.resync_required = True
                 latest.save(update_fields=["resync_required", "updated_at"])
+            return latest
+
+    def set_authoritative(self, stream: Any, authoritative: bool) -> Any:
+        """Flip whether the stream's source is the system of record, then re-derive its subjects.
+
+        The knob lives on the stream's current generation. Statements are retained,
+        so the flip is a re-derivation: survivorship re-runs for every subject with
+        a current statement linked through this stream, under the caller's changeset.
+        The caller authorizes the flip on the stream's integration.
+        """
+
+        with system_context(reason="integrate.stream.set_authoritative"), transaction.atomic():
+            latest = self._lock_latest(stream)
+            if latest.authoritative != authoritative:
+                latest.authoritative = authoritative
+                latest.save(update_fields=["authoritative", "updated_at"])
+            for reference in references(apps.get_model("integrate", "RecordLink")):
+                if not issubclass(reference.model, Statement):
+                    continue
+                linked = reference.model._base_manager.filter(
+                    **{f"{reference.name}__stream": latest}, superseded__isnull=True
+                )
+                subjects = reference.model.statement_subject_model._base_manager.filter(
+                    pk__in=linked.values("subject_id")
+                )
+                for subject in subjects.order_by("pk").iterator():
+                    reference.model.objects.resolve(subject=subject)
             return latest
 
     def _lock_latest(self, stream: Any) -> Any:
@@ -3850,6 +3885,16 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
     kind = StateField(choices_enum=StreamKind)
     direction = StateField(choices_enum=StreamDirection)
     snapshot = models.BooleanField(default=False)
+    authoritative = models.BooleanField(default=False)
+    """Whether this stream's source is the system of record for the aspects it asserts.
+
+    Set on a SYSTEM_OF_RECORD source, its statements outrank people's ordinary
+    (normal-rank) edits in every aspect whose precedence lists that kind; unset,
+    the stream is a system of reference below people. A person's confirm or
+    dismiss stays on top either way. Flip through
+    :meth:`SyncStreamManager.set_authoritative`: statements are retained, so the
+    flip is a re-derivation, never a migration.
+    """
     generation = models.PositiveIntegerField(default=1)
     phase = StateField(choices_enum=StreamPhase, default=StreamPhase.BASELINE)
     state = StateField(choices_enum=StreamState, default=StreamState.OPEN)
@@ -4213,7 +4258,7 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             return link
 
 
-class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, AngeeDataModel):
+class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, StatementLinkMixin, AngeeDataModel):
     """A remote identity retaining observations, application facts and run state.
 
     ``applied_base`` pins this link's own historical application snapshot; an
@@ -4232,7 +4277,15 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
     merge_policy = MergePolicy.MOVE
     runtime = True
     sqid_prefix = "rlk_"
+    authority_related = ("stream",)
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
+
+    @property
+    def authoritative(self) -> bool:
+        """The stream decides authority for every statement this link backs."""
+
+        return bool(self.stream.authoritative)
+
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     external_key = models.CharField(max_length=512)
     asserted_by = models.TextField(blank=True, editable=False)

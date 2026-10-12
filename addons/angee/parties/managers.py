@@ -45,7 +45,8 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.identity import EvidenceReference, instances_from_public_ids, public_id_for
+from angee.base.evidence import EvidenceReference
+from angee.base.identity import instances_from_public_ids, public_id_for
 from angee.base.impl import resolve_hooks
 from angee.base.merge import references
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
@@ -108,7 +109,7 @@ class HandleAssociationAssessment:
     """Closed risk status plus association rows already readable by the actor."""
 
     status: HandleAssociationStatus
-    readable_links: tuple[Any, ...]
+    readable_statements: tuple[Any, ...]
     conflict_evidence_readable: bool
 
 
@@ -521,17 +522,9 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                     handle=handle,
                     subject__is_trashed=False,
                 )
-                .select_related("subject")
+                .select_related("subject", "link__stream")
             )
-            winner = min(
-                candidates,
-                key=lambda row: (
-                    *row.sort_key()[:2],
-                    not row.subject.has_real_name,
-                    *row.sort_key()[2:],
-                ),
-                default=None,
-            )
+            winner = min(candidates, key=lambda row: row.sort_key(), default=None)
             previous = handle.party_id
             resolved = winner.subject_id if winner else None
             confirmed = bool(winner and winner.is_confirmed)
@@ -663,15 +656,13 @@ class PartyStatementQuerySet(StatementQuerySet):
         )
 
     def readable(self, actor: Any) -> Any:
-        """Serving projection only; shadow tables have no independent read grants."""
-        return (
-            super()
-            .readable(actor)
-            .handles()
-            .filter(
-                handle_id__in=Subquery(read_scoped_queryset(apps.get_model("parties", "Handle"), actor).values("pk")),
-            )
-        )
+        """Serving projection only; shadow tables have no independent read grants.
+
+        The Handle gate is applied eagerly (``scoped()``): a lazily scoped queryset
+        embedded as a subquery compiles without the actor's scope.
+        """
+        handles = read_scoped_queryset(apps.get_model("parties", "Handle"), actor)
+        return super().readable(actor).handles().filter(handle_id__in=Subquery(handles.scoped().values("pk")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1210,49 +1201,52 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         handle.require_access("read", actor)
         visible = self.handle_statements().readable(actor).members()
         readable = tuple(visible.filter(handle_id=handle.pk).select_related("subject").order_by("pk"))
-        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
+        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_statements=readable)
 
     def _assess_claimed_handle_authorized(
         self,
         *,
         party: Any,
         handle: Any,
-        readable_links: tuple[Any, ...],
+        readable_statements: tuple[Any, ...],
     ) -> HandleAssociationAssessment:
         """Assess one exact Handle after its caller authorized Party and evidence reads."""
 
-        if any(link.handle_id != handle.pk for link in readable_links):
+        if any(statement.handle_id != handle.pk for statement in readable_statements):
             raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
         with system_context(reason="parties.statement.assess_claimed_handle"):
-            authoritative = tuple(
+            complete = tuple(
                 self.handle_statements()
                 .filter(handle_id=handle.pk, status=self.handle_statements().model.StatementStatus.ASSERTED)
                 .members()
                 .order_by("pk")
             )
-        same = tuple(link for link in authoritative if link.subject_id == party.pk)
-        if any(link.is_dismissed for link in same):
+        same = tuple(statement for statement in complete if statement.subject_id == party.pk)
+        if any(statement.is_dismissed for statement in same):
             status = HandleAssociationStatus.SAME_DISMISSED
-        elif any(link.is_confirmed and not link.is_dismissed and link.subject_id != party.pk for link in authoritative):
+        elif any(
+            statement.is_confirmed and not statement.is_dismissed and statement.subject_id != party.pk
+            for statement in complete
+        ):
             status = HandleAssociationStatus.CONFIRMED_OTHER
-        elif any(link.is_confirmed and not link.is_dismissed for link in same):
+        elif any(statement.is_confirmed and not statement.is_dismissed for statement in same):
             status = HandleAssociationStatus.SAME_CONFIRMED
-        elif any(not link.is_dismissed for link in same):
+        elif any(not statement.is_dismissed for statement in same):
             status = HandleAssociationStatus.WEAK_SAME
         else:
             status = HandleAssociationStatus.UNKNOWN
-        readable_ids = {link.pk for link in readable_links}
+        readable_ids = {statement.pk for statement in readable_statements}
         conflict_ids = {
-            link.pk
-            for link in authoritative
+            statement.pk
+            for statement in complete
             if (
-                (link.subject_id == party.pk and link.is_dismissed)
-                or (link.subject_id != party.pk and link.is_confirmed and not link.is_dismissed)
+                (statement.subject_id == party.pk and statement.is_dismissed)
+                or (statement.subject_id != party.pk and statement.is_confirmed and not statement.is_dismissed)
             )
         }
         return HandleAssociationAssessment(
             status=status,
-            readable_links=readable_links,
+            readable_statements=readable_statements,
             conflict_evidence_readable=conflict_ids.issubset(readable_ids),
         )
 
