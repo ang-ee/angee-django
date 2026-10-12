@@ -127,8 +127,8 @@ Concretely, today:
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
   the framework core (including composition from source models to `runtime/`),
   and the base addons: GraphQL via strawberry-django, relationship-based
-  authorization (REBAC), aggregates, tiered resources, history/revisions, and
-  the React frontend (layouts, list/board/form views).
+  authorization (REBAC), aggregates, tiered resources, changeset history with a
+  History tab and revert, and the React frontend (layouts, list/board/form views).
 - **Also landed.** Agents, integrations, knowledge, storage, communications,
   and MCP are available as addons. Knowledge's retrieval seam includes a skeleton
   `knowledge_graph_pgvector` plugin using lexical search; embeddings and Graph RAG

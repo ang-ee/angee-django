@@ -17,6 +17,7 @@
     "@angee/app": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/metadata": "workspace:*",
+    "@angee/provenance": "workspace:*",
     "@angee/ui": "workspace:*",
     "lucide-react": "^1.21.0"
   },

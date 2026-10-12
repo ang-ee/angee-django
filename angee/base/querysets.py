@@ -11,6 +11,7 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import NotSupportedError, connections, models, transaction
 from rebac import app_settings, system_context
 from rebac.managers import RebacQuerySet, TrackedQuerySet
+from rebac.resources import model_resource_type
 from rebac.watch import statement_keys
 
 from angee.base.changesets import changeset_model_label, current_changeset, write_group
@@ -45,6 +46,20 @@ def model_history(model: type[models.Model]) -> ModelHistory | None:
             raise NotSupportedError("History capture does not support proxy model writes.")
         return None
     return cast("ModelHistory | None", history)
+
+
+def record_history(model: type[models.Model]) -> ModelHistory | None:
+    """Return the history owner of a permission-governed record model.
+
+    History is read through the record's own REBAC gate, so a tracked table
+    without a resource type (a statement shadow table) has no readable history
+    of its own: it is read through its subject. Resource metadata and the
+    provenance history surface share this one admission rule.
+    """
+
+    if not model_resource_type(model):
+        return None
+    return model_history(model)
 
 
 class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):

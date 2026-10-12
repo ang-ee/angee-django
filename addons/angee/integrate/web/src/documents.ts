@@ -80,27 +80,3 @@ export const IntegrationSyncStream = graphql(`
   }
 `);
 
-/** Native observations are read through the actor-authorized link. */
-export const IntegrationRecordLinkHistory = graphql(`
-  query IntegrationRecordLinkHistory($id: String!, $limit: Int!, $offset: Int!) {
-    record_links_by_pk(id: $id) {
-      id
-      history(limit: $limit, offset: $offset) {
-        history_id history_date history_type source_hash remote_version
-        mapping_version dependency_digest applied_at
-      }
-    }
-  }
-`);
-
-/** Payload evidence is fetched only for the requested history row. */
-export const IntegrationRecordLinkHistoryPayload = graphql(`
-  query IntegrationRecordLinkHistoryPayload($id: String!, $historyId: Int!) {
-    record_links_by_pk(id: $id) {
-      id
-      history_record(history_id: $historyId) {
-        history_id source_payload mapped_payload
-      }
-    }
-  }
-`);

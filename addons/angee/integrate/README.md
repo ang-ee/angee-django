@@ -39,8 +39,10 @@ Each applied record retains the observe row and the application-evidence row
 (commit 8 review ruling). Pinning `applied_base` creates no pointer-only history
 row. History retention is unbounded: deployments budget both full snapshots and
 the snapshots from generation changes, when retained links follow the new epoch.
-The Streams history list shows hashes, versions and application facts; payloads
-load on demand through their authorized link.
+The Streams tab's link history drill-down is the provenance
+[History timeline](../provenance/README.md#history-surface) for the link: one
+entry per sync changeset with its hash, version, application facts and payloads
+as field deltas, read through the link's own authorization.
 
 A baseline adopts matching local identities without an applied base using remote
 values. Local-only rows may then be created remotely when a writable baseline

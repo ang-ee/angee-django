@@ -1,6 +1,7 @@
 import * as React from "react";
-import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, useRouteHref, type ResourceViewDefaultGroups } from "@angee/ui";
-import { useParams } from "@tanstack/react-router";
+import { HISTORY_TAB_ID, RecordHistoryTimeline, useRecordHistory } from "@angee/provenance";
+import { ResourceList, Form, List, Column, Field, Group, RECORD_TAB_SEARCH_KEY, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, updateRouteSearch, useChatterContent, useRouteHref, type ChatterTab, type RecordSmartButtonDescriptor, type ResourceViewDefaultGroups } from "@angee/ui";
+import { useNavigate, useParams } from "@tanstack/react-router";
 
 import { useNotesT, type NotesT } from "./i18n";
 
@@ -78,11 +79,47 @@ export function NotePage(): React.ReactElement {
   const recordId = creating ? null : routeId;
   const activeRecordId =
     !creating && typeof recordId === "string" ? recordId : null;
+  // The note's changesets: provenance owns the read, the History tab and Revert;
+  // this page shows the same entries compactly in the chatter and counts them
+  // on the Versions button, which opens the tab.
+  const history = useRecordHistory(MODEL, activeRecordId, { enabled: activeRecordId !== null });
+  const versionCount = history.data?.history?.total ?? 0;
+  const navigate = useNavigate();
+  const tabs = React.useMemo(
+    () => [
+      {
+        id: "activity",
+        label: t("record.activity"),
+        icon: "activity",
+        count: versionCount,
+        children: <RecordHistoryTimeline model={MODEL} id={activeRecordId} compact />,
+      },
+    ] satisfies readonly ChatterTab[],
+    [activeRecordId, t, versionCount],
+  );
+  const chatter = React.useMemo(() => (activeRecordId ? { tabs } : null), [activeRecordId, tabs]);
+  useChatterContent(chatter);
+  const recordSmartButtons = React.useMemo(
+    () =>
+      [
+        {
+          id: "versions",
+          icon: "versions",
+          count: versionCount,
+          label: t("record.versions"),
+          onClick: () => {
+            void navigate({ to: ".", search: updateRouteSearch({ [RECORD_TAB_SEARCH_KEY]: HISTORY_TAB_ID }) });
+          },
+        },
+      ] satisfies readonly RecordSmartButtonDescriptor[],
+    [navigate, t, versionCount],
+  );
   return (
     <div className="flex flex-col gap-4">
       {/* Open as a month-grouped list; board view switches to status lanes. */}
       <ResourceList
         resource={MODEL}
+        recordSmartButtons={recordSmartButtons}
         placement="inline"
         routed
       >
@@ -100,6 +137,11 @@ export function NotePage(): React.ReactElement {
               ? t("status.editing")
               : t("status.all")}
         </StatusSegment>
+        {activeRecordId ? (
+          <StatusSegment icon="versions">
+            {t("status.version", { count: versionCount })}
+          </StatusSegment>
+        ) : null}
         <StatuslineSpacer />
         <StatusSegment>notes.Note</StatusSegment>
         <StatusSegment icon="grid">console</StatusSegment>

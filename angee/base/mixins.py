@@ -1027,8 +1027,13 @@ class ModelHistory(HistoricalRecords):
             restored.save(using=using)
             row = restored
         else:
-            fields = [field.name for field in model._meta.local_concrete_fields if not field.primary_key]
-            changed = set(last.diff_against(previous, included_fields=fields).changed_fields)
+            # Compare the stored snapshots directly: native ``diff_against`` reads
+            # editable fields only, and a revert restores trash and audit columns too.
+            changed = {
+                field.name
+                for field in model._meta.local_concrete_fields
+                if not field.primary_key and getattr(last, field.attname) != getattr(previous, field.attname)
+            }
             if isinstance(row, TrashMixin) and "is_trashed" in changed:
                 row.revert_removal(previous, using=using)
                 changed.difference_update(row.TRASH_FIELDS)

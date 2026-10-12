@@ -112,6 +112,8 @@ const ResourceSchema = v.looseObject({
   recordEdges: v.optional(Strings),
   /** Whether the shared `merge_records` verb serves this resource: its model composes `MergeableMixin`. */
   mergeable: v.optional(v.boolean()),
+  /** Whether the provenance `history` surface serves this resource: its model keeps native history. */
+  history: v.optional(v.boolean()),
   roots: RootsSchema,
   typeNames: TypeNamesSchema,
   rowModel: v.optional(v.picklist(["client", "server"])),

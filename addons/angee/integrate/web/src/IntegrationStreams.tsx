@@ -1,14 +1,11 @@
 import type { DocumentType } from "@angee/gql/console";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import type { Row } from "@angee/metadata";
+import { RecordHistoryTimeline } from "@angee/provenance";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Button,
   Code,
-  CodeBlock,
-  Dialog,
-  ErrorBanner,
-  LoadingPanel,
   ListView,
   RowsListView,
   NavLink,
@@ -27,10 +24,10 @@ import {
   type WidgetRenderProps,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useMemo, type ReactElement } from "react";
 
 import { useIntegrateT } from "./i18n";
-import { IntegrationRecordLinkHistory, IntegrationRecordLinkHistoryPayload, IntegrationSyncStream } from "./documents";
+import { IntegrationSyncStream } from "./documents";
 
 export const INTEGRATION_STREAMS_TAB_ID = "integrate.streams";
 export const SYNC_STREAM_MODEL = "integrate.SyncStream";
@@ -46,9 +43,6 @@ interface StreamRow extends StringIdRow {
 type FailureRow = NonNullable<NonNullable<DocumentType<
   typeof IntegrationSyncStream
 >["sync_streams_by_pk"]>["failures"]>[number];
-type HistoryRow = NonNullable<DocumentType<
-  typeof IntegrationRecordLinkHistory
->["record_links_by_pk"]>["history"][number] & StringIdRow;
 
 interface LinkRow extends StringIdRow {
   model_label?: string;
@@ -89,19 +83,8 @@ export function IntegrationStreamsPane(): ReactElement {
     enabled: view !== "streams",
     models: [SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
-  const [historyOffset, setHistoryOffset] = useState(0);
-  const historyLimit = 50;
-  const historyRead = useAuthoredQuery(IntegrationRecordLinkHistory, { id: linkId ?? "", limit: historyLimit, offset: historyOffset }, {
-    dataProviderName,
-    enabled: view === "history",
-    models: [RECORD_LINK_MODEL],
-  });
-  const historyRows = useMemo(() => (historyRead.data?.record_links_by_pk?.history ?? []).map((row) => ({
-    ...row, id: String(row.history_id),
-  })), [historyRead.data]);
   const stream = streamRead.data?.sync_streams_by_pk;
   const show = useCallback((nextView: StreamView, id?: string, link?: string): void => {
-    setHistoryOffset(0);
     void navigate({ to: ".", search: updateRouteSearch({
       [INTEGRATION_STREAM_SEARCH_KEYS.integration]: id ? integrationId : undefined,
       [INTEGRATION_STREAM_SEARCH_KEYS.stream]: id,
@@ -243,19 +226,6 @@ export function IntegrationStreamsPane(): ReactElement {
       },
     },
   ], [recordHref, t]);
-  const historyColumns = useMemo<readonly ListColumn<HistoryRow>[]>(() => [
-    { field: "history_date" },
-    { field: "history_type" },
-    { field: "source_hash" },
-    { field: "remote_version" },
-    { field: "mapping_version" },
-    { field: "applied_at" },
-    { field: "history_id", header: t("streams.payloads"), sortable: false, interactive: true,
-      render: (row) => <HistoryPayload link={linkId ?? ""}
-        historyId={Number(row.history_id)}
-        dataProviderName={dataProviderName} />,
-    },
-  ], [dataProviderName, linkId, t]);
   const linkActions = useMemo<readonly RowActionDeclaration<LinkRow>[]>(() => [
     defineRowAction<LinkRow>({
       kind: "page", id: "pin", label: t("streams.pin"), variant: "ghost",
@@ -309,25 +279,12 @@ export function IntegrationStreamsPane(): ReactElement {
       toolbarActions={toolbar}
     />
   ) : view === "history" ? (
-    <RowsListView<HistoryRow>
-      key={`history:${linkId}`}
-      rows={historyRows}
-      fetching={historyRead.isFetching}
-      error={historyRead.error}
-      presentation="embedded"
-      scope="local"
-      columns={historyColumns}
-      toolbarActions={<>{toolbar}
-        <Button size="sm" variant="ghost" disabled={historyOffset === 0 || historyRead.isFetching}
-          onClick={() => setHistoryOffset((offset) => Math.max(0, offset - historyLimit))}>
-          {t("streams.previousHistory")}
-        </Button>
-        <Button size="sm" variant="ghost" disabled={historyRows.length < historyLimit || historyRead.isFetching}
-          onClick={() => setHistoryOffset((offset) => offset + historyLimit)}>
-          {t("streams.nextHistory")}
-        </Button>
-      </>}
-    />
+    // A link's observations are its record history: the provenance timeline shows
+    // each sync's payload, hash and application facts as field deltas per changeset.
+    <div key={`history:${linkId}`} className="grid min-w-0 gap-3">
+      <div className="flex flex-wrap items-center gap-2">{toolbar}</div>
+      <RecordHistoryTimeline model={RECORD_LINK_MODEL} id={linkId} dataProviderName={dataProviderName} />
+    </div>
   ) : (
     <ListView<LinkRow>
       key={`links:${streamId}`}
@@ -342,34 +299,6 @@ export function IntegrationStreamsPane(): ReactElement {
       toolbarActions={toolbar}
     />
   );
-}
-
-/** Native dialog lifecycle controls when payload evidence is fetched. */
-function HistoryPayload({ link, historyId, dataProviderName }: {
-  link: string; historyId: number; dataProviderName?: string;
-}): ReactElement {
-  const t = useIntegrateT();
-  const [open, setOpen] = useState(false);
-  const read = useAuthoredQuery(IntegrationRecordLinkHistoryPayload, { id: link, historyId }, {
-    dataProviderName, enabled: open, models: [RECORD_LINK_MODEL],
-  });
-  const row = read.data?.record_links_by_pk?.history_record;
-  return <Dialog.Root open={open} onOpenChange={setOpen}>
-    <Dialog.Trigger render={<Button size="sm" variant="ghost" />}>{t("streams.payloads")}</Dialog.Trigger>
-    <Dialog.Portal>
-      <Dialog.Backdrop />
-      <Dialog.Content>
-        <Dialog.Header>
-          <Dialog.Title>{t("streams.payloads")}</Dialog.Title>
-          <Dialog.Close />
-        </Dialog.Header>
-        <Dialog.Body>
-          {read.isFetching ? <LoadingPanel /> : read.error ? <ErrorBanner description={read.error.message} /> :
-            <CodeBlock>{JSON.stringify(row, null, 2)}</CodeBlock>}
-        </Dialog.Body>
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>;
 }
 
 /** Compact top-level cursor evidence; nested payloads never enter the cell. */

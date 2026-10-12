@@ -373,6 +373,8 @@ class DataResourceMetadata:
     record_edges: tuple[str, ...] = ()
     mergeable: bool = False
     """Whether the model composes ``MergeableMixin``, so the shared ``merge_records`` verb serves it."""
+    history: bool = False
+    """Whether the model keeps native history, so the provenance ``history`` surface serves its records."""
     row_model: str = "server"
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] = ()

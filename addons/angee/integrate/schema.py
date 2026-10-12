@@ -81,7 +81,6 @@ Credential = apps.get_model("integrate", "Credential")
 WebhookSubscription = apps.get_model("integrate", "WebhookSubscription")
 SyncStream = apps.get_model("integrate", "SyncStream")
 RecordLink = apps.get_model("integrate", "RecordLink")
-RecordLinkHistory = RecordLink.history.model
 User = get_user_model()
 _OPEN_FAILURE_LINKS = Prefetch(
     "links",
@@ -740,7 +739,8 @@ def apply_integration_patch_fields(
     provided: set[str] = set()
     if data.credential is not strawberry.UNSET:
         credential = (
-            None if data.credential is None
+            None
+            if data.credential is None
             else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
         )
         target.attach_credential(credential)
@@ -894,9 +894,7 @@ class ConnectionMutation:
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            oauth_client = integration.connect_oauth_client(
-                capfirst(str(integration._meta.verbose_name))
-            )
+            oauth_client = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
             return connect_integration_target(
                 info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
@@ -1213,20 +1211,35 @@ class IntegrationConnectionMixin:
 
         return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
 
-    @strawberry_django.field(only=[
-        "owner_id", "lifecycle", "credential_id", "discovery_retry_at", "discovery_generation",
-        "discovery_completed_at",
-    ], extensions=[PermissionsExtension(("resume",), model=Integration)], prefetch_related=[_connection_credential])
+    @strawberry_django.field(
+        only=[
+            "owner_id",
+            "lifecycle",
+            "credential_id",
+            "discovery_retry_at",
+            "discovery_generation",
+            "discovery_completed_at",
+        ],
+        extensions=[PermissionsExtension(("resume",), model=Integration)],
+        prefetch_related=[_connection_credential],
+    )
     def can_resume(self) -> bool:
         """Project the model's admission to resume its current grant."""
 
         return bool(cast(Any, self).can_resume())
 
-    @strawberry_django.field(only=[
-        "owner_id", "lifecycle", "credential_id", "discovery_retry_at", "discovery_generation",
-        "discovery_completed_at",
-    ], extensions=[PermissionsExtension(("retry_discovery",), model=Integration)],
-        prefetch_related=[_connection_credential])
+    @strawberry_django.field(
+        only=[
+            "owner_id",
+            "lifecycle",
+            "credential_id",
+            "discovery_retry_at",
+            "discovery_generation",
+            "discovery_completed_at",
+        ],
+        extensions=[PermissionsExtension(("retry_discovery",), model=Integration)],
+        prefetch_related=[_connection_credential],
+    )
     def can_retry_discovery(self) -> bool:
         """Project the model's admission to retry settled discovery."""
 
@@ -1275,8 +1288,7 @@ class IntegrationOAuthMixin:
     @strawberry_django.field(
         only=["vendor_id", "concrete_type_id"],
         annotate={
-            name: partial(_oauth_projection, name)
-            for name in ("_connection_vendor_slug", "_connection_impl_key")
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")
         },
     )
     def is_oauth_connectable(self) -> bool:
@@ -1482,23 +1494,6 @@ class SyncFailureType:
         return cast(SyncFailure, cast(Any, self)._original_model).is_open
 
 
-@strawberry_django.type(RecordLinkHistory)
-class RecordLinkHistoryType:
-    """Native observations, read only through an authorized link."""
-
-    history_id: auto
-    history_date: auto
-    history_type: auto
-    source_payload: JSON
-    source_hash: auto
-    remote_version: auto
-    mapped_payload: JSON
-    mapping_version: auto
-    dependency_digest: auto
-    applied_at: auto
-    outbox_state: auto
-
-
 @strawberry_django.type(SyncStream)
 class SyncStreamType(AngeeNode):
     """Read-only inspection of a bridge partition's retained epoch."""
@@ -1573,18 +1568,6 @@ class RecordLinkType(AngeeNode):
     @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:
         return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]
-
-    @strawberry_django.field
-    def history(self, limit: int = 50, offset: int = 0) -> list[RecordLinkHistoryType]:
-        """Page native history beneath this link's authorization boundary."""
-        if not 1 <= limit <= 500 or offset < 0:
-            raise ValidationError("History requires a positive bound up to 500 and a nonnegative offset.")
-        return list(cast(Any, self).history.defer("source_payload", "mapped_payload")[offset : offset + limit])
-
-    @strawberry_django.field
-    def history_record(self, history_id: int) -> RecordLinkHistoryType | None:
-        """Load one immutable snapshot through its authorized link."""
-        return cast(Any, self).history.filter(history_id=history_id).first()
 
     @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def model_label(self) -> str:
@@ -1746,7 +1729,12 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
     """Compose native patch authorization with model-owned credential attachment."""
 
     def update(
-        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None,
+        self,
+        info: strawberry.Info,
+        pk: str,
+        data: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
     ) -> Any:
         fields = dict(data)
         credential_id = fields.pop("credential", strawberry.UNSET)
@@ -1759,8 +1747,14 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
                 target.lock_capability()
             instance = super().update(info, pk, fields, expected_revision=expected_revision)
             if credential_id is not strawberry.UNSET:
-                credential = None if credential_id is None else require_instance_for_id(
-                    Credential, credential_id, queryset=write_queryset(Credential),
+                credential = (
+                    None
+                    if credential_id is None
+                    else require_instance_for_id(
+                        Credential,
+                        credential_id,
+                        queryset=write_queryset(Credential),
+                    )
                 )
                 instance.attach_credential(credential)
             return instance
@@ -1989,7 +1983,6 @@ class WebhookActionMutation:
 _CONSOLE_TYPES: list[object] = [
     SyncStreamType,
     RecordLinkType,
-    RecordLinkHistoryType,
     SyncFailureType,
     *_SYNC_STREAM_RESOURCE.types,
     *_RECORD_LINK_RESOURCE.types,
