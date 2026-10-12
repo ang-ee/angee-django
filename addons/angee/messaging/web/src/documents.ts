@@ -105,7 +105,8 @@ export const MessageSenderFields = graphql(`
     display_name
     value
     party_link_confirmed
-    party { id display_name }
+    avatar { id url }
+    party { id display_name display_avatar { id url } }
   }
 `);
 
