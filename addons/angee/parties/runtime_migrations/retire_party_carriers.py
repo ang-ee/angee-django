@@ -55,13 +55,28 @@ def _links(apps, db, folder, row, party_pk):
     )
 
 
+def _payloads(apps, db, links):
+    """Every source payload retained for ``links``, in the shape this state holds.
+
+    After integrate's fold the link and its native history carry the payloads; before
+    it (the preflight runs at the pre-upgrade state) the legacy ``RecordRevision`` rows do.
+    """
+    ids = [link.pk for link in links]
+    link_fields = {field.name for field in apps.get_model("integrate", "RecordLink")._meta.fields}
+    if "source_payload" in link_fields:
+        payloads = [link.source_payload for link in links]
+        payloads.extend(_rows(apps, "integrate.HistoricalRecordLink", db).filter(id__in=ids).values_list(
+            "source_payload", flat=True,
+        ))
+        return [payload or {} for payload in payloads]
+    return [payload or {} for payload in _rows(apps, "integrate.RecordRevision", db).filter(
+        link_id__in=ids,
+    ).order_by("link_id", "number").values_list("source_payload", flat=True)]
+
+
 def _retained_vcard(apps, db, links, raw_vcard):
     expected = vcard_lines(raw_vcard)
-    payloads = [link.source_payload for link in links]
-    payloads.extend(_rows(apps, "integrate.HistoricalRecordLink", db).filter(
-        id__in=[link.pk for link in links],
-    ).values_list("source_payload", flat=True))
-    return any(vcard_lines((payload or {}).get("raw_vcard")) == expected for payload in payloads)
+    return any(vcard_lines(payload.get("raw_vcard")) == expected for payload in _payloads(apps, db, links))
 
 
 
@@ -90,7 +105,8 @@ def plan(apps, db, *, folded=True):
         for name, aspects in (("Party", ("identity", "contact")), ("Person", ("name", "dates")),
                               ("Organization", ("legal_identity",)), ("Address", ("address",)),
                               ("Relationship", ("relationship",))):
-            history = _rows(apps, "parties.Historical" + name + "Statement", db)
+            # Statement history exists only once the parties statement schema has run.
+            history = _rows(apps, "parties.Historical" + name + "Statement", db) if folded else None
             for row in _rows(apps, "parties." + name, db).order_by("pk").iterator():
                 party = row if name == "Party" else _rows(apps, "parties.Party", db).filter(
                     pk=row.party_id if name in ("Address", "Relationship") else row.pk,
@@ -120,7 +136,9 @@ def plan(apps, db, *, folded=True):
                     continue
                 if row.raw_vcard and not _retained_vcard(apps, db, links, row.raw_vcard):
                     notices.append(f"Party {row.pk}: card not retained on any link; its local values stay unasserted")
-                if row.extensions and not any(link.source_payload.get("extensions") == row.extensions for link in links):
+                if row.extensions and not any(
+                    payload.get("extensions") == row.extensions for payload in _payloads(apps, db, links)
+                ):
                     problems.append(Problem("Party", row.pk, "extension data is not retained on the card link"))
         vetoes = _rows(apps, "parties.MergeVeto", db)
         statements = _rows(apps, "parties.PartySameAsPairStatement", db) if folded else None

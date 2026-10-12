@@ -190,6 +190,23 @@ def _required_message() -> str:
     return message
 
 
+_process_boundary: _ChangesetBoundary | None = None
+"""The boundary a whole-process entrypoint publishes to every thread it starts.
+
+A management command (``angee.compose.manage.main``) and a test (the ``angee.testing``
+fixture) own the process while they run, so a thread or pool they start without
+copying the context (``threading.Thread``, ``ThreadPoolExecutor``) writes under their
+boundary, in its own row. Concurrent entrypoints (requests, connections, tasks) never
+publish one: their threads carry the context explicitly (``copy_context().run``).
+"""
+
+
+def _open_boundary() -> _ChangesetBoundary | None:
+    """The boundary this thread writes under: its context's, else the process's."""
+
+    return _current_changeset.get() or _process_boundary
+
+
 def current_changeset(*, required: bool = False, record: bool = False) -> ChangesetLike | None:
     """Return the concrete open changeset, recording it before a captured write.
 
@@ -199,7 +216,7 @@ def current_changeset(*, required: bool = False, record: bool = False) -> Change
     on the first captured write (``required`` or ``record``).
     """
 
-    boundary = _current_changeset.get()
+    boundary = _open_boundary()
     if boundary is None:
         if required and app_settings.REBAC_STRICT_MODE:
             raise ChangesetRequired(_required_message())
@@ -212,7 +229,7 @@ def current_changeset(*, required: bool = False, record: bool = False) -> Change
 def mark_changeset_failed() -> None:
     """Record a handled failure on the open boundary; its changesets close as failed."""
 
-    boundary = _current_changeset.get()
+    boundary = _open_boundary()
     if boundary is not None:
         boundary.mark_failed()
 
@@ -224,21 +241,26 @@ class _ChangesetScope:
     so an async entrypoint never hops threads for the request itself.
     """
 
-    def __init__(self, facts: dict[str, object], *, fresh: bool) -> None:
+    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False) -> None:
         self.facts = facts
         self.fresh = fresh
+        self.process = process
+        self.previous_process: _ChangesetBoundary | None = None
         self.boundary: _ChangesetBoundary | None = None
         self.joined: _ChangesetBoundary | None = None
         self.token: Token[_ChangesetBoundary | None] | None = None
 
     def __enter__(self) -> Callable[[], None]:
-        existing = _current_changeset.get()
+        global _process_boundary
+        existing = _open_boundary()
         if existing is not None and not self.fresh:
             existing.refine(self.facts)
             self.joined = existing
             return existing.mark_failed
         self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh)
         self.token = _current_changeset.set(self.boundary)
+        if self.process:
+            self.previous_process, _process_boundary = _process_boundary, self.boundary
         return self.boundary.mark_failed
 
     def _leave(self, exc_type: type[BaseException] | None) -> str | None:
@@ -250,6 +272,9 @@ class _ChangesetScope:
             return None
         assert self.boundary is not None and self.token is not None
         _current_changeset.reset(self.token)
+        if self.process:
+            global _process_boundary
+            _process_boundary = self.previous_process
         return "failure" if exc_type is not None or self.boundary.failed else "success"
 
     def __exit__(
@@ -280,6 +305,7 @@ def changeset(
     origin: models.Model | None = None,
     occurred_at: datetime | None = None,
     fresh: bool = False,
+    process: bool = False,
 ) -> _ChangesetScope:
     """Open logical attribution, yielding a callback to mark a handled failure.
 
@@ -289,7 +315,9 @@ def changeset(
     grants a bypass. A changeset row is constructed when a caller needs the
     concrete instance and persisted in the first captured write's transaction;
     each writing thread and actor records its own row under the shared facts.
-    Asynchronous entrypoints use ``async with``.
+    Asynchronous entrypoints use ``async with``. ``process=True`` is for an
+    entrypoint that owns the whole process (a management command, a test): threads
+    it starts without copying the context write under this boundary too.
     """
 
     facts: dict[str, object] = {
@@ -305,7 +333,7 @@ def changeset(
         )
         if value is not None
     }
-    return _ChangesetScope(facts, fresh=fresh)
+    return _ChangesetScope(facts, fresh=fresh, process=process)
 
 
 @dataclass

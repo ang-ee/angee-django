@@ -28,12 +28,17 @@ Strict mode refuses a captured write without an open boundary
 | Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | [`angee.compose.manage.main()`](../../../angee/compose/manage.py), called by every rendered `manage.py` |
 | Bridge live session | one per session run, in the task or the spawned child | [`run_bridge_session_job`](../integrate/session_runner.py) |
 | Separate logical writes | `fresh=True` for merge, revert, seed and MCP tool calls | their owners |
+| Test | one per test, `pytest` | the `captured_changeset` fixture of the [`angee.testing.fixtures`](../../../angee/testing/fixtures.py) plugin every test host loads |
 
 A boundary stores one changeset row per writing thread and actor under its
 shared facts: Django connections are per thread, so a worker started with
 `copy_context().run` records its own row in its own transaction, and a loop that
 changes the ambient actor records one row per actor. All rows close with the
-boundary's outcome. A `manage.py` rendered before the framework owned the
+boundary's outcome. An entrypoint that owns the whole process (a management
+command, a test) opens its boundary with `process=True`, so a plain thread or
+pool it starts without copying the context writes under it too, in its own row;
+concurrent entrypoints (requests, connections, tasks) never publish one, and their
+threads carry the context explicitly. A `manage.py` rendered before the framework owned the
 entrypoint has no boundary; its first captured write fails naming the remedy
 (call `angee.compose.manage.main()`; re-render from the project template).
 

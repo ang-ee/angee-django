@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import Any
@@ -66,6 +67,27 @@ def test_main_attributes_a_command_to_one_closed_changeset(
     assert changeset_of(system_queryset(OwnedRow).get()) == context
     assert (context.change_reason, context.activity, context.actor) == (f"manage.{command}", "system", "")
     assert (context.state, context.outcome) == ("closed", "success")
+
+
+def test_a_thread_a_command_starts_writes_under_the_command_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """A whole-process entrypoint publishes its boundary: a plain thread writes under it, in its own row."""
+
+    def command(argv: list[str]) -> None:
+        write("main thread")
+        thread = threading.Thread(target=lambda: (write("plain thread"), connections.close_all()))
+        thread.start()
+        thread.join()
+
+    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setattr(manage, "execute_from_command_line", command)
+    manage.main(["manage.py", "migrate"])
+    rows = changesets()
+    assert len(rows) == 2
+    assert {row.change_reason for row in rows} == {"manage.migrate"}
+    assert {changeset_of(row) for row in system_queryset(OwnedRow).all()} == set(rows)
+    assert current_changeset() is None
 
 
 def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pytest.MonkeyPatch) -> None:

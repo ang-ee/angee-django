@@ -39,5 +39,5 @@ def main(argv: Sequence[str] | None = None) -> None:
     if command in SERVER_COMMANDS:
         execute_from_command_line(arguments)
         return
-    with changeset(fresh=True, activity="system", change_reason=f"manage.{command}"):
+    with changeset(fresh=True, activity="system", change_reason=f"manage.{command}", process=True):
         execute_from_command_line(arguments)

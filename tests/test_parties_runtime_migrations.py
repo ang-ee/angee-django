@@ -704,6 +704,31 @@ def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
     assert "raw_vcard" not in {field.name for field in legacy.model("parties.Party")._meta.fields}
 
 
+@pytest.mark.django_db(transaction=True)
+def test_preflight_reads_only_the_pre_upgrade_shape(legacy: LegacyHost, seeded: dict[str, Any]) -> None:
+    """The preflight runs before the parties statement schema: it never reads statement history."""
+
+    class PreUpgradeApps:
+        """The legacy host's apps without the models only later declarations create."""
+
+        def __init__(self, apps: Any) -> None:
+            self.apps = apps
+
+        def get_model(self, app_label: str, model_name: str | None = None) -> Any:
+            label = app_label if model_name is None else f"{app_label}.{model_name}"
+            if label.lower().startswith("parties.historical") and label.lower().endswith("statement"):
+                raise LookupError(label)
+            return self.apps.get_model(label)
+
+        def get_models(self) -> Any:
+            return self.apps.get_models()
+
+    problems, notices = retire_party_carriers.plan(PreUpgradeApps(legacy.apps), connection.alias, folded=False)
+    assert problems == []
+    rows, _notices = preflight_party_folds.blockers(legacy.apps, connection.alias)
+    assert rows == []
+
+
 def test_vcard_lines_ignore_order_and_revision_stamps() -> None:
     assert retire_party_carriers.vcard_lines(VCARD) == retire_party_carriers.vcard_lines(VCARD_REORDERED)
     assert retire_party_carriers.vcard_lines(VCARD) != retire_party_carriers.vcard_lines(VCARD.replace("Olek", "Other"))

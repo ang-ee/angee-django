@@ -33,14 +33,7 @@ import {
   type HistoryStatement,
   type RecordHistory,
 } from "./documents.console";
-import {
-  actionLabel,
-  activityLabel,
-  entryTone,
-  historyValue,
-  statementVerb,
-  statementVerbLabel,
-} from "./history-entries";
+import { entryTone, historyValue, statementVerb } from "./history-entries";
 import { useProvenanceT, type ProvenanceT } from "./i18n";
 
 /** The History tab's id; `?recordTab=history` opens it on any record. */
@@ -329,4 +322,61 @@ function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t
       </p>
     </section>
   );
+}
+
+
+/** The changeset action's label; every key is named here so the bundle liveness rule sees it. */
+function actionLabel(t: ProvenanceT, action: string | null | undefined): string {
+  switch (optionToken(action)) {
+    case "create":
+      return t("history.action.create");
+    case "update":
+      return t("history.action.update");
+    case "delete":
+      return t("history.action.delete");
+    default:
+      return optionToken(action);
+  }
+}
+
+/** The changeset activity's label, keyed statically for the same reason. */
+function activityLabel(t: ProvenanceT, activity: string | null | undefined): string {
+  switch (optionToken(activity)) {
+    case "manual":
+      return t("history.activity.manual");
+    case "pull":
+      return t("history.activity.pull");
+    case "push":
+      return t("history.activity.push");
+    case "import":
+      return t("history.activity.import");
+    case "merge":
+      return t("history.activity.merge");
+    case "revert":
+      return t("history.activity.revert");
+    case "seed":
+      return t("history.activity.seed");
+    case "system":
+      return t("history.activity.system");
+    default:
+      return optionToken(activity);
+  }
+}
+
+/** A statement version's verb label (asserted, applied, withdrawn, quarantined, deprecated). */
+function statementVerbLabel(t: ProvenanceT, verb: string): string {
+  switch (verb) {
+    case "asserted":
+      return t("history.statement.asserted");
+    case "applied":
+      return t("history.statement.applied");
+    case "withdrawn":
+      return t("history.statement.withdrawn");
+    case "quarantined":
+      return t("history.statement.quarantined");
+    case "deprecated":
+      return t("history.statement.deprecated");
+    default:
+      return verb;
+  }
 }

@@ -309,7 +309,11 @@ def run(args: argparse.Namespace) -> None:
 
                             def set_up(test=test, original=test.setUp) -> None:
                                 test.enterContext(
-                                    changeset(fresh=True, change_reason=f"manage.{args.action}.{test.id()}.fixtures")
+                                    changeset(
+                                        fresh=True,
+                                        change_reason=f"manage.{args.action}.{test.id()}.fixtures",
+                                        process=True,
+                                    )
                                 )
                                 original()
                                 # After the test's own setUp: a transactional test re-syncs the REBAC

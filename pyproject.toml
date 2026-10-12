@@ -208,9 +208,6 @@ python_files = ["test_*.py"]
 testpaths = ["tests", "addons/angee/resources/tests"]
 pythonpath = [".", "addons", "examples/addons"]
 addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
-markers = [
-  "entrypoint_boundaries: the module opens its own changeset boundaries; the root autouse boundary stays closed",
-]
 
 [tool.ruff]
 line-length = 120
