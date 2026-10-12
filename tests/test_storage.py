@@ -1181,19 +1181,30 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     assert "immutable" not in failed_precondition.get("Cache-Control", "")
 
 
+SANDBOXED = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+VIEWER = "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'"
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
-    ("payload", "mime", "disposition"),
+    ("payload", "mime", "disposition", "policy"),
     [
-        (PNG_BYTES, "image/png", "inline"),
-        (SVG_BYTES, "image/svg+xml", "attachment"),
-        (b"<!doctype html><html><body>page</body></html>", "text/html", "attachment"),
+        (PNG_BYTES, "image/png", "inline", SANDBOXED),
+        (b"%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n", "application/pdf", "inline", VIEWER),
+        (b"plain text body\n", "text/plain", "inline", VIEWER),
+        (SVG_BYTES, "image/svg+xml", "attachment", SANDBOXED),
+        (b"<!doctype html><html><body>page</body></html>", "text/html", "attachment", SANDBOXED),
     ],
 )
-def test_a_download_renders_only_a_raster_image_in_place_under_a_locked_down_policy(
-    drive: Any, settings: Any, payload: bytes, mime: str, disposition: str
+def test_a_download_renders_images_and_viewer_types_in_place_and_nothing_script_capable(
+    drive: Any, settings: Any, payload: bytes, mime: str, disposition: str, policy: str
 ) -> None:
-    """Through the composed middleware, every download is nosniff and sandboxed; only an image renders in place."""
+    """Through the composed middleware every download is nosniff under a policy that runs nothing.
+
+    A raster image renders in place sandboxed, a viewer type (PDF, text) in place
+    under the viewer policy, and anything else downloads sandboxed; a revalidation
+    keeps the policy.
+    """
 
     settings.ROOT_URLCONF = "angee.storage.urls"
     with system_context(reason="test storage download types"):
@@ -1206,8 +1217,11 @@ def test_a_download_renders_only_a_raster_image_in_place_under_a_locked_down_pol
     assert response.status_code == 200
     assert response["Content-Disposition"].split(";", 1)[0] == disposition
     assert response["X-Content-Type-Options"] == "nosniff"
-    assert response["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    assert response["Content-Security-Policy"] == policy
     response.close()
+    revalidated = Client().get(url, HTTP_IF_NONE_MATCH=response["ETag"])
+    assert revalidated.status_code == 304
+    assert revalidated["Content-Security-Policy"] == policy
 
 
 def _header_values(value: str) -> set[str]:
