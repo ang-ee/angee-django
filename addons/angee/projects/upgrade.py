@@ -13,7 +13,7 @@ from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
 from angee.base.permissions import effective_rebac_schema
-from angee.compose.migrations import runtime_migration_origin
+from angee.base.runtime_migrations import runtime_migration_origin
 
 CUTOVER_ORIGIN = "angee.projects:record_tasks"
 """The cutover's runtime-migration origin, as projects' addon.toml declares it."""
@@ -112,7 +112,10 @@ def check_cutover_guard(app_configs: Any = None, **kwargs: Any) -> list[checks.C
     """Report a process whose ``migrate`` would apply the cutover unguarded.
 
     The cutover migration holds history only; :func:`refuse_incomplete_cutover`,
-    connected to ``pre_migrate`` for projects, is its sole guard.
+    connected to ``pre_migrate`` for projects, is its sole guard. The check runs
+    before a manual ``manage.py migrate``; ``angee provision`` migrates with
+    ``--skip-checks`` and checks afterwards, so there it reports a disconnected
+    guard only once the cutover has run.
     """
 
     if any(lookup_key[0] == GUARD_DISPATCH_UID for lookup_key, *_receiver in pre_migrate.receivers):

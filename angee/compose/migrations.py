@@ -31,20 +31,14 @@ from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config
+from angee.base.runtime_migrations import ORIGIN_ATTR
 from angee.compose.history import HistoricalRuntimeConfig, historical_labels
 from angee.fs import write_atomic
 
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
-ORIGIN_ATTR = "angee_origin"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
 BASELINE_ATTR = "angee_fresh_baseline"
 logger = logging.getLogger(__name__)
-
-
-def runtime_migration_origin(migration: Migration) -> str | None:
-    """Return the ``<addon>:<name>`` origin a materialized addon runtime migration records."""
-
-    return getattr(migration, ORIGIN_ATTR, None)
 
 
 @dataclass(frozen=True, slots=True)
