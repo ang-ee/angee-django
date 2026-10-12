@@ -39,3 +39,61 @@ export function entryTone(entry: { activity: string; outcome?: string | null }):
   if (activity === "merge") return "info";
   return "success";
 }
+
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+/** The changeset action's label; every key is named here so the bundle liveness rule sees it. */
+export function actionLabel(t: Translate, action: string | null | undefined): string {
+  switch (optionToken(action)) {
+    case "create":
+      return t("history.action.create");
+    case "update":
+      return t("history.action.update");
+    case "delete":
+      return t("history.action.delete");
+    default:
+      return optionToken(action);
+  }
+}
+
+/** The changeset activity's label, keyed statically for the same reason. */
+export function activityLabel(t: Translate, activity: string | null | undefined): string {
+  switch (optionToken(activity)) {
+    case "manual":
+      return t("history.activity.manual");
+    case "pull":
+      return t("history.activity.pull");
+    case "push":
+      return t("history.activity.push");
+    case "import":
+      return t("history.activity.import");
+    case "merge":
+      return t("history.activity.merge");
+    case "revert":
+      return t("history.activity.revert");
+    case "seed":
+      return t("history.activity.seed");
+    case "system":
+      return t("history.activity.system");
+    default:
+      return optionToken(activity);
+  }
+}
+
+/** A statement version's verb label (asserted, applied, withdrawn, quarantined, deprecated). */
+export function statementVerbLabel(t: Translate, verb: string): string {
+  switch (verb) {
+    case "asserted":
+      return t("history.statement.asserted");
+    case "applied":
+      return t("history.statement.applied");
+    case "withdrawn":
+      return t("history.statement.withdrawn");
+    case "quarantined":
+      return t("history.statement.quarantined");
+    case "deprecated":
+      return t("history.statement.deprecated");
+    default:
+      return verb;
+  }
+}

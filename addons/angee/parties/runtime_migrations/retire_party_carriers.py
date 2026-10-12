@@ -17,6 +17,8 @@ reverse relations for batched reads. Neither changes canonical values or attribu
 Reverse restores empty legacy columns/tables, not a competing provenance store.
 """
 
+from typing import NamedTuple
+
 from django.conf import settings
 from django.db import migrations, models
 from rebac import system_context
@@ -62,9 +64,27 @@ def _retained_vcard(apps, db, links, raw_vcard):
     return any(vcard_lines((payload or {}).get("raw_vcard")) == expected for payload in payloads)
 
 
-def forwards(apps, schema_editor):
-    db = schema_editor.connection.alias
-    problems = []
+
+class Problem(NamedTuple):
+    """One row the retirement refuses: the preflight lists it before anything drops."""
+
+    label: str
+    pk: object
+    reason: str
+
+    def __str__(self):
+        return f"{self.label} {self.pk}: {self.reason}"
+
+
+def plan(apps, db, *, folded=True):
+    """Return (blocking problems, notices) for this state; ``folded=False`` skips post-fold parity.
+
+    The preflight composes the pre-fold checks (enrollment identity, link retention,
+    extension data, MergeVeto references); the retirement itself also proves the
+    folded statements. A card no link retains is a notice: the fold left its local
+    values on the canonical columns unasserted (ruling (b)), and the column drops.
+    """
+    problems, notices = [], []
     with system_context(reason="retire.party_carriers"):
         users = _rows(apps, settings.AUTH_USER_MODEL, db)
         for name, aspects in (("Party", ("identity", "contact")), ("Person", ("name", "dates")),
@@ -76,12 +96,12 @@ def forwards(apps, schema_editor):
                     pk=row.party_id if name in ("Address", "Relationship") else row.pk,
                 ).first()
                 if party is None:
-                    problems.append(f"{name} {row.pk}: owning party is missing")
+                    problems.append(Problem(name, row.pk, "owning party is missing"))
                     continue
                 directory = row.source == "carddav" if name == "Relationship" else bool(party.folder_id and party.source_uid)
                 actor = users.filter(pk=row.updated_by_id or row.created_by_id, kind="person").exists()
                 for aspect in aspects:
-                    if (directory or actor) and not history.filter(
+                    if folded and (directory or actor) and not history.filter(
                         subject_id=row.pk, aspect=aspect, history_change_reason="fold.party_aspects",
                     ).exists():
                         # The fold leaves imported and locally edited values without a person unasserted.
@@ -92,23 +112,25 @@ def forwards(apps, schema_editor):
                     continue
                 folder = _rows(apps, "parties.Folder", db).filter(pk=row.folder_id).first()
                 if folder is None or not row.source_uid:
-                    problems.append(f"Party {row.pk}: directory enrollment has no retained stable key")
+                    problems.append(Problem("Party", row.pk, "directory enrollment has no retained stable key"))
                     continue
                 links = list(_links(apps, db, folder, row, row.pk).order_by("-stream__generation", "pk"))
                 if not links:
-                    problems.append(f"Party {row.pk}: no RecordLink retains the directory card")
+                    problems.append(Problem("Party", row.pk, "no RecordLink retains the directory card"))
                     continue
                 if row.raw_vcard and not _retained_vcard(apps, db, links, row.raw_vcard):
-                    problems.append(f"Party {row.pk}: raw vCard is not retained on any link observation")
+                    notices.append(f"Party {row.pk}: card not retained on any link; its local values stay unasserted")
                 if row.extensions and not any(link.source_payload.get("extensions") == row.extensions for link in links):
-                    problems.append(f"Party {row.pk}: extension data is not retained on the card link")
+                    problems.append(Problem("Party", row.pk, "extension data is not retained on the card link"))
         vetoes = _rows(apps, "parties.MergeVeto", db)
-        statements = _rows(apps, "parties.PartySameAsPairStatement", db)
+        statements = _rows(apps, "parties.PartySameAsPairStatement", db) if folded else None
         for veto in vetoes.order_by("pk").iterator():
             left, right = sorted((veto.party_a_id, veto.party_b_id))
-            if not statements.filter(subject__left_id=left, subject__right_id=right, rank="preferred", source_kind="person",
-                                     snak="no_value", superseded_id=None).exists():
-                problems.append(f"MergeVeto {veto.pk}: anti-link parity is unproven")
+            if folded and not statements.filter(
+                subject__left_id=left, subject__right_id=right, rank="preferred",
+                source_kind__in=("person", "seed"), snak="no_value", superseded_id=None,
+            ).exists():
+                problems.append(Problem("MergeVeto", veto.pk, "anti-link parity is unproven"))
         # Dropping copied legacy columns may not erase earlier wire evidence.
         for name in ("HistoricalParty", "HistoricalPerson", "HistoricalOrganization"):
             for row in _rows(apps, "parties." + name, db).order_by("history_id").iterator():
@@ -116,28 +138,37 @@ def forwards(apps, schema_editor):
                     continue
                 folder = _rows(apps, "parties.Folder", db).filter(pk=row.folder_id).first()
                 if folder is None or not row.source_uid:
-                    problems.append(f"{name} {row.history_id}: historical directory identity is unproven")
+                    problems.append(Problem(name, row.history_id, "historical directory identity is unproven"))
                     continue
                 links = list(_links(apps, db, folder, row, row.id))
                 if row.raw_vcard and not _retained_vcard(apps, db, links, row.raw_vcard):
-                    problems.append(f"{name} {row.history_id}: historical raw vCard has no retained RecordLink snapshot")
-        if problems:
-            raise ValueError(f"Party carrier retirement: {len(problems)} rows block this database:\n" + "\n".join(problems))
+                    notices.append(f"{name} {row.history_id}: historical card not retained on any link; it leaves with the column")
         ct = _rows(apps, "contenttypes.ContentType", db).filter(app_label="parties", model="mergeveto").first()
         if ct is not None:
-            try:
-                _rows(apps, "auth.Permission", db).filter(content_type_id=ct.pk).delete()
-            except LookupError:
-                pass
             for model in apps.get_models():
                 if any(field.name == "history_id" for field in model._meta.fields) or model._meta.label == "auth.Permission":
                     continue
                 for field in model._meta.fields:
                     if isinstance(field, models.ForeignKey) and field.remote_field.model._meta.label_lower == "contenttypes.contenttype":
                         if model._base_manager.using(db).order_by().filter(**{field.name: ct.pk}).exists():
-                            problems.append(f"{model._meta.label}.{field.name}: retained MergeVeto reference blocks retirement")
-            if problems:
-                raise ValueError("Party carrier retirement: " + "; ".join(problems))
+                            problems.append(Problem(model._meta.label, field.name, "retained MergeVeto reference blocks retirement"))
+    return problems, notices
+
+
+def forwards(apps, schema_editor):
+    db = schema_editor.connection.alias
+    problems, notices = plan(apps, db)
+    for notice in notices:
+        print(f"Party carrier retirement: {notice}")
+    if problems:
+        raise ValueError(f"Party carrier retirement: {len(problems)} rows block this database:\n" + "\n".join(map(str, problems)))
+    with system_context(reason="retire.party_carriers"):
+        ct = _rows(apps, "contenttypes.ContentType", db).filter(app_label="parties", model="mergeveto").first()
+        if ct is not None:
+            try:
+                _rows(apps, "auth.Permission", db).filter(content_type_id=ct.pk).delete()
+            except LookupError:
+                pass
         for name, resource, subject in (("Relationship", "resource_type", "subject_type"),
                                          ("RelationshipRegistry", "resource_fk__resource_type", "subject_fk__resource_type")):
             _rows(apps, "rebac." + name, db).filter(

@@ -42,6 +42,7 @@ from angee.parties.runtime_migrations import (
     retire_party_handle,
 )
 from angee.provenance.runtime_migrations import changeset_schema, retire_reversion, statement_principal_schema
+from angee.spaces.runtime_migrations import membership_decisions
 
 CARD_COLUMNS = ("folder", "source_uid", "source_etag", "raw_vcard", "extensions")
 VCARD = "\r\n".join(
@@ -686,7 +687,7 @@ def test_retirements_name_dangling_pointers_and_accept_a_reserialized_card(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_carrier_retirement_refuses_a_card_whose_bytes_no_link_retains(
+def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
     legacy: LegacyHost, seeded: dict[str, Any]
 ) -> None:
     legacy.apply(fold_party_handle_statements)
@@ -694,8 +695,13 @@ def test_carrier_retirement_refuses_a_card_whose_bytes_no_link_retains(
     legacy.apply(circle_member_decisions)
     legacy.apply(retire_party_handle)
     legacy.rows("parties.Party").filter(pk=seeded["card"].pk).update(raw_vcard=VCARD.replace("Olek", "Someone"))
-    with pytest.raises(ValueError, match=rf"Party {seeded['card'].pk}: raw vCard is not retained"):
-        legacy.apply(retire_party_carriers)
+    # A card no link retains (a local edit with no actor) is a notice, not a refusal (ruling (b)):
+    # the fold left its values unasserted and the preflight and the retirement both say so.
+    problems, notices = retire_party_carriers.plan(legacy.apps, connection.alias, folded=False)
+    assert problems == []
+    assert f"Party {seeded['card'].pk}: card not retained on any link; its local values stay unasserted" in notices
+    legacy.apply(retire_party_carriers)
+    assert "raw_vcard" not in {field.name for field in legacy.model("parties.Party")._meta.fields}
 
 
 def test_vcard_lines_ignore_order_and_revision_stamps() -> None:
@@ -711,6 +717,16 @@ def _main_like_state() -> ProjectState:
     """The affected tables as a database at ``main`` holds them, before any lane declaration."""
     state = ProjectState()
     state.add_model(ModelState.from_model(ContentType))
+    state.add_model(
+        ModelState(
+            "spaces",
+            "Membership",
+            [
+                ("id", models.BigAutoField(primary_key=True)),
+                ("source", models.CharField(max_length=16, default="manual")),
+            ],
+        )
+    )
     state.add_model(
         ModelState(
             "iam", "User", [("id", models.BigAutoField(primary_key=True)), ("kind", models.CharField(max_length=8))]
@@ -856,6 +872,7 @@ CHAIN = {
         retire_record_sync_hash_bases,
         record_link_failure_status,
     ),
+    "angee.spaces": (membership_decisions,),
     "angee.parties": (
         preflight_party_folds,
         party_statement_schema,
@@ -911,6 +928,8 @@ def test_chain_plans_the_preflight_before_every_destructive_declaration_from_mai
     rounds = _rounds(_main_like_state())
     assert rounds[preflight_party_folds] == 0
     assert all(rounds[module] > rounds[preflight_party_folds] for module in DESTRUCTIVE)
+    # spaces drops its roster labels only after the parties preflight round.
+    assert rounds[membership_decisions] > rounds[preflight_party_folds]
     assert rounds[changeset_schema] < rounds[statement_principal_schema] < rounds[retire_reversion]
     assert rounds[statement_principal_schema] < rounds[party_statement_schema] <= rounds[fold_party_handle_statements]
     assert (

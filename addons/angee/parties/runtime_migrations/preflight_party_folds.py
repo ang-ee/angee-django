@@ -1,4 +1,4 @@
-"""Name every row the parties folds would refuse before any destructive declaration runs.
+"""Name every row the parties folds or retirements would refuse before anything destructive runs.
 
 The folds are proven-or-blocked, and the integrate and provenance retirements that
 precede them in the chain are irreversible. This declaration evaluates both folds'
@@ -21,10 +21,12 @@ This body composes the fold modules' predicates instead of copying them, so the
 preflight and the folds cannot disagree; those modules are append-only history.
 """
 
+from collections import Counter
+
 from django.conf import settings
 from django.db import migrations
 
-from angee.parties.runtime_migrations import fold_party_aspects, fold_party_handle_statements
+from angee.parties.runtime_migrations import fold_party_aspects, fold_party_handle_statements, retire_party_carriers
 
 
 def applies(state):
@@ -36,7 +38,12 @@ def blockers(apps, db):
     _, _, handle_blockers, notices = fold_party_handle_statements.plan(apps, db)
     _, _, _, aspect_blockers, aspect_notices = fold_party_aspects.plan(apps, db)
     notices.update(aspect_notices)
-    return [*handle_blockers, *aspect_blockers], notices
+    # The carrier retirement's pre-fold checks: enrollment identity, link retention,
+    # extension data, MergeVeto references. Its post-fold parity proves the folds' own
+    # output and cannot refuse rows the folds accepted.
+    retirement_problems, retirement_notices = retire_party_carriers.plan(apps, db, folded=False)
+    notices.update(Counter(retirement_notices))
+    return [*handle_blockers, *aspect_blockers, *retirement_problems], notices
 
 
 def forwards(apps, schema_editor):

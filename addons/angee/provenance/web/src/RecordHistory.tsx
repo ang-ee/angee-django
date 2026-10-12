@@ -33,7 +33,14 @@ import {
   type HistoryStatement,
   type RecordHistory,
 } from "./documents.console";
-import { entryTone, historyValue, statementVerb } from "./history-entries";
+import {
+  actionLabel,
+  activityLabel,
+  entryTone,
+  historyValue,
+  statementVerb,
+  statementVerbLabel,
+} from "./history-entries";
 import { useProvenanceT, type ProvenanceT } from "./i18n";
 
 /** The History tab's id; `?recordTab=history` opens it on any record. */
@@ -107,7 +114,7 @@ export function RecordHistoryTimeline({
   if (history === null) {
     return query.isLoading
       ? <LoadingPanel message={t("history.loading")} density="inline" />
-      : <ErrorBanner title={t("history.unavailable")} />;
+      : <ErrorBanner title={t("history.unavailable")} description={null} />;
   }
   if (history.total === 0) {
     return (
@@ -201,8 +208,8 @@ function EntryTitle({ entry, t }: { entry: HistoryEntry; t: ProvenanceT }): Reac
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
       {actor}
-      <span className="font-normal text-fg-muted">{t(`history.activity.${optionToken(entry.activity)}`)}</span>
-      <Badge tone="neutral">{t(`history.action.${optionToken(entry.action)}`)}</Badge>
+      <span className="font-normal text-fg-muted">{activityLabel(t, entry.activity)}</span>
+      <Badge tone="neutral">{actionLabel(t, entry.action)}</Badge>
       {entry.source_kind ? <Chip size="sm" tone="info">{titleCase(optionToken(entry.source_kind))}</Chip> : null}
     </span>
   );
@@ -288,7 +295,7 @@ function StatementVersions({ statements, t }: { statements: readonly HistoryStat
         {statements.map((statement, index) => (
           <li key={`${statement.id}:${index}`} className="flex min-w-0 flex-wrap items-center gap-1.5 text-13">
             <Badge tone={statementVerb(statement) === "withdrawn" ? "warning" : "neutral"}>
-              {t(`history.statement.${statementVerb(statement)}`)}
+              {statementVerbLabel(t, statementVerb(statement))}
             </Badge>
             <span className="font-medium text-fg">{statement.aspect}</span>
             <Chip size="sm" tone="info">{titleCase(optionToken(statement.source_kind))}</Chip>
