@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist
 from django.db import models
 from django.db.models.functions import Coalesce
 from rebac import (
@@ -43,6 +43,8 @@ from angee.base.tiers import ResourceTier
 from angee.base.transitions import StateTransitions
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+_SAVE_VERDICT = "_angee_save_verdict"
+"""Instance key caching the save decision for the length of one ``full_clean``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,8 +378,25 @@ class AngeeModel(TimestampMixin, RebacMixin):
             queryset = queryset.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
         return queryset.lock_if_supported(of=lock) if lock is not None else queryset
 
+    def full_clean(
+        self,
+        exclude: Collection[str] | None = None,
+        validate_unique: bool = True,
+        validate_constraints: bool = True,
+    ) -> None:
+        """Clean as Django does; uniqueness and constraints share one access decision.
+
+        See :meth:`constraint_check_scope`.
+        """
+
+        self.__dict__[_SAVE_VERDICT] = None
+        try:
+            super().full_clean(exclude, validate_unique, validate_constraints)
+        finally:
+            self.__dict__.pop(_SAVE_VERDICT, None)
+
     def validate_unique(self, exclude: Collection[str] | None = None) -> None:
-        """Check field uniqueness against every row once the actor may make this write.
+        """Check field uniqueness against every row once this row's save may proceed.
 
         See :meth:`constraint_check_scope`.
         """
@@ -387,7 +406,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
                 super().validate_unique(exclude)
 
     def validate_constraints(self, exclude: Collection[str] | None = None) -> None:
-        """Check model constraints against every row once the actor may make this write.
+        """Check model constraints against every row once this row's save may proceed.
 
         See :meth:`constraint_check_scope`.
         """
@@ -397,23 +416,57 @@ class AngeeModel(TimestampMixin, RebacMixin):
                 super().validate_constraints(exclude)
 
     def constraint_check_scope(self, step: str) -> AbstractContextManager[Any] | None:
-        """Return the scope this row's uniqueness and constraint checks run in, or ``None`` to skip them.
+        """Return the scope Django's ``step`` (``validate_unique`` or ``validate_constraints``) runs in.
 
-        Those checks compare the row with rows the actor may not read, so under an
-        actor they run in a named system context, and only once the actor holds the
-        access its write needs: ``create`` on this candidate for a new row (the
-        decision its save makes) or ``write`` on a saved one. Without that access
-        they are skipped, and the write's own gate refuses the row. Already
-        elevated, or with no actor at all, they run as they are; an actor-less
-        write is refused by its own gate.
+        Uniqueness and constraints compare this row with rows the actor may not
+        read, so under an actor they run in a named system context, and only when
+        this row's save would pass its REBAC gate (:meth:`_save_allowed`); otherwise
+        ``None`` skips them, and the save refuses the row. They run as they are for a
+        model without row policy, for a step with no rule that reads other rows,
+        inside a system context, and with no actor (where strict mode refuses an
+        actor-less read). An instance's own bypass (``sudo``) enters a system context.
         """
 
-        actor, unscoped = self.effective_actor()
-        if unscoped or actor is None:
+        if not model_resource_type(type(self)) or is_sudo() or not self._compares_other_rows(step):
             return nullcontext()
-        if not self.has_access("create" if self._state.adding else "write"):
+        if self.is_sudo():
+            return system_context(reason=f"{self._meta.label_lower}.{step}")
+        actor, _unscoped = self.effective_actor()
+        if actor is None:
+            return nullcontext()
+        if not self._save_allowed():
             return None
         return system_context(reason=f"{self._meta.label_lower}.{step}")
+
+    def _compares_other_rows(self, step: str) -> bool:
+        """Whether Django's ``step`` has a rule that reads rows other than this one."""
+
+        lineage = (type(self), *self._meta.get_parent_list())
+        if step == "validate_constraints":
+            return any(model._meta.constraints for model in lineage)
+        fields = self._meta.concrete_fields
+        return (
+            any(field.unique and not field.primary_key for field in fields)
+            or any(field.unique_for_date or field.unique_for_month or field.unique_for_year for field in fields)
+            or any(model._meta.unique_together for model in lineage)
+        )
+
+    def _save_allowed(self) -> bool:
+        """Whether this row's save would pass its REBAC gate, decided once per :meth:`full_clean`.
+
+        A candidate the check cannot evaluate (a related row that does not exist)
+        counts as refused, so its field errors stand.
+        """
+
+        if (verdict := self.__dict__.get(_SAVE_VERDICT)) is not None:
+            return bool(verdict)
+        try:
+            verdict = self.has_access("create" if self._state.adding else "write")
+        except (ObjectDoesNotExist, TypeError, ValueError):
+            verdict = False
+        if _SAVE_VERDICT in self.__dict__:
+            self.__dict__[_SAVE_VERDICT] = verdict
+        return verdict
 
     @classmethod
     def is_catalogue_model(cls) -> bool:

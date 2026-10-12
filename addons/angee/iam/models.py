@@ -45,7 +45,6 @@ from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.mixins import OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.scoping import gated_field_expression
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders
@@ -211,8 +210,8 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(
             Self,
             self.alias(
-                _iam_search_username=gated_field_expression(self, "username"),
-                _iam_search_email=gated_field_expression(self, "email"),
+                _iam_search_username=self.readable("username"),
+                _iam_search_email=self.readable("email"),
             ).filter(
                 Q(_iam_search_username__icontains=term)
                 | Q(first_name__icontains=term)
@@ -226,7 +225,7 @@ class UserQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             Self,
-            self.alias(_iam_order_username=gated_field_expression(self, "username")).order_by(
+            self.alias(_iam_order_username=self.readable("username")).order_by(
                 F("_iam_order_username").asc(nulls_last=True), "first_name", "last_name", "pk",
             ),
         )
