@@ -39,7 +39,14 @@ import httpcore2
 import httpx2
 from django.core.exceptions import ValidationError
 
-from .net import canonical_address, is_unsafe_address, parse_http_url, resolved_addresses
+from .errors import RequestNotSentError
+from .net import (
+    AddressNotAllowedError,
+    canonical_address,
+    is_unsafe_address,
+    parse_http_url,
+    resolved_addresses,
+)
 
 HTTP_TIMEOUT_SECONDS = 10
 """Default timeout (seconds) for one outbound request."""
@@ -132,7 +139,7 @@ class _PinnedBackend(httpcore2.SyncBackend):
         SNI and certificate verification on the real hostname.
         """
 
-        last_error: OSError | None = None
+        last_error: Exception | None = None
         for address in self._validated_addresses(host, port):
             try:
                 return super().connect_tcp(
@@ -143,11 +150,8 @@ class _PinnedBackend(httpcore2.SyncBackend):
                     socket_options=socket_options,
                 )
             except (httpcore2.ConnectError, httpcore2.ConnectTimeout, OSError) as exc:
-                last_error = _as_os_error(exc)
-        # Every validated address failed to connect: surface a transport ``OSError``
-        # (distinct from the gate's ``ValidationError``) so callers — e.g. webhook
-        # telemetry — record it as a transport failure, not an SSRF rejection.
-        raise last_error if last_error is not None else ConnectionError(f"{host!r} could not be reached")
+                last_error = exc
+        raise RequestNotSentError() from last_error
 
     def _validated_addresses(self, host: str, port: int) -> tuple[Any, ...]:
         """Return every resolved address for ``host``, or raise if any is unsafe."""
@@ -155,7 +159,7 @@ class _PinnedBackend(httpcore2.SyncBackend):
         addresses = tuple(canonical_address(address) for address in resolved_addresses(host, port))
         for address in addresses:
             if is_unsafe_address(address, allow_private=self._allow_private):
-                raise ValidationError("URL host resolves to an address that is not allowed.")
+                raise AddressNotAllowedError()
         return addresses
 
 
@@ -180,6 +184,14 @@ class PinnedTransport(httpx2.HTTPTransport):
                 "pinning would be disabled — re-verify PinnedTransport against the new version."
             )
         pool._network_backend = _PinnedBackend(allow_private=allow_private)
+
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
+        """Classify only native connect/handshake failures as provably not sent."""
+
+        try:
+            return super().handle_request(request)
+        except (httpx2.ConnectError, httpx2.ConnectTimeout) as error:
+            raise RequestNotSentError() from error
 
 
 class HttpClient:
@@ -279,39 +291,47 @@ class HttpClient:
             if remaining <= 0 or state.requests >= budget.requests:
                 return None
             state.requests += 1
-            with httpx2.Client(
-                transport=self.transport_factory(allow_private=allow_private),
-                timeout=min(float(HTTP_TIMEOUT_SECONDS), remaining),
-            ) as client:
-                with client.stream(
-                    "GET",
-                    current,
-                    headers=_request_headers(headers, capped=True),
-                    follow_redirects=False,
-                ) as response:
-                    if response.status_code in {301, 302, 303, 307, 308}:
-                        location = response.headers.get("location")
-                        if not location or response_redirects >= redirect_limit or state.redirects >= budget.redirects:
+            try:
+                with httpx2.Client(
+                    transport=self.transport_factory(allow_private=allow_private),
+                    timeout=min(float(HTTP_TIMEOUT_SECONDS), remaining),
+                ) as client:
+                    with client.stream(
+                        "GET",
+                        current,
+                        headers=_request_headers(headers, capped=True),
+                        follow_redirects=False,
+                    ) as response:
+                        if response.status_code in {301, 302, 303, 307, 308}:
+                            location = response.headers.get("location")
+                            if (
+                                not location or response_redirects >= redirect_limit
+                                or state.redirects >= budget.redirects
+                            ):
+                                return None
+                            response_redirects += 1
+                            state.redirects += 1
+                            current = urljoin(str(response.url), location)
+                            continue
+                        if not response.is_success:
                             return None
-                        response_redirects += 1
-                        state.redirects += 1
-                        current = urljoin(str(response.url), location)
-                        continue
-                    if not response.is_success:
-                        return None
-                    remaining_bytes = budget.bytes - state.bytes
-                    if remaining_bytes <= 0:
-                        return None
-                    response_limit = min(remaining_bytes, max_bytes) if max_bytes is not None else remaining_bytes
-                    content = _read_capped(response, max_bytes=response_limit, state=state)
-                    if content is None:
-                        return None
-                    return DownloadResult(
-                        content=content,
-                        final_url=str(response.url),
-                        content_type=response.headers.get("content-type", ""),
-                        status_code=response.status_code,
-                    )
+                        remaining_bytes = budget.bytes - state.bytes
+                        if remaining_bytes <= 0:
+                            return None
+                        response_limit = min(remaining_bytes, max_bytes) if max_bytes is not None else remaining_bytes
+                        content = _read_capped(response, max_bytes=response_limit, state=state)
+                        if content is None:
+                            return None
+                        return DownloadResult(
+                            content=content,
+                            final_url=str(response.url),
+                            content_type=response.headers.get("content-type", ""),
+                            status_code=response.status_code,
+                        )
+            except RequestNotSentError as error:
+                if response_redirects:
+                    raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
+                raise
 
     def post(
         self,
@@ -350,8 +370,11 @@ class HttpClient:
     ) -> httpx2.Response:
         """Send one pinned request to ``url`` and return the response.
 
-        Raises ``ValidationError`` when the URL or a resolved address is rejected by
-        the SSRF gate, and ``OSError`` when every validated address is unreachable.
+        Raises ``ValidationError`` when the URL is rejected by the gate, the
+        permanent ``AddressNotAllowedError`` (a ``ValidationError``) when a resolved
+        address is refused by the SSRF policy, and the transient
+        ``RequestNotSentError`` for connection/DNS/TLS failures before sending.
+        Write/read failures retain their uncertain transport type.
         ``same_origin_redirects`` follows at most that many 301/302/307/308 hops,
         retaining the method, body and headers. A changed origin raises
         ``RedirectOriginError`` before sending credentials. It is exclusive with native ``follow_redirects``;
@@ -368,9 +391,13 @@ class HttpClient:
         if max_bytes is not None and max_bytes < 1:
             raise ValueError("max_bytes must be positive when provided.")
 
+        response_seen = False
+
         def read_response(response: httpx2.Response) -> None:
             """Enforce the cap before httpx2 buffers a response or follows its redirect."""
 
+            nonlocal response_seen
+            response_seen = True
             if max_bytes is not None:
                 content = _read_capped(response, max_bytes=max_bytes)
                 if content is None:
@@ -382,15 +409,20 @@ class HttpClient:
         with httpx2.Client(
             transport=self.transport_factory(allow_private=allow_private),
             timeout=timeout,
-            event_hooks={"response": [read_response]} if max_bytes is not None else None,
+            event_hooks={"response": [read_response]},
         ) as client:
             for hop in range(same_origin_redirects + 1):
                 parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
-                response = client.request(
-                    method, url,
-                    headers=_request_headers(headers, capped=max_bytes is not None),
-                    content=body, follow_redirects=follow_redirects,
-                )
+                try:
+                    response = client.request(
+                        method, url,
+                        headers=_request_headers(headers, capped=max_bytes is not None),
+                        content=body, follow_redirects=follow_redirects,
+                    )
+                except RequestNotSentError as error:
+                    if response_seen:
+                        raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
+                    raise
                 if (
                     hop == same_origin_redirects
                     or response.status_code not in {301, 302, 307, 308}
@@ -462,14 +494,3 @@ def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx2.
     if capped:
         result["Accept-Encoding"] = "identity"
     return result
-
-
-def _as_os_error(exc: Exception) -> OSError:
-    """Return the underlying ``OSError`` for a connect failure (httpcore2 wraps it)."""
-
-    if isinstance(exc, OSError):
-        return exc
-    cause = exc.__cause__
-    if isinstance(cause, OSError):
-        return cause
-    return OSError(str(exc))

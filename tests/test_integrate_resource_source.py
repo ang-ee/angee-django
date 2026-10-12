@@ -9,6 +9,7 @@ import httpx2
 import pytest
 from django.core.exceptions import ValidationError
 
+from angee.integrate.errors import RequestNotSentError
 from angee.resources import sources
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -76,15 +77,16 @@ def test_url_source_maps_ssrf_rejection_to_resource_load_error(
         _entry("https://internal.test/data.csv").materialize()
 
 
+@pytest.mark.parametrize("error", [ConnectionRefusedError("down"), RequestNotSentError()])
 def test_url_source_maps_transport_failure_to_resource_load_error(
-    tmp_path: Path, settings: Any, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, settings: Any, monkeypatch: pytest.MonkeyPatch, error: Exception,
 ) -> None:
-    """A transport OSError surfaces as a ResourceLoadError."""
+    """Unsent requests and legacy transport failures remain ResourceLoadError."""
 
     settings.ANGEE_DATA_DIR = tmp_path
 
     def fake_get(self: Any, url: str, **kwargs: Any) -> httpx2.Response:
-        raise ConnectionRefusedError("down")
+        raise error
 
     _patch_get(monkeypatch, fake_get)
     with pytest.raises(ResourceLoadError, match="fetch failed"):

@@ -970,11 +970,14 @@ class ImplDefaultsMixin(models.Model):
         }
         return instance
 
-    def refresh_from_db(self, using: str | None = None, fields: Any = None, **kwargs: Any) -> None:
+    def refresh_from_db(
+        self, using: str | None = None, fields: Iterable[str] | None = None,
+        from_queryset: models.QuerySet[Any] | None = None,
+    ) -> None:
         """Keep the immutable-key snapshot coherent when Django reloads those fields."""
 
-        super().refresh_from_db(using=using, fields=fields, **kwargs)
         refreshed = None if fields is None else set(fields)
+        super().refresh_from_db(using=using, fields=refreshed, from_queryset=from_queryset)
         loaded = dict(getattr(self, "_loaded_impl_keys", {}))
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField) or not field.create_only:

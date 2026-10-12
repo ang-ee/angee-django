@@ -17,6 +17,7 @@ from django.db import models
 from graphql import build_client_schema, get_introspection_query, print_schema
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
 
 logger = logging.getLogger(__name__)
@@ -448,17 +449,20 @@ class OperatorDaemon:
     ) -> Any:
         """Issue an authenticated daemon REST call; return the decoded JSON body (or ``None``)."""
 
-        response = HttpClient().request(
-            method,
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.admin_bearer}",
-            },
-            body=json.dumps(payload).encode() if payload is not None else None,
-            allow_private=True,
-            timeout=timeout,
-        )
+        try:
+            response = HttpClient().request(
+                method,
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.admin_bearer}",
+                },
+                body=json.dumps(payload).encode() if payload is not None else None,
+                allow_private=True,
+                timeout=timeout,
+            )
+        except RequestNotSentError as error:
+            raise OperatorDaemonError(error.public_message) from error
         if not response.is_success:
             raise OperatorDaemonError.from_response(method, url, response.status_code, response.content)
         return response.json() if response.content else None

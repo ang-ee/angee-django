@@ -86,13 +86,18 @@ def test_agent_rename_resyncs_service_user_label(composed_tables: None) -> None:
 
 
 def test_agent_full_save_without_name_change_does_not_touch_service_user(
-    composed_tables: None,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A no-op agent save must not query or update the service-user row."""
 
     owner = User.objects.create_user(username="principal-owner-noop", email="principal-noop@example.com")
     with system_context(reason="test.agent.service_user.noop_setup"):
         agent = Agent.objects.create(name="Noop Save", owner=owner)
+
+    def unexpected_sync(agent: object) -> None:
+        raise AssertionError("A no-op full save must not reconcile reader membership.")
+
+    monkeypatch.setattr("angee.agents.grants.sync_resource_reader_role", unexpected_sync)
 
     user_table = User._meta.db_table
     with CaptureQueriesContext(connection) as captured:

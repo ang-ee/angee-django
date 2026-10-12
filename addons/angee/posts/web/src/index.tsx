@@ -1,9 +1,10 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Rss } from "lucide-react";
+import { CONNECT_RECORD_FIELDS } from "@angee/integrate";
 
 import { enPostsMessages } from "./i18n";
-import { feedForm } from "./FeedForm";
+import { feedForm, FeedConnectAction } from "./FeedForm";
 
 const posts = defineBaseAddon({
   id: "posts",
@@ -24,6 +25,11 @@ const posts = defineBaseAddon({
   icons: { posts: Rss },
   i18n: { posts: enPostsMessages },
   forms: { "posts.Feed": feedForm },
+  containers: {
+    "posts.Feed#actions": {
+      "posts.connect": { sequence: 10, requiredFields: [...CONNECT_RECORD_FIELDS], content: <FeedConnectAction /> },
+    },
+  },
 });
 
 export default posts;

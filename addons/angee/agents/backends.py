@@ -22,7 +22,6 @@ from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
 
 from angee.base.impl import ImplBase
-from angee.integrate.connect import enabled_oauth_client_from_hint
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,22 +119,6 @@ class InferenceBackend(ImplBase):
         return (
             ModelAPIError, UnexpectedModelBehavior, TimeoutError, ConnectionError, TimeoutException, NetworkError,
             *self.transient_error_types,
-        )
-
-    def connect_oauth_client(self, owner_label: str) -> Any:
-        """Return the enabled OAuth client this backend connects its provider through.
-
-        The backend's ``oauth_client`` hint is the only source; an empty hint is not
-        connectable. The bound provider's vendor slug feeds the ``{vendor}`` template.
-        """
-
-        vendor = self.provider.vendor
-        vendor_slug = str(getattr(vendor, "slug", "") or "")
-        return enabled_oauth_client_from_hint(
-            self.oauth_client,
-            owner_label=owner_label,
-            reason="agents.graphql.connect_inference_provider.oauth_client",
-            vendor_slug=vendor_slug,
         )
 
     def list_models(self) -> Sequence[InferenceModelSpec]:

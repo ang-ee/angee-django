@@ -5,6 +5,7 @@ from __future__ import annotations
 SETTINGS = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.posts.backends.FeedBackend"],
     "ANGEE_CHANNEL_BACKEND_CLASSES.feed": "angee.posts.backends.FeedChannelBackend",
+    "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS:append": ["provider_hidden"],
     # Feed backends a ``posts.Feed`` row may select. ``manual`` is the neutral
     # null-object (no source; ``ImplClassField`` requires a non-empty registry).
     # Source addons add their own with a yamlconf dotted key, e.g.
@@ -13,4 +14,3 @@ SETTINGS = {
         "manual": "angee.posts.backends.ManualFeedBackend",
     },
 }
-"""Django settings contributed when the posts addon is installed."""
