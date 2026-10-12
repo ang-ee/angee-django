@@ -1,6 +1,7 @@
 """Repository-wide attribution and principal bootstrap for native pytest hosts."""
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 
 import pytest
 from pytest_django.django_compat import is_django_unittest
@@ -34,12 +35,19 @@ def captured_changeset(request: pytest.FixtureRequest, django_db_blocker: object
     single existence query when they are present and reloads them when not.
     """
 
-    if (
-        is_django_unittest(request)
+    names = set(request.fixturenames)
+    unittest = is_django_unittest(request)
+    uses_db = bool(
+        unittest
         or request.node.get_closest_marker("django_db")
-        or {"db", "transactional_db", "composed_tables"}.intersection(request.fixturenames)
-    ):
-        with django_db_blocker.unblock():  # type: ignore[attr-defined]
+        or {"db", "transactional_db", "composed_tables"} & names
+    )
+    if uses_db and not unittest:
+        # Depend on the database fixture explicitly so this boundary is torn down
+        # (and its changeset closed) while database access is still allowed.
+        request.getfixturevalue("transactional_db" if {"transactional_db", "composed_tables"} & names else "db")
+    with django_db_blocker.unblock() if uses_db else nullcontext():  # type: ignore[attr-defined]
+        if uses_db:
             statement_sources()
-    with changeset(fresh=True, change_reason="pytest"):
-        yield
+        with changeset(fresh=True, change_reason="pytest"):
+            yield
