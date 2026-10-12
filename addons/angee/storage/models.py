@@ -266,6 +266,11 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
             raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
         return drive
 
+    def browsable(self) -> Any:
+        """Return the drives listings offer: all but the image drive, as with ``File.objects.browsable``."""
+
+        return self.exclude(slug=settings.ANGEE_STORAGE_IMAGE_DRIVE)
+
     def image_drive(self) -> Any | None:
         """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.
 
@@ -702,6 +707,15 @@ class FileQuerySet(TrashQuerySet["File"], OwnerQuerySet["File"], AngeeQuerySet["
             FileQuerySet,
             self.untrashed().filter(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, upload_state=UploadState.READY),
         )
+
+    def browsable(self) -> FileQuerySet:
+        """Return the files listings and pickers offer: all but the image drive's.
+
+        Every signed-in user reads the image drive, so its images reach a reader
+        only through the records that show them, never as a browsable gallery.
+        """
+
+        return cast(FileQuerySet, self.exclude(drive__slug=settings.ANGEE_STORAGE_IMAGE_DRIVE))
 
     def delete(self) -> tuple[int, dict[str, int]]:
         """Refuse bulk delete: it bypasses soft-trash and orphans backend bytes.

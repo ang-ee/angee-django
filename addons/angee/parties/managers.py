@@ -1843,15 +1843,20 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         Idempotent and isolated per party: an avatar that cannot move (storage
         refuses it as an image, its bytes cannot be read, storage is down) keeps its
         pointer (clearing a synced person's avatar would strip the photo from their
-        card on the next push) and is counted in a warning. With nothing to move, or
-        no image drive (a fresh database before resources load, or a refused drive of
-        that name), it returns at once.
+        card on the next push) and is counted in a warning. It provisions the image
+        drive first (storage's ``Drive.objects.image_drive``, which writes its grant),
+        so each run leaves the drive readable to every signed-in user, and returns at
+        once without one (a fresh database before resources load, or a refused drive
+        of that name) or with nothing to move.
         """
 
         files = apps.get_model("storage", "File").objects
         with system_context(reason="parties.rehome_avatars"):
+            # Provisioned first, so each run leaves the image drive with its grant, avatars to move or not.
+            if apps.get_model("storage", "Drive").objects.image_drive() is None:
+                return 0
             legacy = self.model._base_manager.exclude(avatar=None).exclude(avatar__in=files.images().values("pk"))
-            if not legacy.exists() or apps.get_model("storage", "Drive").objects.image_drive() is None:
+            if not legacy.exists():
                 return 0
             moved = 0
             for party in legacy.select_related("avatar").iterator():

@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
@@ -39,6 +39,7 @@ from angee.graphql.actions import (
     authorized_action_target,
     resolve_action_target,
 )
+from angee.graphql.capabilities import PermissionsExtension, held_permissions
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -46,7 +47,7 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
@@ -64,7 +65,8 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, PROVIDER_UNAVAILABLE, OAuthFlowError
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
 from angee.integrate.states import ConflictKeep
@@ -727,9 +729,20 @@ def apply_integration_patch_fields(
     Lifecycle is guarded by ``Integration.set_lifecycle()``, which eagerly saves
     through the transition hook. It is therefore deliberately omitted from the
     returned set so child update callers do not re-emit the state write.
+    Credential attachment and lifecycle transitions save eagerly, before unsaved
+    patch values are set.
     """
 
     provided: set[str] = set()
+    if data.credential is not strawberry.UNSET:
+        credential = (
+            None if data.credential is None
+            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
+        )
+        target.attach_credential(credential)
+    if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
+        lifecycle = IntegrationLifecycle.from_value(data.lifecycle)
+        target.set_lifecycle(lifecycle)
     if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
         target.display_name = data.display_name or ""
         provided.add("display_name")
@@ -739,13 +752,6 @@ def apply_integration_patch_fields(
     if data.owner is not strawberry.UNSET:
         target.owner = _user_from_public_id(data.owner)
         provided.add("owner")
-    if data.credential is not strawberry.UNSET:
-        target.credential = (
-            None
-            if data.credential is None
-            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
-        )
-        provided.add("credential")
     if data.account is not strawberry.UNSET:
         target.account = (
             None
@@ -753,8 +759,6 @@ def apply_integration_patch_fields(
             else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
         )
         provided.add("account")
-    if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
-        target.set_lifecycle(IntegrationLifecycle.from_value(data.lifecycle))
     return provided
 
 
@@ -807,7 +811,8 @@ def _attach_completed_integration(info: strawberry.Info, integration_sqid: str, 
         target = _concrete_integration_target(info, user, child._meta.label, PublicID(public_id_of(child)))
     except (PermissionDenied, ValueError) as error:
         raise OAuthFlowError(INVALID_STATE, 400) from error
-    target.attach_credential(credential)
+    if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
+        target.attach_credential(credential)
 
 
 def connect_integration_target(
@@ -821,8 +826,13 @@ def connect_integration_target(
     """Attach the user's live credential to an integration-like MTI row or start OAuth."""
 
     user = _session_user(info)
-    if integration.owner_id != user.pk:
-        raise PermissionDenied("Integration does not belong to the current user.")
+    integration.require_connect(user)
+    if oauth_client.configuration_state != "ready":
+        raise OAuthFlowError(
+            CLIENT_NOT_CONFIGURED,
+            400,
+            f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
+        )
     credential = Credential.objects.live_oauth_for_user(user, oauth_client)
     if credential is not None:
         if credential.user_id != user.pk:
@@ -831,12 +841,6 @@ def connect_integration_target(
         return ConnectIntegrationResult(integration=cast("ConnectedIntegrationType", integration), attached=True)
     if not redirect_uri:
         raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
-    if oauth_client.configuration_state != "ready":
-        raise OAuthFlowError(
-            CLIENT_NOT_CONFIGURED,
-            400,
-            f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
-        )
     request = _request(info)
     started = flow.start(
         request,
@@ -886,7 +890,7 @@ class ConnectionMutation:
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            oauth_client = integration.capability_impl.connect_oauth_client(
+            oauth_client = integration.connect_oauth_client(
                 capfirst(str(integration._meta.verbose_name))
             )
             return connect_integration_target(
@@ -932,7 +936,7 @@ class ConnectionMutation:
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
-        """Fetch the provider's discovery document and fill this client's blank endpoints.
+        """Fetch OIDC metadata and fill this client's blank endpoints.
 
         The resolved authorize/token/userinfo endpoints (and any composed extension
         endpoints, e.g. OIDC issuer/JWKS) are persisted on the OAuth client row, so
@@ -945,13 +949,13 @@ class ConnectionMutation:
             reason="integrate.graphql.discover_oauth_endpoints",
         ) as oauth_client:
             if not str(getattr(oauth_client, "discovery_url", "") or ""):
-                return ActionResult(ok=False, message="Set a discovery URL first.")
+                return ActionResult(ok=False, message="Set an OIDC metadata discovery URL first.")
             try:
                 discovery = oauth_client.discover_endpoints()
             except OAuthFlowError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
-                return ActionResult(ok=False, message="Provider discovery failed.")
+                return ActionResult(ok=False, message="OIDC metadata discovery failed.")
             oauth_client.save()
         issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
         return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
@@ -975,7 +979,14 @@ class ConnectionMutation:
             )
             _attach_completed_integration(info, result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
+            if error.transient:
+                error = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
             return ConnectAccountResult(error=error.public_message, error_code=error.code)
+        except IntegrationError as error:
+            if error.transient:
+                outage = OAuthFlowError(PROVIDER_UNAVAILABLE, 503)
+                return ConnectAccountResult(error=outage.public_message, error_code=outage.code)
+            return ConnectAccountResult(error=error.public_message, error_code="connection_refused")
         return ConnectAccountResult(
             account=cast(ConnectedExternalAccountType, result.account),
             credential=cast(ConnectedCredentialType, result.credential),
@@ -1162,8 +1173,116 @@ class VendorType(AngeeNode):
     updated_at: auto
 
 
+def _credential_projection(name: str, info: Any) -> Any:
+    return Integration.credential_projection_expressions()[f"_connection_{name}"]
+
+
+def _oauth_projection(name: str, info: Any) -> Any:
+    return Integration.oauth_projection_expressions()[name]
+
+
+def _connection_credential(info: Any) -> Prefetch:
+    """Batch the credential owner's current facts without projecting its secrets."""
+
+    del info
+    return Prefetch(
+        "credential",
+        queryset=Credential.objects.connection_health(),
+        to_attr="_connection_credential",
+    )
+
+
 @strawberry.type
-class IntegrationLabelMixin:
+class IntegrationConnectionMixin:
+    """Connection admissions consume batched authority and credential-owned health."""
+
+    @strawberry_django.field(
+        only=["owner_id", "vendor_id", "concrete_type_id", "credential_id"],
+        extensions=[PermissionsExtension(("write",))],
+        prefetch_related=[_connection_credential],
+        annotate={
+            **{name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")},
+        },
+    )
+    def can_connect(self) -> bool:
+        """Project the model's owner-scoped OAuth Connect admission."""
+
+        return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
+
+    @strawberry_django.field(only=[
+        "owner_id", "lifecycle", "credential_id", "discovery_retry_at", "discovery_generation",
+        "discovery_completed_at",
+    ], extensions=[PermissionsExtension(("resume",), model=Integration)], prefetch_related=[_connection_credential])
+    def can_resume(self) -> bool:
+        """Project the model's admission to resume its current grant."""
+
+        return bool(cast(Any, self).can_resume())
+
+    @strawberry_django.field(only=[
+        "owner_id", "lifecycle", "credential_id", "discovery_retry_at", "discovery_generation",
+        "discovery_completed_at",
+    ], extensions=[PermissionsExtension(("retry_discovery",), model=Integration)],
+        prefetch_related=[_connection_credential])
+    def can_retry_discovery(self) -> bool:
+        """Project the model's admission to retry settled discovery."""
+
+        return bool(cast(Any, self).can_retry_discovery())
+
+    @strawberry_django.field(
+        only=["credential_id"],
+        extensions=[PermissionsExtension(("write",))],
+        annotate={
+            f"_connection_{name}": partial(_credential_projection, name)
+            for name in ("status", "expires_at", "last_refresh_status")
+        },
+    )
+    def credential_status(self) -> str | None:
+        """Credential health is visible only to actors who may write this integration."""
+
+        if "write" not in held_permissions(cast(Any, self), ("write",)):
+            return None
+        return str(cast(Any, self).credential_status)
+
+    @strawberry_django.field(
+        only=["credential_id"],
+        extensions=[PermissionsExtension(("write",))],
+        prefetch_related=[_connection_credential],
+    )
+    def is_reconnect_required(self) -> bool | None:
+        """Project consent health only to actors who may write this integration."""
+
+        if "write" not in held_permissions(cast(Any, self), ("write",)):
+            return None
+        return bool(cast(Any, self).is_reconnect_required)
+
+    @strawberry_django.field(only=["discovery_retry_at"])
+    def discovery_pending(self) -> bool:
+        return bool(cast(Any, self).discovery_pending)
+
+    @strawberry_django.field(only=["discovery_retry_at", "discovery_generation", "discovery_completed_at"])
+    def discovery_ready(self) -> bool:
+        return bool(cast(Any, self).discovery_ready)
+
+
+@strawberry.type
+class IntegrationOAuthMixin:
+    """Registration readiness for capabilities with a declared implementation."""
+
+    @strawberry_django.field(
+        only=["vendor_id", "concrete_type_id"],
+        annotate={
+            name: partial(_oauth_projection, name)
+            for name in ("_connection_vendor_slug", "_connection_impl_key")
+        },
+    )
+    def is_oauth_connectable(self) -> bool:
+        """Read public registration readiness without resolving protected relations."""
+
+        return bool(cast(Any, self).is_oauth_connectable())
+
+
+@strawberry.type
+class IntegrationLabelMixin(IntegrationConnectionMixin):
     """Project Integration identity, credential health and saved-stream visibility.
 
     Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
@@ -1186,12 +1305,6 @@ class IntegrationLabelMixin:
         concrete_type_id = cast(Any, self).concrete_type_id
         model = ContentType.objects.get_for_id(concrete_type_id).model_class() if concrete_type_id else Integration
         return capfirst(str(model._meta.verbose_name)) if model is not None else "Integration"
-
-    @strawberry_django.field(only=["credential__status"])
-    def credential_status(self) -> str:
-        """Return the attached credential's status, or ``""`` when none is attached."""
-
-        return str(cast(Any, self).credential_status)
 
     @strawberry_django.field(annotate=Count("sync_streams", distinct=True))
     def stream_count(self) -> int:
@@ -1218,7 +1331,7 @@ class BridgeSyncStatusMixin:
 
 
 @strawberry.type
-class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
+class BridgeTypeMixin(IntegrationLabelMixin, IntegrationOAuthMixin, BridgeSyncStatusMixin):
     """Project the persisted fields shared by every ``Bridge`` child type."""
 
     owner: UserType | None
@@ -1589,6 +1702,30 @@ class SyncRecordActionMutation:
         return ActionResult(ok=True, message=_("Stream resync requested."))
 
 
+class IntegrationWriteBackend(AngeeHasuraWriteBackend):
+    """Compose native patch authorization with model-owned credential attachment."""
+
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None,
+    ) -> Any:
+        fields = dict(data)
+        credential_id = fields.pop("credential", strawberry.UNSET)
+        with transaction.atomic():
+            target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
+            target.require_access("write", _session_user(info))
+            # Native patching locks the addressed model. Acquire the final child
+            # first so parent-addressed patches share the bridge worker order.
+            with system_context(reason="integrate.graphql.patch.lock"):
+                target.lock_capability()
+            instance = super().update(info, pk, fields, expected_revision=expected_revision)
+            if credential_id is not strawberry.UNSET:
+                credential = None if credential_id is None else require_instance_for_id(
+                    Credential, credential_id, queryset=write_queryset(Credential),
+                )
+                instance.attach_credential(credential)
+            return instance
+
+
 _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
@@ -1621,7 +1758,7 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=IntegrationWriteBackend(
         Integration,
         public_id_fields=("vendor", "owner", "credential", "account"),
     ),
@@ -1701,18 +1838,22 @@ class IntegrationCredentialMutation:
 class IntegrationActionMutation:
     """Operational actions on an integration (sync, connection test)."""
 
-    # Follow-up: surface these declared lifecycle actions as console row buttons
-    # once the action metadata registry lands.
+    @strawberry.mutation
+    @action_guard("Could not retry connection discovery.")
+    def retry_discovery(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Retry discovery through the integration's bounded handshake owner."""
+
+        integration = authorized_action_target(info, Integration, id, "retry_discovery")
+        integration.retry_discovery()
+        return ActionResult(ok=True, message="Connection discovery requested.")
+
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def mark_integration_connected(self, id: PublicID) -> ActionResult:
+    @action_guard("Could not resume integration.")
+    def mark_integration_connected(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Move an integration to CONNECTED through its guarded transition."""
 
-        with action_target(
-            Integration,
-            id,
-            reason="integrate.graphql.mark_integration_connected",
-        ) as integration:
-            integration.connect()
+        integration = authorized_action_target(info, Integration, id, "write")
+        integration.resume()
         return ActionResult(ok=True, message="Connected integration.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1840,6 +1981,7 @@ _CONSOLE_TYPES: list[object] = [
 
 schemas = {
     "public": {
+        "extensions": [OAuthRegistrationExtension],
         "query": [IntegrateConnectionsQuery],
         "mutation": [ConnectionMutation, IntegrationCredentialMutation],
         "types": [
@@ -1856,6 +1998,7 @@ schemas = {
         ],
     },
     "console": {
+        "extensions": [OAuthRegistrationExtension],
         # Concrete impl-picker lookups (VcsBridge.backend_class /
         # OAuthClient.provider_type) live here; a generic framework query contributed
         # where its models do.

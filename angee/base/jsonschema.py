@@ -186,6 +186,44 @@ def materialize_schema(
     return materialized if isinstance(materialized, dict) else {"not": {}}
 
 
+def relation_positions(
+    schema: dict[str, Any], value: Any,
+) -> Iterator[tuple[tuple[str | int, ...], dict[str, Any], str]]:
+    """Locate string values at declared relation positions in a finite schema.
+
+    Local references and allOf contribute together; anyOf/oneOf contribute only
+    branches valid for the original value. Literal strings outside those
+    positions carry no relation intent.
+    """
+    if not any(node.get("relation") for node in schema_nodes(schema)):
+        return
+    schema = materialize_schema(schema, annotations=_ANNOTATIONS | {"relation"})
+
+    def visit(
+        node: Any, item: Any, path: tuple[str | int, ...],
+    ) -> Iterator[tuple[tuple[str | int, ...], dict[str, Any], str]]:
+        if not isinstance(node, dict) or item is None:
+            return
+        if (relation := node.get("relation")) and isinstance(item, str):
+            yield path, relation, item
+        if isinstance(item, dict):
+            for name, child in node.get("properties", {}).items():
+                if name in item:
+                    yield from visit(child, item[name], (*path, name))
+        elif isinstance(item, list):
+            prefix = node.get("prefixItems", ())
+            for index, element in enumerate(item):
+                yield from visit(prefix[index] if index < len(prefix) else node.get("items"), element, (*path, index))
+        for child in node.get("allOf", ()):
+            yield from visit(child, item, path)
+        for choice in ("anyOf", "oneOf"):
+            for child in node.get(choice, ()):
+                if validator(child).is_valid(item):
+                    yield from visit(child, item, path)
+
+    yield from visit(schema, value, ())
+
+
 def _intersection(parts: list[dict[str, Any]]) -> dict[str, Any]:
     """Combine compatible keys, retaining conflicting assertions through allOf."""
     combined: dict[str, Any] = {}

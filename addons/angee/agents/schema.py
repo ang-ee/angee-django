@@ -45,6 +45,7 @@ from angee.integrate.schema import (
     CredentialType,
     ExternalAccountType,
     IntegrationLabelMixin,
+    IntegrationOAuthMixin,
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
@@ -73,7 +74,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(IntegrationLabelMixin, AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, AngeeNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
@@ -188,6 +189,7 @@ class AgentType(AngeeNode):
     skills: list[SkillType]
     mcp_servers: list[MCPServerType]
     mcp_tools: list[MCPToolType]
+    resource_reader: auto
     runtime_class: auto
     workspace_template: TemplateType | None
     service_inputs: JSON
@@ -340,6 +342,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills",
         "mcp_servers",
         "mcp_tools",
+        "resource_reader",
         "runtime_class",
         "workspace_template",
         "service_inputs",
@@ -355,6 +358,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills",
         "mcp_servers",
         "mcp_tools",
+        "resource_reader",
         "runtime_class",
         "workspace_template",
         "service_inputs",
@@ -514,12 +518,6 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
 )
 
 
-def _provider_oauth_client(provider: Any) -> Any:
-    """Return the OAuth client selected by this provider's backend."""
-
-    return provider.backend.connect_oauth_client("Inference provider")
-
-
 @strawberry.type
 class InferenceProviderCreateMutation:
     """Admin create for an inference provider child row."""
@@ -573,7 +571,7 @@ class InferenceProviderConnectMutation:
             return connect_integration_target(
                 info,
                 provider,
-                _provider_oauth_client(provider),
+                provider.connect_oauth_client("Inference provider"),
                 redirect_uri=redirect_uri,
                 next_path=next,
             )

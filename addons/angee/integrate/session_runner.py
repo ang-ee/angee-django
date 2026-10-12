@@ -54,6 +54,8 @@ def run_bridge_session_job(
             return {"ok": True, "skipped": True, "reason": "not-live-desired"}
         if type(bridge).Lifecycle.from_value(bridge.lifecycle) is not type(bridge).Lifecycle.CONNECTED:
             return {"ok": True, "skipped": True, "reason": "not-connected"}
+        if not bridge.discovery_ready:
+            return {"ok": True, "skipped": True, "reason": "discovery-incomplete"}
         if impl.session_isolation not in ("thread", "process"):
             raise ImproperlyConfigured(f"Unknown live session isolation: {impl.session_isolation!r}")
         if impl.session_isolation == "process" and not in_child:
@@ -82,6 +84,8 @@ def run_bridge_session_job(
                 return {"ok": True, "skipped": True, "reason": "not-live-desired"}
             if bridge.lifecycle != bridge.Lifecycle.CONNECTED:
                 return {"ok": True, "skipped": True, "reason": "not-connected"}
+            if not bridge.discovery_ready:
+                return {"ok": True, "skipped": True, "reason": "discovery-incomplete"}
             if bridge.runtime_status != IntegrationRuntimeStatus.OK:
                 return {"ok": True, "skipped": True, "reason": "runtime-error"}
             impl = _require_live_impl(bridge)

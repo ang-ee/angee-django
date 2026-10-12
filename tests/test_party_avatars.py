@@ -23,7 +23,13 @@ from angee.parties import signals as parties_signals
 from angee.parties.backends import AvatarReport, ParsedPhoto
 from angee.parties.mixins import LinkSource
 from tests.conftest import File, SchemaAddon, execute_schema, result_data
-from tests.test_storage import PNG_BYTES, SVG_BYTES, drive, image_drive  # noqa: F401 -- the image drive avatars land on
+from tests.test_storage import (  # noqa: F401 -- the image drive avatars land on
+    EVERYONE_VIEWS,
+    PNG_BYTES,
+    SVG_BYTES,
+    drive,
+    image_drive,
+)
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("image_drive", "composed_permissions")]
 parties_schema = importlib.import_module("angee.parties.schema")
@@ -151,6 +157,19 @@ def test_avatars_stored_before_the_image_drive_move_onto_it_once_and_leave_the_o
     monkeypatch.setattr(parties_signals, "has_table", lambda _using, model: model._meta.model_name != "file")
     parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
     assert rehome.call_count == 1
+
+
+def test_every_migrate_leaves_the_image_drive_granted_with_no_avatar_to_move(
+    image_drive: Any,  # noqa: F811 -- imported shared fixture
+) -> None:
+    """A drive provisioned before its grant gains it on the deploy's migrate, before any avatar arrives."""
+
+    with system_context(reason="test image drive grant at migrate"):
+        image_drive.revoke_record_access(EVERYONE_VIEWS.relation, EVERYONE_VIEWS.subject)
+        assert image_drive.direct_record_access() == ()
+    parties_signals._rehome_avatars(app_config=SimpleNamespace(label="parties"), using="default")
+    with system_context(reason="test image drive grant at migrate read"):
+        assert image_drive.direct_record_access() == (EVERYONE_VIEWS,)
 
 
 def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> None:

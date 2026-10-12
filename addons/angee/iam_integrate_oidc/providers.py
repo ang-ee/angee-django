@@ -46,7 +46,7 @@ class GoogleType(GenericOidc):
         "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
         "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_endpoint": "https://oauth2.googleapis.com/token",
-        "userinfo_endpoint": "https://www.googleapis.com/oauth2/v2/userinfo",
+        "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo",
         "authorize_params": {"access_type": "offline"},
         "external_id_claim": "sub",
         "email_claim": "email",

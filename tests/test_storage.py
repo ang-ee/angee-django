@@ -1057,6 +1057,21 @@ def test_every_signed_in_user_reads_an_image_and_nothing_else_the_drive_opens(im
 
 
 @pytest.mark.django_db(transaction=True)
+def test_drive_and_file_listings_leave_out_the_image_drive(image_drive: Any) -> None:
+    """A user reads an image by its id, yet no listing or picker offers the drive's images as a gallery."""
+
+    with system_context(reason="test storage image listings"):
+        image = File.objects.ingest_image(PNG_BYTES)
+        private = File.objects.ingest_bytes(PNG_BYTES, filename="me.png", owner_id=image_drive.alice.pk)
+    schema = addon_schema(storage_schema.schemas, "public")
+    listed = result_data(execute_schema(schema, "{ drives { slug } files { id } }", user=image_drive.alice))
+    assert [row["slug"] for row in listed["drives"]] == [image_drive.assets.slug]
+    assert [row["id"] for row in listed["files"]] == [public_id_of(private)]
+    with actor_context(image_drive.alice):
+        assert File.objects.filter(pk=image.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_an_image_never_deduplicates_onto_a_users_file_with_the_same_bytes(image_drive: Any) -> None:
     """Deduplication stays within the image drive, so an avatar never shares a row with a private upload."""
 
