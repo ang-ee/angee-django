@@ -1701,18 +1701,36 @@ class StatementHistory(ModelHistory):
         row.save(using=first._state.db, update_fields=("superseded", "applied"))
 
     def revert_row(self, first: Any, last: Any, previous: Any) -> list[Any]:
+        """Restore the stance before the changeset, recency included; a first assertion withdraws.
+
+        ``updated_at`` is the stance's recency in :meth:`Statement.sort_key`, so a
+        restored stance keeps the recency it had: stamping the revert's time would
+        let a reverted stance outrank the stance it lost to before the changeset.
+        A withdrawal is a status transition and takes the revert's time, as
+        :meth:`StatementManager._transition` does. One captured queryset update
+        writes the row, since a save stamps ``auto_now`` columns.
+        """
         row = (previous or first).instance
-        row.applied = False
+        model = type(row)
+        using = first._state.db
+        values = {
+            field.attname: getattr(row, field.attname)
+            for field in model._meta.concrete_fields
+            if not field.primary_key
+        }
+        values.pop("changeset_id", None)  # the update attributes the writing changeset
+        values.update(applied=False)
         if previous is None:
-            row.status = row.StatementStatus.WITHDRAWN
-            row.superseded = (
-                type(row)
-                ._base_manager.using(first._state.db)
+            values.update(
+                status=row.StatementStatus.WITHDRAWN,
+                updated_at=timezone.now(),
+                superseded_id=model._base_manager.using(using)
                 .filter(**row.current_key(), superseded__isnull=True)
                 .exclude(pk=row.pk)
-                .first()
+                .values_list("pk", flat=True)
+                .first(),
             )
-        row.save(using=first._state.db)
+        model._base_manager.using(using).filter(pk=row.pk).update(**values)
         return list(self.subjects(first, last, previous))
 
 

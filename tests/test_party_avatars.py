@@ -310,3 +310,25 @@ def test_a_live_sessions_reports_land_one_by_one_and_stop_between_chunks(monkeyp
     with system_context(reason="test session avatar stop"):
         # The first chunk landed before the stop check; the second never ran.
         assert Handle._base_manager.get(external_id=_JID).avatar_id is None
+
+
+def test_a_handle_merge_gives_the_kept_handle_the_alias_avatar_only_when_it_has_none() -> None:
+    """The kept handle takes the merged alias's avatar when it shows none, and keeps its own otherwise."""
+
+    owner = _user("avatar-handle-merge-owner")
+    with system_context(reason="test handle merge avatar"):
+        alias = Handle.objects.upsert(platform="whatsapp", value="113352894324899@lid", created_by_id=owner.pk)
+        phone = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
+    alias_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES)
+    Handle.objects.set_avatar(alias, alias_avatar)
+    with system_context(reason="test handle merge avatar fill"):
+        kept = Handle.objects.merge(alias, into=phone)
+    assert kept.pk == phone.pk and kept.avatar_id == alias_avatar.pk
+
+    with system_context(reason="test handle merge avatar keep"):
+        second_alias = Handle.objects.upsert(platform="whatsapp", value="113352894324898@lid", created_by_id=owner.pk)
+    Handle.objects.set_avatar(second_alias, own_avatar)
+    with system_context(reason="test handle merge avatar keep merge"):
+        kept = Handle.objects.merge(second_alias, into=phone)
+    assert kept.avatar_id == alias_avatar.pk
+    assert not Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).exists()

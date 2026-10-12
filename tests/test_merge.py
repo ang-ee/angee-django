@@ -20,6 +20,7 @@ from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base import merge as merge_module
+from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
 from angee.base.merge import EdgeReference, ForeignKeyReference, references
 from angee.base.mixins import MergeContractMixin, SourceKind
@@ -422,6 +423,43 @@ def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() ->
     assert (older.subject_id, older.superseded_id, newer.superseded_id) == (kept.pk, None, None)
     assert (older.updated_at, min((older, newer), key=lambda row: row.sort_key()).pk) == before
     assert (newer.applied, older.applied, kept.display_name) == (True, False, "Ada Lovelace")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_reverted_stance_gets_its_recency_back_so_the_tie_break_returns_to_its_winner() -> None:
+    """Reverting a changeset that re-dated a stance restores that stance's recency, not the revert's time."""
+
+    statements = Party.statements.model
+    with system_context(reason="revert test stance recency"):
+        owner = create_user("revert-recency")
+        party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        older, newer = (
+            statements._base_manager.create(
+                subject=party,
+                aspect="identity",
+                display_name=name,
+                asserted_by=str(to_subject_ref(make_integration(slug, model=Directory))),
+                source_kind=SourceKind.DIRECTORY,
+            )
+            for name, slug in (("Ada King", "revert-older"), ("Ada Lovelace", "revert-newer"))
+        )
+        statements._base_manager.filter(pk=older.pk).update(updated_at=timezone.now() - timedelta(days=7))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        before = (older.display_name, older.updated_at)
+        assert min((older, newer), key=lambda row: row.sort_key()).pk == newer.pk
+
+        with changeset(fresh=True, change_reason="test.redate"):
+            statements._base_manager.filter(pk=older.pk).update(display_name="Ada K.", updated_at=timezone.now())
+        older.refresh_from_db()
+        assert min((older, newer), key=lambda row: row.sort_key()).pk == older.pk
+        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().changeset
+
+        with changeset(fresh=True, change_reason="test.revert"):
+            redated.revert()
+        older.refresh_from_db()
+    assert (older.display_name, older.updated_at) == before
+    assert min((older, newer), key=lambda row: row.sort_key()).pk == newer.pk
 
 
 @pytest.mark.usefixtures("workflow_step_classes")

@@ -220,6 +220,18 @@ class AngeeUnscopedQuerySet(
 class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
     """Chainable assertion scopes; the manager owns subject admission."""
 
+    def update(self, **kwargs: Any) -> int:
+        """Attribute the rows to the writing changeset, as ``Statement.save`` does.
+
+        A statement row's ``changeset`` is its last writer and its history copies
+        it, so a queryset write that left it would attribute the change to an older
+        changeset (and a revert of the writing changeset would not find it).
+        """
+
+        if "changeset" not in kwargs and "changeset_id" not in kwargs:
+            kwargs["changeset"] = current_changeset(required=True, record=True)
+        return super().update(**kwargs)
+
     def current(self) -> Any:
         return self.filter(superseded__isnull=True)
 
