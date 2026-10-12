@@ -34,5 +34,17 @@ def campaign_user(request):
 
 
 def relationship_snapshot():
-    """Observe both stores, including the inactive store, without writing grants."""
-    return tuple(list(model._base_manager.order_by("pk").values()) for model in (Relationship, RelationshipRegistry))
+    """Observe both stores, including the inactive store, without writing grants.
+
+    Attribution tuples are left out: every changeset row grants its actor read on
+    itself (``provenance/changeset``), and a boundary opens one row per actor it
+    writes under, so an operation's grants are what remains.
+    """
+    return (
+        list(Relationship._base_manager.exclude(resource_type="provenance/changeset").order_by("pk").values()),
+        list(
+            RelationshipRegistry._base_manager.exclude(resource_fk__resource_type="provenance/changeset")
+            .order_by("pk")
+            .values()
+        ),
+    )
