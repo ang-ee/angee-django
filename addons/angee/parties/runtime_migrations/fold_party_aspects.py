@@ -26,7 +26,10 @@ REBAC policy is evaluated and no actor is ever invented. Attribution per row:
 Every blocking row is collected before anything is written; ``plan()`` is the
 predicate the parties fold preflight evaluates on the pre-upgrade state. Statement
 rows carry the row's ``created_at``/``updated_at``; history rows record the fold
-time. Existing occupied statement keys block rather than overwrite evidence.
+time. Existing occupied statement keys block rather than overwrite evidence. A fold
+statement is applied unless another fold (a consumer's own, ordered before this one)
+already applied the subject's aspect: then it is recorded unapplied beside it, counted,
+and resolution arbitrates the two on the aspect's next change.
 
 Reverse is a no-op: provenance stays retained alongside the legacy columns until
 the separate retirement.
@@ -265,8 +268,8 @@ def _principal(principal, legacy=None):
 class Writer:
     """Batched statement and history writes under the fold changeset."""
 
-    def __init__(self, legacy, cs):
-        self.legacy, self.cs, self.now = legacy, cs, timezone.now()
+    def __init__(self, legacy, cs, notices):
+        self.legacy, self.cs, self.now, self.notices = legacy, cs, timezone.now(), notices
         self.batch = []
         self.counts = Counter()
 
@@ -277,10 +280,18 @@ class Writer:
         if statements.filter(**key).exists():
             raise Blocked(f"parties.{name}", subject.pk, f"occupied {aspect} statement key {asserted_by}")
         withdrawn = link is not None and link.status in ("withdrawn", "tombstone")
+        # A statement another fold already applied (a consumer's system of record) keeps
+        # the aspect; this one is recorded beside it, and resolution arbitrates the two
+        # on the aspect's next change. The canonical columns are the same either way.
+        applied = not withdrawn and not statements.filter(
+            subject_id=subject.pk, aspect=aspect, superseded_id=None, applied=True,
+        ).exists()
+        if not withdrawn and not applied:
+            self.notices[f"{name}.{aspect}: another fold's statement is applied; recorded beside it"] += 1
         evidence_label, evidence_pk = ("integrate.RecordLink", link.pk) if link else ("parties." + name, subject.pk)
         row = statements.model(
             **key, **values, source_kind=kind, rank="preferred" if preferred else "normal", snak=snak,
-            status="withdrawn" if withdrawn else "asserted", applied=not withdrawn, confidence=1.0,
+            status="withdrawn" if withdrawn else "asserted", applied=applied, confidence=1.0,
             link_id=link.pk if link else None, changeset_id=self.cs.pk,
             evidence=[{"model": evidence_label, "id": self.legacy.public_id(evidence_label, evidence_pk)}],
             created_at=subject.created_at, updated_at=subject.updated_at,
@@ -326,7 +337,7 @@ def forwards(apps, schema_editor):
         cs = legacy.rows(settings.ANGEE_CHANGESET_MODEL).create(
             activity="system", change_reason=REASON, state="closed", outcome="success",
         )
-        writer = Writer(legacy, cs)
+        writer = Writer(legacy, cs, notices)
         links = legacy.rows("integrate.RecordLink")
         for name, row, (party, integration_id, link, statements) in plans:
             for aspect, principal, kind, statement_link, values in statements:

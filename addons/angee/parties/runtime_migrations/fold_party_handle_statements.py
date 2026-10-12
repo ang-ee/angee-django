@@ -17,6 +17,8 @@ Retained evidence, per carrier source:
   ``parties.display_name``, ``parties.signature_phone``, ``parties.source_sender``.
   The Rule row is created here idempotently under the install seed's key; the fold
   never waits for the resource loader. Rule rows with an unknown evidence kind block.
+  A claimed sender written before 2026-10-10 keeps its references under ``evidence``
+  as a list; they are read as the claim's references (``_retained_metadata``).
 - ``import`` with a RecordLink origin or a canonical Integration label: a normal
   DIRECTORY statement by that Integration. A takeout import (``social_takeout`` or
   any label that is not a SubjectRef, with no RecordLink) is one IMPORT source per
@@ -40,7 +42,9 @@ copied; the untouched carrier retains the original metadata and flags for the
 retirement's parity review. Carrier owner/editor/reader grants become Party
 ``carrier_reader`` grants (read only). The applied statement per (party, handle)
 is the decisive one: a preferred stance, else the strongest normal assertion at the
-review threshold.
+review threshold, unless another fold (a consumer's own, in the same round) already
+applied the pair: then the fold's statements are recorded beside it, counted, and
+resolution arbitrates them on the pair's next change.
 
 Every blocking row is collected before anything is written; the first error names
 them all. ``plan()`` is the predicate the parties fold preflight evaluates against
@@ -68,7 +72,7 @@ PREFIXES = {"parties.party": "pty_", "parties.person": "pty_", "parties.organiza
             "parties.handle": "hdl_", "integrate.recordlink": "rlk_", settings.AUTH_USER_MODEL.lower(): "usr_"}
 RULE_KEYS = {("email_match", None): "parties.normalized_twin", ("email_match", "source_sender"): "parties.source_sender",
              ("rule", None): "parties.email_domain", ("rule", "display_name"): "parties.display_name",
-             ("rule", "signature_phone"): "parties.signature_phone"}
+             ("rule", "signature_phone"): "parties.signature_phone", ("rule", "source_sender"): "parties.source_sender"}
 REVIEW_CONFIDENCE = 0.5
 
 
@@ -148,9 +152,28 @@ class Legacy:
         return matches[0] if len(matches) == 1 else None
 
 
-def _source(legacy, row, party, handle, refs, origins, notices):
-    """Return the carrier's source principal as (principal, kind, link_id), or None when unasserted."""
+def _retained_metadata(row, notices):
+    """The carrier's metadata in the spelling the current producers write.
+
+    Until 2026-10-10 a claimed sender kept its record references under ``evidence``
+    as a list, the key a rule suggestion keeps its evidence mapping under, so a claim
+    landing on a suggestion replaced that mapping with the list of its keys (and the
+    suggestion kept its ``rule`` source). The list's references are the claim's
+    ``evidence_refs``; the leftover key names refer to nothing and are dropped, counted.
+    """
     metadata = row.metadata
+    listed, refs = metadata.get("evidence"), metadata.get("evidence_refs", [])
+    if not metadata.get("claim") or not isinstance(listed, list) or not isinstance(refs, list):
+        return metadata
+    refs = list(refs)
+    if any(not isinstance(item, dict) for item in listed):
+        notices["source_sender claim over a rule suggestion: its overwritten evidence keys dropped"] += 1
+    refs.extend(item for item in listed if isinstance(item, dict) and item not in refs)
+    return {**{key: value for key, value in metadata.items() if key != "evidence"}, "evidence_refs": refs}
+
+
+def _source(legacy, row, metadata, party, handle, refs, origins, notices):
+    """Return the carrier's source principal as (principal, kind, link_id), or None when unasserted."""
     producer_evidence = metadata.get("evidence", {})
     if not isinstance(producer_evidence, dict):
         raise Blocked("PartyHandle", row.pk, "producer evidence must be a mapping")
@@ -271,7 +294,8 @@ def classify(legacy, row, notices):
         raise Blocked("PartyHandle", row.pk, "subject or member origin is missing")
     if not isinstance(row.metadata, dict) or not 0 <= row.confidence <= 1:
         raise Blocked("PartyHandle", row.pk, "invalid retained metadata or confidence")
-    evidence = row.metadata.get("evidence_refs", [])
+    metadata = _retained_metadata(row, notices)
+    evidence = metadata.get("evidence_refs", [])
     if not isinstance(evidence, list):
         raise Blocked("PartyHandle", row.pk, "origin references must be a list")
     refs, origins = [], []
@@ -280,7 +304,7 @@ def classify(legacy, row, notices):
         origins.append(origin)
         if ref not in refs:
             refs.append(ref)
-    source = _source(legacy, row, party, handle, refs, origins, notices)
+    source = _source(legacy, row, metadata, party, handle, refs, origins, notices)
     decision = _decision(legacy, row, refs, notices)
     assertions = []
     if source is not None:
@@ -404,7 +428,15 @@ def forwards(apps, schema_editor):
             if len(pending) >= 500:
                 flush()
         flush()
-        for batch in batched((statement for _, statement in winners.values()), 500):
+        decisive = []
+        for (party_id, handle_id), (_, statement) in winners.items():
+            # Another fold (a consumer's own) may already have applied this pair: it keeps it.
+            if statements.filter(subject_id=party_id, handle_id=handle_id, aspect="handle", superseded_id=None,
+                                 applied=True).exclude(pk=statement.pk).exists():
+                notices["handle: another fold's statement is applied; recorded beside it"] += 1
+                continue
+            decisive.append(statement)
+        for batch in batched(decisive, 500):
             for statement in batch:
                 statement.applied = True
             statements.bulk_update(batch, ("applied",), batch_size=500)

@@ -1,10 +1,11 @@
 """Retire folded handle carriers after checking retained source/decision rows.
 
 The fold precedes this declaration and refuses unresolved attribution. Each old
-pair must retain its normal source assertion in native history (or, for an
-unasserted takeout carrier, no assertion at all); recorded decisions must have the
-corresponding stance; every resolved Handle pointer must have an applied value
-statement.
+pair must retain the fold's source assertion in native history (or, for an import
+carrier the fold leaves unasserted, none of its own: another fold's, whatever its
+reason, or no assertion at all); every current statement of the pair must be in
+native history; recorded decisions must have the corresponding stance; every
+resolved Handle pointer must have an applied value statement, whichever fold wrote it.
 
 Retained workflow/decision JSON references to a carrier change to the folded
 statement id (``party_handle_id`` becomes ``statement_id``); carrier record
@@ -91,18 +92,24 @@ def forwards(apps, schema_editor):
     problems, notices = [], []
     mapping, by_pk = {}, {}
     for row in carriers.order_by("pk").iterator():
-        rows = statements.filter(subject_id=row.party_id, handle_id=row.handle_id, aspect="handle", superseded_id=None)
-        folded = history.filter(subject_id=row.party_id, handle_id=row.handle_id, aspect="handle",
-                                history_change_reason="fold.party_handle")
-        if not rows.exists():
+        pair = dict(subject_id=row.party_id, handle_id=row.handle_id, aspect="handle")
+        rows = statements.filter(**pair, superseded_id=None)
+        kept = rows.order_by("-rank", "-confidence", "-updated_at", "-pk").first()
+        if kept is None or not history.filter(**pair, history_change_reason="fold.party_handle").exists():
+            # The fold asserts every carrier except an import it leaves unasserted; another
+            # fold (a consumer's own) may assert that one under its own reason.
             if row.is_confirmed or row.is_dismissed or row.source != "import":
                 problems.append(f"PartyHandle {row.pk}: missing folded source or history")
-            else:
+            elif kept is None:
                 notices.append(f"PartyHandle {row.pk}: unasserted import carrier retires without a statement")
+            else:
+                notices.append(f"PartyHandle {row.pk}: unasserted import carrier is asserted by another fold")
             by_pk[row.pk] = row.party_id
-            mapping[public_id(CARRIER_PREFIX, row.pk)] = ("", public_id(PARTY_PREFIX, row.party_id))
+            mapping[public_id(CARRIER_PREFIX, row.pk)] = (
+                public_id(STATEMENT_PREFIX, kept.pk) if kept is not None else "", public_id(PARTY_PREFIX, row.party_id),
+            )
             continue
-        if not folded.exists() or not all(history.filter(id=pk).exists() for pk in rows.values_list("pk", flat=True)):
+        if not all(history.filter(id=pk).exists() for pk in rows.values_list("pk", flat=True)):
             problems.append(f"PartyHandle {row.pk}: missing folded source or history")
             continue
         snak = "no_value" if row.is_dismissed else "value"
@@ -111,7 +118,6 @@ def forwards(apps, schema_editor):
         ).exists():
             problems.append(f"PartyHandle {row.pk}: missing folded decision stance")
             continue
-        kept = rows.order_by("-rank", "-confidence", "-updated_at", "-pk").first()
         mapping[public_id(CARRIER_PREFIX, row.pk)] = (public_id(STATEMENT_PREFIX, kept.pk), public_id(PARTY_PREFIX, row.party_id))
         by_pk[row.pk] = row.party_id
     for handle in _rows(apps, "parties.Handle", db).filter(party_id__isnull=False).iterator():

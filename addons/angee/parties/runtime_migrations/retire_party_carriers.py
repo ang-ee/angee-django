@@ -96,17 +96,13 @@ def plan(apps, db, *, folded=True):
 
     The preflight composes the pre-fold checks (enrollment identity, link retention,
     extension data, MergeVeto references); the retirement itself also proves the
-    folded statements. A card no link retains is a notice: the fold left its local
-    values on the canonical columns unasserted (ruling (b)), and the column drops.
+    folded anti-link stances. The aspect fold proves its own statements before it
+    writes. A card no link retains is a notice: the fold left its local values on the
+    canonical columns unasserted (ruling (b)), and the column drops.
     """
     problems, notices = [], []
     with system_context(reason="retire.party_carriers"):
-        users = _rows(apps, settings.AUTH_USER_MODEL, db)
-        for name, aspects in (("Party", ("identity", "contact")), ("Person", ("name", "dates")),
-                              ("Organization", ("legal_identity",)), ("Address", ("address",)),
-                              ("Relationship", ("relationship",))):
-            # Statement history exists only once the parties statement schema has run.
-            history = _rows(apps, "parties.Historical" + name + "Statement", db) if folded else None
+        for name in ("Party", "Person", "Organization", "Address", "Relationship"):
             for row in _rows(apps, "parties." + name, db).order_by("pk").iterator():
                 party = row if name == "Party" else _rows(apps, "parties.Party", db).filter(
                     pk=row.party_id if name in ("Address", "Relationship") else row.pk,
@@ -114,14 +110,6 @@ def plan(apps, db, *, folded=True):
                 if party is None:
                     problems.append(Problem(name, row.pk, "owning party is missing"))
                     continue
-                directory = row.source == "carddav" if name == "Relationship" else bool(party.folder_id and party.source_uid)
-                actor = users.filter(pk=row.updated_by_id or row.created_by_id, kind="person").exists()
-                for aspect in aspects:
-                    if folded and (directory or actor) and not history.filter(
-                        subject_id=row.pk, aspect=aspect, history_change_reason="fold.party_aspects",
-                    ).exists():
-                        # The fold leaves imported and locally edited values without a person unasserted.
-                        continue
                 if name != "Party":
                     continue
                 if not row.folder_id and not any((row.source_uid, row.raw_vcard, row.extensions)):

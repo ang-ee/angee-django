@@ -704,6 +704,138 @@ def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
     assert "raw_vcard" not in {field.name for field in legacy.model("parties.Party")._meta.fields}
 
 
+def _consumer_statement(legacy: LegacyHost, party: Any, aspect: str, **values: Any) -> Any:
+    """A statement a consumer's own fold applied under its own principal and reason, with its history."""
+
+    seed, _ = legacy.rows("provenance.Seed").get_or_create(key="tests.consumer_fold")
+    changeset = legacy.create(
+        settings.ANGEE_CHANGESET_MODEL, activity="system", change_reason="fold.consumer", state="closed"
+    )
+    row = legacy.create(
+        "parties.PartyStatement",
+        subject_id=party.pk,
+        aspect=aspect,
+        asserted_by=f"provenance/seed:{seed.pk}",
+        source_kind="seed",
+        rank="normal",
+        snak="value",
+        status="asserted",
+        applied=True,
+        confidence=1.0,
+        changeset_id=changeset.pk,
+        **values,
+    )
+    legacy.create(
+        "parties.HistoricalPartyStatement",
+        **{field.attname: getattr(row, field.attname) for field in row._meta.concrete_fields},
+        history_date=timezone.now(),
+        history_type="+",
+        history_change_reason="fold.consumer",
+    )
+    return row
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_sender_claim_written_before_the_reference_rename_folds_its_listed_references(
+    legacy: LegacyHost, seeded: dict[str, Any], capsys
+) -> None:
+    """Until 2026-10-10 a claim kept its references under ``evidence``; over a suggestion it also kept the keys."""
+
+    person = seeded["person"]
+    ref = {
+        "model": "parties.Party",
+        "id": fold_party_handle_statements.Legacy(legacy.apps, connection.alias).public_id(
+            "parties.party", seeded["manual"].pk
+        ),
+    }
+    claimed = {}
+    for source, listed, value in (
+        ("email_match", [ref], "claim@example.test"),
+        ("rule", ["kind", "source_handle", ref], "suggested@example.test"),
+    ):
+        handle = legacy.create(
+            "parties.Handle", platform="email", value=value, normalized_value=value, created_by=person
+        )
+        claimed[source] = legacy.create(
+            "parties.PartyHandle",
+            party=seeded["organization"],
+            handle=handle,
+            source=source,
+            confidence=0.4,
+            created_by=person,
+            metadata={"claim": "source_sender", "evidence": listed},
+        )
+
+    rows, notices = preflight_party_folds.blockers(legacy.apps, connection.alias)
+    assert rows == []
+    legacy.apply(fold_party_handle_statements)
+
+    sender = _rule(legacy, "parties.source_sender")
+    for carrier in claimed.values():
+        [statement] = _statements(legacy, seeded["organization"], handle_id=carrier.handle_id)
+        assert (statement.asserted_by, statement.source_kind, statement.evidence) == (sender, "rule", [ref])
+    assert "1 x source_sender claim over a rule suggestion: its overwritten evidence keys dropped" in (
+        capsys.readouterr().out
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_folds_keep_a_statement_another_fold_already_applied(
+    legacy: LegacyHost, seeded: dict[str, Any], capsys
+) -> None:
+    """A consumer's own fold ahead of the lane's keeps what it applied; the lane records its statements beside it."""
+
+    twin = seeded["carriers"]["twin"]
+    handle_claim = _consumer_statement(legacy, seeded["manual"], "handle", handle_id=twin.handle_id)
+    identity = _consumer_statement(legacy, seeded["manual"], "identity", display_name="Manual Party")
+
+    legacy.apply(fold_party_handle_statements)
+    legacy.apply(fold_party_aspects)
+
+    for kept, aspect in ((handle_claim, "handle"), (identity, "identity")):
+        rows = _statements(legacy, seeded["manual"], aspect=aspect)
+        assert sorted((row.pk == kept.pk, row.applied) for row in rows) == [(False, False), (True, True)]
+    out = capsys.readouterr().out
+    assert "1 x handle: another fold's statement is applied; recorded beside it" in out
+    assert "1 x Party.identity: another fold's statement is applied; recorded beside it" in out
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
+    legacy: LegacyHost, seeded: dict[str, Any], capsys
+) -> None:
+    """An import carrier the fold leaves unasserted may be a consumer fold's to assert, under its own reason."""
+
+    imported, person = seeded["imported"], seeded["person"]
+    replica = legacy.create(
+        "parties.Handle",
+        platform="linkedin",
+        value="replica-1",
+        normalized_value="replica-1",
+        party=imported,
+        created_by=person,
+    )
+    carrier = legacy.create(
+        "parties.PartyHandle",
+        party=imported,
+        handle=replica,
+        source="import",
+        confidence=1.0,
+        created_by=person,
+        metadata={"provenance": "social_takeout"},
+    )
+    legacy.apply(fold_party_handle_statements)
+    assert _statements(legacy, imported, handle_id=replica.pk) == []  # no linkedin account channel
+    claim = _consumer_statement(legacy, imported, "handle", handle_id=replica.pk)
+    legacy.apply(fold_party_aspects)
+    legacy.apply(circle_member_decisions)
+
+    legacy.apply(retire_party_handle)
+
+    assert f"PartyHandle {carrier.pk}: unasserted import carrier is asserted by another fold" in capsys.readouterr().out
+    assert [row.pk for row in _statements(legacy, imported, handle_id=replica.pk)] == [claim.pk]
+
+
 def _created_after_the_preflight() -> frozenset[str]:
     """Every model a chain declaration planned in a later round than the preflight creates.
 
