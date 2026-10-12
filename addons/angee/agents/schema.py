@@ -171,7 +171,7 @@ class MCPToolType(AngeeNode):
 class AgentType(AngeeNode):
     """Admin projection of an agent (or, when ``is_template``, an agent template)."""
 
-    owner: UserType
+    owner: UserType | None
     permissions = permissions_field(("call",))
 
     @strawberry.field
@@ -333,7 +333,6 @@ _AGENT_RESOURCE = hasura_model_resource(
     groupable=["is_template", "lifecycle", "runtime_status", "updated_at"],
     insertable=[
         "name",
-        "owner",
         "description",
         "is_template",
         "instructions",
@@ -376,7 +375,6 @@ _AGENT_RESOURCE = hasura_model_resource(
     write_backend=AngeeHasuraWriteBackend(
         Agent,
         public_id_fields=(
-            "owner",
             "model",
             "inference_credential",
             "skills",
