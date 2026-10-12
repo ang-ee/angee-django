@@ -70,6 +70,7 @@ const sender = { id: "hdl-1", display_name: "Billing Desk", value: "billing@exam
 vi.mock("@angee/parties", () => ({
   senderDisplayName: (sender: { display_name?: string; value?: string } | null, fallback = "") =>
     sender?.display_name || sender?.value || fallback,
+  senderAvatarUrl: () => undefined,
 }));
 
 vi.mock("@angee/refine", () => ({
