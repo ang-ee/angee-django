@@ -12,16 +12,34 @@ from tests.bootstrap import statement_sources
 pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def statement_principals(django_db_setup: None, django_db_blocker: object) -> None:
+    """Install the declared statement principals and grants once per test database.
+
+    The rows commit outside any test transaction, so every test that runs inside
+    pytest-django's per-test transaction sees them without reloading.
+    """
+
+    del django_db_setup
+    with django_db_blocker.unblock():  # type: ignore[attr-defined]
+        statement_sources()
+
+
 @pytest.fixture(autouse=True)
-def captured_changeset(request: pytest.FixtureRequest) -> Iterator[None]:
-    """Carry entrypoint defaults through source and addon tests, including native TestCases."""
+def captured_changeset(request: pytest.FixtureRequest, django_db_blocker: object) -> Iterator[None]:
+    """Carry entrypoint defaults through source and addon tests, including native TestCases.
+
+    A test that flushed the database (``transactional_db``, ``TransactionTestCase``)
+    leaves the next database test without principals; ``statement_sources`` is a
+    single existence query when they are present and reloads them when not.
+    """
 
     if (
         is_django_unittest(request)
         or request.node.get_closest_marker("django_db")
         or {"db", "transactional_db", "composed_tables"}.intersection(request.fixturenames)
     ):
-        request.getfixturevalue("composed_permissions")
-        statement_sources()
+        with django_db_blocker.unblock():  # type: ignore[attr-defined]
+            statement_sources()
     with changeset(fresh=True, change_reason="pytest"):
         yield
