@@ -1709,7 +1709,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, AuditMixin, AngeeData
         model = self.declared_concrete_model()
         if model is None or model is type(self):
             return super().source_kind
-        child = concrete_child(self, model)
+        # The declared kind may sit several MTI levels down (an Odoo instance is a
+        # Channel, a Channel an Integration): resolve it along the parent chain.
+        child = self._concrete_child(model, actor=None, authorized=False)
         return child.source_kind if child is not None else None
 
     @classmethod
