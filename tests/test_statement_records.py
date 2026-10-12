@@ -41,3 +41,19 @@ def test_a_donor_aspect_asserts_and_resolves_through_the_subject(composed_tables
     assert record.vat == "PL1234567890"
     with system_context(reason="test donor aspect read"):
         assert list(record.statements.provenance("vat")) == [statement]
+
+
+def test_a_declaration_names_its_model_and_copies_money_without_its_currency() -> None:
+    """``model_name`` sidesteps a taken ``<Subject>Statement``; a money column copies as a plain decimal."""
+
+    from django.db import models
+
+    from tests.statement_models import Ledger
+
+    generated = Ledger.statements.model
+    assert generated.__name__ == "LedgerStance"
+    amount = generated._meta.get_field("amount")
+    assert type(amount) is models.DecimalField
+    assert (amount.max_digits, amount.decimal_places, amount.null) == (12, 2, True)
+    assert not getattr(amount, "angee_currency_field", None)
+    assert not [error for error in generated.check() if error.id.startswith("angee.E01")]

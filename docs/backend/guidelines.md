@@ -1879,7 +1879,9 @@ SQL display order of the same stances.
 Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
 classifies eligible sources; `set()` refuses missing or unknown classifications.
 Statements retain the assertion-time classification across source edits and
-deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`;
+deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`
+(and `model_name=` when `<Subject>Statement` is already a domain model; a money
+column copied without its currency column becomes a plain decimal on the statement);
 core defaults to `None`, and the named model composes `StatementLinkMixin`: its
 `authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
 places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both

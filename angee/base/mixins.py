@@ -1942,14 +1942,17 @@ class StatementRecords(HistoricalRecords):
         bases: Sequence[type[models.Model]] = (Statement,),
         history_manager: type[StatementManager] = StatementManager,
         historical_queryset: type[StatementQuerySet] = StatementQuerySet,
+        model_name: str | None = None,
     ) -> None:
+        """``model_name`` names the generated model when ``<Subject>Statement`` is taken by a domain model."""
+
         super().__init__(
             inherit=True,
             bases=bases,
             history_manager=history_manager,
             historical_queryset=historical_queryset,
             excluded_fields=excluded_fields,
-            custom_model_name=lambda name: f"{name}Statement",
+            custom_model_name=(lambda name: f"{name}Statement") if model_name is None else (lambda name: model_name),
         )
         self.aspects = dict(aspects)
         self.sqid_prefix = sqid_prefix
@@ -2037,7 +2040,14 @@ class StatementRecords(HistoricalRecords):
 
     def copy_fields(self, model: Any) -> dict[str, models.Field]:
         fields = super().copy_fields(model)
-        for field in fields.values():
+        for name, field in list(fields.items()):
+            currency_field = getattr(field, "angee_currency_field", None)
+            if currency_field is not None and currency_field not in fields:
+                # A money column copied without its currency column states the amount
+                # alone; the subject keeps the currency binding (money's E011 check).
+                field = fields[name] = models.DecimalField(
+                    max_digits=field.max_digits, decimal_places=field.decimal_places, db_index=field.db_index
+                )
             field.null = field.blank = True
             field.default = field.db_default = models.NOT_PROVIDED
             field.auto_created = False
