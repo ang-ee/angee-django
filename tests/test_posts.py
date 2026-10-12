@@ -320,6 +320,28 @@ def test_feed_follow_opens_the_edge_and_is_idempotent(posts_tables: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
+def test_merging_two_handles_that_follow_a_feed_keeps_one_follow_spanning_both(posts_tables: None) -> None:
+    """The kept follow takes the earliest start and stays open while either was: one subscription, not two."""
+
+    del posts_tables
+    with system_context(reason="test follow merge"):
+        feed = _feed()
+        kept_handle, alias = _handle("chan-kept"), _handle("chan-alias")
+        kept = FeedFollow.objects.follow(feed=feed, handle=kept_handle)
+        moved = FeedFollow.objects.follow(feed=feed, handle=alias)
+        FeedFollow.objects.unfollow(feed=feed, handle=kept_handle)
+        earliest = kept.started_at - timedelta(days=30)
+        FeedFollow._base_manager.filter(pk=moved.pk).update(started_at=earliest)
+
+        Handle.objects.merge(alias, into=kept_handle)
+
+        follows = list(FeedFollow._base_manager.filter(feed=feed))
+    assert [(row.pk, row.handle_id, row.started_at, row.ended_at) for row in follows] == [
+        (kept.pk, kept_handle.pk, earliest, None)
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_feed_unfollow_closes_the_interval_then_follow_reopens_it(posts_tables: None) -> None:
     """unfollow() closes the open interval (retained), and follow() reopens the row."""
 

@@ -5,10 +5,11 @@ collapse a moved duplicate of that fact (``Participant.merge_identity``), so the
 fact needs its unique constraint. Rows written before it may already repeat; this
 keeps the oldest row of each (thread, handle, role) without a message, deletes the
 copies (they state nothing the kept row does not), then adds the constraint.
-Reverse drops the constraint; the deleted copies do not come back.
+Thread-less rows are outside the constraint and are never touched. Reverse drops
+the constraint; the deleted copies do not come back.
 """
 
-from django.db import migrations, models
+from django.db import migrations, models, router
 
 CONSTRAINT = "uq_participant_thread_handle_role"
 
@@ -21,9 +22,19 @@ def applies(state):
 
 
 def collapse_repeated_facts(apps, schema_editor):
-    participants = apps.get_model("messaging", "Participant")._base_manager.using(schema_editor.connection.alias)
+    participant = apps.get_model("messaging", "Participant")
+    alias = schema_editor.connection.alias
+    if not router.allow_migrate_model(alias, participant):
+        return
+    # The AddConstraint that follows alters this same table. PostgreSQL must check
+    # the deleted rows' deferred foreign keys now or it refuses that DDL.
+    if schema_editor.connection.vendor == "postgresql":
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    participants = participant._base_manager.using(alias)
+    # Only rows the constraint covers: a participation names its thread. Thread-less
+    # rows are outside the constraint and NULL would group them as one fact.
     repeated = (
-        participants.filter(message__isnull=True)
+        participants.filter(message__isnull=True, thread__isnull=False)
         .values("thread_id", "handle_id", "role")
         .annotate(kept=models.Min("pk"), count=models.Count("pk"))
         .filter(count__gt=1)
