@@ -22,7 +22,7 @@ from rebac.roles import grant as grant_role
 from angee.base import merge as merge_module
 from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
-from angee.base.merge import EdgeReference, ForeignKeyReference, references
+from angee.base.merge import EdgeReference, ForeignKeyReference, fold_records, references
 from angee.base.mixins import MergeContractMixin, SourceKind
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.graphql import records
@@ -36,6 +36,7 @@ from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, make_integration, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import CustomColumnEdge, SelfLinkedNode, TagSlot
+from tests.scopedemo.models import ProjectionDoc
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
@@ -144,6 +145,24 @@ def test_a_merge_refuses_itself_too_many_and_records_that_are_gone() -> None:
             survivor.merge(records=[])
         with pytest.raises(ValidationError, match="at most 100"):
             survivor.merge(records=["tag_x"] * 101)
+
+
+def test_a_survivor_referring_to_a_merged_record_refuses_before_anything_moves() -> None:
+    """Moving the survivor's own reference would point it at itself, so the fold refuses and nothing moves."""
+
+    with system_context(reason="merge test self reference"):
+        merged = ProjectionDoc.objects.create(title="merged")
+        survivor = ProjectionDoc.objects.create(title="survivor", parent=merged)
+        child = ProjectionDoc.objects.create(title="child", parent=merged)
+    retired: list[Any] = []
+    with pytest.raises(ValidationError, match="refers to"):
+        fold_records(survivor, [merged], carry=lambda: None, retire=retired.append)
+    assert retired == []
+    with system_context(reason="merge test read"):
+        assert set(ProjectionDoc._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {
+            survivor.pk,
+            child.pk,
+        }
 
 
 def test_a_record_deleted_while_the_merge_waits_reads_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
