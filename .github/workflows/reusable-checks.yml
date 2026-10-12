@@ -158,7 +158,9 @@ jobs:
   stack:
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Composition, fragment checks and the serial bridges suite (439 tests since
+    # the feed and comment bridges) no longer fit 30 minutes.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
