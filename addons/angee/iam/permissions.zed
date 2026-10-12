@@ -30,11 +30,13 @@ definition auth/user {
     // account for people managers, and the colleagues identity owners union in
     // from their fragments.
     permission colleague = self + list
-    // Deliberate disclosures, never the columns' values: pickers and preview
-    // offer only active people (an inactive account is absent), and account
-    // protection covers staff (a staff account is refused, not described).
-    permission active_account = active->disclosed
-    permission staff_account = staff->disclosed
+    // Deliberate disclosures, never the columns' values, each only within the
+    // reach of the sites that rely on it. Pickers, preview and the password
+    // verbs offer only active people (an inactive account is absent); preview,
+    // generic updates and the account verbs refuse staff (a staff account is
+    // refused, not described).
+    permission active_account = (colleague + view_as + issue_password + reset_password) & active->disclosed
+    permission staff_account = (view_as + write + set_active + rename + reset_password + issue_password) & staff->disclosed
     // Restricted fields: the sign-in identity, last sign-in, access state and
     // UI preferences, for people managers and the person.
     permission read_private = self + list

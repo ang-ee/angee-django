@@ -250,3 +250,24 @@ def test_the_directory_is_never_everyones(composed_tables: None) -> None:
     mark_relationships_changed()
     assert _people(viewer) == []
     assert set(_offered(viewer)) == {"wildcard-viewer"}
+
+
+def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_permissions: None) -> None:
+    """Who is active or staff is disclosed only within an actor's picker, preview or verb reach."""
+
+    del composed_permissions
+    viewer = _person("audience-viewer")
+    stranger = _person("audience-stranger")
+    staff = _person("audience-staff", is_staff=True)
+    admin = create_platform_admin("audience-admin")
+    pks = (viewer.pk, stranger.pk, staff.pk)
+
+    def disclosed(actor: Any, action: str) -> set[Any]:
+        return set(User.objects.with_actor(actor).with_action(action).filter(pk__in=pks).values_list("pk", flat=True))
+
+    # A member reaches only their own account in pickers, and no verb or preview.
+    assert disclosed(viewer, "active_account") == {viewer.pk}
+    assert disclosed(viewer, "staff_account") == set()
+    # An administrator previews and acts on every account.
+    assert disclosed(admin, "active_account") == set(pks)
+    assert disclosed(admin, "staff_account") == {staff.pk}

@@ -25,6 +25,7 @@ class GuardedUniqueRow(AngeeModel):
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
     email = models.CharField(max_length=80, unique=True)
+    code = models.CharField(max_length=40, unique=True, null=True, blank=True)
     title = models.CharField(max_length=40, default="row")
 
     class Meta:
@@ -66,6 +67,8 @@ definition scopedemo/guarded_unique_row {
     permission delete = owner
     permission read__email = keeper
     permission write__email = keeper
+    permission read__code = owner + keeper
+    permission write__code = keeper
 }
 definition scopedemo/owned_unique_row {
     relation owner: auth/user // rebac:field=owner
@@ -91,8 +94,8 @@ def rows(db: Any) -> Any:
     users = get_user_model().objects
     alice, bob = users.create_user(username="scope-alice"), users.create_user(username="scope-bob")
     with system_context(reason="test constraint scope seed"):
-        mine = GuardedUniqueRow.objects.create(owner=alice, email="alice@example.com")
-        GuardedUniqueRow.objects.create(owner=bob, email="bob@example.com")
+        mine = GuardedUniqueRow.objects.create(owner=alice, email="alice@example.com", code="A1")
+        GuardedUniqueRow.objects.create(owner=bob, email="bob@example.com", code="B1")
     try:
         yield type("Rows", (), {"alice": alice, "mine": mine})
     finally:
@@ -103,14 +106,27 @@ def _bypass_audits() -> int:
     return PermissionAuditEvent.objects.filter(kind=PermissionAuditEvent.KIND_SUDO_BYPASS).count()
 
 
-@pytest.mark.xfail(strict=True, reason="The update verdict needs rebac's public save preflight (write__<field>).")
-def test_an_update_its_save_would_refuse_never_learns_whether_a_value_is_taken(rows: Any) -> None:
-    """The owner writes the row but not its email, so changing it is refused without saying who holds it."""
+def test_an_update_never_learns_whether_a_value_it_may_not_read_is_taken(rows: Any) -> None:
+    """The owner writes the row but neither reads nor writes its email: the clean stays silent,
+    and the save leaves the email it redacted unwritten."""
 
     with actor_context(rows.alice):
         row = GuardedUniqueRow.objects.get(pk=rows.mine.pk)
         row.email = "bob@example.com"
         row.full_clean()
+        row.save()
+    with system_context(reason="test constraint scope read back"):
+        assert GuardedUniqueRow.objects.get(pk=rows.mine.pk).email == "alice@example.com"
+
+
+def test_an_update_its_save_refuses_never_learns_whether_a_value_is_taken(rows: Any) -> None:
+    """The owner reads the code but may not write it: the clean stays silent and the save refuses."""
+
+    with actor_context(rows.alice):
+        row = GuardedUniqueRow.objects.get(pk=rows.mine.pk)
+        row.code = "B1"
+        # The email it may not read loaded redacted (None): keep it out of field cleaning.
+        row.full_clean(exclude=["email"])
         with pytest.raises(PermissionDenied):
             row.save()
 
