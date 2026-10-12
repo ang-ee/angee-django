@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 from django.apps import AppConfig, apps
 from django.apps.registry import Apps
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.db import connection, connections, migrations, models
 from django.db.backends.base.base import BaseDatabaseWrapper
@@ -29,9 +30,11 @@ from django.db.migrations.writer import MigrationWriter
 from django.db.models.functions import Lower
 from django.utils import timezone
 
+from angee.addons import addon_manifest
 from angee.base.fields import SqidField, StateField
 from angee.compose.history import HistoricalRuntimeConfig
 from angee.compose.migrations import DropGuardAutodetector, RetiredTableOperation, RuntimeMigrations
+from angee.resources.entries import resource_manifest_for, retired_models_for
 from angee.storage.models import Folder
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -491,7 +494,7 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
     with pytest.raises(CommandError, match=refused):  # No addon vouches for the row yet.
         DropGuardAutodetector(history, current).changes(graph=graph)
 
-    monkeypatch.setattr(owner, "retired_seed_models", ("probe.Retired",), raising=False)
+    monkeypatch.setitem(addon_manifest(owner).resources, "retired_models", ["probe.Retired"])
     (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
     assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
 
@@ -505,6 +508,15 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
         with pytest.raises(CommandError, match=refused):
             DropGuardAutodetector(history, current).changes(graph=graph)
         retired._base_manager.filter(pk=row.pk).delete()
+
+
+def test_retired_models_are_a_resources_declaration_not_a_tier(monkeypatch) -> None:
+    messaging = apps.get_app_config("messaging")
+    assert retired_models_for(messaging) == ("messaging.ActivityType",)
+    assert "retired_models" not in resource_manifest_for(messaging)
+    monkeypatch.setitem(addon_manifest(messaging).resources, "retired_models", "messaging.ActivityType")
+    with pytest.raises(ImproperlyConfigured, match="retired_models must be an array of model labels"):
+        retired_models_for(messaging)
 
 
 @pytest.mark.parametrize(("name", "wrapper"), [

@@ -11,10 +11,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, migrations, models
+from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.state import ModelState, ProjectState
+from django.db.models.signals import pre_migrate
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -26,16 +29,15 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.schema import parse_zed
+from rebac.resources import model_resource_type
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.fields import SqidField
-from angee.base.permissions import permission_subject_types
 from angee.compose.migrations import DropGuardAutodetector
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
 from angee.projects.runtime_migrations import record_tasks
 from angee.projects.testing.models import Project, Queue, Stage, Task
-from angee.projects.upgrade import refuse_incomplete_cutover
+from angee.projects.upgrade import GUARD_DISPATCH_UID, check_cutover_guard, record_task_types
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
 from tests.conftest import create_platform_admin
 from tests.test_runtime_migrations import seed_ledger
@@ -168,11 +170,18 @@ def test_a_concealed_tasks_holders_lose_its_record_tasks() -> None:
         follow_up = Task.objects.schedule(concern, title="Call about it", assignee=owner)
     with actor_context(owner):
         assert Task.objects.filter(pk=follow_up.pk).exists()
+    verbs = ("read", "write", "share", "delete", "comment", "widen", "transfer")
+    assert all(Task._base_manager.get(pk=follow_up.pk).with_actor(owner).has_access(verb) for verb in verbs)
+    with actor_context(owner):
+        Task.objects.create(title="Before concealing", subject_id=follow_up.subject_id)
     with system_context(reason="test.record_tasks.conceal"):
         Task._base_manager.filter(pk=concern.pk).update(stage=removed)
     with actor_context(owner):
         assert not Task.objects.filter(pk=follow_up.pk).exists()
-    assert not Task._base_manager.get(pk=follow_up.pk).with_actor(owner).has_access("read")
+        with pytest.raises(PermissionDenied):
+            Task.objects.create(title="After concealing", subject_id=follow_up.subject_id)
+    concealed = Task._base_manager.get(pk=follow_up.pk).with_actor(owner)
+    assert not [verb for verb in verbs if concealed.has_access(verb)]
 
 
 def test_a_record_task_is_assigned_only_to_someone_who_reads_the_record() -> None:
@@ -530,32 +539,59 @@ def test_a_stack_without_projects_drops_its_seeded_catalog_and_refuses_live_acti
             DropGuardAutodetector(released, current).changes(graph=graph)
 
 
-def test_migrate_refuses_the_cutover_for_activities_on_record_types_that_take_no_tasks() -> None:
+class PlanRan(Exception):
+    """Raised in place of applying a plan the guard let through."""
+
+
+def test_migrate_refuses_a_plan_applying_the_cutover_to_record_types_that_take_no_tasks(monkeypatch) -> None:
+    """Django's ``migrate`` dispatches projects' guard, which refuses before the plan runs."""
+
     released = _released()
     registry = released.apps
-    cutover = [(record_tasks.Migration("0099_record_tasks", "projects"), False)]
+    plan: list[tuple[migrations.Migration, bool]] = []
+    # The released database and its plan; applying any plan stops the run.
+    monkeypatch.setattr(MigrationExecutor, "migration_plan", lambda self, targets, clean_start=False: plan)
+    monkeypatch.setattr(MigrationExecutor, "_create_project_state", lambda self, **kwargs: released)
+
+    def apply(self: MigrationExecutor, targets: Any, plan: Any = None, **kwargs: Any) -> None:
+        raise PlanRan(plan)
+
+    monkeypatch.setattr(MigrationExecutor, "migrate", apply)
+    cutover = record_tasks.Migration("0099_record_tasks", "projects")
+    # The origin `angee build` records on the materialized cutover; another name keeps it.
+    cutover.angee_origin = "angee.projects:record_tasks"
     with _released_tables(released):
         with connection.schema_editor() as editor:
             _create(registry, editor)
         _seed(registry, TrackedRecordParent)
-        # Nothing to check unless the plan applies the cutover.
-        refuse_incomplete_cutover(sender=None, plan=[], apps=registry, using="default")
+        # A plan without the cutover is not the guard's to check.
+        plan[:] = [(record_tasks.Migration("0099_record_tasks", "projects"), False)]
+        with pytest.raises(PlanRan):
+            call_command("migrate", skip_checks=True, interactive=False, verbosity=0)
+        plan[:] = [(cutover, False)]
         with pytest.raises(CommandError, match=r"chatterdemo\.trackedrecordparent \(5 activities, 1 assignees\)"):
-            refuse_incomplete_cutover(sender=None, plan=cutover, apps=registry, using="default")
+            call_command("migrate", skip_checks=True, interactive=False, verbosity=0)
+        # The same activities on a record type that takes tasks pass.
+        registry.get_model("messaging", "ThreadAttachment")._base_manager.update(
+            content_type_id=ContentType.objects.get_for_model(ChatterDoc).pk,
+        )
+        with pytest.raises(PlanRan):
+            call_command("migrate", skip_checks=True, interactive=False, verbosity=0)
 
 
-def test_a_permission_reaches_the_subject_types_of_its_arrows_relations_and_permissions() -> None:
-    (definition,) = [item for item in parse_zed("""
-definition t/edge {
-    relation doc: t/doc
-    relation other: t/other
-    relation user: auth/user
-    permission own = doc->read
-    permission record_read = own + user - other->read
-}
-""").definitions if item.resource_type == "t/edge"]
-    assert permission_subject_types(definition, "record_read") == {"t/doc", "auth/user"}
-    assert permission_subject_types(definition, "missing") == set()
+def test_the_cutover_guard_is_connected_and_checked(monkeypatch) -> None:
+    assert check_cutover_guard() == []
+    monkeypatch.setattr(pre_migrate, "receivers", [
+        receiver for receiver in pre_migrate.receivers if receiver[0][0] != GUARD_DISPATCH_UID
+    ])
+    assert [error.id for error in check_cutover_guard()] == ["projects.E001"]
+
+
+def test_record_types_take_tasks_when_both_record_arms_reach_them() -> None:
+    declared = record_task_types()
+    assert {model_resource_type(ChatterDoc), model_resource_type(Task), model_resource_type(Project)} <= declared
+    # Grantee types and undeclared record types take none.
+    assert not {"auth/user", model_resource_type(TrackedRecordParent)} & declared
 
 
 def test_the_cutover_refuses_activity_metadata_a_task_cannot_hold() -> None:

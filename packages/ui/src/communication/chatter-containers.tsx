@@ -35,7 +35,7 @@ export const CHATTER_CONTAINERS: readonly CoreContainer[] = [{
     "chatter.history": {
       sequence: 20,
       content: {
-        // "activity" and "chatter.activity" are the former ids, kept in `?chatterTab=` links until angee 0.3.0
+        // "activity" and "chatter.activity" are the former ids, kept in `?chatterTab=` links until angee 0.4.0
         // removes them (.changeset/chatter-history-tab.md).
         label: <PlaceholderLabel kind="history" />, icon: "activity", aliases: ["history", "activity", "chatter.activity"],
         render: () => <Placeholder kind="history" />,

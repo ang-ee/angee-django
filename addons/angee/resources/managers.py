@@ -30,6 +30,7 @@ from angee.resources.entries import (
     ResourceGroup,
     ValidationResult,
     resource_manifest_for,
+    retired_models_for,
 )
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import materialize_grant_groups
@@ -90,6 +91,20 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
                     continue
             keys.add(public_id)
         return keys
+
+    def retired_seed_keys(self, model_label: str) -> set[Any]:
+        """Return the keys of ``model_label`` rows seeded by the installed addons that retire the model.
+
+        Those addons name it under ``retired_models`` in their addon.toml
+        ``[resources]`` (:func:`retired_models_for`); with none, no row is seeded.
+        """
+
+        label = model_label.lower()
+        owners = [
+            config.name for config in apps.get_app_configs()
+            if label in {retired.lower() for retired in retired_models_for(config)}
+        ]
+        return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
 
 
 def seeded_record_merge_guard(record: models.Model) -> str | None:

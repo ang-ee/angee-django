@@ -1000,7 +1000,8 @@ and current contracts before applying a historical example to a new deployment.
   addon that stays installed declares a runtime migration that preserves or
   retires the data and removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
-  seeded once the addon names the model in its AppConfig `retired_seed_models`.
+  seeded once the addon names the model under `retired_models` in its
+  `addon.toml` `[resources]`.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its

@@ -41,6 +41,12 @@ BASELINE_ATTR = "angee_fresh_baseline"
 logger = logging.getLogger(__name__)
 
 
+def runtime_migration_origin(migration: Migration) -> str | None:
+    """Return the ``<addon>:<name>`` origin a materialized addon runtime migration records."""
+
+    return getattr(migration, ORIGIN_ATTR, None)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeMigrationPlan:
     """One applicable addon migration attached to a concrete runtime node."""
@@ -621,8 +627,9 @@ class DropGuardAutodetector(MigrationAutodetector):
     consistency check, must prove the column empty; an unreachable or
     unconfigured database cannot, so the drop is refused. A deleted model's table
     holds data when it has a row, under the same proof, retired historical labels
-    included; an addon that names the model in its AppConfig ``retired_seed_models``
-    vouches for the rows its own resource files seeded, which retire with the model.
+    included; an addon that names the model under ``retired_models`` in its
+    addon.toml ``[resources]`` vouches for the rows its own resource files seeded,
+    which retire with the model.
 
     A reviewed drop is an addon runtime migration: ``angee build`` materializes it
     into the history first, so its removal is never autodetected here.
@@ -675,7 +682,7 @@ class DropGuardAutodetector(MigrationAutodetector):
                 "unsafe autodetected table drop: " + "; ".join(refusals)
                 + ". A deleted model's table is dropped automatically only when every database that may "
                 "receive the migration proves it holds nothing but rows its retiring addon's resource files seeded "
-                "(AppConfig.retired_seed_models). Declare a cutover "
+                "(addon.toml [resources] retired_models). Declare a cutover "
                 "migration that preserves or retires its rows and deletes the model in an installed addon's "
                 "addon.toml [[migrations]], then run `angee build` before makemigrations."
             )
@@ -765,22 +772,19 @@ class DropGuardAutodetector(MigrationAutodetector):
 def _seeded_primary_keys(model: type[Any], alias: str) -> set[Any]:
     """Return the keys of ``model``'s rows its retiring addon's resource files seeded on ``alias``.
 
-    An addon vouches for its own seeded rows by naming the model in its AppConfig's
-    ``retired_seed_models``; rows other addons seeded, and models no addon names,
-    still count as data. The resource ledger (``angee.resources``) owns reading
-    them; a key the model's primary key cannot hold is not a seeded row of it.
+    The resource ledger (``angee.resources``) owns which rows those are: an addon
+    that removes a model names it under ``retired_models`` in its addon.toml
+    ``[resources]``, and only its own seeded rows retire with the model; rows other
+    addons seeded, and models no addon names, still count as data. A key the
+    model's primary key cannot hold is not a seeded row of it.
     """
 
-    label = model._meta.label
-    owners = [config.name for config in apps.get_app_configs() if label in getattr(config, "retired_seed_models", ())]
-    if not owners:
-        return set()
     try:
         ledger = apps.get_model("resources", "Resource")
     except LookupError:
         return set()
     try:
-        candidates = ledger.objects.using(alias).seeded_target_keys(label, source_addons=owners)
+        candidates = ledger.objects.using(alias).retired_seed_keys(model._meta.label)
     except DatabaseError:
         return set()
     keys = set()

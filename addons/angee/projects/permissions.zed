@@ -1,7 +1,7 @@
 // Authorization schema for bounded projects and their work.
 // @rebac_package: projects
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 13
+// @rebac_schema_revision: 14
 
 definition projects/project {
     relation owner:  auth/user // rebac:field=owner
@@ -40,8 +40,8 @@ definition projects/milestone {
 // never recurses. Contributors whose readers should see a task's record tasks
 // extend them (work lends its queue). Project readers are not lent: that arrow
 // takes generic target unions past SQLite's expression depth. A withheld task
-// withholds its record tasks (`subject->record_withheld`), subtracted beside the
-// subject arm rather than inside it for the same reason.
+// withholds its record tasks from every verb (`subject->record_withheld`),
+// subtracted beside the subject arm rather than inside it for the same reason.
 definition projects/task {
     relation project: projects/project // rebac:field=project
     relation subject: messaging/thread_attachment // rebac:field=subject
@@ -60,7 +60,7 @@ definition projects/task {
     // The sentinel's target, held by everyone: it gates nothing alone. Arrow-only
     // through `unbound`: never check `free` directly.
     permission free = authenticated
-    permission create = (authenticated - subject->attached) + subject->record_write + admin->member
+    permission create = (((authenticated - subject->attached) + subject->record_write) - subject->record_withheld) + admin->member
     permission read_granted = inherited_project->read + owner + assignee + reader + editor
     permission withheld = nil
     permission read = (((read_granted & unbound->free) + subject->record_read) - withheld - subject->record_withheld) + admin->member
@@ -71,16 +71,16 @@ definition projects/task {
     permission write = (((write_granted & unbound->free) + subject->record_write) - withheld - write_withheld - subject->record_withheld) + admin->member
     permission write_as_subject = owner + assignee + editor + admin->member
     permission share_granted = inherited_project->share + owner + editor
-    permission share = (((share_granted & unbound->free) + subject->record_write) - withheld) + admin->member
+    permission share = (((share_granted & unbound->free) + subject->record_write) - withheld - subject->record_withheld) + admin->member
     permission narrow = write
-    permission widen = ((project->share + owner) & unbound->free) + subject->record_write + admin->member
+    permission widen = ((((project->share + owner) & unbound->free) + subject->record_write) - subject->record_withheld) + admin->member
     permission delete_granted = inherited_project->write + owner
-    permission delete = (((delete_granted & unbound->free) + subject->record_write) - withheld) + admin->member
-    permission transfer = (owner & unbound->free) + subject->record_write + admin->member
+    permission delete = (((delete_granted & unbound->free) + subject->record_write) - withheld - subject->record_withheld) + admin->member
+    permission transfer = (((owner & unbound->free) + subject->record_write) - subject->record_withheld) + admin->member
     permission write__owner = transfer
     permission comment_granted = write_granted
     permission comment_withheld = nil
-    permission comment = (((comment_granted & unbound->free) + subject->record_write) - withheld - comment_withheld) + admin->member
+    permission comment = (((comment_granted & unbound->free) + subject->record_write) - withheld - comment_withheld - subject->record_withheld) + admin->member
     permission write__assignee = share
     // Who brings a withheld task back. Contributors that withhold tasks name their
     // managers here; administrators always may.

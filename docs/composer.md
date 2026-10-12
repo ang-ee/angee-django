@@ -285,9 +285,10 @@ any file is written:
 - an autodetected `RemoveField` when a row differs from the field's empty value
   (NULL, or a non-null field's default);
 - an autodetected `DeleteModel` when its table holds a row. An addon that removes
-  a model may name it in its AppConfig `retired_seed_models`: the rows its own
+  a model may name it under `retired_models` in its `addon.toml` `[resources]`
+  (for example `retired_models = ["messaging.ActivityType"]`): the rows its own
   resource files seeded then retire with the model, read through the resource
-  ledger (`ResourceQuerySet.seeded_target_keys`); other addons' seeded rows still
+  ledger (`ResourceQuerySet.retired_seed_keys`); other addons' seeded rows still
   count. The ledger rows stay as `angee.resources` history; the loader skips a
   model it cannot resolve. Retirements of migration-only historical labels are
   guarded the same way.
