@@ -29,7 +29,8 @@ rows carry the row's ``created_at``/``updated_at``; history rows record the fold
 time. Existing occupied statement keys block rather than overwrite evidence. A fold
 statement is applied unless another fold (a consumer's own, ordered before this one)
 already applied the subject's aspect: then it is recorded unapplied beside it, counted,
-and resolution arbitrates the two on the aspect's next change.
+and the migrate that ran the folds resolves the group once it completes
+(``PartyManager.resolve_folded_statements``), so the ranking decides the published value.
 
 Reverse is a no-op: provenance stays retained alongside the legacy columns until
 the separate retirement.
@@ -281,8 +282,8 @@ class Writer:
             raise Blocked(f"parties.{name}", subject.pk, f"occupied {aspect} statement key {asserted_by}")
         withdrawn = link is not None and link.status in ("withdrawn", "tombstone")
         # A statement another fold already applied (a consumer's system of record) keeps
-        # the aspect; this one is recorded beside it, and resolution arbitrates the two
-        # on the aspect's next change. The canonical columns are the same either way.
+        # the aspect for now; this one is recorded beside it, and the migrate's closing
+        # resolve ranks the two (PartyManager.resolve_folded_statements).
         applied = not withdrawn and not statements.filter(
             subject_id=subject.pk, aspect=aspect, superseded_id=None, applied=True,
         ).exists()

@@ -4362,6 +4362,9 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
         assertions names one of them. While another of the source's links still
         observes the record, the assertions move to it through the shared reference
         move, which keeps them asserted; the last link's tombstone withdraws them.
+        Two siblings tombstoned at once could otherwise move the assertions onto each
+        other: this relies on the bridge advisory lock, held by every sync job, webhook
+        landing and live session of the source's integration, to serialize them.
         """
 
         source = self.asserting_source()

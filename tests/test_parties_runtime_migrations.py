@@ -17,12 +17,17 @@ import pytest
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
+from django.core.management.sql import emit_post_migrate_signal
 from django.db import connection, migrations, models
 from django.db.migrations.state import ModelState, ProjectState
 from django.utils import timezone
-from rebac import SubjectRef, app_settings
+from rebac import SubjectRef, app_settings, system_context
+from rebac.actors import to_subject_ref
 
+from angee.base.changesets import changeset
 from angee.base.fields import StateField
+from angee.base.managers import StatementManager
+from angee.base.mixins import SourceKind
 from angee.integrate.runtime_migrations import (
     fold_record_sync_history,
     record_link_failure_status,
@@ -31,6 +36,7 @@ from angee.integrate.runtime_migrations import (
     retire_record_sync_hash_bases,
     retire_record_sync_stores,
 )
+from angee.messaging.testing.models import Directory, Party
 from angee.parties.runtime_migrations import (
     circle_member_decisions,
     fold_party_aspects,
@@ -43,6 +49,7 @@ from angee.parties.runtime_migrations import (
 )
 from angee.provenance.runtime_migrations import changeset_schema, retire_reversion, statement_principal_schema
 from angee.spaces.runtime_migrations import membership_decisions
+from tests.conftest import create_user, make_integration
 
 CARD_COLUMNS = ("folder", "source_uid", "source_etag", "raw_vcard", "extensions")
 VCARD = "\r\n".join(
@@ -704,12 +711,14 @@ def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
     assert "raw_vcard" not in {field.name for field in legacy.model("parties.Party")._meta.fields}
 
 
-def _consumer_statement(legacy: LegacyHost, party: Any, aspect: str, **values: Any) -> Any:
+def _consumer_statement(
+    legacy: LegacyHost, party: Any, aspect: str, *, history: bool = True, activity: str = "system", **values: Any
+) -> Any:
     """A statement a consumer's own fold applied under its own principal and reason, with its history."""
 
     seed, _ = legacy.rows("provenance.Seed").get_or_create(key="tests.consumer_fold")
     changeset = legacy.create(
-        settings.ANGEE_CHANGESET_MODEL, activity="system", change_reason="fold.consumer", state="closed"
+        settings.ANGEE_CHANGESET_MODEL, activity=activity, change_reason="fold.consumer", state="closed"
     )
     row = legacy.create(
         "parties.PartyStatement",
@@ -725,6 +734,8 @@ def _consumer_statement(legacy: LegacyHost, party: Any, aspect: str, **values: A
         changeset_id=changeset.pk,
         **values,
     )
+    if not history:
+        return row
     legacy.create(
         "parties.HistoricalPartyStatement",
         **{field.attname: getattr(row, field.attname) for field in row._meta.concrete_fields},
@@ -800,11 +811,8 @@ def test_the_folds_keep_a_statement_another_fold_already_applied(
     assert "1 x Party.identity: another fold's statement is applied; recorded beside it" in out
 
 
-@pytest.mark.django_db(transaction=True)
-def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
-    legacy: LegacyHost, seeded: dict[str, Any], capsys
-) -> None:
-    """An import carrier the fold leaves unasserted may be a consumer fold's to assert, under its own reason."""
+def _replica_carrier(legacy: LegacyHost, seeded: dict[str, Any]) -> tuple[Any, Any]:
+    """A linked replica handle whose import carrier the fold leaves unasserted (no linkedin account channel)."""
 
     imported, person = seeded["imported"], seeded["person"]
     replica = legacy.create(
@@ -825,7 +833,18 @@ def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
         metadata={"provenance": "social_takeout"},
     )
     legacy.apply(fold_party_handle_statements)
-    assert _statements(legacy, imported, handle_id=replica.pk) == []  # no linkedin account channel
+    assert _statements(legacy, imported, handle_id=replica.pk) == []
+    return carrier, replica
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
+    legacy: LegacyHost, seeded: dict[str, Any], capsys
+) -> None:
+    """An import carrier the fold leaves unasserted may be a consumer fold's to assert, under its own reason."""
+
+    imported = seeded["imported"]
+    carrier, replica = _replica_carrier(legacy, seeded)
     claim = _consumer_statement(legacy, imported, "handle", handle_id=replica.pk)
     legacy.apply(fold_party_aspects)
     legacy.apply(circle_member_decisions)
@@ -834,6 +853,112 @@ def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
 
     assert f"PartyHandle {carrier.pk}: unasserted import carrier is asserted by another fold" in capsys.readouterr().out
     assert [row.pk for row in _statements(legacy, imported, handle_id=replica.pk)] == [claim.pk]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("history", "activity", "refusal"),
+    [(False, "system", "missing folded source or history"), (True, "manual", "is not a fold's system work")],
+)
+def test_the_handle_retirement_refuses_another_writers_statement_a_fold_did_not_write(
+    legacy: LegacyHost, seeded: dict[str, Any], history: bool, activity: str, refusal: str
+) -> None:
+    """Another writer's statement passes only as a fold writes one: system work, with its native history."""
+
+    carrier, replica = _replica_carrier(legacy, seeded)
+    _consumer_statement(legacy, seeded["imported"], "handle", handle_id=replica.pk, history=history, activity=activity)
+    legacy.apply(fold_party_aspects)
+    legacy.apply(circle_member_decisions)
+
+    with pytest.raises(ValueError, match=f"PartyHandle {carrier.pk}: .*{refusal}"):
+        legacy.apply(retire_party_handle)
+
+
+def consumer_fold_reasons() -> tuple[str, ...]:
+    """A consumer's fold family (an ``ANGEE_PARTIES_STATEMENT_FOLDS`` entry), as an import's would declare it."""
+
+    return ("fold.consumer",)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_migrate_ranks_each_folds_shared_groups_once_and_retries_a_failure(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, settings: Any
+) -> None:
+    """A fold's statement applied first keeps a group only until a migrate ranks it, once per fold.
+
+    The consumer's fold ran before the upgrade's: the first migrate's ranking fails and fails
+    it, the next one ranks the group, a later one finds the recorded mark and does nothing.
+    Then the consumer's fold lands again in a later migrate, beside an applied statement of
+    the upgrade's folds: the next migrate ranks that group too. A group only the upgrade's
+    folds wrote is left as it is.
+    """
+
+    del composed_tables
+    settings.ANGEE_PARTIES_STATEMENT_FOLDS = [
+        *settings.ANGEE_PARTIES_STATEMENT_FOLDS,
+        f"{__name__}.consumer_fold_reasons",
+    ]
+    statements = Party.statements.model
+
+    def identity(party: Any, name: str, asserted_by: str, **values: Any) -> Any:
+        return statements._base_manager.create(
+            subject=party, aspect="identity", display_name=name, asserted_by=asserted_by, **values
+        )
+
+    with system_context(reason="test folds meet"):
+        owner = create_user("folds-meet")
+        person = str(to_subject_ref(owner))
+        replica = str(to_subject_ref(make_integration("folds-meet-replica", model=Directory)))
+        first = Party._base_manager.create(display_name="A. Lovelace", created_by=owner)
+        later = Party._base_manager.create(display_name="Grace Hopper", created_by=owner)
+        alone = Party._base_manager.create(display_name="Edsger Dijkstra", created_by=owner)
+        with changeset(fresh=True, activity="system", change_reason="fold.consumer"):
+            consumer = identity(first, "A. Lovelace", replica, source_kind=SourceKind.DIRECTORY, applied=True)
+        with changeset(fresh=True, activity="system", change_reason=fold_party_aspects.REASON):
+            preferred = identity(
+                first, "Ada Lovelace", person, source_kind=SourceKind.PERSON, rank=statements.StatementRank.PREFERRED
+            )
+            folded = identity(later, "Grace Hopper", person, source_kind=SourceKind.PERSON, applied=True)
+            only = identity(alone, "Edsger Dijkstra", person, source_kind=SourceKind.PERSON, applied=True)
+    written = statements.history.filter(id=only.pk).count()
+    resolve_shared = StatementManager.resolve_shared
+
+    def unavailable(self: Any, changesets: Any) -> int:
+        raise RuntimeError("ranking unavailable")
+
+    def applied(*rows: Any) -> list[bool]:
+        return [statements._base_manager.get(pk=row.pk).applied for row in rows]
+
+    monkeypatch.setattr(StatementManager, "resolve_shared", unavailable)
+    with pytest.raises(RuntimeError, match="ranking unavailable"):
+        emit_post_migrate_signal(0, False, connection.alias)
+    assert applied(preferred, consumer) == [False, True]
+
+    monkeypatch.setattr(StatementManager, "resolve_shared", resolve_shared)
+    emit_post_migrate_signal(0, False, connection.alias)
+    assert applied(preferred, consumer) == [True, False]
+    assert Party._base_manager.get(pk=first.pk).display_name == "Ada Lovelace"
+
+    monkeypatch.setattr(StatementManager, "resolve_shared", unavailable)
+    emit_post_migrate_signal(0, False, connection.alias)  # no fold newer than the recorded mark
+
+    with system_context(reason="test a later consumer fold"):
+        # A standing decision the consumer's fold carries over: a preferred stance by its seed principal.
+        seed = apps.get_model("provenance", "Seed")._base_manager.create(key="tests.consumer_fold")
+        with changeset(fresh=True, activity="system", change_reason="fold.consumer"):
+            landed = identity(
+                later,
+                "G. Hopper",
+                f"provenance/seed:{seed.pk}",
+                source_kind=SourceKind.SEED,
+                rank=statements.StatementRank.PREFERRED,
+            )
+    monkeypatch.setattr(StatementManager, "resolve_shared", resolve_shared)
+    emit_post_migrate_signal(0, False, connection.alias)
+
+    assert applied(landed, folded) == [True, False]
+    assert Party._base_manager.get(pk=later.pk).display_name == "G. Hopper"
+    assert statements.history.filter(id=only.pk).count() == written
 
 
 def _created_after_the_preflight() -> frozenset[str]:

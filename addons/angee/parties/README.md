@@ -94,6 +94,16 @@ retained evidence, discarded legacy data and reversal contracts; the rules are:
   `DeleteModel`/`RemoveField`; a card's bytes count as retained when a link
   observation is the same vCard (lines compared as a set, `REV`/`PRODID` ignored).
   Stale `source_etag` values are discarded with the column.
+- **Another addon's fold joins through a declared family.** An addon whose own fold
+  writes parties statements in a migration (an import's system of record) appends a
+  callable returning its fold changesets' change reasons to
+  `ANGEE_PARTIES_STATEMENT_FOLDS`, writes them as system work with native history,
+  and never overwrites an applied statement: it records its own beside it. Folds do
+  not rank each other, so every migrate ranks the groups a family's statements share
+  with another writer, once per fold changeset newer than the last successful
+  ranking (`PartyManager.resolve_folded_statements`); a failure fails that migrate and
+  the next one ranks again. The retirement accepts such a fold's statement on an
+  import carrier this chain's fold left unasserted.
 - **Lost by ruling:** every django-reversion revision (MarkdownPage body, Project
   title/body history) — back the database up first if that history matters. After
   the upgrade run `manage.py remove_stale_contenttypes` for the `reversion.*`,

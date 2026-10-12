@@ -2,10 +2,11 @@
 
 The fold precedes this declaration and refuses unresolved attribution. Each old
 pair must retain the fold's source assertion in native history (or, for an import
-carrier the fold leaves unasserted, none of its own: another fold's, whatever its
-reason, or no assertion at all); every current statement of the pair must be in
-native history; recorded decisions must have the corresponding stance; every
-resolved Handle pointer must have an applied value statement, whichever fold wrote it.
+carrier the fold leaves unasserted, none of its own: another fold's system work,
+whatever its reason, or no assertion at all); every current statement of the pair,
+whichever fold wrote it, must be in native history; recorded decisions must have the
+corresponding stance; every resolved Handle pointer must have an applied value
+statement, whichever fold wrote it.
 
 Retained workflow/decision JSON references to a carrier change to the folded
 statement id (``party_handle_id`` becomes ``statement_id``); carrier record
@@ -89,28 +90,32 @@ def forwards(apps, schema_editor):
     carriers = _rows(apps, "parties.PartyHandle", db)
     statements = _rows(apps, "parties.PartyStatement", db)
     history = _rows(apps, "parties.HistoricalPartyStatement", db)
+    system_work = _rows(apps, settings.ANGEE_CHANGESET_MODEL, db).filter(activity="system")
     problems, notices = [], []
     mapping, by_pk = {}, {}
     for row in carriers.order_by("pk").iterator():
         pair = dict(subject_id=row.party_id, handle_id=row.handle_id, aspect="handle")
         rows = statements.filter(**pair, superseded_id=None)
         kept = rows.order_by("-rank", "-confidence", "-updated_at", "-pk").first()
+        # Every fold, this one or a consumer's own, writes its statements with their native history.
+        if not all(history.filter(id=pk).exists() for pk in rows.values_list("pk", flat=True)):
+            problems.append(f"PartyHandle {row.pk}: missing folded source or history")
+            continue
         if kept is None or not history.filter(**pair, history_change_reason="fold.party_handle").exists():
             # The fold asserts every carrier except an import it leaves unasserted; another
-            # fold (a consumer's own) may assert that one under its own reason.
+            # fold (a consumer's own, system work under its own reason) may assert that one.
             if row.is_confirmed or row.is_dismissed or row.source != "import":
                 problems.append(f"PartyHandle {row.pk}: missing folded source or history")
             elif kept is None:
                 notices.append(f"PartyHandle {row.pk}: unasserted import carrier retires without a statement")
+            elif not system_work.filter(pk=kept.changeset_id).exists():
+                problems.append(f"PartyHandle {row.pk}: another writer's statement is not a fold's system work")
             else:
                 notices.append(f"PartyHandle {row.pk}: unasserted import carrier is asserted by another fold")
             by_pk[row.pk] = row.party_id
             mapping[public_id(CARRIER_PREFIX, row.pk)] = (
                 public_id(STATEMENT_PREFIX, kept.pk) if kept is not None else "", public_id(PARTY_PREFIX, row.party_id),
             )
-            continue
-        if not all(history.filter(id=pk).exists() for pk in rows.values_list("pk", flat=True)):
-            problems.append(f"PartyHandle {row.pk}: missing folded source or history")
             continue
         snak = "no_value" if row.is_dismissed else "value"
         if (row.is_dismissed or row.is_confirmed) and not rows.filter(snak=snak).filter(

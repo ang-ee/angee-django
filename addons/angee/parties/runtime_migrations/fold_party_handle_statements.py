@@ -43,8 +43,9 @@ retirement's parity review. Carrier owner/editor/reader grants become Party
 ``carrier_reader`` grants (read only). The applied statement per (party, handle)
 is the decisive one: a preferred stance, else the strongest normal assertion at the
 review threshold, unless another fold (a consumer's own, in the same round) already
-applied the pair: then the fold's statements are recorded beside it, counted, and
-resolution arbitrates them on the pair's next change.
+applied the pair: then the fold's statements are recorded beside it, counted, and the
+migrate that ran the folds resolves the pair once it completes
+(``PartyManager.resolve_folded_statements``), so the ranking decides the published value.
 
 Every blocking row is collected before anything is written; the first error names
 them all. ``plan()`` is the predicate the parties fold preflight evaluates against

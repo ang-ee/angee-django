@@ -23,6 +23,7 @@ from itertools import chain, combinations, groupby, islice
 from typing import Any, NamedTuple, Self
 
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, models, transaction
@@ -45,20 +46,35 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import changeset, current_changeset
 from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
 from angee.base.merge import fold_records, references
-from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
+from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, Statement, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
+from angee.parties.runtime_migrations import fold_party_aspects, fold_party_handle_statements
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 logger = logging.getLogger(__name__)
+
+RESOLVE_FOLDED = "parties.resolve_folded_statements"
+"""The change reason recording that the fold families' shared statement groups were ranked."""
+
+STATEMENT_FOLDS = "ANGEE_PARTIES_STATEMENT_FOLDS"
+"""The hook setting a fold family that writes parties statements in migrations joins."""
+
+
+def statement_fold_reasons() -> tuple[str, ...]:
+    """The parties upgrade's fold family: the change reasons its two folds write statements under."""
+
+    return (fold_party_handle_statements.REASON, fold_party_aspects.REASON)
+
 
 _DISPLAY_OWN_AVATAR = "_display_own_avatar"
 """Where a page's prefetch parks each party's own avatar the actor can read."""
@@ -993,6 +1009,46 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 "handles", queryset=self._display_avatar_handles(actor, avatars), to_attr=_DISPLAY_AVATAR_HANDLES
             ),
         )
+
+    def resolve_folded_statements(self) -> int:
+        """Rank the statement groups each fold family's statements share with another writer, once per fold.
+
+        A fold records retained facts without ranking them, so in a group two writers
+        meet (the upgrade's folds and a consumer's own, which may land in a later
+        migrate), the applied statement is whichever came first. Each family declared
+        in ``ANGEE_PARTIES_STATEMENT_FOLDS`` with a fold changeset newer than the last
+        successful resolution has its shared groups resolved through the statement
+        owner (``resolve_shared``), under a system changeset this records even when
+        nothing changed: it is the high-water mark, so a later call with no new fold is
+        two queries per family, and a failure records no success and the next call
+        retries. Returns how many groups were resolved.
+        """
+
+        changesets = apps.get_model(settings.ANGEE_CHANGESET_MODEL)._base_manager.using(self.db)
+        resolved_up_to = changesets.filter(change_reason=RESOLVE_FOLDED, outcome="success").aggregate(
+            mark=models.Max("pk")
+        )["mark"]
+        newer = {} if resolved_up_to is None else {"pk__gt": resolved_up_to}
+        families = [changesets.filter(change_reason__in=reasons()) for reasons in resolve_hooks(STATEMENT_FOLDS)]
+        pending = [family for family in families if family.filter(**newer).exists()]
+        if not pending:
+            return 0
+        statement_models = [
+            model
+            for model in sorted(apps.get_models(), key=lambda model: model._meta.label)
+            if issubclass(model, Statement) and model._meta.app_label == self.model._meta.app_label
+        ]
+        with (
+            changeset(fresh=True, activity="system", change_reason=RESOLVE_FOLDED),
+            system_context(reason=RESOLVE_FOLDED),
+        ):
+            resolved = sum(
+                model.objects.db_manager(self.db).resolve_shared(family)
+                for family in pending
+                for model in statement_models
+            )
+            current_changeset(required=True, record=True)
+        return resolved
 
     def rehome_avatars(self) -> int:
         """Move party avatars stored before storage's image drive onto it; return how many moved.
