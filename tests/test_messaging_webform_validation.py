@@ -44,7 +44,7 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         "        if errors:\n"
         "            raise ValidationError(errors)\n"
     )
-    root = Path(__file__).resolve().parents[3]
+    root = Path(__file__).resolve().parents[1]
     report = tmp_path / "composed-webform.json"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
@@ -58,7 +58,7 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
             "--app", "angee.intake",
             "--no-examples",
             "--action", "tests",
-            "--test-label", "angee.messaging.native_webform_validation",
+            "--test-label", "tests.native_messaging_webform_validation",
             "--output", str(report),
         ],
         cwd=root,
@@ -69,4 +69,4 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"Composed webform tests failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

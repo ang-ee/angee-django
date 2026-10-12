@@ -26,6 +26,7 @@ COMPOSED_TEST_TIMEOUT = 120
 
 def run_composed_tests(
     tmp_path: Path, test_label: str, *, app: str | tuple[str, ...], test_postgresql: bool = False,
+    addon_dirs: tuple[Path, ...] = (),
 ) -> None:
     """Run a native contract group without sharing pytest's source-model registry."""
 
@@ -41,6 +42,7 @@ def run_composed_tests(
             str(tmp_path / "runtime"),
             *(["--test-postgresql"] if test_postgresql else []),
             *(argument for name in ((app,) if isinstance(app, str) else app) for argument in ("--app", name)),
+            *(argument for path in addon_dirs for argument in ("--addon-dir", str(path))),
             "--no-examples",
             "--action",
             "tests",
@@ -270,7 +272,8 @@ def main() -> None:
 
             def setup_databases(self, **kwargs: Any) -> Any:
                 databases = super().setup_databases(**kwargs)
-                call_command("rebac", "sync", verbosity=0)
+                if "default" in kwargs.get("aliases", ()):
+                    call_command("rebac", "sync", verbosity=0)
                 return databases
 
         assert args.test_label, "Native tests require explicit test labels"

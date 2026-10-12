@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models.functions import Now
 from rebac import actor_context
@@ -100,6 +101,30 @@ def test_rolled_back_save_does_not_wake_and_tick_recovers_lost_delivery(watched_
     assert runner.tick()["records"] == 1
     assert runner.tick()["records"] == 0
     assert sum(name == "workflows.execute" for name, _ in sent) == 1
+
+
+@pytest.mark.parametrize("failure", [ValueError, ValidationError])
+def test_watch_capture_logs_enqueue_failure_without_rolling_back_the_source(
+    watched_source, register_step, monkeypatch, caplog, failure,
+):
+    actor, sent, record = watched_source
+    register_step(Watch)
+    run, step = start_watcher(Watch, record, actor)
+    run_until(run)
+    sent.clear()
+
+    def fail_enqueue(*args, **kwargs):
+        raise failure("Watch enqueue interrupted")
+
+    monkeypatch.setattr("angee.workflows.managers.enqueue_task", fail_enqueue)
+    with actor_context(actor):
+        record.name = "Source write retained"
+        record.save(update_fields=["name"])
+    record.refresh_from_db()
+    assert record.name == "Source write retained"
+    assert not system_queryset(StepWatch).filter(step_run=step, pending=True).exists()
+    assert record_deliveries(sent) == []
+    assert "Workflow watch capture failed" in caplog.text and "Watch enqueue interrupted" in caplog.text
 
 
 @pytest.mark.parametrize("ending", ["done", "fail", "invalid", "next_page", "cancel"])

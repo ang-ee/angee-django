@@ -33,6 +33,7 @@ from angee.workflows.testing.models import (
     TriggerEvent,
     WorkflowRun,
 )
+from angee.workflows.watches import RecordWatch
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.mtidemo.models import MtiParent
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
@@ -69,6 +70,20 @@ def capture(record):
     triggers.RecordChanged.dispatch(type(record), record)
 
 
+@pytest.mark.parametrize("failure", [ValueError, ValidationError])
+def test_trigger_capture_logs_unexpected_ledger_errors(trigger_setup, monkeypatch, caplog, failure):
+    actor, _workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+
+    def fail_write(*args, **kwargs):
+        raise failure("Trigger ledger interrupted")
+
+    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail_write)
+    capture(record)
+    assert not system_queryset(TriggerEvent).filter(trigger=trigger).exists()
+    assert "Workflow trigger capture failed" in caplog.text and "Trigger ledger interrupted" in caplog.text
+
+
 def restrict_source_grant_to_record(monkeypatch, record):
     """Let the record owner, but not an unrelated workflow editor, delegate it."""
     def targets(cls, trigger):
@@ -91,8 +106,8 @@ def test_record_changed_system_check_requires_grant_targets(monkeypatch):
 
 
 def test_record_changed_requires_the_mixin_for_watch_eligibility():
-    with pytest.raises(ValidationError, match="no registered workflow event source"):
-        triggers.RecordChanged.check_watch_model(MtiParent)
+    with pytest.raises(ValidationError, match="no registered workflow observation"):
+        RecordWatch.check_model(MtiParent)
 
 
 def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):

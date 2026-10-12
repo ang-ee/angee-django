@@ -147,7 +147,9 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
 
     scheduler.enqueue_due_bridges(now=_AT + timedelta(hours=1))
 
-    assert queued == [("posts.Feed", feed.pk)]
+    assert queued == [("posts.Feed", feed.pk)], list(Feed._base_manager.filter(pk=feed.pk).values(
+        "concrete_type__model", "lifecycle", "discovery_generation", "discovery_retry_at", "discovery_completed_at",
+    ))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -185,16 +187,18 @@ def test_integration_feed_children_prefetch_in_fixed_queries(posts_tables: None)
 
 @pytest.mark.django_db(transaction=True)
 def test_quota_consume_debits_the_budget(posts_tables: None) -> None:
-    """consume() opens the period and debits quota_used by the spent units."""
+    """consume() debits quota_used on the explicitly opened scope period."""
 
     del posts_tables
     with system_context(reason="test quota consume"):
         integration = _feed("quota-debit")
-        assert Quota.objects.consume(integration=integration, units=3000, limit=10000, now=_AT) is True
+        period = Quota.objects.open_period(
+            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+        )
+        assert Quota.objects.consume(period=period, units=3000, limit=10000, now=_AT) is True
         ledger = Quota._base_manager.get(integration=integration)
 
     assert ledger.quota_used == 3000
-    assert ledger.quota_limit == 10000
     assert ledger.last_updated == _AT
 
 
@@ -205,12 +209,15 @@ def test_quota_consume_refuses_when_exhausted_and_leaves_ledger_untouched(posts_
     del posts_tables
     with system_context(reason="test quota exhaustion"):
         integration = _feed("quota-exhaustion")
-        assert Quota.objects.consume(integration=integration, units=6000, limit=10000, now=_AT) is True
+        period = Quota.objects.open_period(
+            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+        )
+        assert Quota.objects.consume(period=period, units=6000, limit=10000, now=_AT) is True
         # 6000 + 5000 > 10000 → refused, ledger stays at the prior 6000.
-        assert Quota.objects.consume(integration=integration, units=5000, limit=10000, now=_AT) is False
+        assert Quota.objects.consume(period=period, units=5000, limit=10000, now=_AT) is False
         after_refusal = Quota._base_manager.get(integration=integration).quota_used
         # 6000 + 4000 == 10000 → the budget is spendable up to the limit.
-        assert Quota.objects.consume(integration=integration, units=4000, limit=10000, now=_AT) is True
+        assert Quota.objects.consume(period=period, units=4000, limit=10000, now=_AT) is True
         exhausted = Quota._base_manager.get(integration=integration).quota_used
 
     assert after_refusal == 6000
@@ -220,21 +227,22 @@ def test_quota_consume_refuses_when_exhausted_and_leaves_ledger_untouched(posts_
 @pytest.mark.django_db(transaction=True)
 def test_quota_openers_converge_on_the_window_boundary(
     posts_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Openers that both miss the initial read share one deterministic period and budget."""
+    """Repeated openers share the same deterministic daily period and budget."""
 
     del posts_tables
-    queryset_class = type(Quota.objects.all())
-    monkeypatch.setattr(queryset_class, "current", lambda self, *, now: self.none())
     first_at = _AT
     second_at = _AT + timedelta(microseconds=1)
     with system_context(reason="test quota concurrent openers"):
         integration = _feed("quota-concurrent-openers")
-        first = Quota.objects.open_period(integration=integration, limit=10000, now=first_at)
-        second = Quota.objects.open_period(integration=integration, limit=10000, now=second_at)
-        assert Quota.objects.consume(integration=integration, units=3000, limit=10000, now=first_at) is True
-        assert Quota.objects.consume(integration=integration, units=4000, limit=10000, now=second_at) is True
+        first = Quota.objects.open_period(
+            integration=integration, scope=f"test:integration:{integration.pk}", now=first_at,
+        )
+        second = Quota.objects.open_period(
+            integration=integration, scope=f"test:integration:{integration.pk}", now=second_at,
+        )
+        assert Quota.objects.consume(period=first, units=3000, limit=10000, now=first_at) is True
+        assert Quota.objects.consume(period=second, units=4000, limit=10000, now=second_at) is True
         ledger = Quota._base_manager.get(integration=integration)
 
     assert first.pk == second.pk == ledger.pk
@@ -263,7 +271,10 @@ def test_quota_consume_uses_the_backend_gated_lock_contract(
     monkeypatch.setattr(manager_class, "locked_get", locked_get)
     with system_context(reason="test quota lock contract"):
         integration = _feed("quota-lock-contract")
-        assert Quota.objects.consume(integration=integration, units=1, limit=10, now=_AT) is True
+        period = Quota.objects.open_period(
+            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+        )
+        assert Quota.objects.consume(period=period, units=1, limit=10, now=_AT) is True
         ledger = Quota._base_manager.get(integration=integration)
 
     assert locked_pks == [ledger.pk]
@@ -276,7 +287,9 @@ def test_quota_read_derives_from_its_integration(posts_tables: None) -> None:
     del posts_tables
     with system_context(reason="test quota integration access"):
         integration = _feed("quota-integration-access")
-        quota = Quota.objects.open_period(integration=integration, limit=10, now=_AT)
+        quota = Quota.objects.open_period(
+            integration=integration, scope=f"test:integration:{integration.pk}", now=_AT,
+        )
     assert quota.created_by_id is None
 
     with actor_context(integration.owner):

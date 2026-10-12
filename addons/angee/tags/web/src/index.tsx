@@ -9,6 +9,7 @@ import { Tag as TagIcon, Tags as TagsIcon } from "lucide-react";
 
 import { enTagsMessages } from "./i18n";
 import { tagForm } from "./views/TagForm";
+import { recordTagsWidget } from "./RecordTagsWidget";
 
 const TAGS_ID = "tags";
 
@@ -44,8 +45,9 @@ const tagsMenu: readonly BaseMenuItem[] = [
  * (shared with a picker's "Create and edit…"). Tags appear only where an owner
  * places the field — a record form's `<Field name="tags" />` or a list column —
  * on a model whose addon composes the backend's `TaggedNode`; the form edits it
- * as its standard to-many chips field and saves it with the record. This addon
- * names no other addon's model.
+ * as its standard to-many chips field and saves it with the record. The
+ * `angee.tags.recordTags` widget uses independent tag verbs for records with
+ * read-only scalar fields. This addon names no other addon's model.
  */
 const tags = defineBaseAddon({
   id: TAGS_ID,
@@ -58,6 +60,7 @@ const tags = defineBaseAddon({
     tag: TagIcon,
   },
   forms: { "tags.Tag": tagForm },
+  widgets: { "angee.tags.recordTags": recordTagsWidget },
   containers: {
     // Scope-specific tag addons add facets, columns and form fields to the Tags page.
     "tags.tags#facets": {},

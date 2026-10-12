@@ -21,7 +21,7 @@ from rebac.models import active_relationship_model
 from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
-from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, TOKEN_EXCHANGE_FAILED, OAuthFlowError
 from tests.conftest import (
     Credential,
     ExternalAccount,
@@ -171,6 +171,7 @@ def test_oauth_protocol_discovers_missing_authorize_endpoint() -> None:
         state="state-token",
         redirect_uri="https://app.example/callback",
         scopes=("profile",),
+        code_challenge="challenge",
     )
 
     parsed = parse.urlsplit(url)
@@ -179,6 +180,25 @@ def test_oauth_protocol_discovers_missing_authorize_endpoint() -> None:
         "https://provider.example/oauth/authorize"
     )
     assert dict(parse.parse_qsl(parsed.query))["client_id"] == "client-id"
+
+
+def test_authorization_flow_needs_pkce_or_a_client_secret() -> None:
+    """With neither, nothing authenticates the code exchange: refuse before the redirect."""
+
+    endpoints = {
+        "slug": "provider", "display_name": "Provider", "client_id": "client-id",
+        "authorize_endpoint": "https://provider.example/oauth/authorize",
+        "token_endpoint": "https://provider.example/oauth/token",
+    }
+    flow = {"state": "state-token", "redirect_uri": "https://app.example/callback", "scopes": ("profile",)}
+    for refused in (OAuthClient(**endpoints, supports_pkce=False), OAuthClient(**endpoints)):
+        with pytest.raises(OAuthFlowError) as error:
+            OAuthClientProtocol(refused).authorize_url(**flow)
+        assert error.value.code == CLIENT_NOT_CONFIGURED
+    public = OAuthClientProtocol(OAuthClient(**endpoints)).authorize_url(**flow, code_challenge="challenge")
+    assert dict(parse.parse_qsl(parse.urlsplit(public).query))["code_challenge"] == "challenge"
+    confidential = OAuthClient(**endpoints, supports_pkce=False, client_secret="secret")
+    assert "code_challenge" not in OAuthClientProtocol(confidential).authorize_url(**flow)
 
 
 def test_oauth_client_claim_accessors_support_dotted_paths() -> None:

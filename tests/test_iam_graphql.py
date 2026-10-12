@@ -574,11 +574,13 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
     }
 
 
+@pytest.mark.parametrize("http_status", [400, 429, 503])
 def test_connect_account_complete_uses_bounded_provider_error_message(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
+    http_status: int,
 ) -> None:
-    """Connect completion keeps the stable code without exposing provider text."""
+    """Connect distinguishes outages from refusals without exposing provider text."""
 
     user = User.objects.create_user(username="connect-rate-limited", email="connect@example.com")
     oauth_client = _oauth_client("connect-anthropic", is_oidc=False)
@@ -616,7 +618,7 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
         assert selected_oauth_client.pk == oauth_client.pk
         raise OAuthFlowError(
             "token_exchange_failed",
-            429,
+            http_status,
             body={
                 "error": {
                     "type": "rate_limit_error",
@@ -653,8 +655,11 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
     assert completed["connect_account_complete"] == {
         "account": None,
         "credential": None,
-        "error": "The provider could not complete authorization.",
-        "error_code": "token_exchange_failed",
+        "error": (
+            "The provider could not complete authorization." if http_status == 400
+            else "The provider is temporarily unavailable. Try again later."
+        ),
+        "error_code": "token_exchange_failed" if http_status == 400 else "provider_unavailable",
     }
 
 

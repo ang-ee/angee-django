@@ -148,13 +148,15 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert gemini["client_id"] == "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     assert gemini["authorize_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
     assert gemini["token_endpoint"] == "https://oauth2.googleapis.com/token"
-    assert gemini["userinfo_endpoint"] == "https://www.googleapis.com/oauth2/v2/userinfo"
+    # Clear the former profile override so Google metadata supplies the OIDC
+    # subject-bearing endpoint (exercised by the seed profile test in test_oidc).
+    assert gemini["userinfo_endpoint"] == ""
+    assert gemini["discovery_url"] == "https://accounts.google.com/.well-known/openid-configuration"
     assert gemini["is_enabled"] is True
-    # OIDC trust config (issuer/jwks/discovery) lives in the OIDC login addon, not
+    # OIDC login trust config (issuer/jwks) lives in the OIDC login addon, not
     # the integrate base seed.
     assert "issuer" not in gemini
     assert "jwks_uri" not in gemini
-    assert "discovery_url" not in gemini
     assert gemini["display_name_claim"] == "name"
     assert gemini["avatar_url_claim"] == "picture"
     assert "client_secret" not in gemini

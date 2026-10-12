@@ -34,9 +34,8 @@ describe("angee.tags addon manifest", () => {
     });
   });
 
-  test("registers the tag form and declares only the Tags page's containers", () => {
-    // Tags are a placeable field on the owner's form, edited as its standard chips field.
-    expect(tags.widgets ?? {}).toEqual({});
+  test("registers the tag form, independent record widget and Tags page's containers", () => {
+    expect(Object.keys(tags.widgets ?? {})).toEqual(["angee.tags.recordTags"]);
     expect(Object.keys(tags.forms ?? {})).toEqual(["tags.Tag"]);
     expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields"]);
   });

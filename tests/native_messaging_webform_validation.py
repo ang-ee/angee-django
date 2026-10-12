@@ -1,4 +1,4 @@
-"""Django HTTP contracts run only in the isolated composed webform host."""
+"""Messaging's native HTTP contracts for an isolated composed webform host."""
 
 from __future__ import annotations
 

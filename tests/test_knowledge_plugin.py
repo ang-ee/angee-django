@@ -168,7 +168,7 @@ def test_semantic_search_tool_compiles() -> None:
     assert set(tool.parameters["properties"]) == {"vault", "query", "first"}
     assert tool.parameters["required"] == ["vault", "query"]  # first has a schema default
     assert tool.document == (
-        "query ($first: Int!, $vault: ID!, $query: String!) "
+        "query ($first: Int! = 10, $vault: ID!, $query: String!) "
         "{ semantic_search(first: $first, vault: $vault, query: $query) { id title kind } }"
     )
     # A list operation projects its rows under ``result``.
