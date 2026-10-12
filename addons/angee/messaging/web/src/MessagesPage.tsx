@@ -15,6 +15,8 @@ import { useMessagingT } from "./i18n";
 const MODEL = "messaging.Message";
 const DEFAULT_GROUPS = { list: { field: "channel" } } as const;
 const HELD_FILTER = { is_held: true } as const;
+/** The selection's revisions and verbs, read by the held actions while the held filter is active. */
+const HELD_FIELDS = ["revision", "permissions"] as const;
 const ACTION_OPTIONS = { invalidateModels: [MODEL, "messaging.Thread"], errorNotification: false } as const;
 export type MessageListRow = StringIdRow & MessageSummaryData & {
   revision?: number; permissions?: readonly string[];
@@ -23,14 +25,14 @@ export type MessageListRow = StringIdRow & MessageSummaryData & {
 /** Messages retain ordinary selection/delete; held verbs compose their own view. */
 export function MessagesPage(): React.ReactElement {
   const t = useMessagingT();
-  const view = useResourceView();
-  const held = Filter.from(Filter.combineOptional(view.baseFilter, view.state.filter)).hasPreset(HELD_FILTER);
-  const fields = held ? [...MESSAGE_SUMMARY_FIELDS, "revision", "permissions"] : MESSAGE_SUMMARY_FIELDS;
   const tabs = React.useMemo(() => messageRecordTabs(t), [t]);
-  const filters = React.useMemo(() => [{ id: "held", label: t("messages.held"), filter: HELD_FILTER }], [t]);
+  const filters = React.useMemo(
+    () => [{ id: "held", label: t("messages.held"), filter: HELD_FILTER, fields: HELD_FIELDS }],
+    [t],
+  );
   return <ResourceList<MessageListRow> resource={MODEL} form={messageForm} placement="inline" routed hideCreate recordTabs={tabs}>
     <List<MessageListRow> resource={MODEL} defaultGroups={DEFAULT_GROUPS}
-      fields={fields} tableLayout="fixed" headerVisibility="visually-hidden"
+      fields={MESSAGE_SUMMARY_FIELDS} tableLayout="fixed" headerVisibility="visually-hidden"
       filterOptions={filters} selectable
       bulkActions={(ids, _clear, { filter, selectedRows }) => Filter.from(filter).hasPreset(HELD_FILTER)
         ? <HeldDraftActions ids={ids} rows={selectedRows} /> : null}
