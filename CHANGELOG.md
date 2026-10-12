@@ -16,8 +16,10 @@ live in code docstrings.
   queryset's `readable(field)`, and Angee's `gated_field_expression` is removed.
 - IAM declares its deliberate disclosures in Zed: filtered constants on the
   account's own `is_active` and `is_staff` back `active_account` and
-  `staff_account`, which pickers, preview and account protection match by
-  primary key. Pickers leave inactive accounts out without showing their state.
+  `nonstaff_account`, each within the reach of the sites that use them, which
+  pickers, preview and account protection match by primary key. Pickers leave
+  inactive accounts out without showing their state; protection counts staff,
+  and any account outside the verbs' reach, as protected.
 - `AngeeModel.validate_unique` and `validate_constraints` compare against every
   row under a named system context when the row's save would pass its REBAC
   gates (REBAC's `check_save`, decided once per `full_clean`), leaving out the

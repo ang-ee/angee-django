@@ -253,16 +253,18 @@ class UserQuerySet(AngeeQuerySet[Any]):
         its ``member`` permission — are protected from every actor; an actor's
         own account is protected from that actor. Account verbs, generic
         updates by non-administrators and view-as share this one rule. Staff is
-        a restricted field (``read__is_staff``): IAM's Zed discloses who is staff
-        (``staff_account``) without the column; a system caller (no actor) reads
-        the column directly.
+        a restricted field (``read__is_staff``): within the reach of preview,
+        updates and the account verbs, IAM's Zed tells ``actor`` which accounts are
+        not staff (``nonstaff_account``), and every other account counts as
+        protected, so the rule fails closed. A system caller (no actor) reads the
+        column directly.
         """
 
         if actor is None:
             condition = Q(is_staff=True)
         else:
-            staff = self.model._default_manager.with_actor(actor).with_action("staff_account")
-            condition = Q(pk__in=staff.values("pk"))
+            nonstaff = self.model._default_manager.with_actor(actor).with_action("nonstaff_account")
+            condition = ~Q(pk__in=nonstaff.values("pk"))
         condition |= Q(is_superuser=True)
         holders = protected_account_holders()
         if holders is None:

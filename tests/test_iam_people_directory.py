@@ -253,7 +253,7 @@ def test_the_directory_is_never_everyones(composed_tables: None) -> None:
 
 
 def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_permissions: None) -> None:
-    """Who is active or staff is disclosed only within an actor's picker, preview or verb reach."""
+    """Who is active or staff is disclosed only within an actor's reach; outside it, protection holds."""
 
     del composed_permissions
     viewer = _person("audience-viewer")
@@ -265,9 +265,17 @@ def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_
     def disclosed(actor: Any, action: str) -> set[Any]:
         return set(User.objects.with_actor(actor).with_action(action).filter(pk__in=pks).values_list("pk", flat=True))
 
-    # A member reaches only their own account in pickers, and no verb or preview.
+    def protected(actor: Any) -> set[Any]:
+        with system_context(reason="test.directory.protection"):
+            matched = User.objects.filter(pk__in=pks).filter(User.objects.protection_condition(actor))
+            return set(matched.values_list("pk", flat=True))
+
+    # A member reaches only their own account in pickers, and no verb or preview,
+    # so every account counts as protected from them.
     assert disclosed(viewer, "active_account") == {viewer.pk}
-    assert disclosed(viewer, "staff_account") == set()
-    # An administrator previews and acts on every account.
+    assert disclosed(viewer, "nonstaff_account") == set()
+    assert protected(viewer) == set(pks)
+    # An administrator previews and acts on every account; only staff is protected.
     assert disclosed(admin, "active_account") == set(pks)
-    assert disclosed(admin, "staff_account") == {staff.pk}
+    assert disclosed(admin, "nonstaff_account") == {viewer.pk, stranger.pk}
+    assert protected(admin) == {staff.pk}

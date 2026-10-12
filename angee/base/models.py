@@ -13,6 +13,7 @@ from typing import Any, Self, TypeVar, cast
 
 from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import models
 from django.db.models.functions import Coalesce
 from rebac import (
@@ -465,8 +466,8 @@ class AngeeModel(TimestampMixin, RebacMixin):
         back: the create candidate for a new row; ``write``, each changed field's
         ``write__`` gate, moving edges, expression reads and redacted writes for a
         saved one. A candidate it cannot evaluate (a related row that does not
-        exist, a save that refuses its values) counts as refused, so its field
-        errors stand. A clean that the checked save runs again sees no verdict yet.
+        exist, a save that refuses its values or its actor) counts as refused, so
+        its field errors stand. A clean that the checked save runs again sees no verdict yet.
         """
 
         verdict = self.__dict__.get(_SAVE_VERDICT)
@@ -477,7 +478,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
             self.__dict__[_SAVE_VERDICT] = _SAVE_PENDING
         try:
             verdict = self.check_save().allowed
-        except (ObjectDoesNotExist, TypeError, ValidationError, ValueError):
+        except (DjangoPermissionDenied, ObjectDoesNotExist, TypeError, ValidationError, ValueError):
             verdict = False
         if deciding:
             self.__dict__[_SAVE_VERDICT] = verdict
