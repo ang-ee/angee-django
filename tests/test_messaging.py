@@ -1962,11 +1962,11 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
         link.save(update_fields=("metadata", "updated_at"))
 
     for message in messages:
-        PartyHandle.objects.propose_claimed_handle(
+        PartyHandle.objects.propose_claimed_handle_as_system(
             party,
             handle,
             evidence=message,
-            actor=owner,
+            reason="test claimed sender proposal",
         )
 
     link.refresh_from_db()
