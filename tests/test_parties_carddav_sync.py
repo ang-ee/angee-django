@@ -1073,6 +1073,39 @@ def test_removed_member_tombstones_link_and_withdraws_directory_statements(repli
     assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
+def test_a_tombstone_keeps_the_assertions_another_link_of_the_source_still_observes(replica: Replica) -> None:
+    """One source observing a record through two links keeps its assertions until the last link goes.
+
+    The directory's second address book stands in for an instance's second company stream.
+    """
+
+    person, link = replica.baseline()
+    with system_context(reason="test second observation"):
+        other = SyncStream.objects.current(
+            replica.directory,
+            key="contacts",
+            partition="/books/other/",
+            kind=StreamKind.RECORD_REPLICA,
+            direction=StreamDirection.BIDIRECTIONAL,
+        )
+        sibling = replica.enroll(person, external_key="ada-elsewhere")
+        sibling.stream = other
+        sibling.save(update_fields=["stream"])
+    asserted = Party.statements.model.StatementStatus.ASSERTED
+    linked = set(Party.statements.filter(subject_id=person.pk, link=link, status=asserted).values_list("pk", flat=True))
+    assert linked
+
+    replica.server.remove(_HREF)
+    replica.pull()
+
+    rows = Party.statements.filter(pk__in=linked)
+    assert {(row.status, row.link_id) for row in rows} == {(asserted, sibling.pk)}
+    with system_context(reason="test last observation leaves"):
+        # Every statement table the link evidences: the party rows tracked here among them.
+        assert RecordLink.objects.get(pk=sibling.pk).withdraw_statements() >= len(linked)
+    assert set(rows.values_list("status", flat=True)) == {Party.statements.model.StatementStatus.WITHDRAWN}
+
+
 @pytest.mark.parametrize("policy", ["conflict", "propagate"])
 def test_local_delete_requires_explicit_propagation(replica: Replica, policy: str) -> None:
     person, link = replica.baseline()

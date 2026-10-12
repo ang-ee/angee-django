@@ -4349,15 +4349,53 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
                 rows.append(row)
         return tuple(rows)
 
-    def withdraw_statements(self) -> int:
-        """Withdraw every linked source assertion through its generated table owner."""
+    def asserting_source(self) -> SubjectRef:
+        """The principal this link's observations assert as: its retained stamp, else its integration."""
 
-        source = SubjectRef.parse(self.asserted_by) if self.asserted_by else to_subject_ref(self.stream.integration)
-        return sum(
-            reference.model.objects.db_manager(self._state.db).withdraw(source, link=self)
+        return SubjectRef.parse(self.asserted_by) if self.asserted_by else to_subject_ref(self.stream.integration)
+
+    def withdraw_statements(self) -> int:
+        """Withdraw the source assertions no other link of the source still evidences.
+
+        One source can observe a record through several links (an instance behind
+        several company streams, a contact in two address books) while each of its
+        assertions names one of them. While another of the source's links still
+        observes the record, the assertions move to it through the shared reference
+        move, which keeps them asserted; the last link's tombstone withdraws them.
+        """
+
+        source = self.asserting_source()
+        statements = [
+            reference
             for reference in references(type(self))
             if issubclass(reference.model, Statement) and reference.columns == ("link",)
+        ]
+        observing = (
+            type(self)
+            ._base_manager.using(self._state.db)
+            .filter(
+                target_content_type_id=self.target_content_type_id,
+                target_object_id=self.target_object_id,
+                tombstoned_at__isnull=True,
+            )
+            .exclude(pk=self.pk)
+            .exclude(status__in=(LinkStatus.TOMBSTONE, LinkStatus.WITHDRAWN))
+            .select_related("stream__integration")
+            .order_by("pk")
         )
+        targeted = self.target_content_type_id is not None and bool(self.target_object_id)
+        sibling = next((link for link in observing if link.asserting_source() == source), None) if targeted else None
+        if sibling is None:
+            return sum(
+                reference.model.objects.db_manager(self._state.db).withdraw(source, link=self)
+                for reference in statements
+            )
+        with system_context(reason="integrate.link_evidence_move"):
+            for reference in statements:
+                rows = reference.rows(self).using(self._state.db).filter(asserted_by=str(source))
+                if rows.exists():
+                    reference.move(rows, survivor=sibling)
+        return 0
 
     def update_sync_status(self) -> None:
         """Open failures dominate observation/application status until resolved."""
@@ -4545,7 +4583,7 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
         """Retain the integration's native SubjectRef when the identity is saved."""
 
         if not self.asserted_by:
-            self.asserted_by = str(to_subject_ref(self.stream.integration))
+            self.asserted_by = str(self.asserting_source())
             if kwargs.get("update_fields") is not None:
                 kwargs["update_fields"] = {*kwargs["update_fields"], "asserted_by"}
         super().save(*args, **kwargs)
