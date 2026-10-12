@@ -48,7 +48,7 @@ from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
-from angee.messaging.testing import models as messaging_models
+from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
 from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
@@ -89,12 +89,12 @@ os.environ.pop("SENTRY_DSN", None)
 
 @pytest.fixture
 def activity_catalog(composed_tables: None) -> None:
-    """Declare the activity keys used by existing scheduling scenarios."""
+    """Declare the activity types record tasks use in these scenarios."""
 
     del composed_tables
-    with system_context(reason="tests.messaging.activity_catalog"):
-        messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
-        messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
+    with system_context(reason="tests.projects.activity_catalog"):
+        projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
+        projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):

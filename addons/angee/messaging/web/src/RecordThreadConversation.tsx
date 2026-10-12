@@ -2,7 +2,7 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
-import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
+import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, avatarInitials, cn, createClientKey, errorMessage, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useTrashPrompt, useUiT } from "@angee/ui";
 import {
   StorageUploadTasks,
   useStorageUpload,
@@ -31,7 +31,6 @@ import {
   TrashRecordMessageDocument,
   UpdateRecordMessageDocument,
   type RecordMessageRow,
-  type RecordActivityRow,
   type RecordThreadPayload,
   type RecipientUserRow,
   type SuggestedRecipientRow,
@@ -79,8 +78,6 @@ export interface RecordThreadConversationProps {
    *  followers/subtypes/mark-read strip here; a room supplies its own or omits it.
    *  The transcript + composer + mark-read + live-refetch are the same either way. */
   header?: (chrome: RecordThreadConversationChrome) => React.ReactNode;
-  /** Override the label used when an exchange was recorded on a later day. */
-  activityCopy?: { recordedOn: (day: string) => string };
   /** Already translated consumer copy; omitted entries use messaging defaults. */
   composerCopy?: { audience?: string; help?: string };
   /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
@@ -98,7 +95,6 @@ export interface RecordThreadConversationProps {
     kindSwitch?: boolean;
     recipients?: boolean;
     attachments?: boolean;
-    activities?: boolean;
     messageTypes?: readonly string[];
     /** Explicit labels for message subtype keys; unlisted kinds have no pill. */
     kindLabels?: Readonly<Record<string, string>>;
@@ -120,7 +116,6 @@ export function RecordThreadConversation({
   modelLabel,
   recordId,
   header,
-  activityCopy,
   composerCopy,
   submitKey = "enter",
   stream,
@@ -226,8 +221,6 @@ export function RecordThreadConversation({
   const messageResultCount = threadPayload?.message_result_count ?? 0;
   // Messages arrive server-ordered (chronological ascending); render them verbatim.
   const messages = threadPayload?.messages ?? [];
-  const transcript = transcriptEntries(messages, (!stream || stream.activities) ? threadPayload?.activities ?? [] : []);
-  const activityTypes = new Map((threadPayload?.activity_types ?? []).map((type) => [type.key, type]));
 
   // Drop local reply / editing state the moment its message leaves the feed (a
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
@@ -437,7 +430,7 @@ export function RecordThreadConversation({
         placeholder={t("chatter.search")}
         aria-label={t("chatter.search")}
       /> : null}
-      {transcript.length > 0 ? (
+      {messages.length > 0 ? (
         <div className="space-y-3">
           {activeSearch ? (
             <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
@@ -445,23 +438,16 @@ export function RecordThreadConversation({
             </div>
           ) : null}
           <MessageFeed label={t("chatter.feedLabel")}>
-            {transcript.map((entry) => entry.kind === "activity" ? (
-              <CompletedActivityRow
-                key={`activity:${entry.activity.id}`}
-                activity={entry.activity}
-                type={activityTypes.get(entry.activity.activity_type)}
-                recordedOn={activityCopy?.recordedOn ?? ((day) => t("activity.recordedOn", { day }))}
-              />
-            ) : (
+            {messages.map((message) => (
               <MessageFeedRow
-                key={`message:${entry.message.id}`}
-                message={entry.message}
-                editing={editingMessageId === entry.message.id}
+                key={`message:${message.id}`}
+                message={message}
+                editing={editingMessageId === message.id}
                 canReply={canPost}
                 readOnly={readOnly}
                 streamMode={streamMode}
-                streamVerb={stream?.verbs?.[entry.message.is_reply ? "reply" : "root"]}
-                streamKind={stream?.kindLabels?.[entry.message.subtype?.key ?? ""]}
+                streamVerb={stream?.verbs?.[message.is_reply ? "reply" : "root"]}
+                streamKind={stream?.kindLabels?.[message.subtype?.key ?? ""]}
                 audience={stream ? stream.audience ?? threadPayload?.audience_label ?? t("composer.audience") : undefined}
                 t={t}
                 onStartEdit={handleStartEdit}
@@ -524,63 +510,6 @@ export function RecordThreadConversation({
         onDismiss={() => setError(null)}
       />
     </div>
-  );
-}
-
-type TranscriptEntry =
-  | { kind: "message"; message: RecordMessageRow; day: string; at: string }
-  | { kind: "activity"; activity: RecordActivityRow; day: string; at: string };
-
-function transcriptEntries(
-  messages: readonly RecordMessageRow[],
-  activities: readonly RecordActivityRow[],
-): TranscriptEntry[] {
-  const messageEntries: TranscriptEntry[] = messages.map((message) => {
-    const at = message.sent_at ?? message.created_at;
-    return { kind: "message", message, at, day: formatDateStorage(dateFromValue(at)) ?? "" };
-  });
-  const activityEntries: TranscriptEntry[] = activities
-    .filter((activity) => activity.status === "DONE")
-    .map((activity) => ({
-      kind: "activity", activity, at: activity.completed_at ?? "",
-      day: activity.due_date ?? formatDateStorage(dateFromValue(activity.completed_at)) ?? "",
-    }));
-  const entries: TranscriptEntry[] = [];
-  let nextActivity = 0;
-  for (const messageEntry of messageEntries) {
-    while (nextActivity < activityEntries.length) {
-      const activityEntry = activityEntries[nextActivity]!;
-      const dayOrder = activityEntry.day.localeCompare(messageEntry.day);
-      if (dayOrder > 0 || (dayOrder === 0 &&
-        Date.parse(activityEntry.at) > Date.parse(messageEntry.at))) break;
-      entries.push(activityEntry);
-      nextActivity += 1;
-    }
-    entries.push(messageEntry);
-  }
-  entries.push(...activityEntries.slice(nextActivity));
-  return entries;
-}
-
-function CompletedActivityRow({ activity, type, recordedOn }: {
-  activity: RecordActivityRow;
-  type: { name: string; glyph: string } | undefined;
-  recordedOn: (day: string) => string;
-}): React.ReactElement {
-  const recordedDay = formatDateStorage(dateFromValue(activity.completed_at));
-  const occurredDay = activity.due_date ?? recordedDay;
-  return (
-    <MessageRow
-      avatar={<Glyph decorative name={type?.glyph || "activity"} fallbackName="activity" />}
-      author={activity.created_by ? userDisplayName(activity.created_by, "") : undefined}
-      channel={<span className="text-13 font-medium">{type?.name ?? activity.activity_type}</span>}
-      meta={<>
-        {occurredDay ? <time dateTime={occurredDay}>{formatDate(occurredDay)}</time> : null}
-        {recordedDay && recordedDay !== occurredDay ? <> · {recordedOn(formatDate(recordedDay))}</> : null}
-      </>}
-    >
-      {activity.note || activity.summary}
-    </MessageRow>
   );
 }
 

@@ -317,8 +317,8 @@ shared UI copy through an addon bundle.
   projection, route transitions, DnD policy, and domain actions. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list:
-  [My Work](../../addons/angee/projects/web/src/views/MyWorkPage.tsx) publishes
-  messaging's `ActivityAgendaPane`. Page tests use
+  the [workflows record timeline](../../addons/angee/workflows/web/src/timeline-pane.tsx)
+  publishes its left-side timeline this way. Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
 - Chatter publishers compose by owner for their mounted lifetime. Panels mount
@@ -896,9 +896,9 @@ framework's placeholder chatter tabs this way:
 ```tsx
 "record#aside": {
   "chatter.comments": { remove: true },
-  "chatter.activity": { remove: true },
+  "chatter.history": { remove: true },
   "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-  // messaging.activity, messaging.sources …
+  // messaging.history, messaging.sources …
 },
 ```
 
@@ -937,7 +937,7 @@ containers: {
   "form#chrome": { only: ["iam.share-record"] },
   "shell#drawers-bottom": { only: [] },
   "record#aside": [
-    { only: ["messaging.comments", "messaging.activity", "storage.files"] },
+    { only: ["messaging.comments", "messaging.history", "storage.files"] },
     { only: [], when: { route: "projects.my-work" } },
   ],
 },
@@ -1026,7 +1026,7 @@ The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
 model's pages and may narrow itself further with its content's `when`. A
 `ChatterTabContent` carries `label`, `icon` and `render`, and optionally
 `when`, `count`/`useCount`, `panelClassName` and `aliases`. The framework
-declares placeholder `chatter.comments` and `chatter.activity` tabs until an
+declares placeholder `chatter.comments` and `chatter.history` tabs until an
 addon that supplies the real ones removes them, as messaging does. Tab ids are
 namespaced like every child; `aliases` keeps a tab's former id working in
 `?chatterTab=` links for one release.

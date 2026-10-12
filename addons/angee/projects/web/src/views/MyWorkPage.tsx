@@ -1,8 +1,6 @@
-import { ActivityAgendaPane } from "@angee/messaging";
 import {
   Column,
   List,
-  usePrimaryPane,
   useResourceRecordHref,
   useRuntimeAuth,
 } from "@angee/ui";
@@ -14,16 +12,14 @@ import { useTaskRowActions, type TaskActionRow } from "../task-actions";
 
 /**
  * The personal projection: the actor's open tasks are the page's one list, owning
- * route state, favourites and Share; messaging's Activities due sits beside it in
- * the console's primary (left) pane.
+ * route state, favourites and Share. Tasks about a record are assigned tasks too,
+ * so the list carries every next step the actor owns.
  */
 export function MyWorkPage(): React.ReactElement {
   const t = useProjectsT();
   const userId = useRuntimeAuth().user?.id;
   const recordHref = useResourceRecordHref(TASK_MODEL);
   const taskActions = useTaskRowActions<TaskActionRow>();
-  const agenda = React.useMemo(() => <ActivityAgendaPane />, []);
-  usePrimaryPane(agenda);
   const taskFilter = React.useMemo(
     () => userId
       ? { assignee: { exact: userId }, status: { exact: "OPEN" } }
