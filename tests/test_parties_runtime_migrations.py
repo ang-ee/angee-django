@@ -281,6 +281,18 @@ def seeded(legacy: LegacyHost) -> dict[str, Any]:
         "parties.Directory", display_name="Cards", vendor=vendor, last_used_status="", last_error=""
     )
     folder = legacy.create("parties.Folder", name="Contacts", directory=directory, source_href="/books/default/")
+    # The person's own takeout account: one IMPORT source per imported account, found
+    # as the importer's channel whose backend key is the handle's platform (the takeout
+    # bridges are not installed in this host; slack is the installed key that is also a platform).
+    takeout_channel = legacy.create(
+        "messaging.Channel",
+        display_name="Slack export",
+        vendor=vendor,
+        owner=person,
+        backend_class="slack",
+        last_used_status="",
+        last_error="",
+    )
     stream = legacy.create(
         "integrate.SyncStream",
         integration_id=directory.pk,
@@ -379,10 +391,10 @@ def seeded(legacy: LegacyHost) -> dict[str, Any]:
         "parties.Relationship", party=imported, kind=kind, other_name="Old Employer", source="import", created_by=person
     )
 
-    def handle(value: str, party: Any = None, **extra: Any) -> Any:
+    def handle(value: str, party: Any = None, *, platform: str = "email", **extra: Any) -> Any:
         return legacy.create(
             "parties.Handle",
-            platform="email",
+            platform=platform,
             value=value,
             normalized_value=value,
             party=party,
@@ -415,7 +427,12 @@ def seeded(legacy: LegacyHost) -> dict[str, Any]:
             created_by=service,
             updated_by=service,
         ),
-        "takeout": carrier(imported, handle("takeout-123"), "import", metadata={"provenance": "social_takeout"}),
+        "takeout": carrier(
+            imported, handle("takeout-123", platform="slack"), "import", metadata={"provenance": "social_takeout"}
+        ),
+        "takeout_orphan": carrier(
+            imported, handle("takeout-456", platform="linkedin"), "import", metadata={"provenance": "social_takeout"}
+        ),
     }
     legacy.create(
         "parties.MergeVeto",
@@ -427,6 +444,7 @@ def seeded(legacy: LegacyHost) -> dict[str, Any]:
         person=person,
         service=service,
         directory=directory,
+        takeout_channel=takeout_channel,
         card=card,
         card_link=card_link,
         edited=edited,
@@ -491,7 +509,7 @@ def test_preflight_names_every_blocking_row_before_anything_runs(legacy: LegacyH
         ("PartyHandle", dangling.pk),
         ("parties.MergeVeto", veto.pk),
     }
-    assert any("import without Integration attribution (social_takeout)" in reason for reason in notices)
+    assert any("takeout import without one identified account channel (social_takeout)" in reason for reason in notices)
     with pytest.raises(
         ValueError, match=rf"3 rows block.*\n.*{unknown.pk}.*\n.*{dangling.pk}.*\n.*MergeVeto {veto.pk}"
     ):
@@ -564,9 +582,17 @@ def test_handle_fold_attributes_every_live_producer_and_carries_stamps(
             "id": fold_party_handle_statements.Legacy(legacy.apps, connection.alias).public_id("iam.user", service.pk),
         }
     ]
-    assert _statements(legacy, seeded["imported"]) == []
+    # The slack takeout folds under the importer's account channel; the linkedin one has no channel.
+    (takeout,) = _statements(legacy, seeded["imported"])
+    assert (takeout.asserted_by, takeout.source_kind, takeout.rank, takeout.applied) == (
+        f"integrate/integration:{seeded['takeout_channel'].pk}",
+        "import",
+        "normal",
+        True,
+    )
+    assert takeout.handle_id == seeded["carriers"]["takeout"].handle_id
     history = legacy.rows("parties.HistoricalPartyStatement").filter(history_change_reason="fold.party_handle")
-    assert history.filter(history_type="+").count() == 6
+    assert history.filter(history_type="+").count() == 7  # the six producers above plus the takeout
     changeset = legacy.rows(settings.ANGEE_CHANGESET_MODEL).get(change_reason="fold.party_handle")
     assert changeset.counts == {"parties.partystatement": history.count()}
 

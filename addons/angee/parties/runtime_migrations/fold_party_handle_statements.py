@@ -18,8 +18,12 @@ Retained evidence, per carrier source:
   The Rule row is created here idempotently under the install seed's key; the fold
   never waits for the resource loader. Rule rows with an unknown evidence kind block.
 - ``import`` with a RecordLink origin or a canonical Integration label: a normal
-  DIRECTORY statement by that Integration. Takeout imports (``social_takeout`` or
-  any label that is not a SubjectRef, with no RecordLink) are left unasserted: the
+  DIRECTORY statement by that Integration. A takeout import (``social_takeout`` or
+  any label that is not a SubjectRef, with no RecordLink) is one IMPORT source per
+  imported takeout account (ruling, 2026-10-12): the importer's channel for the
+  handle's platform (``messaging.Channel`` owned by the carrier's creator with that
+  ``backend_class``) asserts a normal IMPORT statement. Without exactly one such
+  channel the link is left unasserted and counted: the
   handle stays linked only through other proof, the count is printed, and IMPORT
   attribution awaits its ruling. Contradictory import attribution blocks.
 - ``oauth``: the login self-claim is the owning user's own decision, a preferred
@@ -131,6 +135,18 @@ class Legacy:
         label = self.apps.get_model(settings.AUTH_USER_MODEL)._meta.label
         return {"model": label, "id": self.public_id(label, pk)}
 
+    def takeout_account(self, owner_id, platform):
+        """The one channel ``owner_id`` imports ``platform`` through, or None (messaging absent, none, or several)."""
+        channel = self.model("messaging.Channel")
+        if channel is None or owner_id is None or not platform:
+            return None
+        owned = self.rows("integrate.Integration").filter(owner_id=owner_id).values_list("pk", flat=True)
+        # The backend key is compared in Python: the field validates lookup values against
+        # the installed backends, and a platform without an installed bridge is not an error.
+        keys = self.rows("messaging.Channel").filter(integration_ptr_id__in=owned).values_list("pk", "backend_class")
+        matches = [pk for pk, key in keys if str(getattr(key, "value", key)) == platform]
+        return matches[0] if len(matches) == 1 else None
+
 
 def _source(legacy, row, party, handle, refs, origins, notices):
     """Return the carrier's source principal as (principal, kind, link_id), or None when unasserted."""
@@ -207,8 +223,12 @@ def _source(legacy, row, party, handle, refs, origins, notices):
                 if not sources:
                     sources.add((integration_id, None))
         if not sources:
-            notices[f"import without Integration attribution ({label or 'unlabelled'}): left unasserted"] += 1
-            return None
+            account = legacy.takeout_account(row.created_by_id, handle.platform)
+            if account is None:
+                notices[f"takeout import without one identified account channel ({label or 'unlabelled'}): "
+                        "left unasserted"] += 1
+                return None
+            return ("integration", account), "import", None
         integration_ids = {pk for pk, _ in sources}
         if len(integration_ids) != 1:
             raise Blocked("PartyHandle", row.pk, f"import attribution is ambiguous: {sorted(map(str, integration_ids))}")

@@ -73,9 +73,11 @@ retained evidence, discarded legacy data and reversal contracts; the rules are:
   preferred statement; a person's confirm/dismiss is their preferred stance; a
   service-account or actorless decision is a normal statement by the fold's `Seed`
   principal (`parties.fold_party_handle`) keeping the recorded account as evidence.
-  Takeout imports (`import` with no Integration), imported relationships and the
-  identity values of imported parties stay unasserted and are counted: IMPORT
-  attribution awaits its ruling. A directory value equal to the applied snapshot is
+  A takeout import (`import` with no Integration) is one IMPORT source per imported
+  takeout account: the importer's channel whose backend key is the handle's platform
+  asserts it; without exactly one such channel the link, like imported relationships
+  and the identity values of imported parties, stays unasserted and is counted. A
+  directory value equal to the applied snapshot is
   the directory's; a local edit is the editing person's, or stays unasserted.
 - **Parity before drops.** Each retirement proves the folded evidence before its
   `DeleteModel`/`RemoveField`; a card's bytes count as retained when a link
