@@ -90,11 +90,12 @@ def composed_tables(composed_tables: None) -> None:
 
     Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
     sync, the install-tier principals and grants that admission reads are loaded
-    (``tests.bootstrap.statement_sources``), exactly as the composed host does.
+    (``angee.parties.testing.fixtures.load_statement_sources``), exactly as the
+    composed host does.
     """
 
     del composed_tables
-    statement_sources()
+    load_statement_sources()
 
 
 @pytest.fixture
@@ -608,13 +609,13 @@ class ExtcontribRole(Role):
 # Every installed backing needs its concrete model before native database setup.
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
+from angee.parties.testing.fixtures import load_statement_sources  # noqa: E402
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401
 from tests import proposals_models  # noqa: E402, F401
-from tests.bootstrap import statement_sources  # noqa: E402
 
 
 class Need(AbstractNeed):

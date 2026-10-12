@@ -1,12 +1,16 @@
-"""Install the declared statement principals and grants into a synced test schema.
+"""Opt-in pytest support: the statement principals parties declares.
 
 Admission is a schema fact fed by seeded install resources (``provenance.Rule``
-rows, role grants); the runtime only reads them. The test host owns this bootstrap
-because it names addon resources: the core ``angee.testing`` plugin stays free of
-addon imports. Both the source host (``composed_tables`` in ``tests/conftest.py``)
-and the composed host (``tests/composed_host.py``) call it after their REBAC sync.
+rows and their role grants); the runtime only reads them, and a stack loads them
+with its install tier. A test database starts without them, so a host whose tests
+reach a statement source loads them after its REBAC sync: the framework's source
+and composed hosts call :func:`load_statement_sources`; a consumer host lists this
+module in ``pytest_plugins`` and requests the ``statement_sources`` fixture.
 """
 
+from __future__ import annotations
+
+import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.management import call_command
@@ -16,11 +20,11 @@ from rebac import backend, system_context
 from angee.resources.entries import ResourceEntry, resource_manifest_for
 
 
-def statement_sources() -> None:
+def load_statement_sources() -> None:
     """Load parties' install declarations once per database state, masters excluded.
 
     A single existence query when the principals are present; a reload after a
-    flush. Both relationship stores receive the grants because campaigns switch
+    flush. Both relationship stores receive the grants because a suite may switch
     storage after bootstrap. Fixtures keep their own relationship vocabulary, so
     the master tier is excluded through the resource loader's native contract.
     """
@@ -28,11 +32,10 @@ def statement_sources() -> None:
     if "provenance" not in apps.app_configs or "parties" not in apps.app_configs:
         return
     if backend().schema().get_definition("provenance/role") is None:
-        # The composed host calls this before its first native sync; the source
-        # host's composed_tables has already synced.
+        # A host may call this before its first native sync.
         call_command("rebac", "sync", verbosity=0)
     rule = apps.get_model("provenance", "Rule")
-    with system_context(reason="tests.statement_sources.bootstrap"):
+    with system_context(reason="parties.testing.statement_sources"):
         if rule._base_manager.exists():
             return
         addon = apps.get_app_config("parties")
@@ -47,3 +50,11 @@ def statement_sources() -> None:
             for storage in ("denormalized", "registry"):
                 with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
                     resource.objects.load_addons((addon,), tiers=("install",))
+
+
+@pytest.fixture
+def statement_sources(db: None) -> None:
+    """The statement principals and grants parties declares, loaded into this test's database."""
+
+    del db
+    load_statement_sources()
