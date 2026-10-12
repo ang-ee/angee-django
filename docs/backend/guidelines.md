@@ -644,8 +644,10 @@ data through REBAC, never a queryset bypass.
   Filter or order on its gate's terms instead: a named filter expression or
   queryset alias built with REBAC's `queryset.readable(field)` is NULL wherever
   the actor lacks the gate, as IAM's `active` filter is. A rule that must filter on a gated column for everyone (pickers offer
-  only active people) is a deliberate disclosure: match by primary key against a
-  subquery under a named system context, as `UserQuerySet.active_people` does.
+  only active people) is a deliberate disclosure: declare it in Zed with a
+  filtered constant on the model's own column and a permission that names it,
+  then match by primary key against that permission's rows, as IAM's
+  `active_account` and `UserQuerySet.active_people` do. No bypass, no audit row.
   Uniqueness and constraint validation compare a row with every row, so
   [`AngeeModel`](../../angee/base/models.py) runs them under a named system context
   once the actor holds the write's access (`create` on the unsaved candidate,

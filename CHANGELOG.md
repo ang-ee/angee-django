@@ -14,9 +14,10 @@ live in code docstrings.
 - Require django-zed-rebac 0.27.0. Its read guards refuse filtering or ordering
   on a gated field under an actor; filters and sorts over a gated field use the
   queryset's `readable(field)`, and Angee's `gated_field_expression` is removed.
-- IAM's active-people and protected-account filters read the gated activity and
-  staff columns by primary key under named system contexts, a deliberate
-  disclosure: pickers leave inactive accounts out without showing their state.
+- IAM declares its deliberate disclosures in Zed: filtered constants on the
+  account's own `is_active` and `is_staff` back `active_account` and
+  `staff_account`, which pickers, preview and account protection match by
+  primary key. Pickers leave inactive accounts out without showing their state.
 - `AngeeModel.validate_unique` and `validate_constraints` compare against every
   row under a named system context when the row's save would pass its REBAC
   gate, decided once per `full_clean`; before, an actor-scoped check saw only
