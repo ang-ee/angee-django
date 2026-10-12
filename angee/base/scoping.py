@@ -103,8 +103,13 @@ def gated_field_expression(queryset: models.QuerySet[Any], field_name: str) -> m
     The value is the column's on rows whose effective actor holds the gate and
     NULL elsewhere, so a predicate or an ordering over it discloses no value the
     actor cannot read. An unscoped (system) queryset projects the column itself.
+    A REBAC queryset that offers ``readable`` (django-zed-rebac 0.27) builds the
+    expression itself, so its field read guards accept it.
     """
 
+    readable = getattr(queryset, "readable", None)
+    if callable(readable):
+        return cast(models.Expression, readable(field_name))
     field = queryset.model._meta.get_field(field_name)
     output_field = cast("models.Field[Any, Any]", field).clone()
     output_field.null = True

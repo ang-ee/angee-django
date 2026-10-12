@@ -242,7 +242,11 @@ class WorkflowManager(AngeeManager):
         with transaction.atomic():
             with system_context(reason="workflows.save_identity locate target"):
                 workflow = self.filter(key=key).first()
-            actor = (workflow or self.model()).require_access("write" if workflow else "create", actor)
+            # A new workflow asks create about the row get_or_create would insert, the candidate its save checks.
+            candidate = workflow or self.model(
+                key=key, name=name, description=description, subject_model=subject_model,
+            )
+            actor = candidate.require_access("write" if workflow else "create", actor)
             with actor_context(actor) if actor is not None else nullcontext():
                 workflow, _ = self.get_or_create(
                     key=key, defaults={"name": name, "description": description, "subject_model": subject_model},

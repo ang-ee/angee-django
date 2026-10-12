@@ -9,6 +9,21 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — django-zed-rebac 0.27
+
+- Require django-zed-rebac 0.27.0. Its read guards refuse filtering or ordering
+  on a gated field under an actor; `gated_field_expression` now returns the
+  queryset's `readable(field)`.
+- IAM's active-people and protected-account filters read the gated activity and
+  staff columns by primary key under named system contexts, a deliberate
+  disclosure: pickers leave inactive accounts out without showing their state.
+- `AngeeModel.validate_unique` and `validate_constraints` compare against every
+  row under a named system context once the actor holds the write's access;
+  before, an actor-scoped check saw only readable rows. A new row's `create`
+  check evaluates the candidate, as its save does.
+- `AngeeModel.system_queryset` returns a permission-naive default queryset as it
+  is, and GraphQL filter expressions take their output fields from it.
+
 ## Unreleased — in-process agent sessions
 
 - Integrate feed identity discovery, committed live horizons, quota reply

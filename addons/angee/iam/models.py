@@ -187,9 +187,16 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return self.filter(kind=UserKind.PERSON)
 
     def active_people(self) -> Self:
-        """Return active human user rows."""
+        """Return active human user rows.
 
-        return cast(Self, self.people().filter(is_active=True))
+        Activity is a restricted field (``read__is_active``), yet pickers and
+        preview offer only active people. That is a deliberate disclosure, so the
+        filter runs under a named system context: an inactive account is absent;
+        its state is never shown.
+        """
+
+        active = self.model._default_manager.system_context(reason="iam.user.active_people").filter(is_active=True)
+        return cast(Self, self.people().filter(pk__in=active.values("pk")))
 
     def search_users(self, search: str) -> Self:
         """Filter users by the fields exposed by IAM identity pickers.
@@ -236,10 +243,13 @@ class UserQuerySet(AngeeQuerySet[Any]):
         set — platform admins plus every elevated role a consumer unions into
         its ``member`` permission — are protected from every actor; an actor's
         own account is protected from that actor. Account verbs, generic
-        updates by non-administrators and view-as share this one rule.
+        updates by non-administrators and view-as share this one rule. Staff is
+        a restricted field (``read__is_staff``), so the authority columns match
+        under a named system context, as the protected set itself does.
         """
 
-        condition = Q(is_staff=True) | Q(is_superuser=True)
+        authority = self.model._default_manager.system_context(reason="iam.user.protection_condition")
+        condition = Q(pk__in=authority.filter(Q(is_staff=True) | Q(is_superuser=True)).values("pk"))
         holders = protected_account_holders()
         if holders is None:
             condition |= Q(pk__isnull=False)

@@ -6,7 +6,8 @@ import hashlib
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
@@ -21,6 +22,7 @@ from rebac import (
     check_new,
     current_actor,
     delete_relationship,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -364,14 +366,54 @@ class AngeeModel(TimestampMixin, RebacMixin):
     ) -> AngeeQuerySet[Self]:
         """Return an elevated unscoped queryset with backend-gated locks; SQLite stays unlocked.
 
-        Locking was previously dead at these call sites and is now real.
+        Locking was previously dead at these call sites and is now real. A model
+        whose default manager is already permission-naive (``AngeeUnscopedQuerySet``)
+        returns that queryset as it is.
         """
 
-        queryset = cast(
-            AngeeQuerySet[Self],
-            cls._default_manager.get_queryset(),
-        ).system_context(reason=f"{cls._meta.label_lower}.system_queryset")
+        queryset = cast(AngeeQuerySet[Self], cls._default_manager.get_queryset())
+        if isinstance(queryset, RebacQuerySet):
+            queryset = queryset.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
         return queryset.lock_if_supported(of=lock) if lock is not None else queryset
+
+    def validate_unique(self, exclude: Collection[str] | None = None) -> None:
+        """Check field uniqueness against every row once the actor may make this write.
+
+        See :meth:`constraint_check_scope`.
+        """
+
+        if (scope := self.constraint_check_scope("validate_unique")) is not None:
+            with scope:
+                super().validate_unique(exclude)
+
+    def validate_constraints(self, exclude: Collection[str] | None = None) -> None:
+        """Check model constraints against every row once the actor may make this write.
+
+        See :meth:`constraint_check_scope`.
+        """
+
+        if (scope := self.constraint_check_scope("validate_constraints")) is not None:
+            with scope:
+                super().validate_constraints(exclude)
+
+    def constraint_check_scope(self, step: str) -> AbstractContextManager[Any] | None:
+        """Return the scope this row's uniqueness and constraint checks run in, or ``None`` to skip them.
+
+        Those checks compare the row with rows the actor may not read, so under an
+        actor they run in a named system context, and only once the actor holds the
+        access its write needs: ``create`` on this candidate for a new row (the
+        decision its save makes) or ``write`` on a saved one. Without that access
+        they are skipped, and the write's own gate refuses the row. Already
+        elevated, or with no actor at all, they run as they are; an actor-less
+        write is refused by its own gate.
+        """
+
+        actor, unscoped = self.effective_actor()
+        if unscoped or actor is None:
+            return nullcontext()
+        if not self.has_access("create" if self._state.adding else "write"):
+            return None
+        return system_context(reason=f"{self._meta.label_lower}.{step}")
 
     @classmethod
     def is_catalogue_model(cls) -> bool:

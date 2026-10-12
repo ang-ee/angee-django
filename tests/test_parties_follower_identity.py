@@ -202,9 +202,10 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             assert resource_type is not None
             for action in ("read", "read_private") if model != Tie else ("read",):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                # Read prepares 13 arrow sources; Tie prepares one Party source.
-                # Private reads need only the final row SELECT.
-                expected_queries = 2 if model == Tie else 14 if action == "read" else 1
+                # Each fresh scope reads the schema revision and expands the actor's
+                # memberships (2). Read then prepares 13 arrow sources; Tie prepares
+                # one Party source. Private reads need only the final row SELECT.
+                expected_queries = 4 if model == Tie else 16 if action == "read" else 3
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
@@ -215,7 +216,9 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    with CaptureQueriesContext(connection) as captured:
+                    # A fresh scope per measurement: one scope keeps the rows it decided,
+                    # so a repeated statement would skip its arrow sources.
+                    with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
                     assert len(captured) == expected_queries, captured.captured_queries

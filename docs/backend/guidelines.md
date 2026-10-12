@@ -643,8 +643,15 @@ data through REBAC, never a queryset bypass.
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.
   Filter or order on its gate's terms instead: a named filter expression or
   queryset alias built with
-  [`gated_field_expression`](../../angee/base/scoping.py) is NULL wherever the
-  actor lacks the gate, as IAM's `active` filter is. A field gate is not creation policy: the library enforces `write__<field>` on
+  [`gated_field_expression`](../../angee/base/scoping.py) (REBAC's
+  `readable(field)`) is NULL wherever the actor lacks the gate, as IAM's `active`
+  filter is. A rule that must filter on a gated column for everyone (pickers offer
+  only active people) is a deliberate disclosure: match by primary key against a
+  subquery under a named system context, as `UserQuerySet.active_people` does.
+  Uniqueness and constraint validation compare a row with every row, so
+  [`AngeeModel`](../../angee/base/models.py) runs them under a named system context
+  once the actor holds the write's access (`create` on the unsaved candidate,
+  `write` on a saved row). A field gate is not creation policy: the library enforces `write__<field>` on
   update only, so keep a protected creation value out of generated insert inputs
   and let its owning verb supply it.
 - **Following is notification state, never access.** Messaging's
