@@ -56,6 +56,35 @@ continuation state. A preferred no_value is the symmetric anti-link; preferred v
 awaits a person's survivor choice. `survivor.merge` owns the changeset and redirect;
 pointing owners union statements, retaining collisions as superseded.
 
-The [declared folds](addon.toml) preserve proven source and person decisions;
-unproven attribution blocks retirement by row. Migration docstrings own the
-retained evidence, discarded legacy data and reversal contracts.
+## Upgrading from PartyHandle carriers
+
+The [declared chain](addon.toml) folds legacy `PartyHandle`, CardDAV columns and
+`MergeVeto` rows into statements, then retires them. Migration docstrings own the
+retained evidence, discarded legacy data and reversal contracts; the rules are:
+
+- **Preflight first.** `preflight_party_folds` evaluates both folds' classification
+  on the pre-upgrade state and fails with every blocking row (model, pk, reason)
+  before any destructive declaration of provenance, integrate or parties runs. It
+  also prints what the folds leave unasserted. Remediate (attribute or remove the
+  named rows) on the old release, then migrate again; nothing has been dropped.
+- **Nothing is attributed to an invented actor.** Rule and matcher rows fold under
+  their seeded `Rule` key (`normalized_twin`, `email_domain`, `display_name`,
+  `signature_phone`, `source_sender`); the OIDC self-claim is the owning user's
+  preferred statement; a person's confirm/dismiss is their preferred stance; a
+  service-account or actorless decision is a normal statement by the fold's `Seed`
+  principal (`parties.fold_party_handle`) keeping the recorded account as evidence.
+  Takeout imports (`import` with no Integration), imported relationships and the
+  identity values of imported parties stay unasserted and are counted: IMPORT
+  attribution awaits its ruling. A directory value equal to the applied snapshot is
+  the directory's; a local edit is the editing person's, or stays unasserted.
+- **Parity before drops.** Each retirement proves the folded evidence before its
+  `DeleteModel`/`RemoveField`; a card's bytes count as retained when a link
+  observation is the same vCard (lines compared as a set, `REV`/`PRODID` ignored).
+  Stale `source_etag` values are discarded with the column.
+- **Lost by ruling:** every django-reversion revision (MarkdownPage body, Project
+  title/body history) — back the database up first if that history matters. After
+  the upgrade run `manage.py remove_stale_contenttypes` for the `reversion.*`,
+  `parties.partyhandle` and `parties.mergeveto` content types.
+- **Reversal:** the folds are no-ops backwards; `retire_party_handle` recreates an
+  empty table and does not undo JSON rewrites, edge retargets or deleted grants,
+  and the old code rejects the rewritten `statement_id`, so revert the whole chain.

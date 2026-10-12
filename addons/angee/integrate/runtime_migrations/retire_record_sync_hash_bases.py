@@ -1,8 +1,13 @@
-"""Retire the superseded hash bases after the applied-history cutover.
+"""Retire the superseded hash bases after the record-sync stores are retired.
 
 applied_base owns comparison evidence. The old hashes are deliberately discarded
 on both live links and snapshots. Reverse restores empty columns; historical hash
 values do not round-trip. No current runtime writer or reader uses these columns.
+
+The guard waits while ``RecordRevision`` is still in the state: the manifest orders
+``fold_record_sync_history`` and ``retire_record_sync_stores`` first, and the
+composer attaches this drop to the round after that retirement, so the documented
+chain order (fold, retire stores, retire hash bases) holds on every upgrading database.
 """
 
 from django.db import migrations
@@ -18,6 +23,9 @@ def applies(state: ProjectState) -> bool:
     fields = {"remote_base_hash", "local_base_hash"}
     present = [fields & owner.fields.keys() for owner in owners]
     if not any(present):
+        return False
+    if ("integrate", "recordrevision") in state.models:
+        # retire_record_sync_stores is pending in this build; wait for its round.
         return False
     if all(names == fields for names in present) and all("applied_base" in owner.fields for owner in owners):
         return True

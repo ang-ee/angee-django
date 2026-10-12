@@ -994,6 +994,21 @@ and current contracts before applying a historical example to a new deployment.
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
   for `**/runtime_migrations` because formatting also changes the pinned digest.
+- **A guard waits for a pending predecessor; a fold chain preflights before it
+  drops.** `applies` is evaluated against the state at the start of each composer
+  round, so the state an earlier declaration of the same build produces is not a
+  partial history: return `False` for it (integrate's
+  [`record_link_failure_status`](../../addons/angee/integrate/runtime_migrations/record_link_failure_status.py)
+  waits for the history table) and raise only for a shape no declaration produces.
+  Folds that can refuse rows collect every blocker before writing and name each
+  row; one first-round preflight declaration evaluates the folds' predicates on the
+  pre-upgrade state so the operator sees the complete list before provenance's
+  reversion drop or any store retirement runs (the
+  [parties chain](../../addons/angee/parties/README.md#upgrading-from-partyhandle-carriers)).
+  Migration bodies read historical models only and carry authoring-time identity
+  facts (sqid prefixes, principal id attributes) rather than importing live owners.
+  The reversion drop loses every revision by ruling: back up first, then
+  `remove_stale_contenttypes` afterwards.
 - **Removing a field or donor addon whose column holds data needs a declared
   cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An

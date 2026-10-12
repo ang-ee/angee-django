@@ -12,6 +12,9 @@ from django.db import migrations, models
 def applies(state):
     if ("parties", "party") not in state.models:
         return False
+    if any(("provenance", name) not in state.models for name in ("changeset", "rule", "seed")):
+        # Provenance's changeset and principal schemas are pending in this build.
+        return False
     names = {"historicalparty", "historicalperson", "historicalorganization", "partystatement", "historicalpartystatement"}
     present = {name for name in names if ("parties", name) in state.models}
     if present == names:

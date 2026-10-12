@@ -17,16 +17,33 @@ name = "directory_sync_status"
 app_label = "parties"
 module = "runtime_migrations.directory_sync_status"
 
+# The statement cutover chain. Manifest order is the in-app order; the guards
+# decide the composer round, which orders the chain across addons: the preflight
+# first, then schema, folds, and the retirements last.
+[[migrations]]
+name = "preflight_party_folds"
+app_label = "parties"
+module = "runtime_migrations.preflight_party_folds"
+
 [[migrations]]
 name = "party_statement_schema"
 app_label = "parties"
 module = "runtime_migrations.party_statement_schema"
 
 [[migrations]]
+name = "party_aspect_schema"
+app_label = "parties"
+module = "runtime_migrations.party_aspect_schema"
+
+[[migrations]]
 name = "fold_party_handle_statements"
 app_label = "parties"
 module = "runtime_migrations.fold_party_handle_statements"
-compatible_source_sha256 = ["255a3dcc212430ce674ab1f39a62641e11cfaacab58ad35b3f1fd9b38b93621b"]
+
+[[migrations]]
+name = "fold_party_aspects"
+app_label = "parties"
+module = "runtime_migrations.fold_party_aspects"
 
 [[migrations]]
 name = "circle_member_decisions"
@@ -37,16 +54,6 @@ module = "runtime_migrations.circle_member_decisions"
 name = "retire_party_handle"
 app_label = "parties"
 module = "runtime_migrations.retire_party_handle"
-
-[[migrations]]
-name = "party_aspect_schema"
-app_label = "parties"
-module = "runtime_migrations.party_aspect_schema"
-
-[[migrations]]
-name = "fold_party_aspects"
-app_label = "parties"
-module = "runtime_migrations.fold_party_aspects"
 
 [[migrations]]
 name = "retire_party_carriers"

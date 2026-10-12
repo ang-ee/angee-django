@@ -1,48 +1,71 @@
-"""Fold proven carrier assertions, retaining the carrier until its reader cutover.
+"""Fold legacy PartyHandle carriers into PartyStatement rows, retaining the carrier.
 
-This is system work, never a REBAC policy evaluation. Historical base managers
-write the statement and its native history under one migration Changeset; set()
-admission is for new assertions only. Every referenced origin must still exist.
-Missing principals, missing origins, conflicting producer clues, contradictory
-decisions and decisions without a proven person actor block with PartyHandle's id.
+System work, never a REBAC policy evaluation: historical base managers write the
+statement and its native history under one migration Changeset. The body reads
+historical models only; principal identities are the authoring-time facts of this
+schema (every principal's subject id is its primary key; public ids are sqids under
+the model prefixes below).
 
-The carrier's recorded updated_by identifies a confirm/dismiss actor. Decisions
-without that actor block; their count is printed for the upgrading database.
-A legacy import label needs its owning addon's persisted
-Integration attribution, supplied by a RecordLink targeting this carrier, or a canonical
-Integration SubjectRef in that label. Never choose an account by its audit owner,
-display name or backend, and never create a legacy.<source> principal.
+Retained evidence, per carrier source:
 
-Only pointers represented by the statement evidence contract are copied there.
-The untouched carrier retains the original metadata, audit dates and flags for
-the later retirement's parity review. Fold-time history dates record the fold,
-not invented historical assertion times. No operational Handle/Party values are
-re-derived here; parties' survivorship cutover is the next commit.
+- ``carddav``: a normal DIRECTORY statement asserted by the card's Directory
+  integration, with the Party as evidence.
+- ``manual`` by a person: a normal PERSON statement asserted by the creator.
+- ``email_match`` / ``rule``: a normal RULE statement asserted by the seeded Rule
+  principal that names the producer — ``parties.normalized_twin`` (the email twin
+  matcher), ``parties.email_domain`` (the organization domain rule),
+  ``parties.display_name``, ``parties.signature_phone``, ``parties.source_sender``.
+  The Rule row is created here idempotently under the install seed's key; the fold
+  never waits for the resource loader. Rule rows with an unknown evidence kind block.
+- ``import`` with a RecordLink origin or a canonical Integration label: a normal
+  DIRECTORY statement by that Integration. Takeout imports (``social_takeout`` or
+  any label that is not a SubjectRef, with no RecordLink) are left unasserted: the
+  handle stays linked only through other proof, the count is printed, and IMPORT
+  attribution awaits its ruling. Contradictory import attribution blocks.
+- ``oauth``: the login self-claim is the owning user's own decision, a preferred
+  PERSON statement by the handle's owner (else its creator).
+- Confirm/dismiss: a preferred PERSON stance by the recorded decider (``updated_by``,
+  else ``created_by``) when that account is a person. A decision whose recorded
+  actor is a service account or absent is a system decision: a normal statement
+  asserted by this fold's Seed principal (``parties.fold_party_handle``), keeping
+  the recorded account as evidence. Nothing is ever attributed to an invented actor.
 
-Carrier owner/editor/reader grants become Party carrier_reader grants, granting
-read only, with zero private-field or edit grants added. The copied count is printed.
-Caveats and expiry are retained; incompatible caveat contexts block. Legacy
-field-backed ownership is carried explicitly. Provision still migrates before
-permission sync. The applied migration record freezes carrier writes.
+Statement rows carry the carrier's ``created_at``/``updated_at``; history rows
+record the fold time. Only pointers that fit the statement evidence contract are
+copied; the untouched carrier retains the original metadata and flags for the
+retirement's parity review. Carrier owner/editor/reader grants become Party
+``carrier_reader`` grants (read only). The applied statement per (party, handle)
+is the decisive one: a preferred stance, else the strongest normal assertion at the
+review threshold.
 
-Reverse is a no-op: it leaves both the untouched carriers and folded statements.
+Every blocking row is collected before anything is written; the first error names
+them all. ``plan()`` is the predicate the parties fold preflight evaluates against
+the pre-upgrade state, so blockers surface before any destructive declaration.
+
+Reverse is a no-op: it leaves both the untouched carriers and the folded statements.
 Removing the migration record reopens legacy writes; reapplying to occupied
 statement keys refuses rather than overwriting newer evidence. Reversing the
-preceding schema migrations drops the newly created statement/history tables.
+preceding schema migrations drops the statement/history tables.
 """
 
+from collections import Counter
 from itertools import batched
 
-from django.apps import apps as live_apps
 from django.conf import settings
-from django.db import migrations, models
+from django.db import migrations
 from django.utils import timezone
 from rebac import SubjectRef, app_settings, system_context
-from rebac.resources import resource_id_attr, subject_id_attr
-
-from angee.base.identity import EvidenceReference, instance_from_public_id, public_id_for
+from sqids import Sqids
+from sqids.constants import DEFAULT_ALPHABET, DEFAULT_MIN_LENGTH
 
 REASON = "fold.party_handle"
+SYSTEM_KEY = "parties.fold_party_handle"
+PREFIXES = {"parties.party": "pty_", "parties.person": "pty_", "parties.organization": "pty_",
+            "parties.handle": "hdl_", "integrate.recordlink": "rlk_", settings.AUTH_USER_MODEL.lower(): "usr_"}
+RULE_KEYS = {("email_match", None): "parties.normalized_twin", ("email_match", "source_sender"): "parties.source_sender",
+             ("rule", None): "parties.email_domain", ("rule", "display_name"): "parties.display_name",
+             ("rule", "signature_phone"): "parties.signature_phone"}
+REVIEW_CONFIDENCE = 0.5
 
 
 def applies(state):
@@ -52,153 +75,236 @@ def applies(state):
     ))
 
 
-def _blocked(row, reason):
-    raise ValueError(f"PartyHandle {row.pk} (party={row.party_id}, handle={row.handle_id}): {reason}")
+class Blocked(ValueError):
+    """One row the fold refuses, named for the operator."""
+
+    def __init__(self, label, pk, reason):
+        super().__init__(f"{label} {pk}: {reason}")
+        self.label, self.pk, self.reason = label, pk, reason
 
 
-def _rows(apps, label, db):
-    # Historical state has physical fields only; native sqid ordering is virtual.
-    return apps.get_model(label)._base_manager.using(db).order_by()
+class Legacy:
+    """Historical-model reads shared by the fold and the preflight."""
+
+    def __init__(self, apps, db):
+        self.apps, self.db = apps, db
+        self.codec = Sqids(min_length=getattr(settings, "DJANGO_SQIDS_MIN_LENGTH", None) or DEFAULT_MIN_LENGTH,
+                           alphabet=getattr(settings, "DJANGO_SQIDS_ALPHABET", None) or DEFAULT_ALPHABET)
+        self.user_kinds = dict(self.rows(settings.AUTH_USER_MODEL).values_list("pk", "kind"))
+        self.integrations = dict(self.rows("integrate.SyncStream").values_list("pk", "integration_id"))
+
+    def model(self, label):
+        try:
+            return self.apps.get_model(label)
+        except LookupError:
+            return None
+
+    def rows(self, label):
+        # Historical state has physical fields only; native sqid ordering is virtual.
+        return self.apps.get_model(label)._base_manager.using(self.db).order_by()
+
+    def person(self, pk):
+        return pk is not None and self.user_kinds.get(pk) == "person"
+
+    def public_id(self, label, pk):
+        return f"{PREFIXES.get(label.lower(), '')}{self.codec.encode([int(pk)])}"
+
+    def decode(self, value):
+        _, separator, encoded = str(value).rpartition("_")
+        decoded = self.codec.decode(encoded if separator else str(value))
+        return decoded[0] if len(decoded) == 1 else None
+
+    def record(self, row, ref):
+        """Resolve one retained evidence reference to its historical row."""
+        if not isinstance(ref, dict) or not isinstance(ref.get("model"), str) or not isinstance(ref.get("id"), str):
+            raise Blocked("PartyHandle", row.pk, f"origin {ref!r} is not a model/id reference")
+        model = self.model(ref["model"])
+        if model is None:
+            raise Blocked("PartyHandle", row.pk, f"origin model {ref['model']!r} is not in this schema")
+        pk = self.decode(ref["id"])
+        origin = model._base_manager.using(self.db).order_by().filter(pk=pk).first() if pk is not None else None
+        if origin is None:
+            raise Blocked("PartyHandle", row.pk, f"origin {ref['model']}:{ref['id']} is missing")
+        return origin, {"model": model._meta.label, "id": ref["id"]}
+
+    def user_ref(self, pk):
+        label = self.apps.get_model(settings.AUTH_USER_MODEL)._meta.label
+        return {"model": label, "id": self.public_id(label, pk)}
 
 
-def _record(apps, db, row, ref):
-    """Delegate public-id decoding to its identity owner, reading historical data."""
-    try:
-        ref = EvidenceReference.model_validate(ref)
-        identity = live_apps.get_model(ref.model)
-        origin = instance_from_public_id(identity, ref.id, queryset=_rows(apps, ref.model, db))
-    except (LookupError, ValueError, TypeError, AttributeError) as error:
-        _blocked(row, f"origin {ref!r} does not identify an existing row: {error}")
-    if origin is None:
-        _blocked(row, f"origin {ref.model}:{ref.id} is missing")
-    return origin, ref.model_dump(mode="json")
-
-
-def _principal(apps, db, row, label, pk, subject_type, kind):
-    principal = _rows(apps, label, db).filter(pk=pk).first()
-    if principal is None:
-        _blocked(row, f"source {label}:{pk} is missing")
-    if kind == "person" and principal.kind != "person":
-        _blocked(row, f"source {label}:{pk} is not a person")
-    identity = live_apps.get_model(label)
-    ref = SubjectRef.of(subject_type, str(getattr(principal, subject_id_attr(identity))))
-    return str(ref), kind
-
-
-def _source(apps, db, row, party, refs, origins):
+def _source(legacy, row, party, handle, refs, origins, notices):
+    """Return the carrier's source principal as (principal, kind, link_id), or None when unasserted."""
     metadata = row.metadata
     producer_evidence = metadata.get("evidence", {})
     if not isinstance(producer_evidence, dict):
-        _blocked(row, "producer evidence must be a mapping")
+        raise Blocked("PartyHandle", row.pk, "producer evidence must be a mapping")
     clues = [bool(producer_evidence), bool(metadata.get("claim")), bool(metadata.get("provenance"))]
     if sum(clues) > 1:
-        _blocked(row, "merged metadata names several producers")
-    if row.source == "manual":
+        raise Blocked("PartyHandle", row.pk, "merged metadata names several producers")
+    if row.source in ("manual", "oauth"):
         if any(clues):
-            _blocked(row, "manual source conflicts with retained producer evidence")
-        return (*_principal(apps, db, row, settings.AUTH_USER_MODEL, row.created_by_id,
-                            app_settings.REBAC_USER_TYPE, "person"), None)
+            raise Blocked("PartyHandle", row.pk, f"{row.source} source conflicts with retained producer evidence")
+        owner = handle.owner_id if row.source == "oauth" else None
+        actor = next((pk for pk in (owner, row.created_by_id) if legacy.person(pk)), None)
+        if actor is not None:
+            return ("user", actor), "person", None
+        recorded = owner or row.created_by_id
+        if recorded is not None:
+            refs.append(legacy.user_ref(recorded))
+        notices[f"{row.source} assertion by a service account or without an actor: attributed to the fold"] += 1
+        return ("seed", SYSTEM_KEY), "seed", None
     if row.source == "carddav":
         if any(clues) or not party.folder_id or not party.source_uid:
-            _blocked(row, "CardDAV source has no unambiguous retained card identity")
-        folder = _rows(apps, "parties.Folder", db).filter(pk=party.folder_id).first()
+            raise Blocked("PartyHandle", row.pk, "CardDAV source has no unambiguous retained card identity")
+        folder = legacy.rows("parties.Folder").filter(pk=party.folder_id).first()
         if folder is None:
-            _blocked(row, f"origin Folder:{party.folder_id} is missing")
-        directory = _rows(apps, "parties.Directory", db).filter(pk=folder.directory_id).first()
-        if directory is None:
-            _blocked(row, f"source Directory:{folder.directory_id} is missing")
-        ref = {"model": "parties.Party", "id": public_id_for(live_apps.get_model("parties", "Party"), party.pk)}
+            raise Blocked("PartyHandle", row.pk, f"origin Folder:{party.folder_id} is missing")
+        if not legacy.rows("parties.Directory").filter(pk=folder.directory_id).exists():
+            raise Blocked("PartyHandle", row.pk, f"source Directory:{folder.directory_id} is missing")
+        ref = {"model": "parties.Party", "id": legacy.public_id("parties.party", party.pk)}
         if ref not in refs:
             refs.append(ref)
-        return (*_principal(apps, db, row, "integrate.Integration", directory.pk,
-                            "integrate/integration", "directory"), None)
-    if row.source in {"rule", "email_match"}:
-        if metadata.get("claim") == "source_sender" and row.source == "email_match" and refs:
-            key = "parties.source_sender"
-        elif producer_evidence.get("kind") == "display_name" and row.source == "rule":
-            origin, ref = _record(apps, db, row, {
-                "model": "parties.Handle", "id": producer_evidence.get("source_handle", ""),
-            })
-            refs.append(ref)
-            key = "parties.display_name"
-        else:
-            _blocked(row, "rule/matcher identity or typed origin was not retained")
-        principal, _ = _rows(apps, "provenance.Rule", db).get_or_create(key=key)
-        return (*_principal(apps, db, row, "provenance.Rule", principal.pk, "provenance/rule", "rule"), None)
+        return ("integration", folder.directory_id), "directory", None
+    if row.source in ("rule", "email_match"):
+        kind = producer_evidence.get("kind") if producer_evidence else metadata.get("claim")
+        if kind == "source_sender" and not refs:
+            raise Blocked("PartyHandle", row.pk, "source_sender claim retained no message evidence")
+        if kind == "display_name":
+            _, ref = legacy.record(row, {"model": "parties.Handle", "id": str(producer_evidence.get("source_handle", ""))})
+            if ref not in refs:
+                refs.append(ref)
+        key = RULE_KEYS.get((row.source, kind))
+        if key is None:
+            raise Blocked("PartyHandle", row.pk, f"{row.source} producer {kind!r} has no seeded Rule key")
+        return ("rule", key), "rule", None
     if row.source == "import":
         if producer_evidence or metadata.get("claim"):
-            _blocked(row, "import source conflicts with retained rule/matcher evidence")
-        content_types = _rows(apps, "contenttypes.ContentType", db)
-        sources = {(origin.asserted_by, origin.pk) for origin in origins
+            raise Blocked("PartyHandle", row.pk, "import source conflicts with retained rule/matcher evidence")
+        carrier_types = set(legacy.rows("contenttypes.ContentType").filter(
+            app_label="parties", model="partyhandle",
+        ).values_list("pk", flat=True))
+        sources = {(legacy.integrations.get(origin.stream_id), origin.pk) for origin in origins
                    if origin._meta.label_lower == "integrate.recordlink"
-                   and origin.target_object_id == str(row.pk)
-                   and content_types.filter(pk=origin.target_content_type_id, app_label="parties", model="partyhandle").exists()}
+                   and origin.target_object_id == str(row.pk) and origin.target_content_type_id in carrier_types}
         label = metadata.get("provenance", "")
         if not isinstance(label, str):
-            _blocked(row, "legacy import provenance must be a string")
+            raise Blocked("PartyHandle", row.pk, "legacy import provenance must be a string")
+        labelled = None
         if label:
             try:
-                ref = SubjectRef.parse(label)
+                labelled = SubjectRef.parse(label)
             except (ValueError, TypeError):
-                if not sources:
-                    _blocked(row, f"legacy import label {label!r} has no persisted Integration attribution from its owner")
+                labelled = None
             else:
-                if sources and {source for source, _ in sources} != {str(ref)}:
-                    _blocked(row, "import label and producer RecordLink contradict one another")
+                if labelled.subject_type != "integrate/integration" or labelled.optional_relation or labelled.subject_id == "*":
+                    raise Blocked("PartyHandle", row.pk, f"import source {labelled} is not one Integration")
+                try:
+                    integration_id = int(labelled.subject_id)
+                except ValueError:
+                    raise Blocked("PartyHandle", row.pk, f"source Integration:{labelled.subject_id} has an invalid identity") from None
+                if sources and {pk for pk, _ in sources} != {integration_id}:
+                    raise Blocked("PartyHandle", row.pk, "import label and producer RecordLink contradict one another")
                 if not sources:
-                    sources.add((str(ref), None))
-        principals = {source for source, _ in sources}
-        if len(principals) != 1:
-            _blocked(row, f"import attribution is ambiguous or absent: {label!r}")
-        try:
-            ref = SubjectRef.parse(next(iter(principals)))
-        except (ValueError, TypeError):
-            _blocked(row, "producer RecordLink has no valid retained source identity")
-        if ref.subject_type != "integrate/integration" or ref.optional_relation or ref.subject_id == "*":
-            _blocked(row, f"import source {ref} is not one Integration")
-        identity = live_apps.get_model("integrate", "Integration")
-        try:
-            principal = _rows(apps, "integrate.Integration", db).filter(
-                **{subject_id_attr(identity): ref.subject_id},
-            ).first()
-        except (ValueError, TypeError):
-            _blocked(row, f"source Integration:{ref.subject_id} has an invalid persisted identity")
-        if principal is None:
-            _blocked(row, f"source Integration:{ref.subject_id} is missing")
+                    sources.add((integration_id, None))
+        if not sources:
+            notices[f"import without Integration attribution ({label or 'unlabelled'}): left unasserted"] += 1
+            return None
+        integration_ids = {pk for pk, _ in sources}
+        if len(integration_ids) != 1:
+            raise Blocked("PartyHandle", row.pk, f"import attribution is ambiguous: {sorted(map(str, integration_ids))}")
+        integration_id = next(iter(integration_ids))
+        if not legacy.rows("integrate.Integration").filter(pk=integration_id).exists():
+            raise Blocked("PartyHandle", row.pk, f"source Integration:{integration_id} is missing")
+        if not legacy.rows("parties.Directory").filter(pk=integration_id).exists():
+            raise Blocked("PartyHandle", row.pk, "Integration source classification has no historical Directory child row")
         if not refs:
-            _blocked(row, "import origin was not retained")
-        if not _rows(apps, "parties.Directory", db).filter(pk=principal.pk).exists():
-            _blocked(row, "Integration source classification has no historical Directory child row")
-        return str(ref), "directory", next((pk for source, pk in sorted(sources, key=str) if pk is not None), None)
-    _blocked(row, f"source {row.source!r} has no proven persisted principal")
+            raise Blocked("PartyHandle", row.pk, "import origin was not retained")
+        link_id = next((pk for _, pk in sorted(sources, key=str) if pk is not None), None)
+        return ("integration", integration_id), "directory", link_id
+    raise Blocked("PartyHandle", row.pk, f"source {row.source!r} has no proven persisted principal")
 
 
-def _decision(apps, db, row):
-    """A carrier decision belongs to its recorded updating person."""
+def _decision(legacy, row, refs, notices):
+    """Return the carrier's decision as (principal, kind, rank, snak), or None."""
     if row.is_confirmed and row.is_dismissed:
-        _blocked(row, "confirmed and dismissed flags contradict one another")
+        raise Blocked("PartyHandle", row.pk, "confirmed and dismissed flags contradict one another")
     if not (row.is_confirmed or row.is_dismissed):
         return None
-    if row.updated_by_id is None:
-        _blocked(row, "decision has no recorded updated_by person actor")
-    return _principal(apps, db, row, settings.AUTH_USER_MODEL, row.updated_by_id, app_settings.REBAC_USER_TYPE, "person")[0]
+    snak = "value" if row.is_confirmed else "no_value"
+    decider = next((pk for pk in (row.updated_by_id, row.created_by_id) if legacy.person(pk)), None)
+    if decider is not None:
+        return ("user", decider), "person", "preferred", snak
+    recorded = row.updated_by_id or row.created_by_id
+    if recorded is not None:
+        ref = legacy.user_ref(recorded)
+        if ref not in refs:
+            refs.append(ref)
+    notices["decision by a service account or without a recorded actor: system decision by the fold"] += 1
+    return ("seed", SYSTEM_KEY), "seed", "normal", snak
 
 
-def _carry_readers(apps, db, row, party):
+def classify(legacy, row, notices):
+    """Return the statements one carrier folds into: (party, handle, refs, link_id, assertions)."""
+    party = legacy.rows("parties.Party").filter(pk=row.party_id).first()
+    handle = legacy.rows("parties.Handle").filter(pk=row.handle_id).first()
+    if party is None or handle is None:
+        raise Blocked("PartyHandle", row.pk, "subject or member origin is missing")
+    if not isinstance(row.metadata, dict) or not 0 <= row.confidence <= 1:
+        raise Blocked("PartyHandle", row.pk, "invalid retained metadata or confidence")
+    evidence = row.metadata.get("evidence_refs", [])
+    if not isinstance(evidence, list):
+        raise Blocked("PartyHandle", row.pk, "origin references must be a list")
+    refs, origins = [], []
+    for ref in evidence:
+        origin, ref = legacy.record(row, ref)
+        origins.append(origin)
+        if ref not in refs:
+            refs.append(ref)
+    source = _source(legacy, row, party, handle, refs, origins, notices)
+    decision = _decision(legacy, row, refs, notices)
+    assertions = []
+    if source is not None:
+        principal, kind, link_id = source
+        assertions.append((principal, kind, "normal", "value", row.confidence, link_id))
+    if decision is not None:
+        principal, kind, rank, snak = decision
+        assertions.append((principal, kind, rank, snak, 1.0, None))
+    return party, handle, refs, assertions
+
+
+def plan(apps, db):
+    """Classify every carrier: (legacy, plans, blockers, notices); the preflight reads the last two."""
+    legacy = Legacy(apps, db)
+    plans, blockers, notices = [], [], Counter()
+    for row in legacy.rows("parties.PartyHandle").order_by("pk").iterator():
+        try:
+            plans.append((row, classify(legacy, row, notices)))
+        except Blocked as blocked:
+            blockers.append(blocked)
+    return legacy, plans, blockers, notices
+
+
+def _principal(legacy, principal):
+    kind, value = principal
+    if kind == "user":
+        return str(SubjectRef.of(app_settings.REBAC_USER_TYPE, str(value)))
+    if kind == "integration":
+        return str(SubjectRef.of("integrate/integration", str(value)))
+    label, subject_type = ("provenance.Rule", "provenance/rule") if kind == "rule" else ("provenance.Seed", "provenance/seed")
+    row, _ = legacy.rows(label).get_or_create(key=value)
+    return str(SubjectRef.of(subject_type, str(row.pk)))
+
+
+def _carry_readers(legacy, row, party):
     """Copy grant data, never inspect schema permissions or evaluate a policy."""
-    model = apps.get_model(app_settings.REBAC_RELATIONSHIP_MODEL)
-    rows = _rows(apps, app_settings.REBAC_RELATIONSHIP_MODEL, db)
-    carrier_id = str(row.pk)  # Frozen carrier resource identity: its integer primary key.
-    party_id = str(getattr(party, resource_id_attr(live_apps.get_model("parties", "Party"))))
-    grants = list(rows.filter(resource_type="parties/party_handle", resource_id=carrier_id,
+    model = legacy.apps.get_model(app_settings.REBAC_RELATIONSHIP_MODEL)
+    rows = legacy.rows(app_settings.REBAC_RELATIONSHIP_MODEL)
+    grants = list(rows.filter(resource_type="parties/party_handle", resource_id=str(row.pk),
                              relation__in=("owner", "editor", "reader")).order_by("pk"))
-    if row.created_by_id:
-        source, _ = _principal(apps, db, row, settings.AUTH_USER_MODEL, row.created_by_id,
-                               app_settings.REBAC_USER_TYPE, None)
-        ref = SubjectRef.parse(source)
-        grants.append(model(subject_type=ref.subject_type, subject_id=ref.subject_id))
+    if row.created_by_id and row.created_by_id in legacy.user_kinds:
+        grants.append(model(subject_type=app_settings.REBAC_USER_TYPE, subject_id=str(row.created_by_id)))
     for grant in grants:
-        key = dict(resource_type="parties/party", resource_id=party_id, relation="carrier_reader",
+        key = dict(resource_type="parties/party", resource_id=str(party.pk), relation="carrier_reader",
                    subject_type=grant.subject_type, subject_id=grant.subject_id,
                    optional_subject_relation=grant.optional_subject_relation, caveat_name=grant.caveat_name)
         existing, created = rows.get_or_create(**key, defaults={
@@ -206,7 +312,7 @@ def _carry_readers(apps, db, row, party):
         })
         if not created:
             if existing.caveat_context != grant.caveat_context:
-                _blocked(row, "Party reader grant has incompatible caveat context")
+                raise Blocked("PartyHandle", row.pk, "Party reader grant has incompatible caveat context")
             if existing.expires_at is not None:
                 expires = None if grant.expires_at is None else max(existing.expires_at, grant.expires_at)
                 rows.filter(pk=existing.pk).update(expires_at=expires)
@@ -215,84 +321,66 @@ def _carry_readers(apps, db, row, party):
 
 def forwards(apps, schema_editor):
     db = schema_editor.connection.alias
-    carriers = _rows(apps, "parties.PartyHandle", db)
-    if not carriers.exists():
+    legacy, plans, blockers, notices = plan(apps, db)
+    if blockers:
+        raise ValueError(f"PartyHandle fold: {len(blockers)} rows block this database:\n" + "\n".join(map(str, blockers)))
+    if not plans:
         return
-    missing_actors = carriers.filter(models.Q(is_confirmed=True) | models.Q(is_dismissed=True)).exclude(
-        updated_by__kind="person",
-    )
-    if missing_actors.exists():
-        print(f"PartyHandle fold: {missing_actors.count()} decisions without a recorded person actor block this database.")
-        _blocked(missing_actors.order_by("pk").first(), "decision has no recorded updated_by person actor")
-    statements = _rows(apps, "parties.PartyStatement", db)
-    history = _rows(apps, "parties.HistoricalPartyStatement", db)
+    statements = legacy.rows("parties.PartyStatement")
+    history = legacy.rows("parties.HistoricalPartyStatement")
+    now = timezone.now()
     pending, snapshots = {}, []
 
     def flush():
         records = list(pending.values())
+        created = [row for row in records if row.pk is None]
         existing = [row for row in records if row.pk is not None]
-        statements.bulk_create([row for row in records if row.pk is None], batch_size=500)
+        # bulk_create stamps auto_now(_add) columns through pre_save; the carrier's stamps win.
+        stamps = [(row, row.created_at, row.updated_at) for row in created]
+        statements.bulk_create(created, batch_size=500)
+        for row, created_at, updated_at in stamps:
+            row.created_at, row.updated_at = created_at, updated_at
+        statements.bulk_update(created, ("created_at", "updated_at"), batch_size=500)
         statements.bulk_update(existing, [field.name for field in statements.model._meta.concrete_fields
-                                           if not field.primary_key], batch_size=500)
+                                          if not field.primary_key], batch_size=500)
         history.bulk_create([
-            history.model(**(values | {"id": row.pk, "created_at": row.created_at, "updated_at": row.updated_at}),
-                          history_date=timezone.now(), history_type=kind, history_change_reason=REASON)
+            history.model(**(values | {"id": row.pk}), history_date=now, history_type=kind, history_change_reason=REASON)
             for row, values, kind in snapshots
         ], batch_size=500)
         pending.clear()
         snapshots.clear()
+
     cs_model = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
     with system_context(reason=REASON):
-        cs = cs_model._base_manager.using(db).create(activity="system", change_reason=REASON,
-                                                   state="closed", outcome="success")
+        cs = cs_model._base_manager.using(db).create(activity="system", change_reason=REASON, state="closed", outcome="success")
         count = readers = 0
         winners = {}
-        for row in carriers.order_by("pk").iterator():
-            party = _rows(apps, "parties.Party", db).filter(pk=row.party_id).first()
-            handle = _rows(apps, "parties.Handle", db).filter(pk=row.handle_id).first()
-            if party is None or handle is None:
-                _blocked(row, "subject or member origin is missing")
-            if not isinstance(row.metadata, dict) or not 0 <= row.confidence <= 1:
-                _blocked(row, "invalid retained metadata or confidence")
-            refs, origins = [], []
-            evidence = row.metadata.get("evidence_refs", [])
-            if not isinstance(evidence, list):
-                _blocked(row, "origin references must be a list")
-            for ref in evidence:
-                origin, ref = _record(apps, db, row, ref)
-                origins.append(origin)
-                if ref not in refs:
-                    refs.append(ref)
-            source, kind, link_id = _source(apps, db, row, party, refs, origins)
-            decision = _decision(apps, db, row)
-            assertions = [(source, kind, "normal", "value", row.confidence)]
-            if decision is not None:
-                assertions.append((decision, "person", "preferred", "value" if row.is_confirmed else "no_value", 1.0))
-            for asserted_by, source_kind, rank, snak, confidence in assertions:
+        for row, (party, handle, refs, assertions) in plans:
+            for principal, source_kind, rank, snak, confidence, link_id in assertions:
+                asserted_by = _principal(legacy, principal)
                 key = dict(subject_id=row.party_id, handle_id=row.handle_id, aspect="handle", asserted_by=asserted_by)
                 identity = tuple(key.values())
                 existing = pending.get(identity) or statements.filter(**key, superseded_id=None).first()
                 if existing is not None and existing.changeset_id != cs.pk:
-                    _blocked(row, f"statement key {asserted_by} already contains newer evidence")
-                values = dict(source_kind=source_kind, rank=rank, snak=snak, confidence=confidence,
-                              evidence=refs, link_id=link_id, changeset_id=cs.pk, status="asserted", applied=False)
+                    raise Blocked("PartyHandle", row.pk, f"statement key {asserted_by} already contains newer evidence")
+                values = dict(source_kind=source_kind, rank=rank, snak=snak, confidence=confidence, evidence=refs,
+                              link_id=link_id, changeset_id=cs.pk, status="asserted", applied=False)
                 created = existing is None
                 statement = statements.model(**key, superseded_id=None) if created else existing
                 for name, value in values.items():
                     setattr(statement, name, value)
-                if not created:
-                    statement.updated_at = timezone.now()
+                statement.created_at = row.created_at if created else statement.created_at
+                statement.updated_at = row.updated_at if created else now
                 pending[identity] = statement
-                snapshot = {field.attname: getattr(statement, field.attname)
-                            for field in statement._meta.concrete_fields}
+                snapshot = {field.attname: getattr(statement, field.attname) for field in statement._meta.concrete_fields}
                 snapshots.append((statement, snapshot, "+" if created else "~"))
                 count += 1
-                if rank == "preferred" or confidence >= 0.5:
+                if rank == "preferred" or confidence >= REVIEW_CONFIDENCE:
                     group = (row.party_id, row.handle_id)
                     order = (rank == "preferred", confidence, row.updated_at, row.pk)
                     if group not in winners or order > winners[group][0]:
                         winners[group] = (order, statement)
-            readers += _carry_readers(apps, db, row, party)
+            readers += _carry_readers(legacy, row, party)
             if len(pending) >= 500:
                 flush()
         flush()
@@ -302,15 +390,17 @@ def forwards(apps, schema_editor):
             statements.bulk_update(batch, ("applied",), batch_size=500)
             history.bulk_create([
                 history.model(**{field.attname: getattr(statement, field.attname) for field in statement._meta.concrete_fields},
-                              history_date=timezone.now(), history_type="~", history_change_reason=REASON)
+                              history_date=now, history_type="~", history_change_reason=REASON)
                 for statement in batch
             ], batch_size=500)
             count += len(batch)
         cs_model._base_manager.using(db).filter(pk=cs.pk).update(
             counts={"parties.partystatement": count}, touched=["parties.partystatement"],
         )
-        print(f"PartyHandle fold: {carriers.count()} carriers, {count} statement snapshots; "
-              f"{readers} carrier grants copied to read only; 0 decisions without a recorded actor.")
+        print(f"PartyHandle fold: {len(plans)} carriers, {count} statement snapshots; "
+              f"{readers} carrier grants copied to read only.")
+        for reason, number in sorted(notices.items()):
+            print(f"PartyHandle fold: {number} x {reason}")
 
 
 class Migration(migrations.Migration):

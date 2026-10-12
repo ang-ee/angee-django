@@ -6,6 +6,11 @@ category = "Data"
 depends_on = ["angee.graphql"]
 
 [[migrations]]
+name = "changeset_schema"
+app_label = "provenance"
+module = "runtime_migrations.changeset_schema"
+
+[[migrations]]
 name = "statement_principal_schema"
 app_label = "provenance"
 module = "runtime_migrations.statement_principal_schema"

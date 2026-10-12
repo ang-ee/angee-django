@@ -1,7 +1,10 @@
 """Retire converted record-sync tables after an exact evidence parity check.
 
 The composer attaches this declaration after fold_record_sync_history. Forward
-refuses partial conversion or changed legacy evidence before either DeleteModel.
+refuses partial conversion or changed legacy evidence before either DeleteModel;
+the parity scan runs before the stream schema change, so no exclusive table lock is
+held while it reads. Retained failures are indexed once as canonical JSON, so the
+check is linear in the number of snapshots and failures.
 Reverse recreates both tables from ordered link history and retained stream state.
 Legacy revision/failure primary keys do not round-trip; payloads, mapping and closure facts survive.
 New native evidence collapses consecutive identical observations and open failure
@@ -12,6 +15,7 @@ lost when the new schema is later reversed; retained native history stays here.
 Stream closure and snapshot intent have no legacy equivalents either.
 """
 
+import json
 from copy import deepcopy
 from datetime import datetime
 
@@ -54,14 +58,17 @@ def forwards(apps, schema_editor):
     revisions = apps.get_model("integrate", "RecordRevision")
     failures = apps.get_model("integrate", "SyncDiscrepancy")
     history = apps.get_model("integrate", "HistoricalRecordLink")
-    retained = []
+    retained = set()
+
+    def key(entry, link_id, stream_id):
+        return json.dumps([entry, link_id, stream_id], sort_keys=True, separators=(",", ":"), default=str)
 
     def retain(owner, link_id, stream_id):
         entries = [*owner.inbound]
         outbox = getattr(owner, "outbox_last_error", {})
         if outbox:
             entries.append(outbox)
-        retained.extend((entry, link_id, stream_id) for entry in entries)
+        retained.update(key(entry, link_id, stream_id) for entry in entries)
 
     for row in history._base_manager.using(db).order_by("history_id").iterator():
         retain(row, row.id, row.stream_id)
@@ -86,7 +93,7 @@ def forwards(apps, schema_editor):
                          for name in ("retry_at", "resolved_at", "created_at", "updated_at")
                          for value in (getattr(row, name),)})
         expected.update(legacy_created_by_id=row.created_by_id, legacy_updated_by_id=row.updated_by_id)
-        if (expected, row.link_id, row.stream_id) not in retained:
+        if key(expected, row.link_id, row.stream_id) not in retained:
             raise ValueError(f"Record sync retirement parity failed for failure {row.pk}.")
     # The protected comparison base must be an applied snapshot of its own link.
     links = apps.get_model("integrate", "RecordLink")._base_manager.using(db)
@@ -175,11 +182,11 @@ class Migration(migrations.Migration):
 
     dependencies: list[tuple[str, str]] = []
     operations = [
+        migrations.RunPython(forwards, backwards),
         migrations.AddField("syncstream", "snapshot", models.BooleanField(default=False)),
         migrations.AddField("syncstream", "state", StateField(
             choices=[("open", "Open"), ("closed", "Closed")], default="open", max_length=6, db_index=True,
         )),
-        migrations.RunPython(forwards, backwards),
         migrations.DeleteModel("SyncDiscrepancy"),
         migrations.DeleteModel("RecordRevision"),
     ]

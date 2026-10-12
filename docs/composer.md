@@ -257,6 +257,16 @@ attaches retirement to the fold's concrete leaf, so its parity check runs before
 either native `DeleteModel`. Keep data verification in the copied migration body,
 since schema guards alone cannot prove that the conversion preserved every row.
 
+Guards are evaluated in rounds against the state each round starts from, and a
+declaration planned in a later round depends on every other app's leaf planned so
+far. A guard therefore returns `False` for the state an earlier declaration of the
+same build still has to produce (a pending predecessor is not a partial history),
+and a chain whose folds can refuse rows puts one preflight declaration in the first
+round and makes every destructive declaration wait for a schema only a later round
+produces: the parties chain (`preflight_party_folds` before provenance's
+`retire_reversion`, integrate's store retirements and its own retirements) is the
+reference.
+
 A destructive retirement owned by an addon that has left the composition can
 declare `uninstalled_only = true`. The migration owner reads these declarations
 from available addon manifests only when the addon is uninstalled and the target

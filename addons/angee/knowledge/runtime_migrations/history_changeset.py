@@ -17,18 +17,12 @@ def applies(state: ProjectState) -> bool:
     if all(model is None for model in histories):
         return False
     required = {"history_id", "history_date", "history_type", "history_user", "history_change_reason"}
-    markdown = state.models.get(("knowledge", "markdownpage"))
-    if (
-        histories[0] is None
-        and markdown is not None
-        and "page" in markdown.fields
-        and "page_ptr" not in markdown.fields
-        and all(
-            model is not None and required.issubset(model.fields) and "changeset" not in model.fields
-            for model in histories[1:]
-        )
+    if histories[0] is None and all(
+        model is not None and required.issubset(model.fields) and "changeset" not in model.fields
+        for model in histories[1:]
     ):
-        # The earlier markdown_page_history declaration must run first.
+        # The earlier markdown_page_history declaration must run first; it is
+        # pending in this build whatever shape MarkdownPage has reached.
         return False
     if any(model is None or not required.issubset(model.fields) for model in histories):
         raise ValueError("Complete or reverse the partial knowledge history schema before adding changesets.")

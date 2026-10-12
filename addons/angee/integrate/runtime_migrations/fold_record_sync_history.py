@@ -2,6 +2,8 @@
 
 Schema changes are declared separately in record_sync_state. Pre-existing native
 history rows remain later evidence; only a set applied_base marks converted state.
+Every link receives its integration attribution and one converted snapshot, links
+without legacy observations included.
 The first converted snapshot is '+'. Historical remote versions were not stored
 and stay blank. Fold-time operational columns (target, parent, status, verification,
 absence, pin policy, metadata and audit stamps) are copied from the link; only the
@@ -69,7 +71,7 @@ def forwards(apps, schema_editor):
     history = apps.get_model("integrate", "HistoricalRecordLink")
     revisions = apps.get_model("integrate", "RecordRevision")._base_manager.using(db)
     failures = apps.get_model("integrate", "SyncDiscrepancy")._base_manager.using(db)
-    if not revisions.order_by().exists() and not failures.order_by().exists():
+    if not link_model._base_manager.using(db).order_by().exists() and not failures.order_by().exists():
         return
     expected_revisions = revisions.order_by().count()
     converted_revisions = 0
