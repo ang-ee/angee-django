@@ -20,7 +20,7 @@ from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
-from django.test import RequestFactory
+from django.test import Client, RequestFactory
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -1226,6 +1226,49 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     )
     assert failed_precondition.status_code == 412
     assert "immutable" not in failed_precondition.get("Cache-Control", "")
+
+
+SANDBOXED = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+VIEWER = "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("payload", "mime", "disposition", "policy"),
+    [
+        (PNG_BYTES, "image/png", "inline", SANDBOXED),
+        (b"%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n", "application/pdf", "inline", VIEWER),
+        (b"plain text body\n", "text/plain", "inline", VIEWER),
+        (SVG_BYTES, "image/svg+xml", "attachment", SANDBOXED),
+        (b"<!doctype html><html><body>page</body></html>", "text/html", "attachment", SANDBOXED),
+    ],
+)
+def test_a_download_renders_images_and_viewer_types_in_place_and_nothing_script_capable(
+    drive: Any, settings: Any, payload: bytes, mime: str, disposition: str, policy: str
+) -> None:
+    """Through the composed middleware every download is nosniff under a policy that runs nothing.
+
+    A raster image renders in place sandboxed, a viewer type (PDF, text) in place
+    under the viewer policy, and anything else downloads sandboxed; a revalidation
+    keeps the policy.
+    """
+
+    settings.ROOT_URLCONF = "angee.storage.urls"
+    with system_context(reason="test storage download types"):
+        MimeType._base_manager.get_or_create(mime_type=mime, defaults={"category": "other", "label": mime})
+    row = _proxy_upload(drive, payload)
+    assert row.mime_type.mime_type == mime
+    with actor_context(drive.alice):
+        url = row.download_url()
+    response = Client().get(url)
+    assert response.status_code == 200
+    assert response["Content-Disposition"].split(";", 1)[0] == disposition
+    assert response["X-Content-Type-Options"] == "nosniff"
+    assert response["Content-Security-Policy"] == policy
+    response.close()
+    revalidated = Client().get(url, HTTP_IF_NONE_MATCH=response["ETag"])
+    assert revalidated.status_code == 304
+    assert revalidated["Content-Security-Policy"] == policy
 
 
 def _header_values(value: str) -> set[str]:
