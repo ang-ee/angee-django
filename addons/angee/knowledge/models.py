@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
+from itertools import islice
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -27,6 +28,7 @@ from markdown_it import MarkdownIt
 from rebac import (
     PermissionDenied,
     SubjectRef,
+    actor_context,
     generic_target,
     system_context,
     to_subject_ref,
@@ -55,11 +57,15 @@ from angee.base.refs import (
     concrete_child_accessor,
     concrete_child_models,
 )
+from angee.base.scoping import lock_if_supported
 from angee.knowledge.retrieval import RetrievalBackend
 from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
 logger = logging.getLogger(__name__)
+
+MAX_SEARCH_PAGE_SIZE = 100
+MAX_SEARCH_VAULTS = 100
 
 # CommonMark tokenizer reused for every outline parse; we only consume block
 # tokens' source line spans (``.map``) and the heading inline ``.content``, so a
@@ -106,6 +112,28 @@ def parse_wikilinks(body: str) -> dict[str, str]:
 
 class VaultQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
     """Actor-scoped vault reads with caller-scoped creation replay."""
+
+    def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
+        """Search at most 100 readable vaults, once per selected backend class.
+
+        Vault name/id order bounds the work set. Backend-key order is stable;
+        each backend owns ranking within its group and the page budget is total.
+        """
+        limit = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
+        if not limit:
+            return []
+        groups: dict[str, list[Any]] = {}
+        for vault in self.scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
+            groups.setdefault(vault.retrieval_class, []).append(vault)
+        field = self.model._meta.get_field("retrieval_class")
+        pages: list[Any] = []
+        for key, vaults in sorted(groups.items()):
+            remaining = limit - len(pages)
+            implementation = field.resolve_class(key)
+            pages.extend(islice(implementation.search_many(vaults, query, first=remaining), remaining))
+            if len(pages) == limit:
+                break
+        return pages
 
 
 class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[misc]
@@ -516,7 +544,32 @@ class RecordBindingManager(AngeeManager):
     """
 
     DEFAULT_ROLE = "related"
+    MEMORY_ROLE = "memory"
     KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
+
+    def ensure_page(self, record: models.Model, *, role: str, vault: Any, title: str, actor: Any) -> Any:
+        """Find or create a role's page, serialized on the canonical bound record.
+
+        The first untrashed bound page is authoritative across vaults. An unreadable
+        binding is refused rather than creating a second page behind the caller's
+        scope. Callers supply a vault-unique title for a newly created page.
+        """
+
+        target = generic_target(self._saved(record, "record"))
+        role = self._role(role)
+
+        def page_for_role() -> models.Model:
+            with system_context(reason="knowledge.ensure_page.find"):
+                binding = self.model._base_manager.filter(
+                    **target.lookups(self.model, "target"), role=role, page__is_trashed=False,
+                ).order_by("pk").first()
+            if binding is not None:
+                binding.require_access("read", actor)
+                return apps.get_model("knowledge", "Page").objects.with_actor(actor).get(pk=binding.page_id)
+            return apps.get_model("knowledge", "Page").objects.create_in(vault, title=title)
+
+        with actor_context(actor):
+            return cast(RecordBinding, self.upsert(target=record, page=page_for_role, role=role)).page
 
     def create(self, **kwargs: Any) -> models.Model:
         """Create through the idempotent role-keyed upsert contract."""
@@ -537,14 +590,32 @@ class RecordBindingManager(AngeeManager):
         self,
         *,
         target: models.Model,
-        page: models.Model | None = None,
+        page: models.Model | Callable[[], models.Model] | None = None,
         vault: models.Model | None = None,
         role: str = DEFAULT_ROLE,
     ) -> models.Model:
-        """Return one binding per knowledge owner, canonical target, and role."""
+        """Return one binding per knowledge owner, canonical target, and role.
 
-        binding, _created = self.get_or_create(**self._key(target, page=page, vault=vault, role=role))
-        return binding
+        Lock and recheck the canonical target before every write, including a
+        lazy page factory. Under PostgreSQL READ COMMITTED, DELETE waits for
+        this transaction and its post-delete teardown sees the committed binding;
+        if DELETE wins, the locked lookup refuses the now-absent target.
+        """
+
+        reference = generic_target(self._saved(target, "target"))
+        with transaction.atomic():
+            with system_context(reason="knowledge.record_binding.lock"):
+                canonical = reference.content_type.model_class()
+                lock_if_supported(canonical._base_manager.all(), no_key=True).get(pk=reference.object_id)
+            owner = page() if callable(page) else page
+            if owner is not None:
+                # Serialize binding admission with memory teardown and page trash.
+                with system_context(reason="knowledge.record_binding.page_lock"):
+                    owner = lock_if_supported(type(owner)._base_manager.all(), no_key=True).get(pk=owner.pk)
+                    if owner.is_trashed:
+                        raise ValidationError("Cannot bind a page in the trash.")
+            binding, _created = self.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
+            return binding
 
     def unbind(
         self,
@@ -560,13 +631,13 @@ class RecordBindingManager(AngeeManager):
         return deleted
 
     def teardown_for_record(self, record: models.Model) -> None:
-        """Delete every binding to ``record`` before the target row disappears.
+        """Remove this record's bindings; trash only memory pages with no remaining memory binding.
 
         Targets declare no reverse ``GenericRelation``. The global knowledge-owned
-        ``pre_delete`` receiver therefore delegates here so primary-key reuse cannot
-        make an old binding resolve to a new row. A binding whose target is gone
-        grants nothing and is removable only elevated, so this system cleanup runs
-        while the target still exists, keeping the normal ``post_delete`` lifecycle.
+        ``post_delete`` receiver delegates here once, on the canonical sender.
+        The target's DELETE waits for :meth:`upsert` to release its row lock;
+        READ COMMITTED makes that committed binding visible to teardown. Binding
+        deletion is elevated and needs no live target or additional target lock.
         """
 
         try:
@@ -582,7 +653,15 @@ class RecordBindingManager(AngeeManager):
         if not bindings.exists():
             return
         with system_context(reason="knowledge.record_binding.teardown"), transaction.atomic():
+            pages = list(lock_if_supported(apps.get_model("knowledge", "Page").objects.filter(
+                pk__in=bindings.filter(role=self.MEMORY_ROLE, page__isnull=False).values("page_id"),
+            ).order_by("pk"), no_key=True))
             bindings.delete()
+            for page in pages:
+                if not page.is_trashed and not self.model._base_manager.filter(
+                    page=page, role=self.MEMORY_ROLE,
+                ).exists():
+                    page.trash(reason="Bound record deleted.")
 
     def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
         """Return actor-readable bindings on one canonical record."""

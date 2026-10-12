@@ -1,5 +1,29 @@
 # Record pages
 
+`RecordBinding.objects.ensure_page(record, role=…, vault=…, title=…, actor=…)`
+finds the role's bound page or creates and binds it through the page and binding
+owners. Every binding write locks and rechecks the canonical target through
+`upsert`, so concurrent ensures share one page and deleted targets refuse writes.
+The first untrashed bound page stays authoritative across vaults and requires
+readable access. Callers supply a vault-unique title for creation. Record deletion
+removes its bindings and trashes an untrashed page only when no remaining binding
+with `RecordBindingManager.MEMORY_ROLE` uses it; other roles retain their pages.
+Binding admission and teardown serialize on the page after the target lock.
+The target's DELETE waits for any binding writer holding the record lock. One `post_delete` teardown on
+the canonical sender removes committed bindings, relying on PostgreSQL
+READ COMMITTED visibility.
+
+Contact memory can start on a platform Handle and later move to its confirmed
+Party by binding the same page to both records through `upsert`. Deleting the
+Handle then removes its binding while the Party retains the page.
+Consumer policy owns recall order, page
+shape and confirmation/merge triggers.
+
+MCP exposes vault-scoped `create_page` through the same GraphQL tool compiler as
+`read_page` and `append_to_page`; vault write grants remain the boundary.
+Retrieval backends implement `search_many` over each bounded readable vault group;
+the lexical owner performs one text scan for the group.
+
 Knowledge contributes a **Pages** chatter tab for record routes. It lists
 actor-readable page bindings and embeds `KnowledgePageView`. Binding and
 unbinding use the existing role-keyed mutations, which require write access to

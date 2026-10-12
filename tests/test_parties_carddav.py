@@ -106,16 +106,16 @@ def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatc
     assert refused.value.public_message == "CardDAV PROPFIND returned HTTP 503."
 
 
-def test_photo_download_is_capped_and_uses_the_collection_origin() -> None:
-    """Photo downloads preserve vCard MIME and use the shared SSRF-safe cap."""
+def test_photo_download_is_capped_and_uses_the_collection_origin(settings: Any) -> None:
+    """Photo downloads preserve vCard MIME and use storage's image cap over the SSRF-safe client."""
 
     class FakeHttp:
-        def download_capped(self, url: str, **kwargs: Any) -> bytes:
-            assert url == "https://dav.example/books/photo.jpg"
-            assert kwargs["cap"] == 5 * 1024 * 1024
+        def request(self, method: str, url: str, **kwargs: Any) -> Any:
+            assert (method, url) == ("GET", "https://dav.example/books/photo.jpg")
+            assert kwargs["max_bytes"] == settings.ANGEE_STORAGE_IMAGE_MAX_BYTES
             assert kwargs["allow_private"] is False
-            assert kwargs["follow_redirects"] is False
-            return b"photo"
+            assert not kwargs.get("follow_redirects") and not kwargs.get("same_origin_redirects")
+            return httpx2.Response(200, content=b"photo")
 
     contact = ParsedContact(
         uid="one",

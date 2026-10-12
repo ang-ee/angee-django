@@ -485,3 +485,30 @@ def test_contact_resources_accept_declared_consumer_fields(
             }
     finally:
         importlib.reload(parties_schema)
+
+
+def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(composed_tables: None) -> None:
+    """The Identity tab's shape: confirming publishes the person's preferred statement; the producer keeps its row."""
+
+    admin = _platform_admin("party-statement-confirmed-admin")
+    with system_context(reason="test.parties.confirmed_statement.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        handle = Handle.objects.create(
+            platform="email",
+            value="ada@example.com",
+            normalized_value="ada@example.com",
+            created_by_id=admin.pk,
+        )
+        rule = messaging_models.Party.objects.rule_source("display_name")
+        producer = messaging_models.Party.objects.assert_handle(party, handle, asserted_by=rule, confidence=0.4)
+        decision = producer.with_actor(admin).confirm()
+
+    query = "query Statements { party_statements { id source_kind confidence is_confirmed is_dismissed } }"
+    rows = _data(execute_schema(_schema("public"), query, user=admin))["party_statements"]
+
+    assert rows == [
+        {"id": decision.sqid, "source_kind": "PERSON", "confidence": 1.0, "is_confirmed": True, "is_dismissed": False}
+    ]
+    with system_context(reason="test.parties.confirmed_statement.read"):
+        producer.refresh_from_db()
+    assert (producer.source_kind, producer.confidence, producer.is_confirmed) == ("rule", 0.4, False)

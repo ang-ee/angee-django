@@ -1,160 +1,158 @@
-"""Durable, idempotent outbound message delivery use-cases."""
+"""One outbound dispatch path; MessageManager owns leases, retries and settlement.
+
+Dispatch recovery is at-most-once after a committed effect claim: an expired
+claim never blindly republishes. Native transient integration refusals promise
+non-acceptance and can retry. Lost settlements and ambiguous acknowledgements
+require an operator decision or a transport that declares safe reconciliation.
+Advisory task locks reduce contention; the persisted row fence is authoritative.
+"""
 
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
+from datetime import timedelta
 from typing import Any
 
-from anymail.exceptions import AnymailAPIError
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
-from requests.exceptions import ConnectionError as RequestsConnectionError
-from requests.exceptions import Timeout as RequestsTimeout
 
-from angee.jobs.enqueue import enqueue_task
+from angee.integrate.errors import IntegrationError, safe_integration_failure
+from angee.jobs.enqueue import celery_app, enqueue_task
 from angee.jobs.locks import record_lock_key, task_lock
+from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain
+from angee.messaging.constants import DELIVER_MESSAGE_TASK
 
 logger = logging.getLogger(__name__)
-
-DELIVER_MESSAGE_TASK = "messaging.deliver_message"
-_NETWORK_ERRORS = (ConnectionError, TimeoutError, RequestsConnectionError, RequestsTimeout)
-
-
-class TransientDeliveryError(Exception):
-    """A network failure or ESP 5xx response that Celery may retry."""
+DELIVERY_TASK_EXPIRES = 300
+MAX_DELIVERY_ATTEMPTS = 4
+MAX_RECONCILE_ATTEMPTS = 5
+RECONCILE_BACKOFF = timedelta(minutes=1)
 
 
 def queue_message_delivery(message: Any) -> bool:
-    """Persist ``queued`` and enqueue one delivery task; return whether queued.
+    """Dispatch due drafts/queues or eligible uncertain recovery on commit.
 
-    ``external_id`` is the stable delivery token. A terminal ``sent`` row is a
-    no-op; every other state can be re-enqueued to repair a lost broker publish
-    or explicitly retry a failed attempt.
+    FAILED rows require the explicit operator retry verb. Uncertain rows retain
+    their status and revision; recovery only runs for a possibly accepted send.
     """
 
     if message.pk is None:
         raise ValidationError("Cannot deliver an unsaved message.")
     with system_context(reason="messaging.delivery.queue"), transaction.atomic():
         row = type(message).objects.sudo(reason="messaging.delivery.queue").lock_if_supported().get(pk=message.pk)
-        _validate_outbound(row)
-        if str(row.status) == str(row.MessageStatus.SENT):
-            message.status = row.status
+        if row.status != row.MessageStatus.UNCERTAIN:
+            row.validate_delivery()
+        now = timezone.now()
+        if (
+            row.status not in (row.MessageStatus.DRAFT, row.MessageStatus.QUEUED, row.MessageStatus.UNCERTAIN)
+            or row.delivery_blocked or row.delivery_held
+            or (row.status == row.MessageStatus.QUEUED and row.delivery_claim is not None)
+            or (row.scheduled_at is None and row.delivery_lease_until is not None and row.delivery_lease_until > now)
+        ):
             return False
-        row.status = row.MessageStatus.QUEUED
-        row.save(update_fields=("status", "updated_at"))
+        if row.status == row.MessageStatus.UNCERTAIN:
+            if row.delivery_operator_only or not row.delivery_possibly_accepted:
+                return False
+            if row.scheduled_at is not None and row.scheduled_at > now:
+                return False
+            if row.delivery_lease_until is not None and row.delivery_lease_until > now:
+                return False
+            # scheduled_at retains the due recovery horizon until a worker claims
+            # it; a lease alongside it fences a still-pending broker submission.
+            row.scheduled_at = row.scheduled_at or now
+            row.delivery_lease_until = now + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+            type(row)._base_manager.filter(pk=row.pk).update(
+                scheduled_at=row.scheduled_at, delivery_lease_until=row.delivery_lease_until,
+            )
+        else:
+            row.status = row.MessageStatus.QUEUED
+            row.scheduled_at = None
+            row.delivery_lease_until = now + timedelta(seconds=DELIVERY_TASK_EXPIRES)
+            row.save(update_fields=("status", "scheduled_at", "delivery_lease_until", "updated_at"))
+        # The shared prefork worker consumes Celery's configured default queue.
+        # Threads-pool queue workers cannot enforce the claim lease's time limits,
+        # so an explicit queue overrides any route to them.
         enqueue_task(
             DELIVER_MESSAGE_TASK,
-            kwargs={"model_label": row._meta.label_lower, "pk": row.pk, "external_id": str(row.external_id)},
+            kwargs={"model_label": row._meta.label_lower, "pk": row.pk, "external_id": row.external_id},
+            queue=celery_app.conf.task_default_queue, expires=DELIVERY_TASK_EXPIRES, robust=True,
         )
-    message.status = message.MessageStatus.QUEUED
+    message.status = row.status
+    message.scheduled_at = row.scheduled_at
+    message.delivery_lease_until = row.delivery_lease_until
+    message.revision = row.revision
     return True
 
 
 def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[str, Any]:
-    """Run one at-least-once delivery attempt under the shared record lock.
-
-    Lost acknowledgements can transmit twice; dedup is receiver-side best effort
-    through the stable Message-ID, not a universal ESP guarantee. Cross-process
-    mutual exclusion requires Postgres advisory locks; SQLite/local locking can
-    double-send.
-    """
+    """Publish under the message lock and the transport's declared delivery lock."""
 
     model = apps.get_model(model_label)
-    with (
-        system_context(reason="messaging.delivery.run"),
-        task_lock(record_lock_key(model_label, pk, "deliver")) as acquired,
-    ):
+    lock_key = record_lock_key(model_label, pk, "deliver")
+    with system_context(reason="messaging.delivery.run"), task_lock(lock_key) as acquired:
         if not acquired:
             return {"ok": True, "skipped": True, "reason": "delivery-already-running"}
-        message = _claim(model, pk, external_id)
+        message = model.objects.claim_delivery(pk, token=external_id)
+        backend = None
         if message is None:
-            return {"ok": True, "skipped": True, "reason": "missing-or-stale"}
-        if str(message.status) == str(message.MessageStatus.SENT):
-            return {"ok": True, "skipped": True, "reason": "already-sent"}
+            uncertain = model.objects.sudo(reason="messaging.delivery.reconcile").filter(
+                pk=pk, external_id=external_id, status="uncertain",
+            ).first()
+            if uncertain is None:
+                return {"ok": True, "skipped": True, "reason": "missing-or-stale-or-held"}
+            message = model.objects.claim_delivery(pk, token=external_id, reconcile=True)
+            if message is None:
+                return {"ok": True, "delivered": False, "status": "uncertain"}
+        reconciling = message.delivery_needs_reconciliation
         try:
-            channel = message.transport_channel(reason="messaging.delivery.channel")
-            delivered = channel.backend.deliver(message)
-        except Exception as error:
-            _record_status(model, pk, external_id, status="failed")
-            if _is_transient(error):
-                logger.exception("Transient outbound delivery failure for %s:%s.", model_label, pk)
-                raise TransientDeliveryError(f"Transient outbound delivery failure for {model_label}:{pk}.") from error
-            logger.exception("Permanent outbound delivery failure for %s:%s.", model_label, pk)
-            return {
-                "ok": False,
-                "delivered": False,
-                "external_id": external_id,
-                "error": type(error).__name__,
-            }
-        if not delivered:
-            _record_status(model, pk, external_id, status="failed")
-            return {"ok": False, "delivered": False, "external_id": external_id}
-        sent_at = _record_status(model, pk, external_id, status="sent")
-        return {
-            "ok": True,
-            "delivered": True,
-            "external_id": external_id,
-            "sent_at": sent_at.isoformat() if sent_at is not None else None,
-        }
-
-
-def _claim(model: Any, pk: Any, external_id: str) -> Any | None:
-    with system_context(reason="messaging.delivery.claim"), transaction.atomic():
-        message = (
-            model.objects.sudo(reason="messaging.delivery.claim")
-            .lock_if_supported()
-            .filter(pk=pk, external_id=external_id)
-            .select_related("sender", "thread")
-            .first()
-        )
-        if message is None:
-            return None
-        _validate_outbound(message)
-        if str(message.status) != str(message.MessageStatus.SENT):
-            message.status = message.MessageStatus.QUEUED
-            message.save(update_fields=("status", "updated_at"))
-        return message
-
-
-def _record_status(model: Any, pk: Any, external_id: str, *, status: str) -> Any | None:
-    with system_context(reason=f"messaging.delivery.{status}"), transaction.atomic():
-        message = (
-            model.objects.sudo(reason=f"messaging.delivery.{status}")
-            .lock_if_supported()
-            .filter(pk=pk, external_id=external_id)
-            .first()
-        )
-        if message is None or str(message.status) == str(message.MessageStatus.SENT):
-            return getattr(message, "sent_at", None)
-        message.status = status
-        update_fields = ["status", "updated_at"]
-        if status == str(message.MessageStatus.SENT) and message.sent_at is None:
-            message.sent_at = timezone.now()
-            update_fields.append("sent_at")
-        message.save(update_fields=tuple(update_fields))
-        return message.sent_at
-
-
-def _validate_outbound(message: Any) -> None:
-    errors: dict[str, str] = {}
-    if str(message.direction) != str(message.Direction.OUTBOUND):
-        errors["direction"] = "Only outbound messages can be delivered."
-    if message.channel_id is None:
-        errors["channel"] = "Outbound delivery requires a channel."
-    if not str(message.external_id or "").strip():
-        errors["external_id"] = "Outbound delivery requires a stable external_id."
-    if errors:
-        raise ValidationError(errors)
-
-
-def _is_transient(error: Exception) -> bool:
-    """Return whether ``error`` is a retryable network or ESP-server failure."""
-
-    if isinstance(error, AnymailAPIError):
-        status_code = getattr(error, "status_code", None)
-        if isinstance(status_code, int):
-            return 500 <= status_code <= 599
-    return isinstance(error, _NETWORK_ERRORS)
+            try:
+                backend = message.transport_channel(reason="messaging.delivery.channel").backend
+            except Exception as error:
+                # Backend construction precedes any possible provider effect.
+                refusal = (
+                    DeliveryUncertain("The prior delivery still needs reconciliation.") if reconciling
+                    else IntegrationError(safe_integration_failure(error).message)
+                )
+                result = model.objects.record_delivery(
+                    pk, token=external_id, claim=message.delivery_claim, error=refusal,
+                )
+                return {"ok": False, "delivered": False, "status": result}
+            with ExitStack() as contexts:
+                try:
+                    locked = contexts.enter_context(backend.delivery_lock())
+                except Exception as error:
+                    logger.warning("Delivery lock unavailable (%s).", type(error).__name__)
+                    locked = False
+                if not locked:
+                    result = model.objects.record_delivery(
+                        pk, token=external_id, claim=message.delivery_claim,
+                        error=(DeliveryUncertain("The prior delivery still needs reconciliation.")
+                               if reconciling else None),
+                        contention=not reconciling,
+                    )
+                else:
+                    try:
+                        outcome = backend.deliver(message)
+                        if outcome is False:
+                            outcome = DeliveryOutcome(accepted=False)
+                        if not isinstance(outcome, DeliveryOutcome):
+                            raise TypeError("ChannelBackend.deliver must return DeliveryOutcome.")
+                    except Exception as error:
+                        result = model.objects.record_delivery(
+                            pk, token=external_id, claim=message.delivery_claim, error=error,
+                        )
+                    else:
+                        result = model.objects.record_delivery(
+                            pk, token=external_id, claim=message.delivery_claim, outcome=outcome,
+                        )
+        finally:
+            if backend is not None:
+                try:
+                    backend.close()
+                except Exception as error:
+                    logger.warning("Closing delivery transport failed (%s).", type(error).__name__)
+        return {"ok": result != "failed", "delivered": result == "sent", "status": result}

@@ -33,6 +33,7 @@ def run_composed_tests(
     *,
     app: str | tuple[str, ...],
     test_postgresql: bool = False,
+    addon_dirs: tuple[Path, ...] = (),
 ) -> None:
     """Run a native contract group without sharing pytest's source-model registry."""
 
@@ -48,6 +49,7 @@ def run_composed_tests(
             str(tmp_path / "runtime"),
             *(["--test-postgresql"] if test_postgresql else []),
             *(argument for name in ((app,) if isinstance(app, str) else app) for argument in ("--app", name)),
+            *(argument for path in addon_dirs for argument in ("--addon-dir", str(path))),
             "--no-examples",
             "--action",
             "tests",
@@ -281,6 +283,7 @@ def run(args: argparse.Namespace) -> None:
         from django.conf import settings
         from django.core.management import call_command
         from django.db import connection
+        from django.test import TransactionTestCase
         from django.test.runner import DiscoverRunner
 
         from angee.base.changesets import changeset
@@ -291,7 +294,8 @@ def run(args: argparse.Namespace) -> None:
 
             def setup_databases(self, **kwargs: Any) -> Any:
                 databases = super().setup_databases(**kwargs)
-                call_command("rebac", "sync", verbosity=0)
+                if "default" in kwargs.get("aliases", ()):
+                    call_command("rebac", "sync", verbosity=0)
                 return databases
 
             def build_suite(self, *test_labels: Any, **kwargs: Any) -> TestSuite:
@@ -304,7 +308,8 @@ def run(args: argparse.Namespace) -> None:
                         else:
 
                             def set_up(test=test, original=test.setUp) -> None:
-                                statement_sources()
+                                if isinstance(test, TransactionTestCase):
+                                    statement_sources()
                                 test.enterContext(
                                     changeset(fresh=True, change_reason=f"manage.{args.action}.{test.id()}.fixtures")
                                 )

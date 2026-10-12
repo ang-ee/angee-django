@@ -40,10 +40,16 @@ class MembershipDecisionMixin(models.Model):
         abstract = True
 
     def confirm(self) -> None:
+        """Accept this membership, then re-resolve any derived owner.
+
+        Confirmation is the person's decision and writes only the review flags; the
+        producer's facts (its confidence) stay as asserted — a confirmed row already
+        outranks any score.
+        """
+
         with transaction.atomic():
-            self.confidence = 1.0
             self.is_confirmed, self.is_dismissed = True, False
-            self.save(update_fields=("confidence", "is_confirmed", "is_dismissed", "updated_at"))
+            self.save(update_fields=("is_confirmed", "is_dismissed", "updated_at"))
 
     def dismiss(self) -> None:
         with transaction.atomic():

@@ -10,13 +10,16 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection, models
-from django.db.migrations.state import ProjectState
+from django.db.migrations.state import ModelState, ProjectState
+from django.utils import timezone
 from rebac import actor_context, system_context
 
 from angee.integrate.testing.integration import Integration
 from angee.messaging.testing.models import Channel, Message
-from angee.posts.runtime_migrations import feed_channel_parent
+from angee.posts.runtime_migrations import feed_channel_parent, feed_live_since, feed_live_since_ready
 from tests.conftest import Feed, make_integration
+from tests.tables import model_tables
+from tests.test_runtime_migrations import isolated_upgrade_database as isolated_upgrade_database
 
 
 def _legacy_state(missing: str | None = None) -> ProjectState:
@@ -32,6 +35,51 @@ def _legacy_state(missing: str | None = None) -> ProjectState:
         if name != missing:
             feed.fields[name] = channel.fields[name].clone()
     return state
+
+
+@pytest.mark.parametrize("discovery_state", [False, True])
+def test_live_horizon_upgrade_adds_the_field_and_stamps_bound_feeds_in_one_application(
+    transactional_db, isolated_upgrade_database, discovery_state,
+) -> None:
+    """The upgrade provision does not depend on a second schema autodetection pass."""
+
+    before = ProjectState()
+    fields = [
+        ("id", models.AutoField(primary_key=True)),
+        ("external_id", models.CharField(max_length=512, blank=True, default="")),
+    ]
+    if discovery_state:
+        fields.extend([
+            ("discovery_generation", models.PositiveIntegerField(default=0)),
+            ("discovery_completed_at", models.DateTimeField(null=True)),
+            ("discovery_retry_at", models.DateTimeField(null=True)),
+        ])
+    before.add_model(ModelState("posts", "Feed", fields, options={"db_table": "test_feed_horizon_upgrade"}))
+    old_feed = before.apps.get_model("posts", "Feed")
+    migration = feed_live_since.Migration("feed_live_since", "posts")
+    with model_tables((old_feed,)):
+        bound = old_feed.objects.create(external_id="bound-account")
+        old_feed.objects.create(external_id="")
+        if discovery_state:
+            old_feed.objects.create(external_id="pending", discovery_generation=1, discovery_retry_at=timezone.now())
+            old_feed.objects.create(external_id="failed", discovery_generation=1)
+        assert feed_live_since.applies(before)
+        with connection.schema_editor() as editor:
+            after = migration.apply(before.clone(), editor)
+            ready_migration = feed_live_since_ready.Migration("feed_live_since_ready", "posts")
+            self_contained = ready_migration.apply(after.clone(), editor)
+        upgraded = self_contained.apps.get_model("posts", "Feed")
+        assert upgraded.objects.get(pk=bound.pk).live_since is not None
+        assert upgraded.objects.get(external_id="").live_since is None
+        if discovery_state:
+            assert upgraded.objects.get(external_id="pending").live_since is None
+            assert upgraded.objects.get(external_id="failed").live_since is None
+        assert not feed_live_since.applies(after)
+        with connection.schema_editor() as editor:
+            migration.unapply(before, editor)
+        assert list(old_feed.objects.order_by("pk").values_list("external_id", flat=True)) == (
+            ["bound-account", "", "pending", "failed"] if discovery_state else ["bound-account", ""]
+        )
 
 
 def _insert_legacy_feed(editor: Any, model: type[models.Model], pk: Any) -> None:

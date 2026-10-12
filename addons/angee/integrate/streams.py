@@ -34,7 +34,7 @@ from rebac import system_context
 
 from angee.base.changesets import changeset, current_changeset
 from angee.base.serialization import canonical_json, canonical_json_sha256
-from angee.integrate.errors import IntegrationError, _safe_integration_failure
+from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
     UNSET,
@@ -104,7 +104,7 @@ class PartitionFailure:
             "stream": self.definition.key,
             "partition": _public_partition(self.definition.partition),
             "stage": self.stage,
-            "message": _safe_integration_failure(self.error).message,
+            "message": safe_integration_failure(self.error).message,
         }
 
     def log(self, bridge: Any) -> None:
@@ -135,7 +135,19 @@ class BridgeSyncError(IntegrationError):
                 identity += f" ({details['partition']})"
             messages.append(f"{identity}: {details['message']}")
         message = "; ".join(messages)
-        super().__init__(message if len(message) <= 4096 else message[:4095] + "…")
+        transient = bool(self.failures) and all(
+            isinstance(failure.error, IntegrationError) and failure.error.transient for failure in self.failures
+        )
+        hints = [
+            failure.error.retry_after
+            for failure in self.failures
+            if isinstance(failure.error, IntegrationError) and failure.error.retry_after is not None
+        ]
+        super().__init__(
+            message if len(message) <= 4096 else message[:4095] + "…",
+            transient=transient,
+            retry_after=max(hints) if hints else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,15 +343,21 @@ def _resolve_applied(stream: Any, record: Any) -> None:
             failure.resolve()
 
 
-def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None) -> Any:
+def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = None, record_key: str = "") -> Any:
+    """Quarantine one record; an event adapter's record key keeps distinct events apart."""
+
     replica = stream.kind == StreamKind.RECORD_REPLICA and isinstance(record, RecordChange)
     details = dict(error.details)
     if replica:
         details["external_key"] = record.external_key
+    elif record_key:
+        details["external_key"] = record_key
     return (link if link is not None else stream).record_failure(
         kind=error.kind,
         code=error.code,
-        source_hash=record.source_hash if replica else "",
+        source_hash=(
+            record.source_hash if replica else canonical_json_sha256(["record_key", record_key]) if record_key else ""
+        ),
         mapping_version=record.mapping_version if replica else 1,
         details=details,
         **({"outbox": isinstance(error, RemoteRejected)} if link is not None else {}),
@@ -666,11 +684,12 @@ def _apply_page(
                             "message": (
                                 f"Record validation failed for fields: {', '.join(fields)}."
                                 if isinstance(error, ValidationError)
-                                else _safe_integration_failure(error).message
+                                else safe_integration_failure(error).message
                             ),
                         },
                     )
-                failures.append(_quarantine(locked, record, refusal, link=link).pk)
+                record_key = "" if isinstance(record, RecordChange) else adapter.record_key(record)
+                failures.append(_quarantine(locked, record, refusal, link=link, record_key=record_key).pk)
         adapter.finish_page(locked, page, applied)
         if reconcile_state is not None:
             locked.reconcile_state = reconcile_state
@@ -1102,7 +1121,7 @@ def open_stream(
         assert stream is not None
         if stream.generation == 1 and not stream.cursor and bridge.cursor:
             with transaction.atomic():
-                locked_bridge = type(bridge).objects.filter(pk=bridge.pk).lock_if_supported().get()
+                locked_bridge = bridge.lock_capability()
                 stream = manager.lock_current(stream)
                 if not stream.cursor and stream.last_advanced_at is None:
                     seeded_config, legacy_cursor = adapter.seed_config(locked_bridge.cursor)
@@ -1148,6 +1167,8 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
             result = advance_stream(stream, adapter, page_bound=page_bound, deadline=deadline)
             stream, exhausted = result.stream, result.exhausted
             landed += result.count
+            if monotonic() >= deadline:
+                break
             stage = "continuation"
             previous, resets = result.check_continuation(previous=previous, resets=resets)
             _report(

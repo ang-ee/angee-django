@@ -12,6 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.errors import RecordAccessSubjectRefused
+from angee.base.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
 
@@ -323,6 +324,11 @@ class CaptureCampaign(TransactionTestCase):
             self.assertEqual(need.task.estimate, 4)
             self.assertEqual(need.claimed_name, "Request author")
             self.assertEqual(need.access_verdict, None)
+        # The claimed address is unverified: its link waits for review and decides nothing.
+        handle = apps.get_model("parties", "Handle")._base_manager.get(platform="email", value=email)
+        link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
+        self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
+        self.assertEqual(link.evidence, [{"model": need._meta.label, "id": public_id_of(need)} for need in needs])
         self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
 
     def test_email_capture_requires_confirmed_sender_link_and_replays_once(self):

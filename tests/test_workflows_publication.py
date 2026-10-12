@@ -1,9 +1,11 @@
 """Workflow publication and admission contracts."""
 
 import pytest
+from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.db import models
 from pydantic import BaseModel, Field
+from rebac import SubjectRef, actor_context
 
 from angee.base.scoping import system_queryset
 from angee.workflows.definition import DefinitionInvalid
@@ -64,6 +66,21 @@ class WorkflowEcho(Echo):
 
     key = "workflow_echo"
     subject = "workflows.workflow"
+
+
+def test_non_user_editor_cannot_create_a_system_installed_publication(execution):
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), key="group-publication", actor=actor, publish=False)
+    with actor_context(actor):
+        group = Group.objects.create(name="Workflow publishing editors")
+        publisher = SubjectRef.of("auth/group", str(group.pk), "member")
+        workflow.with_actor(actor).grant_record_access("editor", publisher)
+    assert workflow.with_actor(publisher).has_access("write")
+    with pytest.raises(ValidationError, match="user-backed actor"):
+        Workflow.objects.publish(workflow, expected_revision=workflow.draft_revision, actor=publisher)
+    assert not system_queryset(WorkflowVersion).filter(workflow=workflow).exists()
+    workflow.refresh_from_db()
+    assert workflow.published_id is None
 
 
 def test_request_key_replays_original_admission_after_publication(execution, register_step):

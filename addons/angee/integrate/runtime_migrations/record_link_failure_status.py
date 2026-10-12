@@ -1,5 +1,12 @@
-import angee.base.fields
+"""Rename the retired ``discrepant`` link status to ``failed`` on live links and their history.
+
+A vocabulary rename only: every row keeps its state, evidence and timestamps.
+Reverse renames ``failed`` back to ``discrepant`` on both tables and loses nothing.
+"""
+
 from django.db import migrations
+
+import angee.base.fields
 
 
 def applies(state):

@@ -1,6 +1,7 @@
 """Independent decision answers race cancellation without holding a question group."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from queue import Queue
 from time import monotonic, sleep
 
@@ -24,7 +25,12 @@ pytestmark = [
 
 
 def submit(pool, call):
-    """Give each worker its own connection and expose its native lock-wait identity."""
+    """Give each worker its own connection and expose its native lock-wait identity.
+
+    The worker runs in a copy of the caller's context, so the test's attribution
+    boundary and actor reach its captured writes the way a framework thread pool
+    carries them (``copy_context().run``).
+    """
     started = Queue()
 
     def invoke():
@@ -37,7 +43,7 @@ def submit(pool, call):
         finally:
             connections.close_all()
 
-    return pool.submit(invoke), started.get(timeout=10)
+    return pool.submit(copy_context().run, invoke), started.get(timeout=10)
 
 
 def wait_for_lock(pid, future):

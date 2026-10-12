@@ -1,11 +1,18 @@
-import angee.base.fields
-import angee.parties.fields
+"""Django makemigrations output for the declared party aspect schema.
+
+Address coordinates are local facts, not statements: no source states them, so
+the address statement and its history carry no latitude/longitude columns.
+"""
+
 import django.core.validators
 import django.db.models.deletion
 import django.db.models.manager
 import simple_history.models
 from django.conf import settings
 from django.db import migrations, models
+
+import angee.base.fields
+import angee.parties.fields
 
 
 def applies(state):
@@ -54,8 +61,6 @@ class Migration(migrations.Migration):
                 ('region', models.TextField(blank=True, null=True)),
                 ('postal_code', models.CharField(blank=True, max_length=32, null=True)),
                 ('country', angee.parties.fields.CountryCodeField(blank=True, null=True)),
-                ('latitude', models.FloatField(blank=True, null=True)),
-                ('longitude', models.FloatField(blank=True, null=True)),
                 ('aspect', models.CharField(choices=[('address', 'address')], max_length=64)),
             ],
             options={
@@ -125,8 +130,6 @@ class Migration(migrations.Migration):
                 ('region', models.TextField(blank=True, null=True)),
                 ('postal_code', models.CharField(blank=True, max_length=32, null=True)),
                 ('country', angee.parties.fields.CountryCodeField(blank=True, null=True)),
-                ('latitude', models.FloatField(blank=True, null=True)),
-                ('longitude', models.FloatField(blank=True, null=True)),
                 ('aspect', models.CharField(choices=[('address', 'address')], max_length=64)),
                 ('history_id', models.AutoField(primary_key=True, serialize=False)),
                 ('history_date', models.DateTimeField(db_index=True)),

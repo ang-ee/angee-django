@@ -44,7 +44,7 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         "        if errors:\n"
         "            raise ValidationError(errors)\n"
     )
-    root = Path(__file__).resolve().parents[3]
+    root = Path(__file__).resolve().parents[1]
     report = tmp_path / "composed-webform.json"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
@@ -52,21 +52,14 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         [
             sys.executable,
             str(root / "tests" / "composed_host.py"),
-            "--runtime-dir",
-            str(tmp_path / "runtime"),
-            "--addon-dir",
-            str(tmp_path / "addons"),
-            "--app",
-            "example.webform_semantics",
-            "--app",
-            "angee.intake",
+            "--runtime-dir", str(tmp_path / "runtime"),
+            "--addon-dir", str(tmp_path / "addons"),
+            "--app", "example.webform_semantics",
+            "--app", "angee.intake",
             "--no-examples",
-            "--action",
-            "tests",
-            "--test-label",
-            "angee.messaging.native_webform_validation",
-            "--output",
-            str(report),
+            "--action", "tests",
+            "--test-label", "tests.native_messaging_webform_validation",
+            "--output", str(report),
         ],
         cwd=root,
         env=env,

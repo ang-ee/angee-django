@@ -628,7 +628,8 @@ data through REBAC, never a queryset bypass.
   ordinary read/share grants and service requesters remain valid.
 - **Rebuild derived grants after the reset.** After the primary-key reset and
   schema sync above, run `uv run manage.py resync_tool_grants` to reconcile the
-  current built-in tool catalogue and its seeded grants, then
+  current built-in tool catalogue, its seeded grants and every agent's resource-reader
+  membership from its current policy, readiness and runtime, then
   `uv run manage.py resync_project_access` to recreate project-container
   bindings from their application-owned rows. Run these through the stack host
   described in [Checks](../checks.md#composition-and-schema); each command
@@ -818,6 +819,11 @@ and current contracts before applying a historical example to a new deployment.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **Temporary app registries can wire shared signals.** Django's `isolate_apps`
+  runs app ready hooks. Tests including auth restore the sign-in stamp through
+  [IAM's signal owner](../../addons/angee/iam/signals.py), as the
+  [deletion tests](../../tests/test_deletion.py) do, so later tests retain the
+  configured lifecycle.
 - **Django owns static test-table lifecycle.** Register concrete models before
   database setup in installed, unmigrated apps, and use pytest-django's native
   setup and transactional flush. Share source compositions through the owning
@@ -1585,6 +1591,15 @@ projection through their existing write-back policies and remote preconditions.
 
 ### Integrations and workers
 
+Public-feed responding composes [held replies, reply hold, feed streams and
+delivery settlement](../glossary.md#workflows) through the
+[posts](../../addons/angee/posts/README.md),
+[messaging](../../addons/angee/messaging/README.md) and
+[thin workflow](../../addons/angee/workflows_posts/README.md) owners.
+Eligibility and the locked pre-create recheck belong to the message owner;
+steps call that predicate and factory. Verified webhook landing uses the same
+bridge advisory lock as polling and delivery settlement.
+
 - **Bridge scheduling follows the final MTI kind.** A child capability may
   extend another bridge (a public Feed extends Channel). The
   [`Integration.concrete_type`](../../addons/angee/integrate/models.py) identity
@@ -1747,7 +1762,13 @@ projection through their existing write-back policies and remote preconditions.
   [`SyncCycleBridge`](../../addons/angee/workflows_integrate/sync.py), while
   integrate retains scheduling, queue tokens, advisory locks and dispatch
   compare-and-set. Consumer bridges supply scope locks and an input snapshot;
-  they do not create another lifecycle or terminal signal receiver.
+  they do not create another subject lifecycle receiver. Run-owned auxiliary
+  resources use the engine's [`run_stopping`](../../addons/angee/workflows/signals.py)
+  cleanup seam for terminal transitions. Deferred cancellation schedules the
+  transition after the caller releases its locks. Decorate receivers with
+  `isolated_run_cleanup` before connecting them; they must be idempotent.
+  The decorator isolates each receiver's database cleanup in a savepoint and logs its
+  failure without interrupting the terminal write or other receivers.
 - **`Definition` owns graph policy.** The immutable document owns validation,
   class resolution, input bindings, readiness, failure routing and result
   projection. Callers use its methods rather than inspecting node declarations

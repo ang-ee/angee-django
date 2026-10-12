@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
   useState,
   type Key,
@@ -11,10 +12,11 @@ import {
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { functionalUpdate, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Updater, type VisibilityState } from "@tanstack/react-table";
 import { stableSerialize } from "@angee/refine";
-import { Filter, ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { Filter, ResourceQuery, useModelMetadata, type Row } from "@angee/metadata";
 import { validateResourceViewState } from "./model/state";
 import { normaliseGroupStack } from "./model/search";
 import { normalisePageSize } from "./page-size";
+import { idsFromRowSelectionState } from "./resource-view-codecs";
 import type { ResourceCollectionPresentation } from "./resource-view-types";
 
 import {
@@ -35,7 +37,9 @@ import { useValueStable } from "../../lib/use-value-stable";
 import { resourceViewPreset, resourceViewPresetDefaults } from "./model/favorites";
 import { useResourceViewFavorites } from "./resource-view-favorites";
 
-/** Group interaction state outlives a temporarily unmounted server list. */
+/** Group interaction state outlives a temporarily unmounted server list.
+ * Resets are recorded during render so returning to a previous collection never
+ * revives its pagination or expansion. */
 export interface ResourceViewGroupExpansion {
   axisKey: string;
   collapsedKeys: ReadonlySet<string>;
@@ -63,9 +67,61 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
+interface SelectionState {
+  collection: string;
+  scope: string;
+  rowSelection: RowSelectionState;
+  rows: Readonly<Record<string, Row>>;
+}
+
+type SelectionRead = Pick<SelectionState, "rowSelection" | "rows">;
+interface SelectionOwner {
+  read: (scope: string) => SelectionRead;
+  update: (scope: string, updater: Updater<RowSelectionState>, observed?: (id: string) => Row | undefined) => void;
+  enter: (scope: string) => void;
+}
+const EMPTY_SELECTION: SelectionRead = { rowSelection: {}, rows: {} };
+const SelectionOwnerContext = createContext<SelectionOwner | null>(null);
+/** The selection scope of the nearest inherited view; the owner's own collection is "". */
+const SelectionScopeContext = createContext("");
+
+/** One public selection projection for the owning collection and inherited scopes. */
+function useSelectionValue(scope: string, owner: SelectionOwner) {
+  const { rowSelection, rows } = owner.read(scope);
+  const selectedRows = useMemo(() => [...idsFromRowSelectionState(rowSelection)]
+    .flatMap((id) => {
+      const row = rows[id];
+      return row === undefined ? [] : [row];
+    }), [rowSelection, rows]);
+  const setRowSelection = useCallback<ResourceViewContextValue["setRowSelection"]>(
+    (updater, observed) => owner.update(scope, updater, observed), [owner.update, scope],
+  );
+  const toggleSelectedId = useCallback<ResourceViewContextValue["toggleSelectedId"]>(
+    (id, selected, row) => setRowSelection((current) => ({
+      ...current, [id]: selected ?? !current[id],
+    }), row === undefined ? undefined : (selectedId) => selectedId === id ? row : undefined),
+    [setRowSelection],
+  );
+  const clearSelectedIds = useCallback(() => setRowSelection({}), [setRowSelection]);
+  const value = useMemo(() => ({ selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds }),
+    [selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds]);
+  return { rowSelection, value };
+}
+
+/**
+ * Selection survives pagination, page-size and view changes that keep the same
+ * grouping. setView can install the new view's default groupStack, which clears
+ * selection when it changes the grouping. Changes to the validated filter, sort,
+ * groups, preset query/fixed filter, base filter or resource clear selection before
+ * children render, including Router history changes. Only one scope holds a
+ * selection: entering another inherited scope or selecting at the owner clears
+ * the previous scope's selection.
+ */
 export interface ResourceViewContextValue {
   /** Resource whose collection state this provider owns. */
   resource?: string;
+  /** Validated view state; rowSelection is the selection owner's live value for
+   * this scope, replacing the providers' seed-only rowSelection field. */
   state: ResourceViewState;
   /** Declared route defaults resolved for the current view kind. */
   readonly defaultState: Readonly<ResourceViewState>;
@@ -80,7 +136,16 @@ export interface ResourceViewContextValue {
   setPageSize: (pageSize: number) => void;
   setPagination: OnChangeFn<PaginationState>;
   setSorting: OnChangeFn<SortingState>;
-  setRowSelection: OnChangeFn<RowSelectionState>;
+  /** Writes apply to the last rendered collection. A collection change in the
+   * same batch clears the write. Observed rows are captured only on selection. */
+  setRowSelection: (updater: Updater<RowSelectionState>, observed?: (id: string) => Row | undefined) => void;
+  /** Rows observed when selected, in selection-map (object key) order.
+   * Initial/programmatic ids without a row are omitted. Snapshots stay unchanged
+   * until deselection. Actions needing fresh rows must validate them, for example
+   * by revision; reselecting captures the current row. Every surface in the scope
+   * shares these snapshots, so a row may carry the fields of whichever surface
+   * selected it. */
+  selectedRows: readonly Row[];
   setFilter: OnChangeFn<ResourceViewFilter>;
   resetQuery: () => void;
   /** Whether editable query state differs from this collection's default view. */
@@ -90,7 +155,7 @@ export interface ResourceViewContextValue {
   /** Remove a selected shipped preset, including its immutable fixed filter. */
   clearPreset: () => void;
   setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
-  toggleSelectedId: (id: string, selected?: boolean) => void;
+  toggleSelectedId: (id: string, selected?: boolean, row?: Row) => void;
   clearSelectedIds: () => void;
   setView: (view: ResourceViewKind) => void;
   setMode: (mode: CalendarViewMode) => void;
@@ -193,12 +258,8 @@ export function withResourceViewScope({
 }: ResourceViewScopeMountOptions): ReactElement {
   const resolvedScope = scope ?? (presentation === "embedded" ? "local" : "inherit");
   if (!isolated && resolvedScope !== "local" && ambient) {
-    if (baseFilter === undefined) return children(ambient);
-    const scoped = {
-      ...ambient,
-      baseFilter: Filter.combineOptional(ambient.baseFilter, baseFilter),
-    };
-    return <ResourceViewContext.Provider value={scoped}>{children(scoped)}</ResourceViewContext.Provider>;
+    if (baseFilter === undefined) return <InheritedResourceView ambient={ambient}>{children}</InheritedResourceView>;
+    return <ScopedResourceView ambient={ambient} baseFilter={baseFilter}>{children}</ScopedResourceView>;
   }
   return (
     <ResourceViewProvider
@@ -211,6 +272,50 @@ export function withResourceViewScope({
     >
       <ResourceViewScopeBound>{children}</ResourceViewScopeBound>
     </ResourceViewProvider>
+  );
+}
+
+/** An inherited view without its own base filter re-enters the ambient view's scope. */
+function InheritedResourceView({ ambient, children }: {
+  ambient: ResourceViewContextValue;
+  children: ResourceViewScopeMountOptions["children"];
+}): ReactElement {
+  const owner = useContext(SelectionOwnerContext);
+  const scopeKey = useContext(SelectionScopeContext);
+  const enter = owner?.enter;
+  // Recorded like a nested scope's entry, so X → unscoped → X never revives X's ids.
+  useLayoutEffect(() => enter?.(scopeKey), [enter, scopeKey]);
+  return children(ambient);
+}
+
+/** Record scope transitions before paint, even when the next scope selects nothing. */
+function ScopedResourceView({ ambient, baseFilter, children }: {
+  ambient: ResourceViewContextValue;
+  baseFilter: unknown;
+  children: ResourceViewScopeMountOptions["children"];
+}): ReactElement {
+  const owner = useContext(SelectionOwnerContext);
+  if (!owner) throw new Error("An inherited resource view requires a selection owner.");
+  const scopedBaseFilter = useMemo(() => Filter.combineOptional(ambient.baseFilter, baseFilter),
+    [ambient.baseFilter, baseFilter]);
+  const scopeKey = stableSerialize(scopedBaseFilter);
+  const { rowSelection, value: { selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds } } = useSelectionValue(scopeKey, owner);
+  useLayoutEffect(() => owner.enter(scopeKey), [owner.enter, scopeKey]);
+  const state = ambient.state;
+  const viewState = useMemo(() => ({ ...state, rowSelection }), [state, rowSelection]);
+  const scoped = useMemo<ResourceViewContextValue>(() => ({
+    ...ambient,
+    selectedRows,
+    setRowSelection,
+    toggleSelectedId,
+    clearSelectedIds,
+    baseFilter: scopedBaseFilter,
+    state: viewState,
+  }), [ambient, selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds, scopedBaseFilter, viewState]);
+  return (
+    <SelectionScopeContext.Provider value={scopeKey}>
+      <ResourceViewContext.Provider value={scoped}>{children(scoped)}</ResourceViewContext.Provider>
+    </SelectionScopeContext.Provider>
   );
 }
 
@@ -261,9 +366,6 @@ function RouteResourceViewProvider({
   // Narrow Router navigation to functional search updates; no from is supplied
   // because the updater is route-agnostic.
   const navigate = useNavigate() as ResourceViewNavigate;
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>(
-    () => createResourceViewState(initialState).rowSelection,
-  );
   const queryState = useMemo(
     () => readState(search),
     [search, readState],
@@ -279,14 +381,15 @@ function RouteResourceViewProvider({
   const state = useMemo(
     () => ({
       ...queryState,
-      rowSelection,
       queryError: transitionError ?? queryState.queryError,
     }),
-    [queryState, rowSelection, transitionError],
+    [queryState, transitionError],
   );
+  // ResourceViewState requires rowSelection here, but it is seed-only query
+  // state. Query updaters must not read it; the shared owner exposes live ids.
   const updateState = useCallback<OnChangeFn<ResourceViewState>>(
     (updater) => {
-      const next = functionalUpdate(updater, { ...queryState, rowSelection });
+      const next = functionalUpdate(updater, queryState);
       if (next.queryError) {
         setFailedTransition({ search, error: next.queryError });
         return;
@@ -313,15 +416,14 @@ function RouteResourceViewProvider({
         replace: true,
       });
     },
-    [defaultsFor, readState, routePreset, navigate, namespace, queryState, rowSelection, search],
+    [defaultsFor, readState, routePreset, navigate, namespace, queryState, search],
   );
   const defaultState = useMemo(
     () => createResourceViewState({ ...defaultsFor(routePreset), view: state.view }),
     [defaultsFor, routePreset, state.view],
   );
-  const value = useResourceViewContextValue({
+  const { value, selectionOwner } = useResourceViewContextValue({
     updateState,
-    setRowSelection,
     resource,
     baseFilter,
     favoriteKey,
@@ -331,10 +433,23 @@ function RouteResourceViewProvider({
     state,
   });
 
+  return <ResourceViewOwner value={value} selectionOwner={selectionOwner}>{children}</ResourceViewOwner>;
+}
+
+/** Publish an owner's view and selection; its own collection is selection scope "". */
+function ResourceViewOwner({ value, selectionOwner, children }: {
+  value: ResourceViewContextValue;
+  selectionOwner: SelectionOwner;
+  children: ReactNode;
+}): ReactElement {
   return (
-    <ResourceViewContext.Provider value={value}>
-      {children}
-    </ResourceViewContext.Provider>
+    <SelectionOwnerContext.Provider value={selectionOwner}>
+      <SelectionScopeContext.Provider value="">
+        <ResourceViewContext.Provider value={value}>
+          {children}
+        </ResourceViewContext.Provider>
+      </SelectionScopeContext.Provider>
+    </SelectionOwnerContext.Provider>
   );
 }
 
@@ -352,22 +467,14 @@ function LocalResourceViewProvider({
     () => declaredPresetIds === undefined ? undefined : [...new Set([...declaredPresetIds, ...(initialPreset ? [initialPreset] : [])])],
     [declaredPresetIds, initialPreset],
   );
+  // Keep the required rowSelection seed in this query state; only the shared
+  // owner reads/writes live selection, never query-state updaters.
   const [state, updateState] = useState(() =>
     createResourceViewState(initialState),
   );
-  const setRowSelection = useCallback<OnChangeFn<RowSelectionState>>(
-    (updater) => {
-      updateState((current) => ({
-        ...current,
-        rowSelection: functionalUpdate(updater, current.rowSelection),
-      }));
-    },
-    [],
-  );
   const defaultState = useMemo(() => createResourceViewState({ ...initialState, view: state.view }), [initialState, state.view]);
-  const value = useResourceViewContextValue({
+  const { value, selectionOwner } = useResourceViewContextValue({
     updateState,
-    setRowSelection,
     resource,
     baseFilter,
     favoriteKey,
@@ -377,16 +484,11 @@ function LocalResourceViewProvider({
     state,
   });
 
-  return (
-    <ResourceViewContext.Provider value={value}>
-      {children}
-    </ResourceViewContext.Provider>
-  );
+  return <ResourceViewOwner value={value} selectionOwner={selectionOwner}>{children}</ResourceViewOwner>;
 }
 
 function useResourceViewContextValue({
   updateState,
-  setRowSelection,
   resource,
   baseFilter,
   favoriteKey,
@@ -396,7 +498,6 @@ function useResourceViewContextValue({
   state: sourceState,
 }: {
   updateState: OnChangeFn<ResourceViewState>;
-  setRowSelection: OnChangeFn<RowSelectionState>;
   resource: string | undefined;
   baseFilter?: ResourceViewFilter;
   favoriteKey?: string;
@@ -404,7 +505,7 @@ function useResourceViewContextValue({
   defaultState: ResourceViewState;
   initialState?: ResourceViewInitialState;
   state: ResourceViewState;
-}): ResourceViewContextValue {
+}): { value: ResourceViewContextValue; selectionOwner: SelectionOwner } {
   const metadata = useModelMetadata(resource ?? "");
   const { resourceViews } = useAppRuntime();
   const preset = sourceState.preset ? resourceViews[sourceState.preset] : undefined;
@@ -449,6 +550,46 @@ function useResourceViewContextValue({
     expansion: null,
   }));
   const activeGroups = groupsForQuery(groups, groupQuery, groupOrder);
+  if (activeGroups !== groups) setGroups(activeGroups);
+
+  const collection = stableSerialize([groupQuery, groupOrder]);
+  const [selection, setSelection] = useState<SelectionState>(() => ({
+    collection, scope: "", rowSelection: createResourceViewState(initialState).rowSelection, rows: {},
+  }));
+  const activeSelection = selection.collection === collection ? selection : {
+    collection, scope: "", ...EMPTY_SELECTION,
+  };
+  // Adjust during render: children receive the empty value on this render too.
+  if (activeSelection !== selection) setSelection(activeSelection);
+  const read = useCallback<SelectionOwner["read"]>((scope) =>
+    activeSelection.scope === scope ? activeSelection : EMPTY_SELECTION, [activeSelection]);
+  const update = useCallback<SelectionOwner["update"]>((scope, updater, observed) => {
+    setSelection((current) => {
+      const base = current.scope === scope ? current : EMPTY_SELECTION;
+      const rowSelection = functionalUpdate(updater, base.rowSelection);
+      // Object key order is part of the selectedRows contract.
+      const ids = Object.keys(rowSelection);
+      const previousIds = Object.keys(base.rowSelection);
+      if (ids.length === previousIds.length && ids.every((id, index) =>
+        id === previousIds[index] && rowSelection[id] === base.rowSelection[id])) return current;
+      const selectedIds = idsFromRowSelectionState(rowSelection);
+      // Empty writes neither change an empty selection nor displace another scope.
+      if (selectedIds.size === 0 && (current.scope !== scope
+        || !previousIds.some((id) => base.rowSelection[id]))) return current;
+      const rows: Record<string, Row> = {};
+      for (const id of selectedIds) {
+        const row = base.rowSelection[id] ? base.rows[id] : observed?.(id);
+        if (row !== undefined) rows[id] = row;
+      }
+      return { ...current, scope, rowSelection, rows };
+    });
+  }, []);
+  const enter = useCallback<SelectionOwner["enter"]>((scope) => {
+    setSelection((current) => current.scope === scope ? current : { ...current, scope, ...EMPTY_SELECTION });
+  }, []);
+  const selectionOwner = useMemo(() => ({ read, update, enter }), [read, update, enter]);
+  const { rowSelection, value: { selectedRows, setRowSelection, toggleSelectedId, clearSelectedIds } } = useSelectionValue("", selectionOwner);
+  const viewState = useMemo(() => ({ ...state, rowSelection }), [state, rowSelection]);
   const setPaginationByScope = useCallback<OnChangeFn<GroupPagination>>(
     (updater) => {
       setGroups((current) => {
@@ -478,37 +619,25 @@ function useResourceViewContextValue({
     },
     [groupQuery, groupOrder],
   );
-  const clearSelectedIds = useCallback(
-    () => setRowSelection({}),
-    [setRowSelection],
-  );
   const resetScope = useCallback<OnChangeFn<ResourceViewState>>(
     (updater) => {
-      clearSelectedIds();
       updateState((current) => {
         const next = functionalUpdate(updater, current);
         return {
           ...next,
-          rowSelection: {},
           pagination: { ...next.pagination, pageIndex: 0 },
         };
       });
     },
-    [clearSelectedIds, updateState],
+    [updateState],
   );
   const setPagination = useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
-      if (
-        functionalUpdate(updater, state.pagination).pageSize !==
-        state.pagination.pageSize
-      )
-        clearSelectedIds();
       updateState((current) => {
         const next = functionalUpdate(updater, current.pagination);
         const sizeChanged = next.pageSize !== current.pagination.pageSize;
         return {
           ...current,
-          ...(sizeChanged ? { rowSelection: {} } : {}),
           pagination: {
             pageIndex: sizeChanged
               ? 0
@@ -523,7 +652,7 @@ function useResourceViewContextValue({
         };
       });
     },
-    [clearSelectedIds, state.pagination, updateState],
+    [updateState],
   );
   const setSorting = useCallback<OnChangeFn<SortingState>>(
     (updater) => {
@@ -541,10 +670,14 @@ function useResourceViewContextValue({
     },
     [resetScope],
   );
-  return useMemo(
+  const value = useMemo<ResourceViewContextValue>(
     () => ({
       resource,
-      state,
+      state: viewState,
+      selectedRows,
+      setRowSelection,
+      toggleSelectedId,
+      clearSelectedIds,
       defaultState,
       baseFilter: effectiveBaseFilter,
       setColumnVisibility: (updater: Parameters<OnChangeFn<VisibilityState>>[0]) => updateState((current) => ({
@@ -560,7 +693,6 @@ function useResourceViewContextValue({
       pinFavorite,
       setPagination,
       setSorting,
-      setRowSelection,
       setPage: (page: number) =>
         setPagination((current) => ({ ...current, pageIndex: page - 1 })),
       setPageSize: (pageSize: number) =>
@@ -595,12 +727,6 @@ function useResourceViewContextValue({
           queryError: null,
         })),
       setGroupStack,
-      toggleSelectedId: (id: string, selected?: boolean) =>
-        setRowSelection((current) => ({
-          ...current,
-          [id]: selected ?? !current[id],
-        })),
-      clearSelectedIds,
       setView: (view: ResourceViewKind) =>
         updateState((current) => {
           if (view === current.view) return current;
@@ -647,7 +773,11 @@ function useResourceViewContextValue({
     }),
     [
       resource,
-      state,
+      viewState,
+      selectedRows,
+      setRowSelection,
+      toggleSelectedId,
+      clearSelectedIds,
       defaultState,
       initialState,
       queryDirty,
@@ -666,13 +796,12 @@ function useResourceViewContextValue({
       pinFavorite,
       setPagination,
       setSorting,
-      setRowSelection,
       resetScope,
       setGroupStack,
-      clearSelectedIds,
       updateState,
     ],
   );
+  return { value, selectionOwner };
 }
 
 export function useResourceView(): ResourceViewContextValue {

@@ -7,6 +7,7 @@ persistence, without replacing the ingest owner or the three-way classifier.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -23,6 +24,7 @@ import httpcore2
 import httpx2
 import pytest
 import vobject
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
@@ -70,9 +72,11 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
     _xml,
 )
+from angee.storage.exceptions import UploadTargetNotFound, UploadTooLarge
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, make_integration
 from tests.stream_adapters import applied_history, failure_state
+from tests.test_storage import PNG_BYTES
 
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
@@ -1908,7 +1912,9 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
     assert isinstance(rejected.value.__cause__, ValidationError)
 
 
-def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica: Replica) -> None:
+def test_photo_download_uses_storages_image_cap_and_disallows_private_addresses(
+    replica: Replica, settings: Any
+) -> None:
     uri = f"{_BASE}avatar.png"
     replica.server.photos[uri] = b"ABC"
     contact = ParsedContact(photo=ParsedPhoto(uri=uri, mime="image/png"))
@@ -1918,8 +1924,8 @@ def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica:
     assert [request[1] for request in replica.server.requests if request[0] == "GET"] == [uri]
     assert replica.server.private_access[-1] is False
 
-    replica.server.photos[uri] = b"x" * (5 * 1024 * 1024 + 1)
-    with pytest.raises(CardDavError):
+    settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = 2
+    with pytest.raises(UploadTooLarge):
         replica.backend._resolve_photo(contact, collection=_BOOK)
 
 
@@ -1930,9 +1936,10 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     """The storage-owner double observes intake before apply; only hashes enter revisions."""
 
     backend = Backend.objects.create(slug="avatar-double", label="Avatar double", backend_class="local")
-    drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
+    drive = Drive.objects.create(backend=backend, slug=settings.ANGEE_STORAGE_IMAGE_DRIVE, name="Images")
     mime = MimeType.objects.create(mime_type="image/png", category="image", label="PNG")
-    digest = hashlib.sha256(b"ABC").hexdigest()
+    encoded = base64.b64encode(PNG_BYTES).decode()
+    digest = hashlib.sha256(PNG_BYTES).hexdigest()
     phases: list[str] = []
 
     def ingest_bytes(
@@ -1945,7 +1952,7 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     ) -> Any:
         del kwargs
         assert not connection.in_atomic_block
-        assert content == b"ABC"
+        assert content == PNG_BYTES
         phases.append("extract")
         stored, _ = manager.get_or_create(
             drive=drive,
@@ -1975,10 +1982,11 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
         phases.append("apply")
         return original_apply(stream, record)
 
+    monkeypatch.setattr(type(Drive.objects), "image_drive", lambda manager: drive)
     monkeypatch.setattr(type(File.objects), "ingest_bytes", ingest_bytes)
     monkeypatch.setattr(File, "open_stream", unexpected_open)
     monkeypatch.setattr(replica.backend, "apply_record", apply_after_intake)
-    replica.server.store(_HREF, _card().replace("END:VCARD", "PHOTO;ENCODING=b;TYPE=PNG:QUJD\r\nEND:VCARD"))
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{encoded}\r\nEND:VCARD"))
     person, link = replica.baseline()
     stored = File.objects.get(content_hash=digest)
     assert phases == ["extract", "apply"]
@@ -1990,8 +1998,8 @@ def test_extract_prestores_avatar_and_apply_and_local_scan_do_no_storage_io(
     for revision in revisions:
         assert revision.source_payload["contact"]["photo"] == {"hash": digest, "mime": "image/png"}
         assert revision.mapped_payload["photo"] == {"hash": digest, "mime": "image/png"}
-        assert "QUJD" not in json.dumps(revision.source_payload)
-        assert "QUJD" not in json.dumps(revision.mapped_payload)
+        assert encoded not in json.dumps(revision.source_payload)
+        assert encoded not in json.dumps(revision.mapped_payload)
 
 
 @pytest.mark.parametrize("page_bound", [1, 100])
@@ -2019,6 +2027,83 @@ def test_duplicate_uid_quarantines_one_resource_and_commits_the_rest(replica: Re
     assert link.status == LinkStatus.FAILED
     assert link.external_key == link.metadata["href"] == duplicate_href
     assert replica.stream.cursor == {"sync_token": replica.server.token}
+
+
+@pytest.mark.parametrize("photo", ["inline_script", "fetched_oversized"])
+def test_a_card_whose_photo_storage_refuses_waits_in_quarantine_and_the_rest_land(
+    replica: Replica, settings: Any, photo: str
+) -> None:
+    """Inline or fetched, syncing it without the photo would let a later write-back strip the photo from the card."""
+
+    if photo == "inline_script":
+        script = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>').decode()
+        line = f"PHOTO;ENCODING=b;TYPE=SVG:{script}"
+    else:
+        uri = f"{_BASE}avatar.png"
+        replica.server.photos[uri] = PNG_BYTES
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+        line = f"PHOTO;VALUE=URI:{uri}"
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"{line}\r\nEND:VCARD"))
+    replica.server.store(f"{_BOOK}grace.vcf", _card(uid="grace", name="Grace Hopper"))
+
+    result = replica.pull()
+
+    targeted = RecordLink.objects.filter(stream=replica.stream).exclude(target_object_id=None)
+    assert set(targeted.values_list("external_key", flat=True)) == {"grace"}
+    assert len(result.failure_ids) == 1
+    retained = {row.id: row for row in SyncStream.objects.get(pk=replica.stream.pk).sync_failures(open_only=False)}
+    failure = retained[result.failure_ids[0]]
+    assert (failure.kind, failure.code) == (SyncFailureKind.SEMANTIC, "unsupported_photo")
+    assert not File.objects.exists()
+
+
+def test_a_photo_storage_cannot_take_yet_fails_the_page_so_it_retries(replica: Replica) -> None:
+    """No default drive to provision the image drive beside is a transient state, not a card to set aside."""
+
+    photo = base64.b64encode(PNG_BYTES).decode()
+    replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;ENCODING=b;TYPE=PNG:{photo}\r\nEND:VCARD"))
+    with pytest.raises(UploadTargetNotFound):
+        replica.pull()
+    assert not Person.objects.exists()
+    replica.stream.refresh_from_db()
+    assert replica.stream.cursor == {}
+
+
+@pytest.mark.parametrize(("refusal", "code"), [("oversized", "unsupported_photo"), ("unverified", "photo_unavailable")])
+def test_write_back_refuses_an_avatar_the_image_rule_refuses_and_writes_nothing(
+    replica: Replica, settings: Any, monkeypatch: pytest.MonkeyPatch, refusal: str, code: str
+) -> None:
+    """An avatar the image rule refuses, or whose bytes no longer verify, is a remote rejection, never a PUT."""
+
+    person, link = replica.baseline()
+    backend = Backend.objects.create(slug="legacy", label="Legacy", backend_class="local")
+    drive = Drive.objects.create(backend=backend, slug="assets", name="Assets")
+    legacy = File.objects.create(
+        drive=drive,
+        content_hash=hashlib.sha256(PNG_BYTES).hexdigest(),
+        filename="old.png",
+        size_bytes=len(PNG_BYTES),
+        mime_type=MimeType.objects.create(mime_type="image/png", category="image", label="PNG"),
+        storage_path="assets/old.png",
+        upload_state=UploadState.READY,
+    )
+    if refusal == "oversized":
+        settings.ANGEE_STORAGE_IMAGE_MAX_BYTES = len(PNG_BYTES) - 1
+    else:
+
+        def unverified(*_args: Any, **_kwargs: Any) -> bytes:
+            raise ValidationError("The stored bytes do not match the file identity.")
+
+        monkeypatch.setattr(File, "read_verified", unverified)
+    person.avatar = legacy
+    person.save(update_fields=["avatar"])
+
+    result = push_stream(replica.stream, replica.backend)
+
+    failure = next(iter(RecordLink.objects.get(pk=link.pk).failures(open_only=False)))
+    assert result.count == 0
+    assert (failure.kind, failure.code) == (SyncFailureKind.REMOTE_REJECTED, code)
+    assert not [request for request in replica.server.requests if request[0] == "PUT"]
 
 
 def test_uidless_cards_with_same_name_use_distinct_resource_hrefs(replica: Replica) -> None:

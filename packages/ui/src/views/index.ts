@@ -388,6 +388,7 @@ export {
   type UseRecordChromeActionMutationOptions,
 } from "./resource/record-action";
 export { useAuthoredResourceMutation } from "./resource/authored-resource-mutation";
+export { ActionSelectionLimit, useActionSelectionLimit } from "./resource/documents";
 export {
   useActionResultRun,
   type ActionResultRun,

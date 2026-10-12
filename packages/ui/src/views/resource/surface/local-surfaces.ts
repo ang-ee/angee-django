@@ -124,7 +124,6 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     listState,
     rows: pageRows,
     requestedFields,
-    mergedFilter,
     sortOrder,
     ...presentation,
   };

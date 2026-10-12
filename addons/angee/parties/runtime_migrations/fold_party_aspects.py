@@ -28,7 +28,7 @@ ASPECTS = {
     "Person": {"name": ("name_prefix", "given_name", "additional_name", "family_name", "name_suffix", "nickname"),
                "dates": ("birthday", "anniversary")},
     "Organization": {"legal_identity": ("legal_name", "domain")},
-    "Address": {"address": ("label", "po_box", "extended", "street", "city", "region", "postal_code", "country", "latitude", "longitude")},
+    "Address": {"address": ("label", "po_box", "extended", "street", "city", "region", "postal_code", "country")},
     "Relationship": {"relationship": ("other_name", "title", "started_at", "ended_at", "notes")},
 }
 
@@ -123,8 +123,7 @@ def prove_values(apps, db, row, name, fields, link):
     payload = base.mapped_payload
     values = {field: json_safe(getattr(row, row._meta.get_field(field).attname)) for field in fields}
     if name == "Address":
-        projected = {key: value for key, value in values.items() if key not in ("latitude", "longitude")}
-        if any(values[key] is not None for key in ("latitude", "longitude")) or projected not in payload.get("addresses", []):
+        if values not in payload.get("addresses", []):
             blocked(row, "address values cannot be attributed to the application snapshot")
     elif name == "Relationship":
         expected = {"other_name": payload.get("organization", ""), "title": payload.get("title", ""),

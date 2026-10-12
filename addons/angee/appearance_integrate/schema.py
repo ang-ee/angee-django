@@ -9,6 +9,7 @@ from graphql import GraphQLError
 from rebac import current_actor
 
 from angee.appearance_integrate.analyser import analyse_website
+from angee.integrate.errors import RequestNotSentError
 
 
 @strawberry.type
@@ -46,7 +47,7 @@ class AppearanceIntegrateQuery:
             raise GraphQLError("Appearance analysis rate limit exceeded.", extensions={"code": "RATE_LIMITED"})
         try:
             facts = analyse_website(url, cache_partition=str(actor.object))
-        except (OSError, ValidationError, ValueError) as error:
+        except (RequestNotSentError, OSError, ValidationError, ValueError) as error:
             raise GraphQLError(str(error), extensions={"code": "BAD_USER_INPUT"}) from error
         return AppearanceAnalysis(**facts)  # type: ignore[arg-type]
 

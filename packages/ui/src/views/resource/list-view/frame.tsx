@@ -184,7 +184,7 @@ function ListViewBody<TRow extends Row = Row>({
   toolbarWrap,
   tableLayout,
   headerVisibility,
-  selectable,
+  selectable: declaredSelectable,
   renderGroupLabel,
   renderItem,
   columns,
@@ -320,6 +320,7 @@ function ListViewBody<TRow extends Row = Row>({
     () => Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
     [resourceView.state.filter, resourceView.baseFilter],
   );
+  const selectable = declaredSelectable ?? presentation !== "embedded";
   const declaredFacets = useRelationFacets(
     source ? "" : resource,
     facets,
@@ -436,7 +437,8 @@ function ListViewBody<TRow extends Row = Row>({
       surfaceProps={surfaceProps} gantt={gantt} availableViews={availableViews}
       presentation={presentation} className={className} onCreate={onCreate} createLabel={createLabel}
       onRowClick={onRowClick} rowHref={rowHref} toolbarActions={toolbarActions} toolbarWrap={toolbarWrap}
-      maxGroupDepth={maxGroupDepth} selectable={selectable}
+      maxGroupDepth={maxGroupDepth}
+      selectable={selectable}
       searchInput={searchInput}
     />;
     return (

@@ -42,6 +42,22 @@ class ParsedPhoto:
 
 
 @dataclass(frozen=True)
+class AvatarReport:
+    """The avatar a handle's own network shows, as a live source reports it.
+
+    The handle is named by the identity ingest gave it (``external_id`` first,
+    else ``value``); a report never creates or renames one. ``avatar`` holds the
+    image bytes, or ``None`` when the network states that it shows none, which
+    clears the handle's avatar (:meth:`HandleManager.fill_avatar`).
+    """
+
+    platform: str
+    value: str
+    external_id: str
+    avatar: bytes | None
+
+
+@dataclass(frozen=True)
 class ParsedAddressbook:
     """Collection identity and display name; progress belongs to SyncStream."""
 
@@ -231,7 +247,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     def _prepare_contact(self, parsed: ParsedContact) -> ParsedContact:
         """Store fetched media and take the stored form before the driver's page transaction begins."""
 
-        return apps.get_model("parties", "Party").objects.prepare_contact(parsed, created_by_id=self.bridge.owner_id)
+        return apps.get_model("parties", "Party").objects.prepare_contact(parsed)
 
     def _links(self, stream: Any) -> tuple[Any, ...]:
         """Read the latest retained locators directly from their owning links."""

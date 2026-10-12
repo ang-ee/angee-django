@@ -135,8 +135,9 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="+",
+        related_name="party_avatars",
     )
+    """The party's own avatar (a directory card's ``PHOTO``), on storage's image drive every signed-in user reads."""
     handle_count = models.PositiveIntegerField(default=0, db_index=True)
     merged_into = models.ForeignKey(
         "self",
@@ -570,6 +571,19 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
     party_link_confirmed = models.BooleanField(default=False, editable=False)
     """Whether the winning link materialised into ``party`` is human-confirmed."""
 
+    avatar = models.ForeignKey(
+        "storage.File",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="handle_avatars",
+    )
+    """The avatar the handle's own network shows for it (a messenger profile picture).
+
+    Written only by :meth:`HandleManager.set_avatar`, onto storage's image drive every signed-in user reads.
+    """
+
     objects = HandleManager()
 
     class Meta:
@@ -867,8 +881,6 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
                     "region",
                     "postal_code",
                     "country",
-                    "latitude",
-                    "longitude",
                 ),
                 precedence=cast(
                     tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD, SourceKind.DIRECTORY)

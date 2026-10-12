@@ -1,4 +1,4 @@
-"""Cached OAuth/OIDC discovery document fetches."""
+"""Cached OIDC metadata discovery document fetches."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ _DISCOVERY_CACHE_PREFIX = "angee.integrate.oauth.discovery:"
 
 
 def discovery_document(discovery_url: str) -> dict[str, Any]:
-    """Return a cached or freshly fetched discovery document for ``discovery_url``."""
+    """Return cached or freshly fetched OIDC metadata for ``discovery_url``."""
 
     cache_key = _discovery_cache_key(discovery_url)
     cached = cache.get(cache_key)

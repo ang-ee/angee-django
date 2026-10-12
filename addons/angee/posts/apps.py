@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from importlib import import_module
+
 from django.apps import AppConfig
 
 
@@ -12,7 +14,7 @@ class PostsConfig(AppConfig):
     content ``Feed``s (``integrate.Integration`` bridges that poll a platform),
     ``FeedFollow`` subscriptions (the following/timeline edge), rolled-up
     ``PostMetrics`` engagement counts, per-actor reactions on the reused
-    ``messaging.Reaction`` table, per-integration
+    ``messaging.Reaction`` table, provider-scoped
     API ``Quota``, and the public-thread fields it contributes onto
     ``messaging.Thread``/``messaging.Message`` through the same-row ``extends``
     seam. It never forks messaging and reuses its ingest write path; feed source
@@ -27,3 +29,4 @@ class PostsConfig(AppConfig):
         """Run posts ready-time hooks after app population."""
 
         super().ready()
+        import_module("angee.posts.signals")

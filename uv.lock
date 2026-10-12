@@ -807,6 +807,7 @@ addons = [
     { name = "python-magic" },
     { name = "pyyaml" },
     { name = "qrcode", extra = ["pil"] },
+    { name = "requests" },
     { name = "ruamel-yaml" },
     { name = "slack-sdk" },
     { name = "strawberry-django-aggregates" },
@@ -814,6 +815,7 @@ addons = [
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
     { name = "tablib" },
+    { name = "urllib3" },
     { name = "vobject" },
 ]
 dev = [
@@ -891,6 +893,7 @@ addons = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.14.0" },
@@ -898,6 +901,7 @@ addons = [
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
     { name = "strawberry-graphql-django", specifier = ">=0.89.2" },
     { name = "tablib", specifier = ">=3" },
+    { name = "urllib3", specifier = ">=2.2" },
     { name = "vobject", specifier = ">=0.9.9" },
 ]
 dev = [

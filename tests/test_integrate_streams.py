@@ -856,6 +856,32 @@ def test_semantic_failure_quarantines_one_row_and_continues_page(stream_bridge: 
     assert (failure.source_hash, failure.status) == ("", SyncFailureStatus.OPEN)
 
 
+def test_keyed_event_refusals_with_one_code_stay_distinct(stream_bridge: Channel) -> None:
+    """An event adapter's record key keeps same-code refusals from coalescing."""
+
+    class KeyedAdapter(MemoryAdapter):
+        def record_key(self, record: Any) -> str:
+            return record
+
+        def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+            if record.startswith("poison"):
+                raise SemanticError("invalid_name", details={"reason": "refused"})
+            return super().apply_record(stream, record)
+
+    stream = SyncStream.objects.current(stream_bridge, "events")
+    pages = [StreamPage(("poison-a", "poison-b"), {"offset": 2}), StreamPage(("poison-a",), {"offset": 3})]
+    adapter = KeyedAdapter(pages=pages)
+    first = advance_stream(stream, adapter)
+    retained = {row.id: row for row in SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=False)}
+    rows = [retained[failure_id] for failure_id in first.failure_ids]
+    assert [row.details["external_key"] for row in rows] == ["poison-a", "poison-b"]
+    assert len({row.source_hash for row in rows}) == 2
+    again = advance_stream(stream, adapter)
+    assert again.failure_ids == (rows[0].id,)
+    retried = {row.id: row for row in SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=False)}
+    assert retried[rows[0].id].attempts == 2
+
+
 @pytest.mark.parametrize("replica", [False, True])
 @pytest.mark.parametrize("stage", ["apply", "settle"])
 def test_data_error_quarantines_record_after_savepoint_rollback(
@@ -1467,6 +1493,29 @@ def test_event_feeds_apply_without_replica_links(stream_bridge: Channel) -> None
     assert AppliedRecord.objects.count() == 2
     assert not RecordLink.objects.exists()
     assert not applied_history().exists()
+
+
+def test_sync_bridge_deadline_partial_page_is_not_a_repeated_cursor(
+    stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+
+    class BudgetAdapter(MemoryAdapter):
+        def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+            page = super().extract(stream, page_bound, deadline=deadline)
+            if self.extracted == 2:
+                clock[0] = 2.0
+            return page
+
+    page = StreamPage(("partial-event",), {"next": "same"}, exhausted=False)
+    adapter = BudgetAdapter(pages=[page, page])
+    stream_bridge.config = {"sync_time_budget": 1}
+    monkeypatch.setattr(stream_driver, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    with system_context(reason="test budget partial page"):
+        assert sync_bridge(stream_bridge) == 2
+    assert adapter.extracted == 2
+    assert SyncStream.objects.get(integration=stream_bridge, key="records").cursor == {"next": "same"}
 
 
 def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Channel) -> None:

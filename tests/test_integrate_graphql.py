@@ -999,6 +999,31 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
         assert persisted.credential_id == credential.pk
 
 
+def test_connection_admissions_project_ownership_without_loading_credentials(composed_tables: None) -> None:
+    bridge = make_integration(
+        "connect-admissions", kind=CredentialKind.OAUTH, backend_class="stub", model=VcsBridge,
+    )
+    admin = _platform_admin("connect-admissions-admin")
+    with system_context(reason="test.integrate.connect_admissions"):
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+    query = """
+        query Admission($id: String!) {
+          vcs_bridges_by_pk(id: $id) { can_connect can_resume can_retry_discovery }
+        }
+    """
+    variables = {"id": _public_id(bridge)}
+    assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"] == {
+        "can_connect": True, "can_resume": False, "can_retry_discovery": False,
+    }
+    assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"] == {
+        "can_connect": False, "can_resume": False, "can_retry_discovery": False,
+    }
+    with system_context(reason="test.integrate.resume_admissions"):
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=bridge.credential, lifecycle="paused")
+    assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"]["can_resume"] is False
+    assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"]["can_resume"] is True
+
+
 def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
     composed_tables: None,
 ) -> None:
@@ -1825,3 +1850,84 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     )
     assert not missing["resolveSyncFailure"]["ok"]
     assert len(calls) == 1
+
+
+
+def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(composed_tables: None) -> None:
+    integration = make_integration("credential-patch-owner")
+    foreign = make_integration("credential-patch-foreign").credential
+    with system_context(reason="test own replacement credential"):
+        own = Credential.objects.create_local_credential(
+            integration.owner, kind="static_token", name="Replacement", material={"api_key": "fake"},
+        )
+    schema = _schema()
+
+    def patch(credential: Any) -> Any:
+        return _execute(schema, f'''mutation {{
+          update_integrations_by_pk(pk_columns: {{id: "{_public_id(integration)}"}},
+            _set: {{credential: "{_public_id(credential)}"}}) {{ id }}
+        }}''', user=integration.owner)
+
+    denied = patch(foreign)
+    assert denied.errors and "not found" in denied.errors[0].message.lower()
+    with system_context(reason="test refused patch is atomic"):
+        integration.refresh_from_db()
+        assert integration.credential_id != foreign.pk
+    assert _data(patch(own))["update_integrations_by_pk"]["id"] == _public_id(integration)
+    with system_context(reason="test attached own credential"):
+        integration.refresh_from_db()
+        assert integration.credential_id == own.pk
+
+
+def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(composed_tables: None) -> None:
+    bridge = make_integration("parent-admission", model=VcsBridge, backend_class="stub")
+    with system_context(reason="test parent admission needs consent"):
+        VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
+    result = _data(_execute(_schema(), f'''query {{
+      integrations_by_pk(id: "{_public_id(bridge)}") {{ can_connect can_resume can_retry_discovery }}
+    }}''', user=bridge.owner))["integrations_by_pk"]
+    assert result == {"can_connect": True, "can_resume": False, "can_retry_discovery": False}
+
+
+@pytest.mark.parametrize("actor_kind", ["owner", "admin"])
+def test_connection_admission_query_count_does_not_grow_with_rows(composed_tables: None, actor_kind: str) -> None:
+    first = make_integration("batched-admission-0", model=VcsBridge, backend_class="stub", lifecycle="paused")
+    actor = first.owner if actor_kind == "owner" else _platform_admin("batched-admission-admin")
+    schema = _schema()
+    query = "{ integrations { can_connect can_resume can_retry_discovery } }"
+    _data(_execute(schema, query, user=actor))  # Warm Django's model/content-type metadata.
+    with CaptureQueriesContext(connection) as single_queries:
+        rows = _data(_execute(schema, query, user=actor))["integrations"]
+    assert len(rows) == 1 and rows[0]["can_resume"] == (actor_kind == "admin")
+    for index in range(1, 6):
+        make_integration(
+            f"batched-admission-{index}", model=VcsBridge, backend_class="stub",
+            owner=first.owner, lifecycle="paused",
+        )
+    with CaptureQueriesContext(connection) as many_queries:
+        rows = _data(_execute(schema, query, user=actor))["integrations"]
+    assert len(rows) == 6 and all(row["can_resume"] == (actor_kind == "admin") for row in rows)
+    assert len(many_queries) <= len(single_queries) + 1
+
+
+def test_connect_completion_returns_account_switch_as_a_typed_result(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    integration = make_integration("account-switch-result")
+    monkeypatch.setattr(
+        integrate_schema.flow, "remembered_oauth_client", lambda *args: integration.credential.oauth_client,
+    )
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise integrate_schema.OAuthFlowError("account_switch_refused", 409)
+
+    monkeypatch.setattr(integrate_schema._connect, "complete_account_connect", refuse)
+    result = _data(_execute(_schema(), '''mutation {
+      connect_account_complete(code: "code", state: "state", redirect_uri: "https://app.example/callback") {
+        error error_code account { id }
+      }
+    }''', user=integration.owner))["connect_account_complete"]
+    assert result == {
+        "error": "Detach this credential from its integrations before changing the external account.",
+        "error_code": "account_switch_refused", "account": None,
+    }

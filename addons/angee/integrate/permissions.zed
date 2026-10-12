@@ -61,6 +61,9 @@ definition integrate/integration {
     // also creates elevated but is gated by credential ownership in the resolver,
     // not by this permission.
     permission create = admin->member
+    // Resume remains a platform operation; owners can recover failed discovery.
+    permission resume = admin->member
+    permission retry_discovery = owner + admin->member
     // The owner manages their own integration; platform admins reach all.
     permission read = owner + reader + admin->member
     permission write = owner + admin->member

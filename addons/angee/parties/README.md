@@ -15,6 +15,25 @@ wholly withdrawn rows. [Handle producers](managers.py) compose `Party.statements
 through the shared Handle, Party lock order; resolution owns the cross-party
 winner and derived counters outside Party history.
 
+A card's `PHOTO` is stored as the person's avatar through storage's idempotent
+`File.objects.ingest_image` before the page transaction; a photo storage refuses
+(not a raster image, or over `ANGEE_STORAGE_IMAGE_MAX_BYTES`) quarantines its
+card while the rest of the page lands, and write-back refuses to send such an
+avatar as a remote rejection. Only the person's own `avatar` is projected. A
+handle carries the avatar its own network shows: live sessions report it as an
+`AvatarReport` through `Handle.objects.fill_avatar`, which never creates a
+handle. A party without a readable avatar of its own displays the avatar of its
+strongest handle the viewer can read (`Party.objects.display_avatar`); that
+fallback is derived for reading and never stored or written to a card. Avatars
+live on storage's image drive, which every signed-in user reads; which avatar a
+party or handle shows stays with that record's readers.
+
+A handle that proves to be another's spelling (a resolved messenger alias) moves
+its handle statements onto the surviving handle through
+`Party.objects.move_handle_statements`, the generic reference move a record
+merge performs: collisions stay inspectable as superseded, so every decision and
+its evidence survive.
+
 Ordinary person edits assert normal statements; confirm/dismiss writes preferred
 statements without rewriting the producer or copying evidence. Person preferences
 survive remote removal: confirmed handles can be republished; dismissal makes

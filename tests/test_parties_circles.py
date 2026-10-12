@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import (
+    Address,
     Circle,
     CircleMember,
     Directory,
@@ -27,7 +29,7 @@ from angee.messaging.testing.models import (
     Relationship,
     RelationshipKind,
 )
-from angee.parties.backends import ParsedContact
+from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from tests.conftest import make_integration
 from tests.test_messaging import _grant
@@ -357,6 +359,142 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
 
 
 @pytest.mark.django_db(transaction=True)
+def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(composed_tables: None) -> None:
+    """A party stating both spellings keeps the stronger current; the weaker stays superseded with its evidence."""
+
+    del composed_tables
+    with system_context(reason="test move statements"):
+        owner = _user("move-statements")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324870@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421935", created_by=owner)
+        confirmed, dismissed, stronger = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Bob", "Robert", "Rob")
+        )
+        confirmed.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+        folded = Party.objects.assert_handle(confirmed, phone, asserted_by=owner, confidence=0.6, evidence=[alias])
+        Party.objects.assert_handle(dismissed, alias, asserted_by=owner, confidence=0.6)
+        dismissed.with_actor(owner).dismiss(aspect="handle", handle=alias)
+        Party.objects.assert_handle(stronger, alias, asserted_by=owner, confidence=0.3)
+        Party.objects.assert_handle(stronger, phone, asserted_by=owner, confidence=0.9)
+        alias.refresh_from_db()
+        assert alias.party_id == confirmed.pk
+
+        Party.objects.move_handle_statements(alias, phone)
+
+        current = {
+            row.subject_id: (row.confidence, row.is_confirmed, row.is_dismissed)
+            for row in Party.statements.filter(handle=phone).current()
+        }
+        superseded = list(Party.statements.filter(handle=phone, superseded__isnull=False).order_by("confidence"))
+        for row in (phone, alias, confirmed, folded):
+            row.refresh_from_db()
+        assert not Party.statements.filter(handle=alias).exists()
+        assert alias.party_id is None
+
+    assert current == {
+        confirmed.pk: (1.0, True, False),
+        dismissed.pk: (1.0, False, True),
+        stronger.pk: (0.9, False, False),
+    }
+    assert [(row.subject_id, row.confidence) for row in superseded] == [(stronger.pk, 0.3), (confirmed.pk, 0.6)]
+    assert (folded.superseded_id is not None, folded.evidence) == (True, superseded[1].evidence)
+    assert (phone.party_id, phone.party_link_confirmed) == (confirmed.pk, True)
+    assert confirmed.handle_count == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None) -> None:
+    """Nothing is deleted, so the move itself re-resolves the handle it empties and recounts its owner."""
+
+    del composed_tables
+    with system_context(reason="test move lone statement"):
+        owner = _user("move-lone-statement")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324871@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421936", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        Party.objects.assert_handle(party, alias, asserted_by=owner)
+
+        Party.objects.move_handle_statements(alias, phone)
+
+        for row in (alias, phone, party):
+            row.refresh_from_db()
+    assert (alias.party_id, phone.party_id, party.handle_count) == (None, party.pk, 1)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: None) -> None:
+    """A source stating both spellings keeps its stronger statement current; the weaker is retained, not deleted."""
+
+    del composed_tables
+    with system_context(reason="test move statements fold"):
+        owner = _user("move-statements-fold")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324872@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421937", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        weaker = Party.objects.assert_handle(party, alias, asserted_by=owner, confidence=0.9)
+        stronger = Party.objects.assert_handle(party, phone, asserted_by=owner, confidence=1.0)
+
+        Party.objects.move_handle_statements(alias, phone)
+
+        weaker.refresh_from_db()
+        stronger.refresh_from_db()
+        assert (weaker.handle_id, weaker.superseded_id, weaker.applied) == (phone.pk, stronger.pk, False)
+        assert (stronger.superseded_id, stronger.applied) == (None, True)
+        assert Party.statements.asserted().filter(pk=stronger.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_moving_statements_from_a_handle_already_gone_moves_nothing(composed_tables: None) -> None:
+    """A second resolver run racing the first finds its alias merged away and leaves the survivor alone."""
+
+    del composed_tables
+    with system_context(reason="test move statements gone"):
+        owner = _user("move-statements-gone")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324873@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421938", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        Party.objects.assert_handle(party, phone, asserted_by=owner)
+        Handle._base_manager.filter(pk=alias.pk).delete()
+
+        Party.objects.move_handle_statements(alias, phone)
+
+        phone.refresh_from_db()
+    assert phone.party_id == party.pk
+    assert Party.statements.filter(handle=phone).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tables: None) -> None:
+    """Confirming a rule's suggestion writes the person's preferred statement beside the untouched producer.
+
+    A source that owns the suggestion's score (an Odoo import, a matching rule)
+    keeps its row, score and kind; the handle leaves review and is asserted.
+    """
+
+    del composed_tables
+    with system_context(reason="test confirm keeps producer"):
+        owner = _user("confirm-producer")
+        party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="ada@example.com", created_by=owner)
+        rule = Party.objects.rule_source("display_name")
+        producer = Party.objects.assert_handle(party, handle, asserted_by=rule, confidence=0.4)
+        assert not Party.statements.asserted().filter(pk=producer.pk).exists()
+        assert Party.statements.to_review().filter(pk=producer.pk).exists()
+        before = (producer.updated_at, producer.rank, producer.confidence, producer.source_kind)
+
+        decision = producer.with_actor(owner).confirm()
+
+        producer.refresh_from_db()
+        handle.refresh_from_db()
+        assert (producer.updated_at, producer.rank, producer.confidence, producer.source_kind) == before
+        assert (decision.subject_id, decision.handle_id, decision.is_confirmed) == (party.pk, handle.pk, True)
+        assert decision.pk != producer.pk
+        assert Party.statements.asserted().filter(pk=decision.pk).exists()
+        assert not Party.statements.to_review().filter(handle=handle).exists()
+        assert handle.party_id == party.pk
+
+
+@pytest.mark.django_db(transaction=True)
 def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 
@@ -392,7 +530,8 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         handle.refresh_from_db()
         assert handle.party_id is None
 
-        # A human confirm outranks any score and clears the dismissal.
+        # A human confirm outranks any score and clears the dismissal; the link keeps
+        # its producer's source and score.
         strong.refresh_from_db()
         strong = strong.with_actor(owner).confirm()
         handle.refresh_from_db()
@@ -400,7 +539,6 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         assert handle.party_id == alice.pk
         assert handle.party_link_confirmed is True
         assert strong.is_confirmed and not strong.is_dismissed
-        assert strong.confidence == 1.0
         assert strong.source_kind == "person"
 
         # Low-confidence, undecided links are exactly the review queue.
@@ -875,6 +1013,55 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert refreshed.title == "Principal Mathematician"
     assert refreshed.notes == "Research lead"
     assert Relationship._base_manager.filter(pk=manual.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> None:
+    """A card address updates its matching row and keeps its coordinates and primary flag.
+
+    A new address is created, and only a row the card no longer lists loses the
+    card's statement: two equal card addresses are two rows, and listing the
+    address once leaves one of them asserted.
+    """
+
+    del composed_tables
+    home = ParsedAddress(label="home", street="1 Main St", city="Springfield", country="US")
+    work = ParsedAddress(label="work", street="2 Side St", city="Shelbyville", country="US")
+    with system_context(reason="test carddav addresses"):
+        owner = _user("carddav-addresses")
+        directory = make_integration(
+            owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
+        )
+        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact-4")
+        RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
+        card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
+        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk, link=link)
+        assert Address._base_manager.filter(party=person, label="work").count() == 2
+        located = Address._base_manager.get(party=person, label="home")
+        located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
+        located.save(update_fields=["latitude", "longitude", "is_primary", "updated_at"])
+
+        moved = ParsedAddress(label="Home", street="1  MAIN st", city="springfield", country="US")
+        office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
+        Party.objects.ingest_contact(
+            replace(card, addresses=(moved, work, office)),
+            folder=folder,
+            created_by_id=owner.pk,
+            link=link,
+            target=person,
+        )
+        rows = list(Address._base_manager.filter(party=person).order_by("pk"))
+        asserted = set(
+            Address.statements.filter(subject__in=rows, link=link).canonical().values_list("subject_id", flat=True)
+        )
+
+    kept = next(row for row in rows if row.pk == located.pk)
+    assert (kept.label, kept.street, kept.city) == ("Home", "1  MAIN st", "springfield")
+    assert (kept.latitude, kept.longitude, kept.is_primary) == (39.8, -89.6, True)
+    assert sorted(row.label for row in rows if row.pk in asserted) == ["Home", "office", "work"]
+    assert len(rows) == 4
 
 
 @pytest.mark.django_db(transaction=True)

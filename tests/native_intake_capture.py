@@ -422,6 +422,22 @@ class NeedAccessDecisionTests(IntakeAccessCase):
             need.decide_access("intake.deny")
         self.assertEqual(self.User._base_manager.filter(email="new@example.com").count(), 1)
 
+    def test_a_decider_without_write_on_the_requesters_person_still_records_the_claim(self):
+        """The claimed address is the decision's own system work, not a check of the decider's party write."""
+
+        person = self.party(self.reader)
+        self.assertFalse(person.with_actor(self.owner).has_access("write"))
+        need = self.as_user(self.need(email="reader@example.com"), self.owner)
+        # A deployment may let this decider create accounts (a role extension)
+        # without party write; the account gate is not what this test is about.
+        with patch.object(type(self.User.objects), "check_create"):
+            self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
+        with system_context(reason="test claimed address"):
+            link = apps.get_model("parties", "Party").statements.get(
+                subject_id=person.pk, handle__platform="email", handle__value="reader@example.com"
+            )
+        self.assertIn("intake.Need", {ref["model"] for ref in link.evidence})
+
     def test_existing_account_without_claimed_email_can_be_approved(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         before = need.revision
