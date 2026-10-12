@@ -81,6 +81,19 @@ os.environ.pop("SENTRY_DSN", None)
 
 
 @pytest.fixture
+def composed_tables(composed_tables: None) -> None:
+    """The source host's composed tables also carry the declared statement principals.
+
+    Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
+    sync, the install-tier principals and grants that admission reads are loaded
+    (``tests.bootstrap.statement_sources``), exactly as the composed host does.
+    """
+
+    del composed_tables
+    statement_sources()
+
+
+@pytest.fixture
 def activity_catalog(composed_tables: None) -> None:
     """Declare the activity keys used by existing scheduling scenarios."""
 
@@ -585,6 +598,7 @@ from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
 from angee.uom.testing import models as uom_models  # noqa: E402, F401
 from tests import proposals_models  # noqa: E402, F401
+from tests.bootstrap import statement_sources  # noqa: E402
 
 
 class Need(AbstractNeed):

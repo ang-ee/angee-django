@@ -279,10 +279,10 @@ class Replica:
 
 
 @pytest.fixture
-def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[Replica]:
+def replica(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[Replica]:
     """Create the complete existing model graph, preserving real ingest/cascades."""
 
-    del transactional_db
+    del composed_tables
     with system_context(reason="test CardDAV replica"):
         directory = make_integration(
             "carddav-replica",

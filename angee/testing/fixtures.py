@@ -5,7 +5,6 @@ from django.apps import apps
 from django.core.management import call_command
 
 from angee.testing.permissions import composed_permissions as composed_permissions
-from angee.testing.permissions import install_statement_principals
 
 
 @pytest.fixture(autouse=True)
@@ -30,4 +29,3 @@ def composed_tables(transactional_db: None) -> None:
 
     del transactional_db
     call_command("rebac", "sync", verbosity=0)
-    install_statement_principals()
