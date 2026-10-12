@@ -45,7 +45,6 @@ from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.mixins import OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.scoping import gated_field_expression
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders
@@ -187,9 +186,26 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return self.filter(kind=UserKind.PERSON)
 
     def active_people(self) -> Self:
-        """Return active human user rows."""
+        """Return active human user rows.
 
-        return cast(Self, self.people().filter(is_active=True))
+        Activity is a restricted field (``read__is_active``), yet pickers and
+        preview offer only active people: a deliberate disclosure IAM's Zed
+        declares (``active_account``). An inactive account is absent; its state
+        is never shown. See :meth:`inactive_condition`.
+        """
+
+        actor, unscoped = self.effective_actor()
+        return cast(Self, self.people().exclude(self.inactive_condition(None if unscoped else actor)))
+
+    def inactive_condition(self, actor: Any = None) -> Q:
+        """Match inactive accounts as IAM's Zed discloses them to ``actor`` (``active_account``).
+
+        Without an actor (a system caller) the column decides directly.
+        """
+
+        if actor is None:
+            return Q(is_active=False)
+        return ~Q(pk__in=self.model._default_manager.with_actor(actor).with_action("active_account").values("pk"))
 
     def search_users(self, search: str) -> Self:
         """Filter users by the fields exposed by IAM identity pickers.
@@ -204,8 +220,8 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(
             Self,
             self.alias(
-                _iam_search_username=gated_field_expression(self, "username"),
-                _iam_search_email=gated_field_expression(self, "email"),
+                _iam_search_username=self.readable("username"),
+                _iam_search_email=self.readable("email"),
             ).filter(
                 Q(_iam_search_username__icontains=term)
                 | Q(first_name__icontains=term)
@@ -219,7 +235,7 @@ class UserQuerySet(AngeeQuerySet[Any]):
 
         return cast(
             Self,
-            self.alias(_iam_order_username=gated_field_expression(self, "username")).order_by(
+            self.alias(_iam_order_username=self.readable("username")).order_by(
                 F("_iam_order_username").asc(nulls_last=True), "first_name", "last_name", "pk",
             ),
         )
@@ -236,10 +252,20 @@ class UserQuerySet(AngeeQuerySet[Any]):
         set — platform admins plus every elevated role a consumer unions into
         its ``member`` permission — are protected from every actor; an actor's
         own account is protected from that actor. Account verbs, generic
-        updates by non-administrators and view-as share this one rule.
+        updates by non-administrators and view-as share this one rule. Staff is
+        a restricted field (``read__is_staff``): within the reach of preview,
+        updates and the account verbs, IAM's Zed tells ``actor`` which accounts are
+        not staff (``nonstaff_account``), and every other account counts as
+        protected, so the rule fails closed. A system caller (no actor) reads the
+        column directly.
         """
 
-        condition = Q(is_staff=True) | Q(is_superuser=True)
+        if actor is None:
+            condition = Q(is_staff=True)
+        else:
+            nonstaff = self.model._default_manager.with_actor(actor).with_action("nonstaff_account")
+            condition = ~Q(pk__in=nonstaff.values("pk"))
+        condition |= Q(is_superuser=True)
         holders = protected_account_holders()
         if holders is None:
             condition |= Q(pk__isnull=False)
@@ -667,12 +693,13 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         super().save(*args, **kwargs)
 
     @staticmethod
-    def account_action_blockers(action: str, protection: Q) -> tuple[tuple[Q, str], ...]:
+    def account_action_blockers(action: str, protection: Q, inactive: Q) -> tuple[tuple[Q, str], ...]:
         """Return the target conditions refusing ``action``, each with its refusal.
 
-        ``protection`` is the acting subject's ``protection_condition``. The
-        locked verbs and the batched ``account_actions`` projection share these
-        conditions, so a control is offered exactly when its verb admits it.
+        ``protection`` and ``inactive`` are the acting subject's
+        ``protection_condition`` and ``inactive_condition``. The locked verbs and
+        the batched ``account_actions`` projection share these conditions, so a
+        control is offered exactly when its verb admits it.
         """
 
         usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
@@ -681,7 +708,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             (protection, PROTECTED_ACCOUNT_MESSAGE),
         ]
         if action in {UserAccountAction.RESET_PASSWORD, UserAccountAction.ISSUE_PASSWORD}:
-            blockers.append((Q(is_active=False), "Only active accounts can receive a password."))
+            blockers.append((inactive, "Only active accounts can receive a password."))
         if action == UserAccountAction.RESET_PASSWORD:
             blockers.append((~usable_password, "This account has no password to reset; give it access instead."))
         if action == UserAccountAction.ISSUE_PASSWORD:
@@ -698,10 +725,11 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         if actor is None:
             return {action: models.Value(False) for action in UserAccountAction.values}
         protection = cls.objects.protection_condition(actor)
+        inactive = cls.objects.inactive_condition(actor)
         annotations: dict[str, models.Expression] = {}
         for action in UserAccountAction.values:
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
-            for condition, _error in cls.account_action_blockers(action, protection):
+            for condition, _error in cls.account_action_blockers(action, protection, inactive):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
         return annotations
@@ -733,7 +761,10 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
         users = type(self).objects
         rows = users.system_context(reason="iam.account.eligibility").filter(pk=self.pk)
-        for condition, error in type(self).account_action_blockers(action, users.protection_condition(actor)):
+        blockers = type(self).account_action_blockers(
+            action, users.protection_condition(actor), users.inactive_condition(actor),
+        )
+        for condition, error in blockers:
             if rows.filter(condition).exists():
                 return error
         return None

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from functools import partial
 from itertools import islice
+from operator import methodcaller
 from typing import Any, cast
 
 import strawberry
@@ -35,7 +36,7 @@ from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id, public_subject_ref
 from angee.base.models import AngeeModel
-from angee.base.scoping import gated_field_expression, lock_if_supported
+from angee.base.scoping import lock_if_supported
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression
@@ -764,7 +765,7 @@ _USER_RESOURCE = hasura_model_resource(
     name="users",
     filterable=["id", "first_name", "last_name", "active", "directory"],
     filter_expressions={
-        "active": partial(gated_field_expression, field_name="is_active"),
+        "active": methodcaller("readable", "is_active"),
         "directory": partial(permission_expression, name="list"),
     },
     sortable=["first_name", "last_name"],
