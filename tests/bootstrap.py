@@ -9,6 +9,7 @@ and the composed host (``tests/composed_host.py``) call it after their REBAC syn
 
 from django.apps import apps
 from django.conf import settings
+from django.core.management import call_command
 from django.test import override_settings
 from rebac import backend, system_context
 
@@ -24,10 +25,12 @@ def statement_sources() -> None:
     the master tier is excluded through the resource loader's native contract.
     """
 
-    if not apps.is_installed("angee.provenance") or not apps.is_installed("angee.parties"):
+    if "provenance" not in apps.app_configs or "parties" not in apps.app_configs:
         return
     if backend().schema().get_definition("provenance/role") is None:
-        return
+        # The composed host calls this before its first native sync; the source
+        # host's composed_tables has already synced.
+        call_command("rebac", "sync", verbosity=0)
     rule = apps.get_model("provenance", "Rule")
     with system_context(reason="tests.statement_sources.bootstrap"):
         if rule._base_manager.exists():
