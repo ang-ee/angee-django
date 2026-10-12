@@ -25,6 +25,8 @@ export interface MessageReaderProps {
   message: MessageReaderData;
   /** The attachment shown beside the body. The host owns where this lives: route or local state. */
   previewPartId?: string | null;
+  /** An attachment chip asks the host to preview a part; Close passes null. A host that
+   *  previews elsewhere handles the part there and passes no `previewPartId`. */
   onPreviewPartChange: (partId: string | null) => void;
   /** Reveal and scroll to one part of the body. */
   activePartId?: string | null;
@@ -60,9 +62,9 @@ export function MessageReader({
   return (
     <div className={cn("grid min-w-0 gap-6", previewUrl && "lg:grid-cols-2")}>
       <article aria-label={message.title || t("message.label")} className="min-w-0 space-y-5">
-        <header className="flex items-start gap-3">
+        <header className="flex flex-wrap items-start gap-3">
           <Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
-          <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="min-w-40 flex-1 space-y-0.5">
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="truncate text-13 font-semibold">{sender}</span>
               {address && address !== sender ? (
@@ -81,26 +83,30 @@ export function MessageReader({
               ) : null;
             })}
           </div>
-          <RelativeTime
-            className="whitespace-nowrap pt-0.5 text-2xs text-fg-muted"
-            value={message.sent_at ?? message.created_at}
-          />
-          <Button
-            size="iconSm"
-            variant={message.starred ? "secondary" : "ghost"}
-            aria-label={t(message.starred ? "message.unstar" : "message.star")}
-            aria-pressed={message.starred}
-            disabled={starState.fetching}
-            onClick={() => {
-              setStarError(undefined);
-              void setStarred({ id: message.id, starred: !message.starred }).catch((error: unknown) =>
-                setStarError(error instanceof Error ? error.message : String(error)),
-              );
-            }}
-          >
-            <Glyph name="star" />
-          </Button>
-          {actions}
+          {/* The date, star and host actions wrap below the sender as one group rather
+              than overlap it when the column is narrow. */}
+          <div className="ml-auto flex shrink-0 items-start gap-3">
+            <RelativeTime
+              className="whitespace-nowrap pt-0.5 text-2xs text-fg-muted"
+              value={message.sent_at ?? message.created_at}
+            />
+            <Button
+              size="iconSm"
+              variant={message.starred ? "secondary" : "ghost"}
+              aria-label={t(message.starred ? "message.unstar" : "message.star")}
+              aria-pressed={message.starred}
+              disabled={starState.fetching}
+              onClick={() => {
+                setStarError(undefined);
+                void setStarred({ id: message.id, starred: !message.starred }).catch((error: unknown) =>
+                  setStarError(error instanceof Error ? error.message : String(error)),
+                );
+              }}
+            >
+              <Glyph name="star" />
+            </Button>
+            {actions}
+          </div>
         </header>
         {starError ? <Alert tone="danger">{starError}</Alert> : null}
         <MessagePartsView
