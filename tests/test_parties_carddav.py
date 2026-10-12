@@ -222,7 +222,11 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert person.user_id == admin.pk
         assert link.subject_id == person.pk
         assert link.handle_id == handle.pk
-        assert link.source_kind == "directory"
+        assert link.source_kind == "person"
+        assert link.asserted_by == f"auth/user:{admin.pk}"
+        assert link.rank == link.StatementRank.NORMAL
+        assert link.link_id is None
+        assert link.evidence == [{"model": integration._meta.label, "id": integration.public_id}]
         assert link.confidence == 1.0
         assert link.is_confirmed is False
 

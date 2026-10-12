@@ -10,7 +10,7 @@ itself.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -23,11 +23,12 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
-from rebac import PermissionDenied, current_actor, generic_target, system_context
+from rebac import PermissionDenied, actor_context, current_actor, generic_target, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, instance_actor
+from angee.base.changesets import changeset
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, RowLockMixin, clean_trash_reason
 from angee.base.models import AngeeDataModel, AngeeManager
@@ -1316,11 +1317,12 @@ class TaskWork(StagedModelMixin):
         Stage.validate_transition(previous, target)
         if self.stage_id != target.pk:
             self.stage = target
-            self._change_reason = reason or None
-            try:
+            actor = instance_actor(self)
+            with (
+                actor_context(actor) if actor is not None else nullcontext(),
+                changeset(fresh=True, change_reason=reason, origin=self),
+            ):
                 self.save(update_fields=("stage", "updated_at"))
-            finally:
-                del self._change_reason
         return self
 
     @transaction.atomic

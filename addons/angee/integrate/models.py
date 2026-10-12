@@ -3087,12 +3087,17 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
 
     def sync_failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
         """Read stream and linked failures through their owning row permissions."""
-        if open_only:
-            links = getattr(self, "open_failure_links", None)
-            if links is None:
-                links = self.links.with_open_failures()
+        actor, unscoped = self.effective_actor(strict=True)
+        links = self.links.all()
+        if unscoped:
+            links = links.sudo(reason="integrate.stream.sync_failures")
         else:
-            links = self.links.only("stream_id", "inbound", "outbox_last_error").order_by("pk")
+            links = links.with_actor(actor)
+        if open_only:
+            prefetched = getattr(self, "open_failure_links", None)
+            links = prefetched if prefetched is not None else links.with_open_failures()
+        else:
+            links = links.only("stream_id", "inbound", "outbox_last_error").order_by("pk")
         rows = list(self.failures(open_only=open_only))
         for link in links:
             link.stream = self
@@ -3355,9 +3360,10 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         if target is not UNSET:
             self._set_target(locked, target)
         locked.status = LinkStatus.CURRENT
+        locked.tombstoned_at = None
         locked.update_sync_status()
-        locked.save(update_fields=["target_content_type", "target_object_id", "status", "updated_at"])
-        for name in ("target_content_type_id", "target_object_id", "status"):
+        locked.save(update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"])
+        for name in ("target_content_type_id", "target_object_id", "status", "tombstoned_at"):
             setattr(link, name, getattr(locked, name))
         return locked
 
@@ -3463,6 +3469,11 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
     def failure_stream(self) -> SyncStream:
         return self.stream
 
+    def _lock_sync_state(self) -> Self:
+        """Follow a link's current epoch before fencing a retained failure mutation."""
+        self.refresh_from_db(fields=("stream",))
+        return super()._lock_sync_state()
+
     def failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
         rows = list(super().failures(open_only=open_only))
         if self.outbox_last_error:
@@ -3486,7 +3497,10 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
         if self.failures(open_only=True):
             self.status = LinkStatus.FAILED
         elif self.status == LinkStatus.FAILED:
-            self.status = LinkStatus.CURRENT if self.applied_base_id else LinkStatus.OBSERVED
+            if self.tombstoned_at is not None:
+                self.status = LinkStatus.TOMBSTONE
+            else:
+                self.status = LinkStatus.CURRENT if self.applied_base_id else LinkStatus.OBSERVED
 
     def on_sync_state_saved(self, locked: Self) -> None:
         locked.update_sync_status()
@@ -3542,7 +3556,9 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, Angee
 
     def local_changed(self, projection: Any) -> bool:
         """Compare a JSON-native projection with this link's protected applied base."""
-        return self.applied_base is None or bool(
+        if self.applied_base is None:
+            return projection is not None
+        return bool(
             DeepDiff(
                 json.loads(canonical_json(self.applied_base.mapped_payload)),
                 json.loads(canonical_json(projection)),

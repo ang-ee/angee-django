@@ -52,14 +52,21 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         [
             sys.executable,
             str(root / "tests" / "composed_host.py"),
-            "--runtime-dir", str(tmp_path / "runtime"),
-            "--addon-dir", str(tmp_path / "addons"),
-            "--app", "example.webform_semantics",
-            "--app", "angee.intake",
+            "--runtime-dir",
+            str(tmp_path / "runtime"),
+            "--addon-dir",
+            str(tmp_path / "addons"),
+            "--app",
+            "example.webform_semantics",
+            "--app",
+            "angee.intake",
             "--no-examples",
-            "--action", "tests",
-            "--test-label", "angee.messaging.native_webform_validation",
-            "--output", str(report),
+            "--action",
+            "tests",
+            "--test-label",
+            "angee.messaging.native_webform_validation",
+            "--output",
+            str(report),
         ],
         cwd=root,
         env=env,
@@ -69,4 +76,4 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"Composed webform tests failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

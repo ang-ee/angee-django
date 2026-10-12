@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
 from django.conf import settings
@@ -108,7 +109,7 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
                 raise NotSupportedError("History capture requires bulk-insert primary keys on this database.")
             current_changeset(required=True, record=True)
         self._for_write = True
-        with transaction.atomic(using=self.db), write_group():
+        with transaction.atomic(using=self.db) if history is not None else nullcontext(), write_group():
             rows = super().bulk_create(
                 candidates,
                 batch_size=batch_size,

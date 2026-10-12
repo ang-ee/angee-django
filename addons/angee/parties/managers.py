@@ -51,7 +51,7 @@ from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, Tr
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
 from angee.base.refs import generic_pointer_model
-from angee.base.scoping import by_key, read_scoped_queryset
+from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
@@ -260,7 +260,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
     """Factory + upsert for handles (the contact-point write path)."""
 
     def for_user(self, user: Any) -> Any:
-        """Return the account's confirmed handle for internal attribution."""
+        """Return the account's self-claimed handle for internal attribution."""
 
         if user is None or user.pk is None:
             raise ValueError("Handle author is required.")
@@ -273,7 +273,11 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             platform=self.model.Platform.for_value(value),
             value=value,
             display_name=display_name,
-            asserted_by=user,
+            asserted_by=(
+                user
+                if user.source_kind == SourceKind.PERSON
+                else apps.get_model("parties", "Party").objects.rule_source("source_sender")
+            ),
             metadata={"user_id": str(user.pk)},
         )
 
@@ -445,15 +449,16 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         platform: str,
         value: str,
         asserted_by: Any = None,
+        evidence: Iterable[Any] = (),
         display_name: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> Any:
-        """Record ``value`` as ``user``'s own account handle: the control fact + a confirmed self-link.
+        """Record ``value`` as ``user``'s own account handle and normal identity claim.
 
         The one verb the connect flows (OIDC login, CardDAV/OAuth connect) call for
         the signed-in user's own address. It writes BOTH facts the model separates:
         the **control** fact (:attr:`Handle.owner` — this user sends/syncs as the
-        address) and the **identity** fact (a confirmed :class:`PartyStatement` to the
+        address) and the **identity** fact (a normal-rank :class:`PartyStatement` to the
         user's own :class:`~angee.parties.models.Person`, so the address resolves to
         them). Directory *contacts'* handles get neither. Idempotent.
 
@@ -463,6 +468,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         for later review. The whole decision is atomic and row-locked.
         """
 
+        evidence = tuple(evidence)
         person_model = apps.get_model("parties", "Person")
         link_owner = apps.get_model("parties", "Party").objects
         with system_context(reason="parties.handle.claim_own"), transaction.atomic():
@@ -491,6 +497,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                     handle,
                     confidence=0.3,
                     asserted_by=asserted_by or user,
+                    evidence=evidence,
                 )
                 return handle
             if handle.owner_id is None:
@@ -501,6 +508,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 handle,
                 confidence=1.0,
                 asserted_by=asserted_by or user,
+                evidence=evidence,
             )
         return handle
 
@@ -797,7 +805,7 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
 
         if limit <= 0:
             return []
-        actor = self.actor() or current_actor()
+        actor, unscoped = self.effective_actor(strict=True)
         visible = self.canonical().scoped_for_aggregate().values("pk")
         statements = self.model.same_as.model.statements.canonical()
         pairs = (
@@ -821,14 +829,17 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
             ]
             for pair in pairs
         }
+        handle_model = apps.get_model("parties", "Handle")
         readable = instances_from_public_ids(
-            apps.get_model("parties", "Handle"),
+            handle_model,
             (ref.id for refs in refs_by_pair.values() for ref in refs),
-            queryset=read_scoped_queryset(apps.get_model("parties", "Handle"), actor),
+            queryset=system_queryset(handle_model) if unscoped else read_scoped_queryset(handle_model, actor),
         )
         result = []
         for pair, refs in refs_by_pair.items():
             handles = [readable[ref.id] for ref in refs if ref.id in readable]
+            if len(handles) != len(refs):
+                continue
             result.append(
                 SameAsPair(pair.left, pair.right, handles[0].normalized_value if handles else "", tuple(handles))
             )
@@ -933,7 +944,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         durable anti-link unchanged; confirmation remains the explicit human action.
         """
 
-        party.require_access("write", actor)
+        actor = to_subject_ref(party.require_access("write", actor))
         handle_model = apps.get_model("parties", "Handle")
         allowed_platforms = {
             str(handle_model.Platform.EMAIL),

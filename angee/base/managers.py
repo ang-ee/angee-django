@@ -145,8 +145,8 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             basis_hash=basis_hash,
         )
         if self.model.statement_link:
-            if link is not None:
-                link.require_access("read", actor=source)
+            if link is not None and not read_scoped_queryset(type(link), source).filter(pk=link.pk).exists():
+                raise PermissionDenied("The asserting source requires read on the link.")
             defaults["link"] = link
         elif link is not None:
             raise ValidationError("This statement declaration has no link model.")

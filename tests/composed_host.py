@@ -284,6 +284,7 @@ def run(args: argparse.Namespace) -> None:
         from django.test.runner import DiscoverRunner
 
         from angee.base.changesets import changeset
+        from tests.bootstrap import statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
@@ -301,17 +302,15 @@ def run(args: argparse.Namespace) -> None:
                         if isinstance(test, TestSuite):
                             fixture_boundaries(test)
                         else:
-                            # Setup fixtures need attribution; the test body owns
-                            # the request/task/command boundaries it exercises.
-                            setattr(
-                                test,
-                                "setUp",
-                                changeset(
-                                    fresh=True,
-                                    activity="system",
-                                    change_reason=f"manage.{args.action}.{test.id()}.fixtures",
-                                )(test.setUp),
-                            )
+
+                            def set_up(test=test, original=test.setUp) -> None:
+                                statement_sources()
+                                test.enterContext(
+                                    changeset(fresh=True, change_reason=f"manage.{args.action}.{test.id()}.fixtures")
+                                )
+                                original()
+
+                            setattr(test, "setUp", set_up)
 
                 fixture_boundaries(suite)
                 return suite

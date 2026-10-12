@@ -2049,9 +2049,10 @@ def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
     part = Part._base_manager.get(message__external_id="bounded-headers@x", type="text/html")
     assert part.cid == ("" if excess else cid)
     assert part.fragment.text == "<p>Retained body.</p>"
-    assert not any(
-        (True for stream_row in SyncStream.unscoped_objects.all() for row in stream_row.sync_failures(open_only=False))
-    )
+    with system_context(reason="test imap inspect retained failures"):
+        assert not any(
+            row for stream_row in SyncStream.objects.all() for row in stream_row.sync_failures(open_only=False)
+        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2081,9 +2082,10 @@ def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
     assert set(Message._base_manager.values_list("external_id", flat=True)) == {"first@x", "last@x"}
     assert not Thread._base_manager.filter(title__text="Poison").exists()
     assert not Handle._base_manager.filter(value=value).exists()
-    discrepancy = next(
-        (row for stream_row in SyncStream.unscoped_objects.all() for row in stream_row.sync_failures(open_only=False))
-    )
+    with system_context(reason="test imap inspect retained failures"):
+        discrepancy = next(
+            row for stream_row in SyncStream.objects.all() for row in stream_row.sync_failures(open_only=False)
+        )
     assert discrepancy.code == "invalid_record"
     assert discrepancy.details == {
         "stream": "messages",

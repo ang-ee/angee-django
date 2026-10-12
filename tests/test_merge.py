@@ -163,11 +163,7 @@ def test_an_edge_without_a_merge_policy_blocks_and_its_blockers_project(monkeypa
     mobile, mobil, _ada, _bob = _vocabulary()
     _tag_on_tag(mobile, mobil)
     monkeypatch.setattr(TagAssignment, "merge_policy", RecordRefMixin.merge_policy)
-    blocked = {
-        tag.pk
-        for condition, _message in Tag.merge_blockers()
-        for tag in Tag._base_manager.filter(condition)
-    }
+    blocked = {tag.pk for condition, _message in Tag.merge_blockers() for tag in Tag._base_manager.filter(condition)}
     assert blocked == {mobil.pk}
     with actor_context(_curator("merge-blocked")), pytest.raises(ValidationError, match="tag assignments"):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
@@ -208,7 +204,7 @@ def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     assert edges["storage.FileAttachment"] == MergePolicy.MOVE
     assert edges["workflows.StepWatch"] == MergePolicy.MOVE
     assert edges["workflows.WorkflowRun"] == MergePolicy.KEEP
-    assert edges["integrate.RecordLink"] == MergePolicy.BLOCK
+    assert edges["integrate.RecordLink"] == MergePolicy.MOVE
     assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
 
 
@@ -246,10 +242,10 @@ def test_a_share_on_a_multi_table_child_row_is_seen_from_its_parent() -> None:
     with system_context(reason="merge test mti share"):
         child = MtiChild.objects.create(title="Shared", detail="child")
         parent = MtiParent._base_manager.get(pk=child.pk)
-        assert not merge_module._named_in_relationships(parent)
+        assert not merge_module.named_in_relationships(parent)
         share = RelationshipTuple(resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reader))
         write_relationships([share])
-        assert merge_module._named_in_relationships(parent)
+        assert merge_module.named_in_relationships(parent)
 
 
 def _links(tag: Any, title: str) -> Any:
@@ -332,12 +328,12 @@ def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: p
     owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
     with system_context(reason="merge test share"):
         project = Project.objects.create(title="Shared", owner=owner)
-        assert not merge_module._named_in_relationships(project)
+        assert not merge_module.named_in_relationships(project)
         project.system_grant_record_access("reader", reader)
-        assert merge_module._named_in_relationships(project)
+        assert merge_module.named_in_relationships(project)
 
     mobile, mobil, _ada, _bob = _vocabulary()
-    monkeypatch.setattr(merge_module, "_named_in_relationships", lambda record: record.pk == mobil.pk)
+    monkeypatch.setattr(merge_module, "named_in_relationships", lambda record: record.pk == mobil.pk)
     with actor_context(_curator("merge-shared")), pytest.raises(ValidationError, match="shared"):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
 
@@ -396,7 +392,10 @@ def test_a_record_an_unfinished_run_works_on_refuses_its_merge(execution: Any) -
     actor, _ = execution
     mobile, mobil, ada, bob = _vocabulary()
     workflow = Workflow.objects.install_definition(
-        key="merge_guard", name="Merge guard", draft=document("entry"), actor=actor,
+        key="merge_guard",
+        name="Merge guard",
+        draft=document("entry"),
+        actor=actor,
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=mobil)
     curator = _curator("merge-run-guard")
@@ -415,13 +414,17 @@ def test_the_shared_verb_merges_a_mergeable_type_and_refuses_another() -> None:
     schema = addon_schema(tags_schema.schemas, "console", records.schemas)
 
     refused = execute_schema(
-        schema, _MERGE, {"type": "parties/party", "id": public_id_of(ada), "records": [public_id_of(bob)]},
+        schema,
+        _MERGE,
+        {"type": "parties/party", "id": public_id_of(ada), "records": [public_id_of(bob)]},
         user=curator,
     )
     assert result_data(refused)["merge_records"]["ok"] is False
 
     merged = execute_schema(
-        schema, _MERGE, {"type": "tags/tag", "id": public_id_of(mobile), "records": [public_id_of(mobil)]},
+        schema,
+        _MERGE,
+        {"type": "tags/tag", "id": public_id_of(mobile), "records": [public_id_of(mobil)]},
         user=curator,
     )
     assert result_data(merged)["merge_records"] == {"ok": True, "message": "Merged.", "validation_errors": None}

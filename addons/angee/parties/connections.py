@@ -160,6 +160,7 @@ def _ingest_one_connection(
             handle,
             confidence=1.0,
             asserted_by=asserted_by,
+            link=link,
             evidence=[handle],
         )
         if parsed.email:
@@ -174,6 +175,7 @@ def _ingest_one_connection(
                 email,
                 confidence=1.0,
                 asserted_by=asserted_by,
+                link=link,
                 evidence=[handle],
             )
         _land_acquaintance(
@@ -185,6 +187,7 @@ def _ingest_one_connection(
             kinds=kinds,
             created_by_id=created_by_id,
             asserted_by=asserted_by,
+            link=link,
             evidence=handle,
         )
         _land_employment(
@@ -196,12 +199,14 @@ def _ingest_one_connection(
             kinds=kinds,
             created_by_id=created_by_id,
             asserted_by=asserted_by,
+            link=link,
             evidence=handle,
         )
         parent.statements.set(
             aspect="identity",
             values={"display_name": parsed.handle.display_name or parsed.handle.value},
             asserted_by=asserted_by,
+            link=link,
             evidence=[{"model": handle._meta.label, "id": handle.public_id}],
         )
         person.refresh_from_db()
@@ -249,6 +254,7 @@ def _land_acquaintance(
     kinds: dict[str, Any],
     created_by_id: Any,
     asserted_by: Any,
+    link: Any,
     evidence: Any,
 ) -> None:
     """Record the source account's idempotent connection to ``person``."""
@@ -265,6 +271,7 @@ def _land_acquaintance(
     edge.statements.set(
         aspect="relationship",
         asserted_by=asserted_by,
+        link=link,
         evidence=[{"model": evidence._meta.label, "id": evidence.public_id}],
         values={
             "other_name": "",
@@ -286,6 +293,7 @@ def _land_employment(
     kinds: dict[str, Any],
     created_by_id: Any,
     asserted_by: Any,
+    link: Any,
     evidence: Any,
 ) -> None:
     """Land the existing free-text employee relationship shape when present."""
@@ -304,6 +312,7 @@ def _land_employment(
     edge.statements.set(
         aspect="relationship",
         asserted_by=asserted_by,
+        link=link,
         evidence=[{"model": evidence._meta.label, "id": evidence.public_id}],
         values={
             "other_name": organization,

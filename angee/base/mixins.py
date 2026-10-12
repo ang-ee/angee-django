@@ -12,6 +12,7 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
@@ -57,7 +58,6 @@ from angee.base.querysets import (
     _AngeeQuerySetMixin,
     model_history,
 )
-from angee.base.refs import concrete_child_models, generic_pointer_model
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
@@ -758,7 +758,8 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
 
         Protected API for an owning verb (an external sync retiring vanished
         rows, a folder taking its contents along): a queryset update emits no
-        instance-save signals or history. ``at`` stamps rows trashed together.
+        instance-save signals; the composed queryset owns history capture.
+        ``at`` stamps rows trashed together.
         """
 
         now = timezone.now()
@@ -922,6 +923,8 @@ class ModelHistory(HistoricalRecords):
         The caller holds the operational row locks throughout restoration.
         """
 
+        from angee.base.refs import generic_pointer_model
+
         history = model.history.using(using)
         key = model._meta.pk.attname
         rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
@@ -1053,6 +1056,8 @@ class ModelHistory(HistoricalRecords):
         later queryset write in the group. Native receivers consume those keys.
         """
 
+        from angee.base.refs import concrete_child_models
+
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return
         manager = get_history_manager_for_model(model)
@@ -1122,12 +1127,37 @@ class ModelHistory(HistoricalRecords):
         options["app_label"] = model._meta.app_label
         return options
 
+    def get_extra_fields(self, model: Any, fields: Any) -> dict[str, Any]:
+        """Keep global attribution storage resolvable in isolated model registries."""
+
+        extra = super().get_extra_fields(model, fields)
+        if model._meta.apps is not apps:
+            if self.user_id_field is None and self.user_model is None:
+                user = get_user_model()
+                extra["history_user"].remote_field.model = user
+                extra["history_user"].remote_field.field_name = user._meta.pk.name
+            field = _ChangesetHistory._meta.get_field("changeset").clone()
+            field.remote_field.model = apps.get_model(
+                getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"])
+            )
+            field.remote_field.field_name = field.remote_field.model._meta.pk.name
+            extra["changeset"] = field
+        return extra
+
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
         """Copy MTI identity as a regular historical relation, not an inheritance link."""
 
         fields = super().copy_fields(model)
         for name, field in fields.items():
             source = model._meta.get_field(name)
+            if (
+                model._meta.apps is not apps
+                and isinstance(field, models.ForeignKey)
+                and isinstance(source.remote_field.model, type)
+                and cast(Any, source.remote_field.model)._meta.apps is apps
+            ):
+                field.remote_field.model = source.remote_field.model
+                field.remote_field.field_name = source.target_field.name
             if source.remote_field is None or not source.auto_created or not source.remote_field.parent_link:
                 continue
             field.auto_created = False
@@ -1163,11 +1193,11 @@ class HistoryMixin(models.Model):
     ) -> None:
         """Validate attribution before SQL and scope native save dispatch to one group."""
 
-        if not raw and not hasattr(self, "skip_history_when_saving"):
-            if model_history(type(self)) is not None:
-                current_changeset(required=True, record=True)
         alias = using or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=alias, savepoint=False), write_group():
+        with transaction.atomic(using=alias, savepoint=not raw), write_group():
+            if not raw and not hasattr(self, "skip_history_when_saving"):
+                if model_history(type(self)) is not None:
+                    current_changeset(required=True, record=True)
             super().save_base(raw, force_insert, force_update, alias, update_fields)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
@@ -1305,7 +1335,7 @@ class Aspect:
                 pk = field.target_field.value_from_object(value) if isinstance(value, models.Model) else value
                 rows = (
                     read_scoped_queryset(field.remote_field.model, source)
-                    if kind == SourceKind.PERSON
+                    if kind == SourceKind.PERSON and not is_sudo()
                     else system_queryset(field.remote_field.model)
                 )
                 members[name] = rows.get(**{field.target_field.name: pk})
@@ -1364,9 +1394,19 @@ class StatementsMixin(models.Model):
             return
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         update_fields = kwargs.get("update_fields")
+        saved_fields = (
+            None
+            if update_fields is None
+            else {
+                field.name
+                for field in self._meta.concrete_fields
+                if field.name in update_fields or field.attname in update_fields
+            }
+        )
         with actor_context(actor), transaction.atomic(using=using):
             previous = type(self)._base_manager.using(using).filter(pk=self.pk).first() if self.pk else None
             super().save(*args, **kwargs)
+            resolved_fields: set[str] = set()
             for manager in self.statement_managers():
                 for aspect, declaration in manager.model.statement_aspects.items():
                     fields = declaration.fields
@@ -1374,11 +1414,7 @@ class StatementsMixin(models.Model):
                         declaration.members
                         or not fields
                         or not any(
-                            (
-                                update_fields is None
-                                or name in update_fields
-                                or self._meta.get_field(name).attname in update_fields
-                            )
+                            (saved_fields is None or name in saved_fields)
                             and (previous is None or getattr(previous, name) != getattr(self, name))
                             for name in fields
                         )
@@ -1386,10 +1422,15 @@ class StatementsMixin(models.Model):
                         continue
                     manager.set(
                         aspect=aspect,
-                        values={name: getattr(self, name) for name in fields},
+                        values={
+                            name: getattr(self if saved_fields is None or name in saved_fields else previous, name)
+                            for name in fields
+                        },
                         asserted_by=actor,
                     )
-            self.refresh_from_db(using=using)
+                    resolved_fields.update(fields if saved_fields is None else set(fields) & saved_fields)
+            if resolved_fields:
+                self.refresh_from_db(using=using, fields=sorted(resolved_fields))
 
     def require_statement_write(self, actor: SubjectRef) -> None:
         """Admit assertions through the subject's native REBAC write scope."""

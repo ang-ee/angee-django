@@ -568,14 +568,15 @@ class PartiesDirectoryMutation:
                 **directory_values,
             )
             # The connected account's own login address is the admin's own handle:
-            # claim it (control ownership + confirmed self-identity link). Synced
+            # claim it (control ownership + normal person identity statement). Synced
             # *contacts'* handles get neither fact — only this connected account's.
             if username.strip():
                 Handle.objects.claim_own(
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),
-                    asserted_by=directory.integration_ptr,
+                    asserted_by=user,
+                    evidence=[directory.integration_ptr],
                     display_name=name,
                 )
         return cast(DirectoryType, directory)

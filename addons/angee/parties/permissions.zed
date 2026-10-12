@@ -27,18 +27,15 @@ definition parties/party {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
-    relation trashed: parties/party // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
-    permission conceal = authenticated
-    permission withheld = trashed->conceal
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = ((read_granted + carrier_reader) - withheld) + delete
-    permission read_private = ((owner + editor + reader + admin->member) - withheld) + delete
+    permission read = read_granted + carrier_reader
+    permission read_private = owner + editor + reader + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private
     permission read__handle_count = read_private
-    permission write = ((owner + editor + statement_source + admin->member) - withheld) + delete
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -54,14 +51,11 @@ definition parties/person {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
-    relation trashed: parties/person // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
-    permission conceal = authenticated
-    permission withheld = trashed->conceal
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = (read_granted - withheld) + delete
-    permission read_private = ((owner + editor + reader + admin->member) - withheld) + delete
+    permission read = read_granted
+    permission read_private = owner + editor + reader + admin->member
     // Field gates are per resource definition, including inherited columns.
     permission read__notes = read_private
     permission read__first_met_note = read_private
@@ -69,7 +63,7 @@ definition parties/person {
     permission read__birthday = read_private
     permission read__anniversary = read_private
     permission read__nickname = read_private
-    permission write = ((owner + editor + statement_source + admin->member) - withheld) + delete
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -81,14 +75,11 @@ definition parties/organization {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
-    relation trashed: parties/organization // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
-    permission conceal = authenticated
-    permission withheld = trashed->conceal
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = (read_granted - withheld) + delete
-    permission write = ((owner + editor + statement_source + admin->member) - withheld) + delete
+    permission read = read_granted
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -116,14 +107,11 @@ definition parties/address {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
-    relation trashed: parties/address // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
-    permission conceal = authenticated
-    permission withheld = trashed->conceal
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = (read_granted - withheld) + delete
-    permission write = ((owner + editor + statement_source + admin->member) - withheld) + delete
+    permission read = read_granted
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -190,14 +178,11 @@ definition parties/relationship {
     relation statement_role: provenance/role // rebac:const=parties_statement_source
     permission statement_source = directory + other_directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
-    relation trashed: parties/relationship // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
-    permission conceal = authenticated
-    permission withheld = trashed->conceal
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = (read_granted - withheld) + delete
-    permission write = ((owner + editor + statement_source + admin->member) - withheld) + delete
+    permission read = read_granted
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 

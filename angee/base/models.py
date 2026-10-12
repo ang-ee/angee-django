@@ -755,34 +755,12 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
             return field.resolve_class(default)
         return field.resolve_for(self)
 
-    @property
-    def public_id(self) -> str:
-        """Return the stable public identifier for this model instance."""
-
-        value = self.public_id_value()
-        if value in (None, ""):
-            return ""
-        return str(value)
-
     @classmethod
     def from_public_id(cls, value: str) -> Self | None:
         """Return the instance addressed by ``value``, if one exists."""
 
         queryset = cast(AngeeQuerySet[Self], cls._default_manager.all())
         return queryset.from_public_id(value)
-
-    @classmethod
-    def public_id_from_pk(cls, value: Any) -> str:
-        """Return the public id encoded from this model's primary-key value."""
-
-        if value in (None, ""):
-            return ""
-        return str(value)
-
-    def public_id_value(self) -> Any:
-        """Return the raw public identifier value owned by this instance."""
-
-        return self.pk
 
     def broadcasts_changes(self) -> bool:
         """Return whether this row's saves/deletes broadcast on ``changes`` subscriptions.

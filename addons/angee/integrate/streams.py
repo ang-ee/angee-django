@@ -591,11 +591,10 @@ def _apply_page(
                             raise SemanticError("both_changed", kind=SyncFailureKind.CONFLICT)
                         if decision == ChangeKind.UNCHANGED:
                             assert revision is not None
-                            if record.target is not None:
-                                links.revalidate(link, target=record.target)
                             if record.tombstone:
                                 links.tombstone(link)
                             else:
+                                links.revalidate(link, target=record.target if record.target is not None else UNSET)
                                 adapter.on_revalidated(locked, (link,))
                             _resolve_applied(locked, record)
                             continue

@@ -127,7 +127,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         )
 
     def load_xref[M: AngeeModel](
-        self, handle: str, *, model: type[M], actor: Any = None, allow_non_dev: bool = False,
+        self,
+        handle: str,
+        *,
+        model: type[M],
+        actor: Any = None,
+        allow_non_dev: bool = False,
     ) -> M:
         """Import one declared ``addon.name.xref`` through its model's resource.
 
@@ -158,18 +163,25 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     )
                 self._check_load_tiers((group.entry.tier,), allow_non_dev=allow_non_dev)
                 selected = ResourceGroup(
-                    group.entry, group.model_label, group.dataset.subset(rows=[index]), [group.source_rows[index]],
+                    group.entry,
+                    group.model_label,
+                    group.dataset.subset(rows=[index]),
+                    [group.source_rows[index]],
                 )
-                with changeset(activity="seed"), transaction.atomic():
+                with transaction.atomic():
                     resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
                     with system_context(reason="resources.load_xref resolve existing target"):
-                        current_changeset(record=True)
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
                     if resolution is not None and resolution.instance is not None:
                         actor = resolution.instance.require_access("write", actor)
                     self._import_groups(
-                        (group.entry,), (selected,), (), dry_run=False, addon_aliases=aliases, actor=actor,
+                        (group.entry,),
+                        (selected,),
+                        (),
+                        dry_run=False,
+                        addon_aliases=aliases,
+                        actor=actor,
                     )
                     with system_context(reason="resources.load_xref resolve imported target"):
                         instance = resolve_xref(handle, self.model, aliases)
@@ -207,7 +219,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             (
                 group,
                 build_resource(
-                    group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases,
+                    group.model,
+                    group.entry,
+                    ledger_model=self.model,
+                    addon_aliases=addon_aliases,
                 ),
             )
             for group in row_groups
@@ -221,7 +236,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             reason = "resources.validate" if dry_run else "resources.load"
             with (
                 system_context(reason=reason),
-                changeset(activity="seed"),
+                changeset(fresh=True, activity="seed"),
                 transaction.atomic(),
             ):
                 current_changeset(record=True)

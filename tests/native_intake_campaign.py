@@ -334,7 +334,7 @@ class CaptureCampaign(TransactionTestCase):
             handle = apps.get_model("parties", "Handle").objects.upsert(
                 platform="email", value=email, created_by_id=self.actor.pk
             )
-            party.with_actor(self.actor).statements.set(aspect="handle", handle=handle, values={})
+            party.with_actor(self.actor).statements_for("handle").set(aspect="handle", handle=handle, values={})
         for key, confirmed in (("suggested", False), ("confirmed", True)):
             with system_context(reason="tests.t3.email"):
                 if confirmed:

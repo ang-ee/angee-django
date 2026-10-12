@@ -188,7 +188,10 @@ def test_named_excludes_archived_rows_in_an_archivable_composition(owner: Any) -
                 app_label = "party_lookup"
                 rebac_resource_type = "parties/party"
 
-        with model_tables((ArchivableParty,)), system_context(reason="test archived party names"):
+        with (
+            model_tables((ArchivableParty, ArchivableParty.history.model)),
+            system_context(reason="test archived party names"),
+        ):
             active = ArchivableParty.objects.create(display_name="Alex Example", created_by=owner)
             ArchivableParty.objects.create(display_name="Alex Example", is_archived=True, created_by=owner)
             assert list(ArchivableParty.objects.named("alex example")) == [active]

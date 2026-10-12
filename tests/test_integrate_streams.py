@@ -388,7 +388,7 @@ def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel
                 {"offset": 1},
             )
         ],
-        candidates=(LocalChange("person:1", {}),),
+        candidates=(LocalChange("person:1", {"value": "changed"}),),
     )
 
     with pytest.raises(AdapterContractError, match="write_back must return WriteBackResult"):

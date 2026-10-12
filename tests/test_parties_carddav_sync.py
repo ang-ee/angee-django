@@ -674,7 +674,7 @@ def test_concurrent_vcard_changes_remain_conflicts(
     old_bases = (
         link.applied_base.source_hash,
         canonical_json_sha256(link.applied_base.mapped_payload),
-        link.remote_version,
+        link.applied_base.remote_version,
     )
     person_pk = person.pk
     if local_deleted:
@@ -697,11 +697,13 @@ def test_concurrent_vcard_changes_remain_conflicts(
     assert (
         link.applied_base.source_hash,
         canonical_json_sha256(link.applied_base.mapped_payload),
-        link.remote_version,
+        link.applied_base.remote_version,
     ) == old_bases
+    assert link.remote_version == ("" if remote_deleted else replica.server.cards[_HREF][1])
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
     if local_deleted:
-        assert not Party.objects.filter(pk=person_pk).exists()
+        assert not Party.objects.canonical().filter(pk=person_pk).exists()
+        assert Party.objects.get(pk=person_pk).is_trashed
     else:
         person.refresh_from_db()
         assert person.notes == "Local edit"
@@ -712,7 +714,7 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     old_bases = (
         link.applied_base.source_hash,
         canonical_json_sha256(link.applied_base.mapped_payload),
-        link.remote_version,
+        link.applied_base.remote_version,
     )
     person.notes = "Keep local edit"
     person.save(update_fields=["notes"])
@@ -730,7 +732,7 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
     assert (
         link.applied_base.source_hash,
         canonical_json_sha256(link.applied_base.mapped_payload),
-        link.remote_version,
+        link.applied_base.remote_version,
     ) == old_bases
     assert "Concurrent remote edit" in replica.server.cards[_HREF][0]
 

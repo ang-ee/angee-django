@@ -5,6 +5,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
+from angee.base.scoping import system_queryset
 from angee.integrate.states import SyncFailure
 from angee.integrate.testing.models import RecordLink
 
@@ -15,7 +16,7 @@ def applied_history() -> Any:
     return RecordLink.history.filter(
         history_id__in=RecordLink.history.order_by()
         .values("applied_base_id")
-        .union(RecordLink.objects.order_by().values("applied_base_id"))
+        .union(system_queryset(RecordLink).order_by().values("applied_base_id"))
     )
 
 

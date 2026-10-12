@@ -420,9 +420,10 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
 
     assert generated.HistoricalTracked is history
     assert not history._meta.abstract
-    assert {
-        field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)
-    } == {"doubled", "positive"}
+    assert {field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)} == {
+        "doubled",
+        "positive",
+    }
     assert isinstance(Tracked._meta.get_field("positive"), BooleanGeneratedField)
     historical_fields = {field.name for field in history._meta.local_fields}
     assert {"id", "value"} <= historical_fields
@@ -457,10 +458,10 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
     history = Tracked.history.model
     assert history._meta.app_label == config.label
     assert history._meta.db_table == f"{config.label}_historicaltracked"
-    assert not hasattr(generated, "HistoricalChild")
-    assert generated.Child.history.model is history
+    assert generated.Child.history.model is generated.HistoricalChild
+    assert generated.Child.history.model is not history
     assert "sqid" not in {field.name for field in history._meta.local_fields}
-    with model_tables((Tracked, history)):
+    with model_tables((Tracked, generated.Child, history, generated.HistoricalChild)):
         record = Tracked.objects.create(title="first")
         record.title = "second"
         record.save()
@@ -514,6 +515,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         state = ModelState.from_model(model)
         if state.name == "HistoricalChild":
             state.fields.pop("history_user")
+            state.fields.pop("changeset")
         target.add_model(state)
     changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
     operations = changes[config.label][0].operations

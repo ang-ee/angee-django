@@ -22,10 +22,28 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class PublicIdentity(models.Model):
-    """Model-owned public lookup, shared without importing composed model bases."""
+    """Model-owned public identity, shared without importing composed model bases."""
 
     class Meta:
         abstract = True
+
+    @property
+    def public_id(self) -> str:
+        """Return the stable public identifier for this model instance."""
+
+        value = self.public_id_value()
+        return "" if value in (None, "") else str(value)
+
+    def public_id_value(self) -> Any:
+        """Return the raw public identifier value owned by this instance."""
+
+        return self.pk
+
+    @classmethod
+    def public_id_from_pk(cls, value: Any) -> str:
+        """Return the public id encoded from this model's primary-key value."""
+
+        return "" if value in (None, "") else str(value)
 
     @classmethod
     def public_id_lookup(cls, value: str) -> dict[str, Any]:

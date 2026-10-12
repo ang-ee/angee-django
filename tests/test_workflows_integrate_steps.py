@@ -212,7 +212,7 @@ def test_lost_lease_resumes_after_the_committed_cursor(cycle, monkeypatch):
     # Settlement counts acknowledge outputs; the first page committed independently.
     assert run.output["counts"]["cycle_items"] == 1
     assert list(
-        system_queryset(StepAttempt).filter(step_run=row).order_by("history_date").values_list("result", flat=True)
+        system_queryset(StepAttempt).filter(step_run=row).order_by("number").values_list("result", flat=True)
     ) == ["timed_out", "succeeded"]
 
 
@@ -281,7 +281,7 @@ def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
     assert (
         sum(
             len(row.sync_failures(open_only=True))
-            for row in SyncStream.objects.current_for_bridge(cycle.bridge, "records")
+            for row in SyncStream.objects.current_for_bridge(cycle.bridge, "records").with_actor(cycle.bridge.owner)
         )
         == 2
     )
@@ -292,7 +292,8 @@ def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
     assert run.status == "succeeded"
     assert [keys for _, keys in cycle.rescanned] == [("east:0",), ("west:0",), ("east:1",), ("west:1",)]
     assert not any(
-        row.sync_failures(open_only=True) for row in SyncStream.objects.current_for_bridge(cycle.bridge, "records")
+        row.sync_failures(open_only=True)
+        for row in SyncStream.objects.current_for_bridge(cycle.bridge, "records").with_actor(cycle.bridge.owner)
     )
     assert run.output["counts"] == {"streams": 2}
 
@@ -317,10 +318,11 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
     assert runner.execute(step_row(run).pk)
     replacement = SyncStream.objects.current_for_bridge(cycle.bridge, "records").get()
     assert replacement.generation == 2 and replacement.phase == StreamPhase.BASELINE
-    assert replacement.cursor == {}
+    assert replacement.cursor == ({} if fallback else {"offset": 1})
     assert runner.execute(step_row(run).pk)
     replacement.refresh_from_db()
-    assert replacement.cursor == {"offset": 1} and replacement.phase == StreamPhase.BASELINE
+    assert replacement.cursor == {"offset": 1 if fallback else 2}
+    assert replacement.phase == (StreamPhase.BASELINE if fallback else StreamPhase.DELTA)
 
     run_until(run)
 
@@ -340,7 +342,7 @@ def test_rescan_waits_for_conflicts_without_applying_them(cycle):
 
     assert run.status == "waiting" and step_row(run).waiting_kind == "time"
     assert cycle.rescanned == [] and cycle.applied == []
-    failure.refresh_from_db()
+    failure = failure_state(failure)
     assert failure.is_open
 
 
@@ -356,7 +358,7 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     decide(decision, actor=cycle.bridge.owner, chosen=[record.link.public_id for record in conflicts])
     run_until(run)
     assert run.status == "failed"
-    assert len(SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=True)) == 2
+    assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 2
     for failure in conflicts:
         failure.resolve_conflict(keep=ConflictKeep.REMOTE)
     StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
@@ -375,7 +377,7 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
     run_until(run)
     assert run.status == "failed" and system_queryset(Decision).count() == 1
-    assert len(SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=True)) == 1
+    assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 1
 
 
 @pytest.mark.parametrize("step", [StreamStage, Rescan])

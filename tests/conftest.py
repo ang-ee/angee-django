@@ -24,7 +24,6 @@ from rebac.roles import grant as grant_role
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
-from angee.base.changesets import changeset
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
@@ -76,19 +75,9 @@ from tests import extraction_models  # noqa: F401 -- register shared FK targets 
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
-pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
-
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.
 os.environ.pop("SENTRY_DSN", None)
-
-
-@pytest.fixture(autouse=True)
-def captured_changeset() -> Iterator[None]:
-    """Give existing source-addon fixtures and writes a strict attribution boundary."""
-
-    with changeset(activity="system", change_reason="pytest"):
-        yield
 
 
 @pytest.fixture
