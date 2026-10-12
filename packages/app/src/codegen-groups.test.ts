@@ -76,10 +76,12 @@ describe("group operation codegen", () => {
     const generated = generateActions(METADATA);
 
     expect(generated).toContain(
-      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncFailure" | "retrySyncFailure" | "submit_channel_password";',
+      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncFailure" | "retrySyncFailure" | "start_workflow_run" | "submit_channel_password";',
     );
     for (const field of [
-      "install", "disable", "start_workflow_run", "start_workflow_recovery",
+      // start_workflow_run targets one workflow id beside an optional subject: an action
+      // like resolveSyncFailure, so it is authored; start_workflow_recovery needs two required inputs.
+      "install", "disable", "start_workflow_recovery",
       "optional_id", "defaulted_id", "string_id", "list_id", "extra_required_arg",
       "optional_only", "no_arguments",
     ]) {
