@@ -1164,16 +1164,20 @@ class TaskWork(StagedModelMixin):
         return self
 
     @transaction.atomic
-    def complete(self) -> Any:
+    def complete(self, *, feedback: str = "") -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
         if self.queue_id is None:
-            return self._base_verb("complete")
+            return self._base_verb("complete", feedback=feedback)
+        previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
+        if previous is not None and previous.category == "completed":
+            return self
         self.validate_action("complete")
         stage = self._stage_for_category("completed")
         self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
         self.stage = stage
         self.save(update_fields=("stage", "updated_at"))
+        self.post_completion(feedback)
         return self
 
     @transaction.atomic
@@ -1951,11 +1955,11 @@ class TaskWork(StagedModelMixin):
             follower.save(update_fields=("thread", "attachment", "last_read_message", "updated_at"))
             canonical_party_ids.add(follower.party_id)
 
-    def _base_verb(self, name: str, *args: Any) -> Any:
+    def _base_verb(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """Run a projects-only lifecycle verb for a legacy queue-less task."""
 
         with self._work_verb_write():
-            return getattr(super(), name)(*args)
+            return getattr(super(), name)(*args, **kwargs)
 
 
 class UserWork(ResourceLoadMixin):

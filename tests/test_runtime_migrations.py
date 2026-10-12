@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 from django.apps import AppConfig, apps
 from django.apps.registry import Apps
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.db import connection, connections, migrations, models
 from django.db.backends.base.base import BaseDatabaseWrapper
@@ -27,10 +28,13 @@ from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
 from django.db.migrations.writer import MigrationWriter
 from django.db.models.functions import Lower
+from django.utils import timezone
 
-from angee.base.fields import StateField
+from angee.addons import addon_manifest
+from angee.base.fields import SqidField, StateField
 from angee.compose.history import HistoricalRuntimeConfig
 from angee.compose.migrations import DropGuardAutodetector, RetiredTableOperation, RuntimeMigrations
+from angee.resources.entries import resource_manifest_for, retired_models_for
 from angee.storage.models import Folder
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -396,6 +400,123 @@ def test_autodetected_column_drop_requires_every_row_empty(field, value, storage
         f"unsafe autodetected column drop: probe.task.{field}: {storage} holds data in 1 row(s) on database 'default'. "
     )
     assert "[[migrations]]" in message
+
+
+@pytest.mark.parametrize("rows", [0, 1])
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_autodetected_table_drop_requires_an_empty_table(rows: int) -> None:
+    """A model removed from code drops its table automatically only while the table holds no row."""
+
+    history, current = ProjectState(), ProjectState()
+    for state in (history, current):
+        state.add_model(ModelState("probe", "Kept", [("id", models.AutoField(primary_key=True))]))
+    history.add_model(ModelState("probe", "Retired", [("id", models.AutoField(primary_key=True))]))
+    graph = MigrationGraph()
+    graph.add_node(("probe", "0001_initial"), migrations.Migration("0001_initial", "probe"))
+    retired = history.apps.get_model("probe", "Retired")
+    with connection.schema_editor() as editor:
+        editor.create_model(retired)
+    retired._base_manager.bulk_create([retired() for _ in range(rows)])
+
+    guard = DropGuardAutodetector(history, current)
+    if not rows:
+        (migration,) = guard.changes(graph=graph)["probe"]
+        assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
+        return
+    with pytest.raises(CommandError) as refused:
+        guard.changes(graph=graph)
+    message = str(refused.value)
+    assert message.startswith(
+        "unsafe autodetected table drop: probe.retired: table probe_retired holds data in 1 row(s) on database "
+        "'default'. "
+    )
+    assert "[[migrations]]" in message
+
+
+def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref: str = "seeded") -> None:
+    """Record a resource-ledger row naming ``model_label``, as its addon's resource files once seeded it.
+
+    The ledger's label field refuses models no longer in code, so the row is
+    written raw, as it survives in a database whose model was since removed.
+    """
+
+    ledger = apps.get_model("resources", "Resource")
+    if ledger._meta.db_table not in connection.introspection.table_names():
+        with connection.schema_editor() as editor:
+            editor.create_model(ledger)
+    values = {
+        "source_addon": addon, "source_path": f"resources/master/010_{xref}.yaml", "tier": "master",
+        "xref": xref, "content_hash": "sha256:" + "0" * 64, "target_model": model_label,
+        "target_id": public_id, "loaded_at": timezone.now(),
+    }
+    fields = [field for field in ledger._meta.local_concrete_fields if not field.primary_key]
+    row = [
+        values[field.attname] if field.attname in values
+        else timezone.now() if isinstance(field, models.DateTimeField) and not field.null
+        else field.get_default() if field.has_default() else None
+        for field in fields
+    ]
+    columns = ", ".join(connection.ops.quote_name(field.column) for field in fields)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {connection.ops.quote_name(ledger._meta.db_table)} ({columns}) "
+            f"VALUES ({', '.join(['%s'] * len(fields))})",
+            [field.get_db_prep_value(value, connection) if field.attname not in ("target_model",) else value
+             for field, value in zip(fields, row, strict=True)],
+        )
+
+
+@pytest.mark.parametrize("public_ids", ["sqid", "primary_key"])
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolated_upgrade_database")
+def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypatch, public_ids: str) -> None:
+    """Only the addon that names the model vouches for its own seeded rows; any other row refuses the drop."""
+
+    history, current = ProjectState(), ProjectState()
+    for state in (history, current):
+        state.add_model(ModelState("probe", "Kept", [("id", models.AutoField(primary_key=True))]))
+    history.add_model(ModelState("probe", "Retired", [("id", models.AutoField(primary_key=True))]))
+    graph = MigrationGraph()
+    graph.add_node(("probe", "0001_initial"), migrations.Migration("0001_initial", "probe"))
+    retired = history.apps.get_model("probe", "Retired")
+    with connection.schema_editor() as editor:
+        editor.create_model(retired)
+    codec = SqidField(real_field_name="id", min_length=8, prefix="ret")
+
+    def public_id(row):
+        return codec.public_id_from_value(row.pk) if public_ids == "sqid" else str(row.pk)
+
+    owner = apps.get_app_config("resources")
+    seeded = retired._base_manager.create()
+    seed_ledger("probe.Retired", public_id(seeded), addon=owner.name)
+    refused = r"probe\.retired: table probe_retired holds data in 1 row\(s\)"
+    with pytest.raises(CommandError, match=refused):  # No addon vouches for the row yet.
+        DropGuardAutodetector(history, current).changes(graph=graph)
+
+    monkeypatch.setitem(addon_manifest(owner).resources, "retired_models", ["probe.Retired"])
+    (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
+    assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
+
+    # Another addon's seeded row, a ledger id that is not the row's canonical public
+    # id, and an unledgered row each still count as data.
+    for addon, ledgered in (("probe.other", True), (owner.name, False), (None, None)):
+        row = retired._base_manager.create()
+        if addon is not None:
+            stale = SqidField(real_field_name="id", min_length=0, prefix="ret").public_id_from_value(row.pk)
+            seed_ledger("probe.Retired", public_id(row) if ledgered else stale, addon=addon, xref=f"row{row.pk}")
+        with pytest.raises(CommandError, match=refused):
+            DropGuardAutodetector(history, current).changes(graph=graph)
+        retired._base_manager.filter(pk=row.pk).delete()
+
+
+def test_retired_models_are_a_resources_declaration_not_a_tier(monkeypatch) -> None:
+    messaging = apps.get_app_config("messaging")
+    assert retired_models_for(messaging) == ("messaging.ActivityType",)
+    assert "retired_models" not in resource_manifest_for(messaging)
+    monkeypatch.setitem(addon_manifest(messaging).resources, "retired_models", "messaging.ActivityType")
+    with pytest.raises(ImproperlyConfigured, match="retired_models must be an array of model labels"):
+        retired_models_for(messaging)
 
 
 @pytest.mark.parametrize(("name", "wrapper"), [

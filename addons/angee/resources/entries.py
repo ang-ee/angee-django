@@ -89,6 +89,10 @@ STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 """Text formats that can carry ``_meta`` and ``rows`` envelopes."""
 
 
+RETIRED_MODELS_KEY = "retired_models"
+"""The ``[resources]`` key naming removed models whose seeded rows retire with them; not a tier."""
+
+
 def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
     """Return normalized resource declarations keyed by tier for one addon."""
 
@@ -96,9 +100,28 @@ def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, An
     resources = contract.resources if contract is not None else {}
     manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
     for raw_tier, declarations in resources.items():
+        if raw_tier == RETIRED_MODELS_KEY:
+            continue
         tier = ResourceTier.from_value(raw_tier)
         manifest[tier] = _resource_entries(app_config, declarations)
     return manifest
+
+
+def retired_models_for(app_config: AppConfig) -> tuple[str, ...]:
+    """Return the removed model labels whose rows ``app_config``'s resource files seeded.
+
+    An addon that removes such a model names it under ``retired_models`` in its
+    addon.toml ``[resources]``; the composer's drop guard then lets those rows,
+    and only those, go with the model's table.
+    """
+
+    contract = addon_manifest(app_config)
+    labels = contract.resources.get(RETIRED_MODELS_KEY, []) if contract is not None else []
+    if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
+        raise ImproperlyConfigured(
+            f"{app_config.name}: addon.toml [resources] {RETIRED_MODELS_KEY} must be an array of model labels"
+        )
+    return tuple(labels)
 
 
 def _resource_entries(

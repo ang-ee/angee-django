@@ -14,9 +14,9 @@ describe("messaging addon manifest", () => {
     const aside = messaging.containers?.["record#aside"] as Record<string, unknown>;
     expect(aside).toMatchObject({
       "chatter.comments": { remove: true },
-      "chatter.activity": { remove: true },
+      "chatter.history": { remove: true },
       "messaging.comments": { sequence: 10, content: { aliases: ["comments"] } },
-      "messaging.activity": { sequence: 20, content: { aliases: ["activity"] } },
+      "messaging.history": { sequence: 20, content: { aliases: ["history", "activity", "messaging.activity"] } },
       "messaging.sources": { sequence: 30, content: { aliases: ["sources"] } },
     });
   });

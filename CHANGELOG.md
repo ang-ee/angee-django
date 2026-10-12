@@ -9,6 +9,30 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — record tasks (breaking; ships in 0.3.0)
+
+Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tasks".
+
+- Record activities are record tasks: a `projects.Task` whose `subject` is a
+  record's chatter attachment, typed by `projects.ActivityType` (moved from
+  messaging with its public ids). A record task answers to its record alone, in
+  the permission schema: a record type takes tasks once its owner declares
+  `record_read` and `record_write` on `messaging/thread_attachment`.
+- The cutover, `projects:record_tasks`, is irreversible: it converts every
+  activity and drops messaging's `ThreadActivity` and `ActivityType` tables,
+  holding the task tables' lock throughout. projects refuses the `migrate` run
+  that would apply it while activities sit on undeclared record types.
+- GraphQL removals: messaging's activity types and nodes, `activity_agenda`, the
+  record activity mutations and the activity fields on the record-thread
+  payload; `promote_thread_activity_to_task` and `Task.converted_from_activity`.
+  Record tasks use `record_tasks`, `schedule_record_task`, `log_record_task`,
+  `complete_task(id, feedback)` and `drop_task`.
+- Messaging's change-history tab is `messaging.history` (placeholder
+  `chatter.history`); the former ids stay as `?chatterTab=` aliases until 0.4.0.
+- The composer's drop guard refuses an autodetected `DeleteModel` whose table
+  holds rows, except rows the retiring addon's resource files seeded once it
+  names the model under `retired_models` in its `addon.toml` `[resources]`.
+
 ## Unreleased — in-process agent sessions
 
 - Integrate feed identity discovery, committed live horizons, quota reply
