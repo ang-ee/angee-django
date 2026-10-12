@@ -53,12 +53,15 @@ vi.mock("@angee/ui", async () => {
   };
 });
 
-function need(verdict: "PENDING" | "COMPLETED" | "REJECTED", permissions = ["write"]): CurrentAccessRow {
+function need(
+  verdict: "PENDING" | "COMPLETED" | "REJECTED",
+  permissions: CurrentAccessRow["permissions"] = ["write"],
+): CurrentAccessRow {
   return {
-    id: "need-1", revision: 3, permissions,
+    id: "need-1", revision: 3, permissions, requester_user: null,
     requester_access_granted: verdict === "COMPLETED",
     claimed_name: "Alex Example", claimed_email: "alex@example.net", access_verdict: verdict === "PENDING" ? null : [verdict === "COMPLETED" ? "intake.approve" : "intake.deny"],
-    party: { id: "party-1", display_name: "Alex Example" },
+    party: { id: "party-1", display_name: "Alex Example", display_avatar: null },
     access_decision: { id: "decision-1", verdict: verdict === "PENDING" ? null : [verdict === "COMPLETED" ? "intake.approve" : "intake.deny"], is_open: verdict === "PENDING" },
   };
 }
