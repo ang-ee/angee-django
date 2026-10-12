@@ -6,6 +6,22 @@ SETTINGS = {
     "ANGEE_IMPL_REGISTRIES:append": ["angee.storage.backends.StorageBackend"],
     "ANGEE_STORAGE_DEFAULT_DRIVE": "assets",
     "ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES": 64 * 1024 * 1024,
+    # Images a server ingests to render inline (avatars): raster types only,
+    # since an SVG can carry script, sniffed from the bytes. They live on their
+    # own drive, so content deduplication never resolves one to a user's file.
+    "ANGEE_STORAGE_IMAGE_DRIVE": "images",
+    "ANGEE_STORAGE_IMAGE_MAX_BYTES": 5 * 1024 * 1024,
+    "ANGEE_STORAGE_IMAGE_TYPES": [
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/heic",
+        "image/heif",
+        "image/jpeg",
+        "image/png",
+        "image/tiff",
+        "image/webp",
+    ],
     "ANGEE_STORAGE_DRAFT_TTL_HOURS": 24,
     "ANGEE_STORAGE_TRASH_TTL_DAYS": 30,
     # The ``Backend.backend_class`` registry: each key a ``Backend`` row may name

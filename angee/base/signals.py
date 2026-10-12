@@ -1,4 +1,4 @@
-"""Per-model receiver binding."""
+"""Per-model receiver binding and the post-migrate receiver guard."""
 
 from __future__ import annotations
 
@@ -6,8 +6,37 @@ from collections.abc import Callable
 from typing import Any
 
 from django.apps import apps
+from django.db import connections, router
 from django.db.models import Model
 from django.db.models.signals import ModelSignal, class_prepared
+
+
+def migrated_model(*, app_config: object, using: str, app_label: str, model_name: str) -> type[Model] | None:
+    """Return the model a ``post_migrate`` receiver may work on now, or ``None``.
+
+    Django sends ``post_migrate`` for every app on every migrate, test databases
+    included, so a receiver acts once: on its own app's signal, for the connection
+    the router writes the model to, and only while migrations have created the
+    model's table (not after migrating back past it).
+    """
+
+    if getattr(app_config, "label", "") != app_label:
+        return None
+    try:
+        model = apps.get_model(app_label, model_name)
+    except LookupError:
+        return None
+    if using != router.db_for_write(model) or not router.allow_migrate_model(using, model):
+        return None
+    return model if has_table(using, model) else None
+
+
+def has_table(using: str, model: type[Model]) -> bool:
+    """Return whether migrations have created ``model``'s table on the ``using`` connection."""
+
+    connection = connections[using]
+    with connection.cursor() as cursor:
+        return model._meta.db_table in connection.introspection.table_names(cursor)
 
 
 def connect_for_models(
