@@ -1134,7 +1134,7 @@ def _system_of_record_statement(party: Any, source: Any, link: Any, **values: An
 
 @pytest.mark.django_db(transaction=True)
 def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(composed_tables: None) -> None:
-    """Flipping ``SyncStream.authoritative`` re-derives the subjects; preferred stays on top (§11.2)."""
+    """Declaring or flipping ``SyncStream.authoritative`` re-derives the subjects; preferred stays on top (§11.2)."""
 
     del composed_tables
     with system_context(reason="test authoritative stream"):
@@ -1149,7 +1149,9 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(co
         party.refresh_from_db()
         assert party.display_name == "Ada (me)"
 
-        SyncStream.objects.set_authoritative(stream, True)
+        # The adapter's declaration carries the fact: redeclaring flips the current generation.
+        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA, authoritative=True)
+        assert stream.authoritative is True
         party.refresh_from_db()
         assert party.display_name == "Ada (odoo)"
         assert Party.statements.model._base_manager.get(link=link).applied

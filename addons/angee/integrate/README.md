@@ -47,6 +47,9 @@ as field deltas, read through the link's own authorization.
 A baseline adopts matching local identities without an applied base using remote
 values. Local-only rows may then be created remotely when a writable baseline
 completes. Before enabling two-way sync, review the synchronized local scope.
+A declaration's `authoritative` flag marks the source as the system of record for
+what the stream states (`SyncStream.authoritative`, read by statement survivorship);
+changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
 Direction or snapshot changes open a new baseline generation and retain links,
 policy and failures. Adapter-private deletion policy remains in stream `config`.
 A declared snapshot with no reconciliation interval closes after its baseline;

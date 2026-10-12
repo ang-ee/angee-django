@@ -46,13 +46,12 @@ from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference
-from angee.base.identity import instances_from_public_ids, public_id_for
+from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
 from angee.base.merge import references
 from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.querysets import StatementQuerySet
-from angee.base.refs import generic_pointer_model
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
@@ -1002,14 +1001,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         """Assert normal handle facts from native supporting records, preserving person decisions."""
         source = to_subject_ref(asserted_by)
         subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
-        origins = list(evidence)
-        refs = [
-            {
-                "model": generic_pointer_model(type(row))._meta.label,
-                "id": public_id_for(generic_pointer_model(type(row)), row.pk),
-            }
-            for row in origins
-        ]
+        refs = [EvidenceReference.of(row) for row in evidence]
         existing = subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
         if existing is not None and existing.rank == existing.StatementRank.PREFERRED:
             subject.statements.asserting_source(asserted_by)
@@ -1275,11 +1267,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             raise ValidationError(
                 {"confidence": f"Claimed-handle proposals require confidence below {self.model.REVIEW_CONFIDENCE}."}
             )
-        evidence_model = generic_pointer_model(type(evidence))
-        evidence_ref = {
-            "model": evidence_model._meta.label,
-            "id": public_id_for(evidence_model, evidence.pk),
-        }
+        evidence_ref = EvidenceReference.of(evidence).model_dump(mode="json")
         with system_context(reason=reason), transaction.atomic():
             handles, parties = self.lock_identity_rows(
                 party_ids=(party.pk,),
@@ -1435,7 +1423,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 aspect="same_as",
                 values={},
                 asserted_by=source,
-                evidence=[{"model": row._meta.label, "id": row.public_id} for row in evidence],
+                evidence=[EvidenceReference.of(row) for row in evidence],
             )
             changed += 1
         return changed

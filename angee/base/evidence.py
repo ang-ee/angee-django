@@ -14,10 +14,10 @@ from django.db import models
 from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
-from angee.base.identity import instances_from_public_ids
+from angee.base.identity import instances_from_public_ids, public_id_for
 from angee.base.mixins import AppendOnlyModel
 from angee.base.models import AngeeDataModel
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 
 
@@ -45,6 +45,13 @@ class EvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str
     id: str
+
+    @classmethod
+    def of(cls, record: models.Model) -> EvidenceReference:
+        """Name a saved record by the model its generic pointers resolve to and its public id."""
+
+        pointer_model = generic_pointer_model(type(record))
+        return cls(model=pointer_model._meta.label, id=public_id_for(pointer_model, record.pk))
 
 
 def _readable(

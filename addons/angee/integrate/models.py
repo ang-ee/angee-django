@@ -3709,6 +3709,7 @@ class SyncStreamManager(AngeeManager):
         kind: StreamKind = StreamKind.EVENT_FEED,
         direction: StreamDirection = StreamDirection.PULL,
         snapshot: bool = False,
+        authoritative: bool = False,
         cursor: Any = None,
         reconcile_interval: timedelta | None = None,
         absence_threshold: int = 2,
@@ -3720,6 +3721,9 @@ class SyncStreamManager(AngeeManager):
         Cursor and policy arguments seed only the first epoch; subsequent calls
         preserve persisted progress and policy. Kind is immutable; direction or
         snapshot changes start a new baseline generation with the persisted policy.
+        ``authoritative`` is the declaration's fact: a changed declaration flips the
+        current generation through :meth:`set_authoritative`, so an adapter never
+        flips it from inside a page.
         """
 
         if absence_threshold < 1:
@@ -3737,6 +3741,7 @@ class SyncStreamManager(AngeeManager):
                     kind=kind,
                     direction=direction,
                     snapshot=snapshot,
+                    authoritative=authoritative,
                     cursor={} if cursor is None else cursor,
                     reconcile_interval=reconcile_interval,
                     absence_threshold=absence_threshold,
@@ -3746,7 +3751,9 @@ class SyncStreamManager(AngeeManager):
             if stream.kind != kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
             if stream.direction != direction or stream.snapshot != snapshot:
-                return self.bump_generation(stream, direction=direction, snapshot=snapshot)
+                stream = self.bump_generation(stream, direction=direction, snapshot=snapshot)
+            if stream.authoritative != authoritative:
+                stream = self.set_authoritative(stream, authoritative)
             return stream
 
     def bump_generation(

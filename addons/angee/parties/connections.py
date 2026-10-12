@@ -24,6 +24,7 @@ from django.db import transaction
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
+from angee.base.evidence import EvidenceReference
 from angee.base.mixins import SourceKind, StatementSourceMixin
 
 
@@ -211,7 +212,7 @@ def _ingest_one_connection(
             values={"display_name": parsed.handle.display_name or parsed.handle.value},
             asserted_by=asserted_by,
             link=link,
-            evidence=[{"model": handle._meta.label, "id": handle.public_id}],
+            evidence=[EvidenceReference.of(handle)],
         )
         person.refresh_from_db()
         return person
@@ -304,7 +305,7 @@ def _land_acquaintance(
         aspect="relationship",
         asserted_by=asserted_by,
         link=link,
-        evidence=[{"model": evidence._meta.label, "id": evidence.public_id}],
+        evidence=[EvidenceReference.of(evidence)],
         values={
             "other_name": "",
             "title": "",
@@ -345,7 +346,7 @@ def _land_employment(
         aspect="relationship",
         asserted_by=asserted_by,
         link=link,
-        evidence=[{"model": evidence._meta.label, "id": evidence.public_id}],
+        evidence=[EvidenceReference.of(evidence)],
         values={
             "other_name": organization,
             "title": str(title or ""),

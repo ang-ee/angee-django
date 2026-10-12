@@ -86,6 +86,8 @@ class StreamDefinition:
     tombstone_retention: timedelta | None = None
     config: dict[str, Any] = field(default_factory=dict)
     snapshot: bool = False
+    authoritative: bool = False
+    """The source is the system of record for what this stream states (``SyncStream.authoritative``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1112,6 +1114,7 @@ def open_stream(
                 kind=definition.kind,
                 direction=definition.direction,
                 snapshot=definition.snapshot,
+                authoritative=definition.authoritative,
                 cursor=_validated_cursor(definition.cursor),
                 reconcile_interval=definition.reconcile_interval,
                 absence_threshold=definition.absence_threshold,
