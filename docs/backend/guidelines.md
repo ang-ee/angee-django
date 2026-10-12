@@ -1872,6 +1872,25 @@ corrected local projection under its existing write-back policy. Archive callers
 use an explicit system boundary; serving exports retain subject authorization and
 gated-field redaction. No archive sink or history-pruning policy is introduced.
 
+Every captured write runs inside a [changeset boundary](../../angee/base/changesets.py);
+strict mode refuses one without it. Entrypoints own boundaries, one per unit of
+work, and nothing else opens a `fresh` one except a deliberately separate logical
+write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
+stack's own sync or async path; WebSocket connections through
+`ChangesetScopeMiddleware`, composed in [`angee.asgi`](../../angee/asgi.py); Celery
+tasks through [`angee.jobs.celery.Task`](../../angee/jobs/celery.py); management
+commands through [`angee.compose.manage.main()`](../../angee/compose/manage.py),
+which every rendered `manage.py` calls (`serve`, `runserver` and `test` are
+excluded because their requests, connections, tasks and tests own boundaries;
+interactive shells keep the command boundary); a bridge live-session run through
+[`run_bridge_session_job`](../../addons/angee/integrate/session_runner.py). A
+boundary stores one changeset row per writing thread and actor under its shared
+facts, so `copy_context().run` in a worker pool and a per-event actor loop
+attribute exactly. A response status of 400 or more, a GraphQL result with
+`errors` (marked by [`AngeeGraphQLView`](../../addons/angee/graphql/views.py)) or an
+exception closes the rows as failed. Tests inherit a boundary from the root
+`conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
+
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.

@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import logging
+import sys
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from threading import RLock
+from types import TracebackType
 from typing import Protocol, cast
 
+from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.conf import settings
 from django.db import connections, models, router, transaction
@@ -24,9 +29,18 @@ from angee.base.autoconfig import SETTINGS
 
 logger = logging.getLogger(__name__)
 
+MANAGEMENT_ENTRYPOINT = "angee.compose.manage.main"
+"""The framework-owned ``manage.py`` entrypoint that opens a command's boundary."""
+
 
 class ChangesetRequired(MissingActorError):
     """A captured write has no logical attribution boundary."""
+
+
+def changeset_model_label() -> str:
+    """Return the swappable storage label; empty when attribution storage is disabled."""
+
+    return cast(str, getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]) or "")
 
 
 class ChangesetLike(Protocol):
@@ -44,114 +58,218 @@ class ChangesetLike(Protocol):
     def close(self, outcome: str) -> None: ...
 
 
+@dataclass
+class _ChangesetRow:
+    """The stored changeset of one writing thread and actor, touched only by that thread."""
+
+    instance: ChangesetLike
+    attributed: bool = False
+    persisted: bool = False
+    pending_commit: Callable[[], None] | None = None
+
+
 class _ChangesetBoundary:
-    """Private lazy construction and Django-owned transaction admission."""
+    """Shared facts of one logical boundary, stored as one row per writing thread and actor.
+
+    Django connections are per thread, so a row's insert must share the thread
+    and transaction of the captured writes that reference it; ``copy_context().run``
+    in a worker pool therefore records its own row under the boundary's facts.
+    A row per actor keeps attribution exact when one boundary serves several
+    actors, such as a per-event trigger loop. Every row closes with the boundary.
+    """
 
     def __init__(self, facts: dict[str, object], *, defaults: bool) -> None:
         self.facts = facts
         self.explicit = set() if defaults else set(facts)
-        self.instance: ChangesetLike | None = None
-        self.attributed = False
-        self.persisted = False
-        self.pending_commit: Callable[[], None] | None = None
-        self.mark_failed: Callable[[], None] = lambda: None
+        self.rows: dict[tuple[threading.Thread, str], _ChangesetRow] = {}
+        self.failed = False
         self.lock = RLock()
+
+    def mark_failed(self) -> None:
+        self.failed = True
+
+    @property
+    def recording(self) -> bool:
+        return any(row.pending_commit is not None or row.persisted for row in self.rows.values())
 
     def refine(self, facts: dict[str, object]) -> None:
         with self.lock:
             for name, value in facts.items():
-                previous = getattr(self.instance, name) if self.instance is not None else self.facts.get(name)
-                if previous != value and (name in self.explicit or self.pending_commit is not None or self.persisted):
+                previous = self.facts.get(name)
+                if previous != value and (name in self.explicit or self.recording):
                     raise ValueError(f"Conflicting changeset {name}: {previous!r} and {value!r}.")
             self.facts.update(facts)
             self.explicit.update(facts)
-            if self.instance is not None:
+            for row in self.rows.values():
                 for name, value in facts.items():
-                    setattr(self.instance, name, value)
+                    setattr(row.instance, name, value)
 
-    def construct(self) -> ChangesetLike:
+    def row(self) -> _ChangesetRow:
+        """Return the current thread's row for the ambient actor, constructing it lazily.
+
+        The thread object, not its recyclable identifier, is the key: Django binds
+        connections to the thread object as well.
+        """
+
+        actor = current_actor()
+        key = (threading.current_thread(), str(actor) if actor is not None else "")
         with self.lock:
-            if self.instance is None:
-                model = apps.get_model(getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]))
+            row = self.rows.get(key)
+            if row is None:
+                model = apps.get_model(changeset_model_label())
                 facts = dict(self.facts)
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
-                self.instance = cast(ChangesetLike, model(**facts))
+                instance = cast(ChangesetLike, model(actor=key[1], **facts))
                 if origin is not None:
-                    setattr(self.instance, "origin", origin)
-            return self.instance
+                    setattr(instance, "origin", origin)
+                row = self.rows[key] = _ChangesetRow(instance)
+            return row
 
     def capture(self, *, record: bool) -> ChangesetLike:
-        with self.lock:
-            instance = self.construct()
-            if not self.attributed:
-                actor = current_actor()
-                instance.actor = str(actor) if actor is not None else ""
-                instance.change_reason = cast(str, self.facts.get("change_reason", current_sudo_reason() or ""))
-                self.attributed = True
-            if record and not self.persisted:
-                using = router.db_for_write(type(instance), instance=instance)
-                connection = connections[using]
-                # Django removes callbacks on savepoint/transaction rollback and
-                # retains them on savepoint release. The queue owns that distinction.
-                if self.pending_commit is None or not any(
-                    callback is self.pending_commit for _, callback, _ in connection.run_on_commit
-                ):
-                    instance.pk = None
-                    instance._state.adding = True
-                    instance.save(force_insert=True, using=using)
+        row = self.row()
+        instance = row.instance
+        if not row.attributed:
+            instance.change_reason = cast(str, self.facts.get("change_reason", current_sudo_reason() or ""))
+            row.attributed = True
+        if record and not row.persisted:
+            using = router.db_for_write(type(instance), instance=instance)
+            connection = connections[using]
+            # Django removes callbacks on savepoint/transaction rollback and
+            # retains them on savepoint release. The queue owns that distinction.
+            if row.pending_commit is None or not any(
+                callback is row.pending_commit for _, callback, _ in connection.run_on_commit
+            ):
+                instance.pk = None
+                instance._state.adding = True
+                instance.save(force_insert=True, using=using)
 
-                    def mark_persisted() -> None:
-                        with self.lock:
-                            self.persisted = True
+                def mark_persisted() -> None:
+                    row.persisted = True
 
-                    self.pending_commit = mark_persisted
-                    transaction.on_commit(mark_persisted, using=using)
-            return instance
+                row.pending_commit = mark_persisted
+                transaction.on_commit(mark_persisted, using=using)
+        return instance
 
     def close(self, outcome: str) -> None:
-        if self.instance is None:
-            return
-        try:
-            instance = self.instance
-            using = router.db_for_write(type(instance), instance=instance)
+        with self.lock:
+            rows = list(self.rows.values())
+        for row in rows:
+            try:
+                self._close_row(row, outcome)
+            except Exception:
+                logger.exception("Could not close changeset %s", row.instance.pk)
 
-            def close_persisted() -> None:
-                if not self.persisted:
-                    return
-                with transaction.atomic(using=using):
-                    instance.close(outcome)
+    @staticmethod
+    def _close_row(row: _ChangesetRow, outcome: str) -> None:
+        instance = row.instance
+        using = router.db_for_write(type(instance), instance=instance)
 
-            if connections[using].in_atomic_block:
-                transaction.on_commit(close_persisted, using=using, robust=True)
-            else:
-                close_persisted()
-        except Exception:
-            logger.exception("Could not close changeset %s", self.instance.pk)
+        def close_persisted() -> None:
+            if not row.persisted:
+                return
+            with transaction.atomic(using=using):
+                instance.close(outcome)
+
+        if connections[using].in_atomic_block:
+            transaction.on_commit(close_persisted, using=using, robust=True)
+        else:
+            close_persisted()
 
 
 _current_changeset: ContextVar[_ChangesetBoundary | None] = ContextVar("angee_current_changeset", default=None)
+
+
+def _required_message() -> str:
+    message = "A captured write requires an open changeset."
+    if sys.argv and Path(sys.argv[0]).name == "manage.py":
+        message += (
+            f" This management command runs without a boundary: manage.py must call {MANAGEMENT_ENTRYPOINT}();"
+            " re-render it from the project template."
+        )
+    return message
 
 
 def current_changeset(*, required: bool = False, record: bool = False) -> ChangesetLike | None:
     """Return the concrete open changeset, recording it before a captured write.
 
     Empty boundaries create no database rows, allowing checks and schema commands
-    to run before migrations. Strictness follows REBAC's existing posture. Actor
-    and sudo reason resolve on the first captured write (``required`` or ``record``).
+    to run before migrations. Strictness follows REBAC's existing posture. The
+    row belongs to the current thread and ambient actor; its sudo reason resolves
+    on the first captured write (``required`` or ``record``).
     """
 
     boundary = _current_changeset.get()
     if boundary is None:
         if required and app_settings.REBAC_STRICT_MODE:
-            raise ChangesetRequired("A captured write requires an open changeset.")
+            raise ChangesetRequired(_required_message())
         return None
-    if not getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]):
+    if not changeset_model_label():
         return None
-    return boundary.capture(record=record) if required or record else boundary.construct()
+    return boundary.capture(record=record) if required or record else boundary.row().instance
 
 
-@contextmanager
+def mark_changeset_failed() -> None:
+    """Record a handled failure on the open boundary; its changesets close as failed."""
+
+    boundary = _current_changeset.get()
+    if boundary is not None:
+        boundary.mark_failed()
+
+
+class _ChangesetScope:
+    """One ``changeset()`` entry, usable with ``with`` and ``async with``.
+
+    The asynchronous exit closes the boundary in Django's thread-sensitive worker
+    so an async entrypoint never hops threads for the request itself.
+    """
+
+    def __init__(self, facts: dict[str, object], *, fresh: bool) -> None:
+        self.facts = facts
+        self.fresh = fresh
+        self.boundary: _ChangesetBoundary | None = None
+        self.joined: _ChangesetBoundary | None = None
+        self.token: Token[_ChangesetBoundary | None] | None = None
+
+    def __enter__(self) -> Callable[[], None]:
+        existing = _current_changeset.get()
+        if existing is not None and not self.fresh:
+            existing.refine(self.facts)
+            self.joined = existing
+            return existing.mark_failed
+        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh)
+        self.token = _current_changeset.set(self.boundary)
+        return self.boundary.mark_failed
+
+    def _leave(self, exc_type: type[BaseException] | None) -> str | None:
+        """Reset the context; return the outcome to close, or ``None`` for a joined boundary."""
+
+        if self.joined is not None:
+            if exc_type is not None:
+                self.joined.mark_failed()
+            return None
+        assert self.boundary is not None and self.token is not None
+        _current_changeset.reset(self.token)
+        return "failure" if exc_type is not None or self.boundary.failed else "success"
+
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None
+    ) -> None:
+        outcome = self._leave(exc_type)
+        if outcome is not None and self.boundary is not None:
+            self.boundary.close(outcome)
+
+    async def __aenter__(self) -> Callable[[], None]:
+        return self.__enter__()
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None
+    ) -> None:
+        outcome = self._leave(exc_type)
+        if outcome is not None and self.boundary is not None and self.boundary.rows:
+            await sync_to_async(self.boundary.close)(outcome)
+
+
 def changeset(
     *,
     action: str | None = None,
@@ -162,14 +280,16 @@ def changeset(
     origin: models.Model | None = None,
     occurred_at: datetime | None = None,
     fresh: bool = False,
-) -> Iterator[Callable[[], None]]:
+) -> _ChangesetScope:
     """Open logical attribution, yielding a callback to mark a handled failure.
 
     Entrypoints use ``fresh=True`` to own a boundary; their facts are defaults.
     Ad-hoc nested boundaries join and refine defaults before recording, while
     conflicting explicit facts fail fast. No boundary changes REBAC's actor or
-    grants a bypass. Construction is deferred until a caller needs the concrete
-    instance; persistence follows the first captured write's transaction.
+    grants a bypass. A changeset row is constructed when a caller needs the
+    concrete instance and persisted in the first captured write's transaction;
+    each writing thread and actor records its own row under the shared facts.
+    Asynchronous entrypoints use ``async with``.
     """
 
     facts: dict[str, object] = {
@@ -185,32 +305,7 @@ def changeset(
         )
         if value is not None
     }
-    existing = _current_changeset.get()
-    if existing is not None and not fresh:
-        existing.refine(facts)
-        try:
-            yield existing.mark_failed
-        except BaseException:
-            existing.mark_failed()
-            raise
-        return
-
-    boundary = _ChangesetBoundary(facts, defaults=fresh)
-    token = _current_changeset.set(boundary)
-    outcome = "failure"
-    failed = False
-
-    def mark_failed() -> None:
-        nonlocal failed
-        failed = True
-
-    boundary.mark_failed = mark_failed
-    try:
-        yield mark_failed
-        outcome = "failure" if failed else "success"
-    finally:
-        _current_changeset.reset(token)
-        boundary.close(outcome)
+    return _ChangesetScope(facts, fresh=fresh)
 
 
 @dataclass

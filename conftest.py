@@ -20,8 +20,13 @@ def captured_changeset(request: pytest.FixtureRequest) -> Iterator[None]:
     fixture so it is torn down — and its changeset closed — while database access
     is still allowed. Statement principals and their grants belong to the test's
     permission schema: ``composed_tables`` installs them after its REBAC sync.
+    Modules marked ``entrypoint_boundaries`` exercise the production entrypoints'
+    own boundaries and run without this one.
     """
 
+    if request.node.get_closest_marker("entrypoint_boundaries"):
+        yield
+        return
     names = set(request.fixturenames)
     if not is_django_unittest(request) and (
         request.node.get_closest_marker("django_db") or {"db", "transactional_db", "composed_tables"} & names

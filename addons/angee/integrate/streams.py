@@ -1249,6 +1249,8 @@ def sync_bridge(bridge: Any) -> int:
                 with ThreadPoolExecutor(
                     max_workers=min(parallelism, len(definitions)), thread_name_prefix="bridge-sync"
                 ) as pool:
+                    # Each worker records its own changeset row under the cycle's boundary
+                    # and actor (angee.base.changesets), so the copied context is safe to share.
                     futures = {
                         pool.submit(copy_context().run, _drain_partition, bridge, definition, deadline): definition
                         for definition in definitions

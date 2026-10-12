@@ -44,8 +44,7 @@ from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_history_manager_for_model
 
 from angee.base.actors import actor_user_id, instance_actor
-from angee.base.autoconfig import SETTINGS
-from angee.base.changesets import current_changeset, write_group
+from angee.base.changesets import changeset_model_label, current_changeset, write_group
 from angee.base.errors import DomainError
 from angee.base.fields import SqidField, StateField
 from angee.base.identity import PublicIdentity
@@ -58,6 +57,7 @@ from angee.base.querysets import (
     _AngeeQuerySetMixin,
     model_history,
 )
+from angee.base.refs import concrete_child_models, generic_pointer_model
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
@@ -793,7 +793,7 @@ class _ChangesetHistory(models.Model):
     """Historical attribution shared by every native generated history model."""
 
     changeset = models.ForeignKey(
-        getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]),
+        changeset_model_label(),
         null=True,
         blank=True,
         on_delete=models.PROTECT,
@@ -922,8 +922,6 @@ class ModelHistory(HistoricalRecords):
         A later write, including an unattributed one, refuses the whole revert.
         The caller holds the operational row locks throughout restoration.
         """
-
-        from angee.base.refs import generic_pointer_model
 
         history = model.history.using(using)
         key = model._meta.pk.attname
@@ -1056,8 +1054,6 @@ class ModelHistory(HistoricalRecords):
         later queryset write in the group. Native receivers consume those keys.
         """
 
-        from angee.base.refs import concrete_child_models
-
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return
         manager = get_history_manager_for_model(model)
@@ -1137,9 +1133,7 @@ class ModelHistory(HistoricalRecords):
                 extra["history_user"].remote_field.model = user
                 extra["history_user"].remote_field.field_name = user._meta.pk.name
             field = _ChangesetHistory._meta.get_field("changeset").clone()
-            field.remote_field.model = apps.get_model(
-                getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"])
-            )
+            field.remote_field.model = apps.get_model(changeset_model_label())
             field.remote_field.field_name = field.remote_field.model._meta.pk.name
             extra["changeset"] = field
         return extra

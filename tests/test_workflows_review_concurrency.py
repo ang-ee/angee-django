@@ -29,7 +29,8 @@ def submit(pool, call):
 
     The worker runs in a copy of the caller's context, so the test's attribution
     boundary and actor reach its captured writes the way a framework thread pool
-    carries them (``copy_context().run``).
+    carries them (``copy_context().run``); the boundary records the worker's own
+    changeset row in the worker's connection.
     """
     started = Queue()
 

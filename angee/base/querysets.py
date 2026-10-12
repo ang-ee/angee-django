@@ -13,8 +13,7 @@ from rebac import app_settings, system_context
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.watch import statement_keys
 
-from angee.base.autoconfig import SETTINGS
-from angee.base.changesets import current_changeset, write_group
+from angee.base.changesets import changeset_model_label, current_changeset, write_group
 from angee.base.scoping import by_key, lock_if_supported, read_scoped_queryset
 
 if TYPE_CHECKING:
@@ -28,17 +27,7 @@ def model_history(model: type[models.Model]) -> ModelHistory | None:
 
     if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
         return None
-    if (
-        model._meta.label_lower
-        == cast(
-            str,
-            getattr(
-                settings,
-                "ANGEE_CHANGESET_MODEL",
-                SETTINGS["ANGEE_CHANGESET_MODEL"],
-            ),
-        ).lower()
-    ):
+    if model._meta.label_lower == changeset_model_label().lower():
         return None
     concrete = model._meta.concrete_model
     history = getattr(concrete._meta, "angee_model_history", None)

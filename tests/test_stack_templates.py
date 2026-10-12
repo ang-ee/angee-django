@@ -967,19 +967,29 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
 
 
-def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> None:
-    """A real one-shot command attributes its captured write through rendered manage.py."""
+STALE_MANAGE_PY = textwrap.dedent("""\
+    import os
+    import sys
 
-    manage = tmp_path / "manage.py"
-    manage.write_text(
-        (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
-    )
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
+    from django.core.management import execute_from_command_line
+
+    execute_from_command_line(sys.argv)
+    """)
+"""A manage.py rendered before the framework owned the entrypoint: no attribution boundary."""
+
+
+def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.CompletedProcess[str]:
+    """Run a one-shot command that captures a write through the given ``manage.py`` body."""
+
+    (tmp_path / "manage.py").write_text(manage_source)
     addon_dir = tmp_path / "addons"
     commands = addon_dir / "captureprobe" / "management" / "commands"
     commands.mkdir(parents=True)
     for package in (commands, commands.parent, commands.parent.parent):
         (package / "__init__.py").touch()
-    (commands / "captureprobe.py").write_text(textwrap.dedent('''\
+    (commands / "captureprobe.py").write_text(
+        textwrap.dedent("""\
         from django.apps import apps
         from django.core.management.base import BaseCommand
         from rebac import system_context
@@ -990,8 +1000,9 @@ def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> Non
             def handle(self, *args, **options):
                 with system_context(reason="captureprobe.write"):
                     apps.get_model("notes", "Note").objects.create(title="Command write")
-        '''))
-    script = textwrap.dedent('''\
+        """)
+    )
+    script = textwrap.dedent("""\
         import runpy
         import sys
         from pathlib import Path
@@ -1016,14 +1027,36 @@ def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> Non
         assert context.activity == "system"
         assert context.state == "closed"
         assert context.outcome == "success"
-        ''')
+        """)
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-c", script, str(ROOT), str(tmp_path)],
-        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
+
+
+def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> None:
+    """A real one-shot command attributes its captured write through rendered manage.py."""
+
+    rendered = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
+    assert "from angee.compose.manage import main" in rendered
+    result = _run_probe_command(tmp_path, rendered)
     assert result.returncode == 0, f"rendered management command failed:\n{result.stdout}\n{result.stderr}"
+
+
+def test_stale_manage_py_fails_loudly_with_the_remedy(tmp_path: Path) -> None:
+    """A manage.py without the framework entrypoint refuses the captured write and names the fix."""
+
+    result = _run_probe_command(tmp_path, STALE_MANAGE_PY)
+    assert result.returncode != 0
+    assert "ChangesetRequired" in result.stderr
+    assert "manage.py must call angee.compose.manage.main()" in result.stderr
 
 
 # --- dev (process) contracts ---------------------------------------------------
@@ -1560,9 +1593,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
 def test_dev_stack_ingress_aliases_serve_further_hosts() -> None:
     """Alias host names join the edge site and the UI's allowed hosts."""
 
-    stack = _render_dev_docker_stack(
-        ingress_domain="dev.example.com", ingress_aliases="ap.example.com,crm.example.com"
-    )
+    stack = _render_dev_docker_stack(ingress_domain="dev.example.com", ingress_aliases="ap.example.com,crm.example.com")
 
     assert stack["ingress"]["domain"] == "dev.example.com"
     assert stack["ingress"]["aliases"] == ["ap.example.com", "crm.example.com"]
