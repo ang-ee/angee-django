@@ -60,7 +60,7 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OptimisticLockMixin, OwnerMixin, TrashMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OptimisticLockMixin, OwnerMixin, SourceKind, TrashMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -1146,6 +1146,12 @@ class Channel(Bridge):
 
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
+
+    @property
+    def source_kind(self) -> SourceKind | None:
+        """The selected protocol declares whether this channel asserts statements, and as what."""
+
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).source_kind
 
     def can_reconcile_delivery(self) -> bool:
         """Read the concrete capability's backend declaration without opening it."""

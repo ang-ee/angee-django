@@ -110,3 +110,10 @@ Email delivery distinguishes definite refusals from uncertain acceptance. SMTP
 timeouts/disconnects after sending starts and ambiguous provider HTTP 5xx settle
 uncertain, requiring acknowledgement before another send. DNS, TLS, connect
 timeout and greeting disconnects during connection opening retry as not sent.
+
+A channel asserts statements only through its protocol's declaration:
+`ChannelBackend.source_kind` (default `None`, refused as a source) is what
+`Channel.source_kind` returns, so an `Integration` principal resolves to it through
+its capability child. Takeout and export backends declare `SourceKind.IMPORT` and
+assert as the channel's `integration_ptr`, the same row that owns the takeout's
+`SyncStream` and observed `RecordLink`s.
