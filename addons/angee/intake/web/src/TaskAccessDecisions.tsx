@@ -14,7 +14,7 @@ export interface CurrentAccessRow extends StringIdRow {
   claimed_email: string | null;
   access_verdict: JsonValue | null;
   requester_access_granted: boolean;
-  party: { id: string; display_name: string } | null;
+  party: { id: string; display_name: string; display_avatar?: { url: string } | null } | null;
   access_decision: { id: string; verdict: JsonValue | null; is_open: boolean } | null;
 }
 
