@@ -23,17 +23,17 @@ and orphans edge rows on delete.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models
+from django.db import DEFAULT_DB_ALIAS, models
 from django.utils.text import capfirst
 from rebac import ObjectRef, to_object_ref
 from rebac.field_backing import canonical_model
@@ -41,7 +41,15 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
+from angee.base.mixins import MergeContractMixin
 from angee.base.permissions import effective_rebac_definition
+
+
+class RetainedGenericRelation(GenericRelation):
+    """Query retained edges without collecting them on the target's deletion."""
+
+    def bulk_related_objects(self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS) -> list[models.Model]:
+        return []
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,45 +238,15 @@ class MergePolicy(StrEnum):
     """Refuse the merge while such a row exists."""
 
 
-def unique_field_sets(model: type[models.Model]) -> Iterator[tuple[tuple[str, ...], models.Q]]:
-    """Yield each unique field set of ``model`` with the condition it applies under.
+class RecordRefMixin(MergeContractMixin, models.Model):
+    """Project a row reference from the model's single declared generic foreign key.
 
-    An expression constraint names no field set and is not yielded.
+    Its collision declarations (``merge_identity``, ``merge_collapse``) are the
+    pointing model's own, on :class:`~angee.base.mixins.MergeContractMixin`.
     """
-
-    for field in model._meta.concrete_fields:
-        if field.unique and not field.primary_key:
-            yield (field.name,), models.Q()
-    for together in model._meta.unique_together:
-        yield tuple(together), models.Q()
-    for constraint in model._meta.constraints:
-        if isinstance(constraint, models.UniqueConstraint) and constraint.fields:
-            yield tuple(constraint.fields), constraint.condition or models.Q()
-
-
-class RecordRefMixin(models.Model):
-    """Project a row reference from the model's single declared generic foreign key."""
 
     merge_policy: ClassVar[MergePolicy] = MergePolicy.BLOCK
     """What merging the referenced record does to this edge's rows; an edge that declares none blocks."""
-
-    merge_identity: ClassVar[tuple[tuple[str, ...], ...]] = ()
-    """Unique field sets whose equal rows state one fact.
-
-    A merge moving a row onto one the survivor already holds under such a set
-    drops the merged record's copy; any other unique collision refuses the merge.
-    """
-
-    def merge_collapse(self, duplicate: Any) -> bool:
-        """Fold ``duplicate``'s state into this row before a merge drops it as the same fact.
-
-        A merge asks only when the two differ beyond their identity and
-        bookkeeping. Return whether the duplicate's state is now kept; the default
-        keeps nothing, so the merge refuses rather than lose it.
-        """
-
-        del duplicate
-        return False
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -299,17 +277,6 @@ class RecordRefMixin(models.Model):
                     id="angee.E030",
                 )
             )
-        declared = {fields for fields, _condition in unique_field_sets(cls)}
-        for fields in cls.merge_identity:
-            if tuple(fields) not in declared:
-                errors.append(
-                    checks.Error(
-                        f"{cls._meta.label}.merge_identity names {fields}, which no unique field set declares.",
-                        hint="Declare the identity as a unique field, unique_together or a UniqueConstraint.",
-                        obj=cls,
-                        id="angee.E037",
-                    )
-                )
         return errors
 
     @property
@@ -410,15 +377,17 @@ class RecordRefMixin(models.Model):
                 pk = field.public_id_to_value(value) if field else model._meta.pk.to_python(value)
                 if pk is None or public_id_for(model, pk) != value:
                     continue
-            except (TypeError, ValueError, ValidationError):
+            except TypeError, ValueError, ValidationError:
                 continue
-            candidates.append(models.When(
-                **{
-                    f"{reference.ct_field}__app_label": model._meta.app_label,
-                    f"{reference.ct_field}__model": model._meta.model_name,
-                },
-                then=models.Value(str(pk)),
-            ))
+            candidates.append(
+                models.When(
+                    **{
+                        f"{reference.ct_field}__app_label": model._meta.app_label,
+                        f"{reference.ct_field}__model": model._meta.model_name,
+                    },
+                    then=models.Value(str(pk)),
+                )
+            )
         return models.Case(*candidates, default=models.Value(""), output_field=models.CharField())
 
     @property

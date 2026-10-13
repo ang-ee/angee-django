@@ -1,22 +1,81 @@
 # Integrations and record sync
 
-An integration owns credentials, connection intent and permissions. A concrete
-bridge adds scheduling, a dedicated `sync_run_id` dispatch pointer, and telemetry; its backend declares independently ordered
-stream partitions. `Bridge.sync()` drives those declarations by default, while
-existing capability overrides remain valid.
+An integration owns connection intent, credentials and permissions. A concrete
+bridge supplies a backend that declares independently ordered stream partitions.
+The shared driver handles bounded pages, conditional writes and reconciliation;
+domain adapters own protocol parsing and ingest policy.
 
 | Concern | Owner |
 |---|---|
-| Connection, cadence, queue admission and run telemetry | [Integration and Bridge](models.py) |
-| Stream identity, opaque cursor, baseline generation and reconciliation policy | [SyncStream and its manager](models.py) |
-| External identity, last-synced remote/local hashes and retained tombstones | [RecordLink and its manager](models.py) |
-| Immutable observed and applied evidence | [RecordRevision and its manager](models.py) |
-| Record quarantine and due rescan candidates | [SyncDiscrepancy and its manager](models.py) |
-| Bounded page, conditional push and inventory execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
-| Concurrent nested JSON edits | [merge_json_state](models.py) |
-| Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed); `manage.py preview_push <integration>` lists what a push would write ([`preview_push`](streams.py)) |
-| Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
+| Connection, scheduling, queue admission and run telemetry | [Integration and Bridge](models.py) |
+| Epochs, cursors, snapshot closure and reconciliation policy | [SyncStream and its manager](models.py) |
+| External identity, observations, applied base, outbox and pin policy | [RecordLink and its manager/queryset](models.py) |
+| Inbound failure slots and retry lifecycle | [SyncStateMixin](mixins.py) and [SyncFailure](states.py) |
+| Adapter contract and bounded execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
+| Operator actions and inspection | [Console schema](schema.py), [Streams views](web/src/IntegrationStreams.tsx) and [Integration permissions](permissions.zed) |
 
+Event feeds are append-only and compose their domain's idempotent ingest verb.
+They create no replica links. Their unlinked failures belong to the stream's
+`inbound` state; closed slots retain evidence without a stream history table.
+Stream cursors are plain finite JSON and commit with the records they cover.
+Transport runs outside the page transaction; record refusals use savepoints so
+later records can continue, while infrastructure failures roll back the page.
+
+Record replicas compare JSON-native local and remote mapped projections against
+their protected `applied_base`, a snapshot in the link's own native history.
+Observation never advances that base. Remote-only changes apply locally;
+local-only changes may write back with a remote version fence. Divergent edits
+and remote deletion against a local edit require an explicit choice. Identical
+edits converge, as accepted by the commit 8 review ruling. Adapters revalidate
+their local projection under domain locks before applying.
+
+A conditional write returns authoritative source evidence and version, retained
+with the local projection so the driver recognizes its next pull echo. Separate
+JSON Patch `test` operations check each retained reflection precondition beside
+the transport's remote-version fence. Neither makes the two systems atomic.
+Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
+
+Each applied record retains the observe row and the application-evidence row
+(commit 8 review ruling). Pinning `applied_base` creates no pointer-only history
+row. History retention is unbounded: deployments budget both full snapshots and
+the snapshots from generation changes, when retained links follow the new epoch.
+The Streams tab's link history drill-down is the provenance
+[History timeline](../provenance/README.md#history-surface) for the link: one
+entry per sync changeset with its hash, version, application facts and payloads
+as field deltas, read through the link's own authorization.
+
+A baseline adopts matching local identities without an applied base using remote
+values. Local-only rows may then be created remotely when a writable baseline
+completes. Before enabling two-way sync, review the synchronized local scope.
+A declaration's `authoritative` flag marks the source as the system of record for
+what the stream states (`SyncStream.authoritative`, read by statement survivorship);
+changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
+Direction or snapshot changes open a new baseline generation and retain links,
+policy and failures. Adapter-private deletion policy remains in stream `config`.
+A declared snapshot with no reconciliation interval closes after its baseline;
+explicit resync opens a new generation. Missing cadence alone never means read-once.
+
+Several inbound failures can coexist. Semantic failures use bounded backoff;
+conflicts await an explicit remote/local choice. Due replica failures re-read
+identity through `BridgeImpl.read_keys`; unsupported identity reads fall back to
+a baseline with the reason retained in failure details. Refused writes retry
+through the outbox. A due refusal with no remaining local candidate closes.
+`RecordLink.pin()` withholds automatic application and push; `unpin()` resumes
+them. Admin actions dispatch to those owners.
+
+Inventory and absence reconciliation are resumable bounded pulses. Compound
+children follow their immutable aggregate parent for absence and retries; the
+adapter owns child application evidence. Neither reconciliation nor generation
+changes silently discard open failures or domain rows.
+
+See the [Record sync guideline](../../../docs/backend/guidelines.md#record-sync)
+for invariants, the owners above for exact contracts, and
+[`preview_push`](streams.py) for read-only push inspection. The
+[Directory addon](../parties/README.md) composes this protocol for CardDAV.
+
+RecordLink declares `merge_policy = MOVE`: merging a target moves its links to
+the survivor. Both remote cards receive the survivor's projection, subject to
+each stream's write-back policy and remote preconditions.
 Provider presets are contributed through the existing implementation registry:
 subclass `OAuthProviderType`, declare a unique `key`, and contribute
 `"ANGEE_OAUTH_PROVIDER_TYPE_CLASSES.<key>"` from the owning addon's autoconfig.
@@ -127,135 +186,3 @@ queryset, so hidden credentials are refused as not found. Authored console
 patches retain their administrator gate. Both dispatch attachment to the model
 owner.
 
-Event feeds compose their domain's idempotent ingest verb and never create links
-or revisions. Messaging uses conversation partitions for Slack and mailbox
-partitions for IMAP. Their legacy bridge cursor slices seed the first stream row
-only, through the pure `BridgeImpl.seed_cursor` hook. Legacy delivery policy
-translates through `seed_config`, which returns config defaults and the retained
-cursor with migrated policy removed. The driver fills missing `Bridge.config`
-keys and saves that cursor under the bridge row lock in the same transaction as
-stream seeding. Later partitions retain their positions without resurrecting
-removed policy. Subsequent progress belongs to the stream. `Bridge.cursor` remains for
-Mount's existing cursor cleanup and Feed's declared backend contract, as well as
-the first-generation messaging seeds; its presence does not authorize a second
-cursor writer for an adopted stream.
-
-Record replicas compare each side with its last applied base. An unchanged pair
-does nothing; a remote-only change applies locally; a local-only change can be
-conditionally written back by a push-capable adapter. Concurrent edits and
-remote deletion versus a local edit remain open conflicts. A write-back returns
-the authoritative remote version and content hash; retaining those facts with
-the local projection identifies its later echo without relying on timestamps.
-The adapter owns locking and validating the local projection before applying it.
-Adapter policy lives in `SyncStream.config`, seeded by `StreamDefinition` only
-when the first epoch is created and preserved across epoch changes. A successful
-conditional deletion returns `WriteBackResult(tombstone=True)` so the driver
-retains the link's deletion and local origin. [Directory](../parties/README.md)
-composes this protocol for bidirectional CardDAV contacts.
-
-Before a two-way replica completes its first baseline, an adapter's identity
-match between a live remote record and an existing local row with no link revision
-is adopted with remote wins.
-The driver applies the remote projection and records its version and both applied
-bases without a conflict or write-back. Each identity can be adopted across
-baseline pages and cursor resets; retained revisions still use ordinary
-three-way comparison. `push_stream` suppresses local pushes only until that first
-baseline completes. Local-only rows can then be created remotely, including
-during the same sync call that completes the baseline. Before upgrading pull-only
-sync to two-way sync, remove any local-only rows that must not reach the remote
-from the synchronized scope.
-
-Changes to mapping version or dependency digest also require application. The
-adapter returns applied evidence in `ApplyResult`; only the driver promotes the
-primary link. `apply_record` returns one result for one record. An adapter promotion of that link aborts the page. Optional
-`prepare_page` locks a page's compound identities and targets once, before the
-record savepoints; it and the visibility hooks perform database work only.
-
-The driver extracts outside a transaction, then commits each page's database
-effects, discrepancies and cursor together. Each record has a savepoint. A
-declared semantic refusal, field validation failure or record-level `DataError`
-quarantines that record; infrastructure failures roll back the page and propagate.
-`finish_page` composes domain batch relationships
-after successful rows are visible, before the cursor commits; messaging uses its
-existing quotation owner here. External writes occur before their database
-reflection and use the remote version precondition. If the process loses the
-response, the next observation must reconcile that uncertainty; this protocol
-does not promise an atomic commit across two systems.
-
-Partition failures retain healthy partitions' committed pages. Both serial and
-parallel syncs report each failed stream, partition and operation through the
-shared safe failure projection, and log the original exception with its traceback.
-The terminal progress details identify failures after all partitions finish, so a
-healthy partition cannot replace them with its last page's progress.
-
-Bounded callers resolve declarations through `open_stream`, use `begin_stream_cycle(stream, adapter)`
-once, then `advance_stream` until its
-result is exhausted, passing the returned stream after an epoch reset. The
-caller closes its adapter. `push_stream` and `reconcile_stream` complete the
-cycle when applicable. These functions contain no workflow runtime dependency.
-`preview_push(stream, adapter)` returns the keys a push would write and those
-held back, writing nothing. Before resuming an integration paused for a mapping
-change, every stream should preview no writes.
-
-The Streams tab keeps its drill-down in route search state. Its open discrepancy
-view uses the backend `is_open` filter and offers explicit remote/local choices
-for conflicts.
-
-At cycle start, due non-conflict replica discrepancies with links are re-read
-through `read_keys(stream, keys)` when the adapter declares
-`supports_identity_reads`. It
-returns one `RecordChange` for every requested external key, including a remote
-tombstone when that key no longer exists. Transport runs outside transactions;
-the shared page apply path commits the observations without changing the cursor,
-phase or advancement timestamps. Successful apply resolves earlier non-conflict
-failures for that identity. Event feeds are excluded from discrepancy rescan,
-and so are refused writes (`remote_rejected`): the push retries those, since a
-record the remote never stored has nothing to re-read.
-An adapter without `supports_identity_reads` requests a baseline instead, recording the fallback
-and reason in the discrepancy details. No private work queue is retained.
-A pull that finds a record unchanged still retains the source it read, so a
-remote edit the comparison hash cannot see is not reverted by the next write-back.
-
-Semantic quarantine increments `attempts` and sets an exponential retry delay
-starting at one minute, capped by the smaller of a positive reconciliation
-interval or 24 hours. A zero interval means continuous inventory reconciliation,
-so it retains the 24-hour retry cap. A refused write holds its link's write-back
-until `retry_at`, on every write path (`SyncDiscrepancyQuerySet.holding_writes`);
-each refused link keeps its own row, and a later write that lands resolves it.
-A full push (no `external_keys`) also closes a due refusal whose link has nothing
-left to write, because its record was deleted or reverted locally: nothing would
-retry it, and no rescan reads it.
-Conflicts keep `retry_at=None` and require
-explicit resolution before either side can be written again. `resolve_conflict`
-requires `keep="remote"` (re-read and apply remotely owned facts) or `keep="local"`
-(re-read the remote, retain its source as the base, then conditionally write the
-local projection onto it).
-Plain `resolve` refuses conflicts. A newer remote edit may reject the chosen
-local write again and retain fresh quarantine.
-An invalid/expired cursor or `resync_required` creates a new baseline generation,
-carrying existing links and quarantine forward while retaining revision history.
-
-Inventory sweeps read and apply newly enumerated identities before incrementing
-absence counts. Each `reconcile_stream(..., page_bound=100)` call commits one
-bounded pulse; repeat while `SyncStream.reconcile_state` is nonempty.
-Adapters implement `enumerate_keys(..., after=None)` as a stable
-iterator with exclusive seek. The driver stores its checkpoint separately from
-the adapter-owned opaque cursor.
-`read_keys` handles unseen identities as well as existing links. Without that
-operation, the driver first extracts a separate bounded baseline. Root and child
-absence passes also checkpoint their progress; completion alone updates
-`last_reconciled_at`. First absence records unavailability, then a retained
-tombstone at the declared threshold. `on_absent` runs once per status transition;
-`on_revalidated` runs after each successful unchanged observation. Both share the
-status transaction so domain visibility changes roll back with the link.
-
-`RecordRevision` retention is unbounded by design. Each substantive application
-retains full source and mapped payloads; deployments must budget storage for
-this growing history. No automatic pruning is performed.
-
-A compound link declares one immutable root `parent` in the same stream. Children
-follow parent absence and retries read the parent's identity; their own successful
-evidence and discrepancy resolution remain with the aggregate adapter. Sweeps
-never delete domain rows or overwrite an open conflict. A peer beyond its
-tombstone retention period must reverify a baseline. Link observation and
-promotion preserve an omitted target; explicit `target=None` clears its binding.

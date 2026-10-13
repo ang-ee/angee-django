@@ -2760,7 +2760,10 @@ describe("FormView", () => {
         },
       }),
     );
-    await waitFor(() => expect(visibleWhen).toHaveBeenCalledWith(expect.objectContaining({ title })));
+    // The predicate also receives the form's data resource, so a kind-level tab can gate on it.
+    await waitFor(() => expect(visibleWhen).toHaveBeenCalledWith(
+      expect.objectContaining({ title }), expect.objectContaining({ modelLabel: resource }),
+    ));
     expect(sdkMocks.recordSelection).toContain("title");
     expect(screen.queryAllByRole("heading", { name: "Related" })).toHaveLength(visible ? 1 : 0);
   });

@@ -23,7 +23,7 @@ from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, HierarchyMixin, OwnerMixin
 from angee.base.models import AngeeDataModel
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
-from angee.parties.mixins import ScoredLinkMixin
+from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
 
@@ -117,7 +117,7 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel):
         return candidate
 
 
-class Membership(ScoredLinkMixin, AuditMixin, AngeeDataModel):
+class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
     """One party's role-bearing roster row in a shared group.
 
     Confirmation resolves live through the canonical ``Person.user`` identity
@@ -148,7 +148,9 @@ class Membership(ScoredLinkMixin, AuditMixin, AngeeDataModel):
     )
     role = StateField(choices_enum=MembershipRole, default=MembershipRole.MEMBER)
     notification_policy = StateField(
-        choices_enum=NotificationPolicy, default=NotificationPolicy.INBOX, db_index=False,
+        choices_enum=NotificationPolicy,
+        default=NotificationPolicy.INBOX,
+        db_index=False,
     )
     subtype_keys = models.JSONField(blank=True, default=list)
     objects = MembershipManager()

@@ -6,6 +6,7 @@ assignments, a record tagged with both keeps one, and the merged tag goes away.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -13,25 +14,29 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import DO_NOTHING
+from django.utils import timezone
 from rebac import PermissionDenied, RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base import merge as merge_module
+from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
-from angee.base.merge import EdgeReference, ForeignKeyReference, references
+from angee.base.merge import EdgeReference, ForeignKeyReference, fold_records, references
+from angee.base.mixins import MergeContractMixin, SourceKind
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.graphql import records
-from angee.messaging.testing.models import Party
+from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from angee.tags import schema as tags_schema
 from angee.tags.testing.models import Tag, TagAssignment
 from angee.workflows.testing.models import StepWatch, Workflow, WorkflowRun
-from tests.conftest import addon_schema, create_user, execute_schema, result_data
+from tests.conftest import addon_schema, create_user, execute_schema, make_integration, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.recordrefdemo.models import CustomColumnEdge, SelfLinkedNode, TagSlot
+from tests.scopedemo.models import ProjectionDoc
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("composed_permissions")
@@ -142,6 +147,24 @@ def test_a_merge_refuses_itself_too_many_and_records_that_are_gone() -> None:
             survivor.merge(records=["tag_x"] * 101)
 
 
+def test_a_survivor_referring_to_a_merged_record_refuses_before_anything_moves() -> None:
+    """Moving the survivor's own reference would point it at itself, so the fold refuses and nothing moves."""
+
+    with system_context(reason="merge test self reference"):
+        merged = ProjectionDoc.objects.create(title="merged")
+        survivor = ProjectionDoc.objects.create(title="survivor", parent=merged)
+        child = ProjectionDoc.objects.create(title="child", parent=merged)
+    retired: list[Any] = []
+    with pytest.raises(ValidationError, match="refers to"):
+        fold_records(survivor, [merged], carry=lambda: None, retire=retired.append)
+    assert retired == []
+    with system_context(reason="merge test read"):
+        assert set(ProjectionDoc._base_manager.filter(parent=merged).values_list("pk", flat=True)) == {
+            survivor.pk,
+            child.pk,
+        }
+
+
 def test_a_record_deleted_while_the_merge_waits_reads_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     mobile, mobil, _ada, _bob = _vocabulary()
     resolve = merge_module.instances_from_public_ids
@@ -163,11 +186,7 @@ def test_an_edge_without_a_merge_policy_blocks_and_its_blockers_project(monkeypa
     mobile, mobil, _ada, _bob = _vocabulary()
     _tag_on_tag(mobile, mobil)
     monkeypatch.setattr(TagAssignment, "merge_policy", RecordRefMixin.merge_policy)
-    blocked = {
-        tag.pk
-        for condition, _message in Tag.merge_blockers()
-        for tag in Tag._base_manager.filter(condition)
-    }
+    blocked = {tag.pk for condition, _message in Tag.merge_blockers() for tag in Tag._base_manager.filter(condition)}
     assert blocked == {mobil.pk}
     with actor_context(_curator("merge-blocked")), pytest.raises(ValidationError, match="tag assignments"):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
@@ -208,15 +227,14 @@ def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     assert edges["storage.FileAttachment"] == MergePolicy.MOVE
     assert edges["workflows.StepWatch"] == MergePolicy.MOVE
     assert edges["workflows.WorkflowRun"] == MergePolicy.KEEP
-    assert edges["integrate.RecordLink"] == MergePolicy.BLOCK
+    assert edges["integrate.RecordLink"] == MergePolicy.MOVE
     assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
 
 
-def test_a_generic_pointer_no_edge_declares_blocks_unless_it_is_a_revision() -> None:
-    """A plain generic foreign key cannot be moved safely; a reversion snapshot is history."""
+def test_a_generic_pointer_no_edge_declares_blocks() -> None:
+    """A plain generic foreign key cannot be moved safely."""
 
     plain = {ref.model._meta.label: ref.policy for ref in references(Tag) if isinstance(ref, EdgeReference)}
-    assert plain["reversion.Version"] == MergePolicy.KEEP
     assert plain["rebac.SchemaOverride"] == MergePolicy.BLOCK
 
 
@@ -247,10 +265,10 @@ def test_a_share_on_a_multi_table_child_row_is_seen_from_its_parent() -> None:
     with system_context(reason="merge test mti share"):
         child = MtiChild.objects.create(title="Shared", detail="child")
         parent = MtiParent._base_manager.get(pk=child.pk)
-        assert not merge_module._named_in_relationships(parent)
+        assert not merge_module.named_in_relationships(parent)
         share = RelationshipTuple(resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reader))
         write_relationships([share])
-        assert merge_module._named_in_relationships(parent)
+        assert merge_module.named_in_relationships(parent)
 
 
 def _links(tag: Any, title: str) -> Any:
@@ -333,12 +351,12 @@ def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: p
     owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
     with system_context(reason="merge test share"):
         project = Project.objects.create(title="Shared", owner=owner)
-        assert not merge_module._named_in_relationships(project)
+        assert not merge_module.named_in_relationships(project)
         project.system_grant_record_access("reader", reader)
-        assert merge_module._named_in_relationships(project)
+        assert merge_module.named_in_relationships(project)
 
     mobile, mobil, _ada, _bob = _vocabulary()
-    monkeypatch.setattr(merge_module, "_named_in_relationships", lambda record: record.pk == mobil.pk)
+    monkeypatch.setattr(merge_module, "named_in_relationships", lambda record: record.pk == mobil.pk)
     with actor_context(_curator("merge-shared")), pytest.raises(ValidationError, match="shared"):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
 
@@ -383,11 +401,86 @@ def test_a_collision_no_field_set_describes_refuses_the_merge() -> None:
 
 
 def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    edges = [model for model in apps.get_models() if issubclass(model, RecordRefMixin)]
-    assert not [error for model in edges for error in model.check() if error.id == "angee.E037"]
+    """Edges and plain pointing rows (a message's participants and reactions) declare their identity alike."""
+
+    pointing = [model for model in apps.get_models() if issubclass(model, MergeContractMixin)]
+    assert {Participant, Reaction} <= set(pointing)
+    assert not [error for model in pointing for error in model.check() if error.id == "angee.E037"]
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
     assert [error.id for error in CustomColumnEdge.check() if error.id == "angee.E037"] == ["angee.E037"]
+    monkeypatch.setattr(Participant, "merge_identity", (("message", "handle"),))
+    assert [error.id for error in Participant.check() if error.id == "angee.E037"] == ["angee.E037"]
+
+
+def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:
+    """Two directories' equal stances on parties that merge: the older stays older, the newer still wins."""
+
+    statements = Party.statements.model
+    with system_context(reason="merge test stance recency"):
+        owner = create_user("merge-recency")
+        kept = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        merged = Party._base_manager.create(display_name="Ada King", created_by=owner)
+        older, newer = (
+            statements._base_manager.create(
+                subject=party,
+                aspect="identity",
+                display_name=party.display_name,
+                asserted_by=str(to_subject_ref(make_integration(slug, model=Directory))),
+                source_kind=SourceKind.DIRECTORY,
+            )
+            for party, slug in ((merged, "recency-older"), (kept, "recency-newer"))
+        )
+        statements._base_manager.filter(pk=older.pk).update(updated_at=timezone.now() - timedelta(days=7))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        before = (older.updated_at, min((older, newer), key=lambda row: row.sort_key()).pk)
+
+        kept.with_actor(owner).merge(records=[merged.public_id])
+
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        kept.refresh_from_db()
+    assert (older.subject_id, older.superseded_id, newer.superseded_id) == (kept.pk, None, None)
+    assert (older.updated_at, min((older, newer), key=lambda row: row.sort_key()).pk) == before
+    assert (newer.applied, older.applied, kept.display_name) == (True, False, "Ada Lovelace")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_reverted_stance_gets_its_recency_back_so_the_tie_break_returns_to_its_winner() -> None:
+    """Reverting a changeset that re-dated a stance restores that stance's recency, not the revert's time."""
+
+    statements = Party.statements.model
+    with system_context(reason="revert test stance recency"):
+        owner = create_user("revert-recency")
+        party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        older, newer = (
+            statements._base_manager.create(
+                subject=party,
+                aspect="identity",
+                display_name=name,
+                asserted_by=str(to_subject_ref(make_integration(slug, model=Directory))),
+                source_kind=SourceKind.DIRECTORY,
+            )
+            for name, slug in (("Ada King", "revert-older"), ("Ada Lovelace", "revert-newer"))
+        )
+        statements._base_manager.filter(pk=older.pk).update(updated_at=timezone.now() - timedelta(days=7))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        before = (older.display_name, older.updated_at)
+        assert min((older, newer), key=lambda row: row.sort_key()).pk == newer.pk
+
+        with changeset(fresh=True, change_reason="test.redate"):
+            statements._base_manager.filter(pk=older.pk).update(display_name="Ada K.", updated_at=timezone.now())
+        older.refresh_from_db()
+        assert min((older, newer), key=lambda row: row.sort_key()).pk == older.pk
+        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().changeset
+
+        with changeset(fresh=True, change_reason="test.revert"):
+            redated.revert()
+        older.refresh_from_db()
+    assert (older.display_name, older.updated_at) == before
+    assert min((older, newer), key=lambda row: row.sort_key()).pk == newer.pk
 
 
 @pytest.mark.usefixtures("workflow_step_classes")
@@ -397,7 +490,10 @@ def test_a_record_an_unfinished_run_works_on_refuses_its_merge(execution: Any) -
     actor, _ = execution
     mobile, mobil, ada, bob = _vocabulary()
     workflow = Workflow.objects.install_definition(
-        key="merge_guard", name="Merge guard", draft=document("entry"), actor=actor,
+        key="merge_guard",
+        name="Merge guard",
+        draft=document("entry"),
+        actor=actor,
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=mobil)
     curator = _curator("merge-run-guard")
@@ -416,13 +512,17 @@ def test_the_shared_verb_merges_a_mergeable_type_and_refuses_another() -> None:
     schema = addon_schema(tags_schema.schemas, "console", records.schemas)
 
     refused = execute_schema(
-        schema, _MERGE, {"type": "parties/party", "id": public_id_of(ada), "records": [public_id_of(bob)]},
+        schema,
+        _MERGE,
+        {"type": "parties/party", "id": public_id_of(ada), "records": [public_id_of(bob)]},
         user=curator,
     )
     assert result_data(refused)["merge_records"]["ok"] is False
 
     merged = execute_schema(
-        schema, _MERGE, {"type": "tags/tag", "id": public_id_of(mobile), "records": [public_id_of(mobil)]},
+        schema,
+        _MERGE,
+        {"type": "tags/tag", "id": public_id_of(mobile), "records": [public_id_of(mobil)]},
         user=curator,
     )
     assert result_data(merged)["merge_records"] == {"ok": True, "message": "Merged.", "validation_errors": None}

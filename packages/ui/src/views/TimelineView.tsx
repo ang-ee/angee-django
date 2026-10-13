@@ -11,7 +11,7 @@ import type { ListEmptyContent } from "./resource/resource-view-types";
 
 /**
  * The chronological View — rows bucketed by day (newest first), each rendered
- * as a `TimelineEntry` (the same entry the revisions aside uses). Frameless: it
+ * as a `TimelineEntry`. Frameless: it
  * composes inside a `ResourceList` or stands alone over a row array. `renderEntry`
  * overrides the entry body for richer rows (e.g. an avatar).
  */

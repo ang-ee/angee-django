@@ -10,6 +10,7 @@ depends_on = [
   "angee.knowledge",
   "angee.messaging",
   "angee.parties",
+  "angee.provenance",
   "angee.scheduling",
   "angee.storage",
   "angee.tags",
@@ -23,6 +24,11 @@ demo = [
   { path = "resources/demo/030_projects.task.yaml", depends_on = ["resources/demo/010_projects.project.yaml", "resources/demo/020_projects.milestone.yaml", "work:resources/demo/012_work.stage.yaml"] },
   { path = "resources/demo/031_projects.task.yaml", depends_on = "resources/demo/030_projects.task.yaml" },
 ]
+
+[[migrations]]
+name = "history_changeset"
+app_label = "projects"
+module = "runtime_migrations.history_changeset"
 
 [[migrations]]
 name = "record_tasks"

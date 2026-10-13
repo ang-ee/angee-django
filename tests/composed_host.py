@@ -10,13 +10,16 @@ PostgreSQL DATABASE_URL and creates a separate native test database.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import runpy
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
+from unittest import TestSuite
 
 import environ
 
@@ -25,7 +28,11 @@ COMPOSED_TEST_TIMEOUT = 120
 
 
 def run_composed_tests(
-    tmp_path: Path, test_label: str, *, app: str | tuple[str, ...], test_postgresql: bool = False,
+    tmp_path: Path,
+    test_label: str,
+    *,
+    app: str | tuple[str, ...],
+    test_postgresql: bool = False,
     addon_dirs: tuple[Path, ...] = (),
 ) -> None:
     """Run a native contract group without sharing pytest's source-model registry."""
@@ -101,9 +108,7 @@ def boot(
     from angee.compose.composer import Composer
 
     installed_apps = (
-        list(root_apps)
-        if root_apps is not None
-        else [manifest.name for _, manifest in discover(addon_dirs)]
+        list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
     )
     namespace = runpy.run_module(
         "angee.compose.defaults",
@@ -123,6 +128,8 @@ def boot(
     for name, value in namespace.items():
         setattr(settings, name, value)
     django.setup()
+    if root_apps is None:
+        importlib.import_module("tests.statement_models")
 
 
 def resource_values() -> dict[str, Any]:
@@ -191,7 +198,6 @@ def resource_values() -> dict[str, Any]:
 def model_snapshot() -> dict[str, Any]:
     """Expose final Django state, manager selection and tracking for comparisons."""
 
-    import reversion
     from django.apps import apps
     from django.db.migrations.state import ModelState
     from django.db.migrations.writer import MigrationWriter
@@ -205,6 +211,7 @@ def model_snapshot() -> dict[str, Any]:
         for model in addon.get_models():
             state = ModelState.from_model(model)
             manager = type(model._default_manager)
+            history_model = getattr(getattr(model, "history", None), "model", None)
             snapshot[model._meta.label_lower] = {
                 "fields": {name: MigrationWriter.serialize(field)[0] for name, field in state.fields.items()},
                 "options": {name: MigrationWriter.serialize(value)[0] for name, value in state.options.items()},
@@ -218,10 +225,7 @@ def model_snapshot() -> dict[str, Any]:
                     parent._meta.label_lower: field.name if field else None
                     for parent, field in model._meta.parents.items()
                 },
-                "history": getattr(getattr(model, "history", None), "model", None)._meta.label_lower
-                if hasattr(getattr(model, "history", None), "model")
-                else None,
-                "revision": reversion.is_registered(model),
+                "history": history_model._meta.label_lower if history_model is not None else None,
                 "checks": [{"id": issue.id, "message": str(issue)} for issue in model.check()],
             }
     return snapshot
@@ -252,6 +256,20 @@ def main() -> None:
     args = parser.parse_args()
     if args.test_postgresql and args.action != "tests":
         parser.error("--test-postgresql is available only for native test runs")
+    from angee.base.changesets import changeset
+
+    boundary = (
+        nullcontext()
+        if args.action == "tests"
+        else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
+    )
+    with boundary:
+        run(args)
+
+
+def run(args: argparse.Namespace) -> None:
+    """Dispatch one composed-host action without a process-wide test boundary."""
+
     boot(
         args.source_root.resolve(),
         args.runtime_dir.resolve(),
@@ -265,7 +283,11 @@ def main() -> None:
         from django.conf import settings
         from django.core.management import call_command
         from django.db import connection
+        from django.test import TransactionTestCase
         from django.test.runner import DiscoverRunner
+
+        from angee.base.changesets import changeset
+        from angee.parties.testing.fixtures import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
@@ -276,6 +298,35 @@ def main() -> None:
                     call_command("rebac", "sync", verbosity=0)
                 return databases
 
+            def build_suite(self, *test_labels: Any, **kwargs: Any) -> TestSuite:
+                suite = super().build_suite(*test_labels, **kwargs)
+
+                def fixture_boundaries(tests: TestSuite) -> None:
+                    for test in tests:
+                        if isinstance(test, TestSuite):
+                            fixture_boundaries(test)
+                        else:
+
+                            def set_up(test=test, original=test.setUp) -> None:
+                                test.enterContext(
+                                    changeset(
+                                        fresh=True,
+                                        change_reason=f"manage.{args.action}.{test.id()}.fixtures",
+                                        process=True,
+                                    )
+                                )
+                                original()
+                                # After the test's own setUp: a transactional test re-syncs the REBAC
+                                # schema its flush emptied, so the principal bootstrap finds it synced
+                                # and only loads the Rule/Seed rows instead of syncing a second time.
+                                if isinstance(test, TransactionTestCase):
+                                    load_statement_sources()
+
+                            setattr(test, "setUp", set_up)
+
+                fixture_boundaries(suite)
+                return suite
+
         assert args.test_label, "Native tests require explicit test labels"
         if not args.test_postgresql:
             assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
@@ -284,17 +335,17 @@ def main() -> None:
         # This disposable host has no migration history. Sync the whole current
         # model graph together, including contenttypes and REBAC's witness table;
         # mixed sync/migrate ordering leaves generated foreign keys dangling.
-        settings.MIGRATION_MODULES = {
-            config.label: None for config in apps.get_app_configs()
-        }
+        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
         args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")
         raise SystemExit(bool(failures))
     if args.action == "state":
         from django.apps import apps
+        from django.core.management import call_command
         from django.db.migrations.state import ProjectState
         from django.db.migrations.writer import MigrationWriter
 
+        call_command("check", verbosity=1)
         states = {
             key: (state.name, state.fields, state.options, state.bases, state.managers)
             for key, state in ProjectState.from_apps(apps).models.items()

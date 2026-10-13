@@ -11,13 +11,13 @@ import {
 
 import { usePartiesT } from "./i18n";
 import {
-  usePartyHandleRowActions,
-  type PartyHandleActionRow,
-} from "./party-handle-row-actions";
+  usePartyStatementRowActions,
+  type PartyStatementActionRow,
+} from "./party-statement-row-actions";
 
-type LinkRow = PartyHandleActionRow & {
+type LinkRow = PartyStatementActionRow & {
   confidence?: number;
-  evidence_refs?: Array<{ model: string; id: string }>;
+  evidence?: Array<{ model: string; id: string }>;
   evidence_truncated?: boolean;
 };
 
@@ -28,35 +28,29 @@ function linkState(row: LinkRow, t: ReturnType<typeof usePartiesT>): React.React
 }
 
 /**
- * The person's identity claims — every party↔handle link with its confidence and
+ * The person's identity claims — every handle statement with its confidence and
  * the two review verbs. Confirm outranks any synced score; dismiss is the durable
  * anti-link (the pair is never re-proposed), so both stay visible here instead of
  * silently vanishing.
  */
 export function IdentityTab({ recordId, form }: RecordPanelContext): React.ReactElement {
   const t = usePartiesT();
-  const rowActions = usePartyHandleRowActions<LinkRow>("remaining");
+  const rowActions = usePartyStatementRowActions<LinkRow>("remaining");
   const recordHref = useResourceRecordHrefLookup();
   const search = useRouteSearch();
-  const focusedHandle = typeof search.partyHandle === "string" ? search.partyHandle : "";
+  const focusedHandle = typeof search.partyStatement === "string" ? search.partyStatement : "";
 
   const columns = React.useMemo<readonly ListColumn<LinkRow>[]>(
     () => [
       { field: "handle.value", header: t("identity.handle") },
       { field: "handle.platform", header: t("identity.platform") },
       { field: "confidence" },
+      { field: "source_kind", header: t("identity.claim") },
       {
-        field: "source",
-        header: t("identity.claim"),
-        render: (row) => row.source === "EMAIL_MATCH"
-          ? t("identity.senderClaim")
-          : String(row.source ?? ""),
-      },
-      {
-        field: "evidence_refs",
+        field: "evidence",
         header: t("identity.evidence"),
-        render: (row) => row.evidence_refs?.length
-          ? <span className="flex flex-wrap gap-2">{row.evidence_refs.map((ref, index) => {
+        render: (row) => row.evidence?.length
+          ? <span className="flex flex-wrap gap-2">{row.evidence.map((ref, index) => {
             const href = recordHref(ref.model, ref.id);
             return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
               {t("identity.evidenceSource", { number: index + 1 })}
@@ -77,22 +71,22 @@ export function IdentityTab({ recordId, form }: RecordPanelContext): React.React
     <div className="grid gap-3">
       <p className="text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
       <ListView<LinkRow>
-        resource="parties.PartyHandle"
+        resource="parties.PartyStatement"
         presentation="embedded"
         fields={[
           "id",
           "handle.value",
           "handle.platform",
           "confidence",
-          "source",
-          "evidence_refs.model",
-          "evidence_refs.id",
+          "source_kind",
+          "evidence.model",
+          "evidence.id",
           "evidence_truncated",
           "is_confirmed",
           "is_dismissed",
         ]}
         baseFilter={{
-          party: { exact: recordId },
+          subject: { exact: recordId },
           ...(focusedHandle ? { id: { exact: focusedHandle } } : {}),
         }}
         columns={columns}

@@ -40,7 +40,7 @@ actually unique to your product.
   abstract addons into one running app: concrete Django models, one GraphQL
   schema, one permission schema, typed TS.
 - **Data modeling** — abstract models with opaque `sqid` IDs and a `StateField`,
-  plus drop-in mixins for timestamps, audit, history, revisions, archiving, and
+  plus drop-in mixins for timestamps, audit, history, archiving, and
   tagging; `EncryptedField` for secrets at rest.
 - **Permissions (REBAC)** — Zanzibar-shape authorization via `django-zed-rebac`:
   reads scope through the manager, writes check the instance; each addon ships a

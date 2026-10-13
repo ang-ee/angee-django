@@ -43,7 +43,7 @@ from rebac.roles import ROLE_RELATION
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.mixins import OptimisticLockMixin
+from angee.base.mixins import OptimisticLockMixin, SourceKind, StatementSourceMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
@@ -61,9 +61,7 @@ VIEWABLE_PEOPLE_MAX_LIMIT = 25
 IAMKind = role_anchor("iam/kind", name="IAMKind")
 IAMProtected = role_anchor("iam/protected", name="IAMProtected")
 
-PROTECTED_ACCOUNT_MESSAGE = (
-    "This account is protected: it is your own, staff, a superuser, or holds an elevated role."
-)
+PROTECTED_ACCOUNT_MESSAGE = "This account is protected: it is your own, staff, a superuser, or holds an elevated role."
 """Refusal shared by every account verb and by generic updates of protected accounts."""
 
 logger = logging.getLogger(__name__)
@@ -236,7 +234,10 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return cast(
             Self,
             self.alias(_iam_order_username=self.readable("username")).order_by(
-                F("_iam_order_username").asc(nulls_last=True), "first_name", "last_name", "pk",
+                F("_iam_order_username").asc(nulls_last=True),
+                "first_name",
+                "last_name",
+                "pk",
             ),
         )
 
@@ -392,8 +393,13 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         actor = self.check_create()
         return self._create_person(
-            username, email, password, first_name=first_name, last_name=last_name,
-            actor=actor, reason="iam.person.create",
+            username,
+            email,
+            password,
+            first_name=first_name,
+            last_name=last_name,
+            actor=actor,
+            reason="iam.person.create",
         )
 
     def create_person_as_system(self, username: str, email: str, *, reason: str) -> Any:
@@ -410,7 +416,13 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             raise ValidationError({"email": ["An email address is required."]})
         with system_context(reason=reason):
             user = self._create_person(
-                username, email, None, first_name="", last_name="", actor=None, reason=reason,
+                username,
+                email,
+                None,
+                first_name="",
+                last_name="",
+                actor=None,
+                reason=reason,
             )
         logger.info("Created person account %s as system: %s", user.pk, reason)
         return user
@@ -447,7 +459,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
                     with system_context(reason="iam.person.validate"):
                         user.full_clean()
                     user.sudo(reason=reason).save()
-            except (IntegrityError, ValidationError):
+            except IntegrityError, ValidationError:
                 if self._person_email_matches(email).exists():
                     raise AccountExists from None
                 raise
@@ -546,7 +558,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
     ) -> list[Any]:
         """Return ``actor``'s active colleagues after search, ordering, and cap."""
 
-        return list(self.colleagues(actor).picker(search)[:bounded_limit(limit)])
+        return list(self.colleagues(actor).picker(search)[: bounded_limit(limit)])
 
     def visible_person_from_public_id(self, actor: Any, public_id: str) -> Any | None:
         """Resolve one public user id against the same colleague rows as the picker."""
@@ -596,14 +608,17 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         ):
             return None
         try:
-            return self.system_context(reason="iam.subject.active_person").active_people().filter(
-                pk=subject.subject_id
-            ).first()
-        except (TypeError, ValueError, ValidationError):
+            return (
+                self.system_context(reason="iam.subject.active_person")
+                .active_people()
+                .filter(pk=subject.subject_id)
+                .first()
+            )
+        except TypeError, ValueError, ValidationError:
             return None
 
 
-class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
+class User(StatementSourceMixin, AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
@@ -632,8 +647,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(default=timezone.now)
     preferences = models.JSONField(default=dict, blank=True)
-    # django-reversion's ``Revision.user`` reverse query name is ``revision``, so
-    # the inherited save counter lives under another name; GraphQL still calls it ``revision``.
+    # The user save counter is stored as ``account_revision``; GraphQL exposes it as ``revision``.
     revision = None
     account_revision = models.PositiveIntegerField(default=1, editable=False)
     REVISION_FIELD = "account_revision"
@@ -649,6 +663,14 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Whether this principal represents a human, independently of activity."""
 
         return self.kind == UserKind.PERSON
+
+    @property
+    def source_kind(self) -> SourceKind | None:
+        """Classify active person accounts; other users are not statement sources."""
+
+        if not self.is_active or not self.is_person:
+            return None
+        return cast(SourceKind, SourceKind.PERSON)
 
     class Meta:
         """Django model options for the IAM user source."""
@@ -741,9 +763,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             return []
         annotations = type(self).account_action_annotations(actor)
         allowed = (
-            type(self).objects.system_context(reason="iam.account.actions").filter(pk=self.pk)
+            type(self)
+            .objects.system_context(reason="iam.account.actions")
+            .filter(pk=self.pk)
             .annotate(**{f"_iam_{name}": expression for name, expression in annotations.items()})
-            .values(*(f"_iam_{name}" for name in annotations)).first()
+            .values(*(f"_iam_{name}" for name in annotations))
+            .first()
         ) or {}
         return [action for action in UserAccountAction.values if allowed.get(f"_iam_{action}")]
 
@@ -752,8 +777,10 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
         users = type(self).objects
         return bool(
-            users.system_context(reason="iam.account.protection").filter(pk=self.pk)
-            .filter(users.protection_condition(actor)).exists()
+            users.system_context(reason="iam.account.protection")
+            .filter(pk=self.pk)
+            .filter(users.protection_condition(actor))
+            .exists()
         )
 
     def account_action_error(self, action: str, actor: Any) -> str | None:
@@ -839,7 +866,8 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             if user.is_active != active:
                 user.is_active = active
                 user.sudo(reason="iam.account.set_active").save(
-                    update_fields=["is_active", "updated_at"], expected_revision=expected_revision,
+                    update_fields=["is_active", "updated_at"],
+                    expected_revision=expected_revision,
                 )
             self.is_active, self.account_revision = user.is_active, user.account_revision
 
@@ -853,11 +881,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         with transaction.atomic():
             user = self._lock_for_account_action(str(UserAccountAction.RENAME), expected_revision=expected_revision)
             user.first_name, user.last_name = first_name, last_name
-            user.clean_fields(exclude=[
-                field.name for field in user._meta.fields if field.name not in {"first_name", "last_name"}
-            ])
+            user.clean_fields(
+                exclude=[field.name for field in user._meta.fields if field.name not in {"first_name", "last_name"}]
+            )
             user.sudo(reason="iam.account.rename").save(
-                update_fields=["first_name", "last_name", "updated_at"], expected_revision=expected_revision,
+                update_fields=["first_name", "last_name", "updated_at"],
+                expected_revision=expected_revision,
             )
             self.first_name, self.last_name = user.first_name, user.last_name
             self.account_revision = user.account_revision

@@ -370,6 +370,9 @@ importers:
       '@angee/metadata':
         specifier: workspace:*
         version: link:../../../../packages/metadata
+      '@angee/provenance':
+        specifier: workspace:*
+        version: link:../../provenance/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
@@ -1305,6 +1308,46 @@ importers:
         specifier: ^4.1.9
         version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
 
+  addons/angee/provenance/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
   addons/angee/resources/web:
     dependencies:
       '@angee/app':
@@ -1948,6 +1991,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../../packages/app
+      '@angee/provenance':
+        specifier: workspace:*
+        version: link:../../../../../addons/angee/provenance/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../../packages/ui

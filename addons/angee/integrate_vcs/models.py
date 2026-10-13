@@ -45,7 +45,8 @@ class VcsBridge(Bridge):
     extends = "integrate.Integration"
     integration_create_mode = IntegrationCreateMode.FORM
 
-    backend_class = ImplClassField(VCSBackend,
+    backend_class = ImplClassField(
+        VCSBackend,
         default="local",
         create_only=True,
     )
@@ -317,7 +318,7 @@ class Source(AuditMixin, AngeeDataModel):
         """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
 
         ``Source`` owns "what a kind resolves to": an output model binds itself to a
-        kind with a ``source_kind`` class attribute; the integration registry owns
+        kind by composing ``VcsOutput`` and declaring ``source_kind``; the registry owns
         the deterministic app scan and contract check.
         """
 
@@ -356,7 +357,7 @@ class Source(AuditMixin, AngeeDataModel):
         }
 
 
-class TemplateManager(AngeeManager):
+class TemplateManager(AngeeManager, registry.VcsOutputManager):
     """Manager owning the reconcile of template rows from a template source."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -393,7 +394,7 @@ class TemplateManager(AngeeManager):
         )
 
 
-class Template(AuditMixin, AngeeDataModel):
+class Template(registry.VcsOutput, AuditMixin, AngeeDataModel):
     """One Copier template discovered under a ``Source`` (``source_kind="template"``).
 
     The operator renders these; the kind here is the *template* kind from the

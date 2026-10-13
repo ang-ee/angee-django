@@ -51,7 +51,7 @@ test("an authored resource mutation refreshes the declared resource's list and r
       name: id === "handle-1" ? name : "Unrelated",
     },
   }));
-  const resource = testDataResource("parties.PartyHandle");
+  const resource = testDataResource("parties.PartyStatement");
   const unrelated = testDataResource("notes.Note");
   const dataProvider = { getList, getOne, custom };
   function Providers({ children }: { children: ReactNode }) {
@@ -75,7 +75,7 @@ test("an authored resource mutation refreshes the declared resource's list and r
     });
     const [decide] = useAuthoredResourceMutation(DECIDE, {
       dataProviderName: "console",
-      invalidateModels: ["parties.PartyHandle"],
+      invalidateModels: ["parties.PartyStatement"],
     });
     return { decide, detail, list, unrelatedDetail };
   }, { wrapper: Providers });

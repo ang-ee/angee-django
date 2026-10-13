@@ -1,1 +1,1 @@
-"""Human identity and duplicate-pair reviews composed over parties and workflows."""
+"""Human identity and same_as pair reviews composed over parties and workflows."""

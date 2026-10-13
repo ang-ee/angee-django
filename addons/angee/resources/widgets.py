@@ -141,7 +141,7 @@ class ContentTypeForeignKeyWidget(widgets.ForeignKeyWidget):
     """Resolve a foreign key to ``contenttypes.ContentType`` from a model label.
 
     Content types are never ledger rows, so a seed names the target model by
-    its Django label (``parties.PartyHandle``) instead of an xref. The native
+    its Django label (``parties.PartyStatement``) instead of an xref. The native
     ``clean`` keeps empty values and ``key_is_id`` handling.
     """
 

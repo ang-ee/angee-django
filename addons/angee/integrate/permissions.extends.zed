@@ -1,0 +1,11 @@
+// Integration-owned changeset attribution.
+// @rebac_package: integrate
+// @rebac_schema_revision: 1
+
+definition provenance/changeset {
+    relation actor_integration: integrate/integration
+
+    permission create = actor_integration
+    permission read = actor_integration
+    permission write = actor_integration
+}

@@ -5,7 +5,7 @@ name = "angee.knowledge"
 description = "A markdown-first knowledge base — vaults of pages with versioned markdown bodies"
 keywords = ["knowledge", "rag", "embeddings"]
 category = "Data"
-depends_on = ["angee.iam", "angee.messaging", "angee.tags"]
+depends_on = ["angee.iam", "angee.messaging", "angee.tags", "angee.provenance"]
 dependencies = [
   "markdown-it-py>=4.2",
 ]
@@ -21,3 +21,13 @@ demo = [
 name = "markdown_page_child"
 app_label = "knowledge"
 module = "runtime_migrations.markdown_page_child"
+
+[[migrations]]
+name = "markdown_page_history"
+app_label = "knowledge"
+module = "runtime_migrations.markdown_page_history"
+
+[[migrations]]
+name = "history_changeset"
+app_label = "knowledge"
+module = "runtime_migrations.history_changeset"

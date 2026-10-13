@@ -507,7 +507,6 @@ class GraphQLSchemas:
             schema._schema,
             (*parts.query, *parts.mutation, *parts.subscription),
         )
-        self._assert_revision_visibility(resources)
         self._attach_schema_metadata(schema, name=name, resources=resources)
         return schema
 
@@ -526,19 +525,6 @@ class GraphQLSchemas:
         angee_extensions["resources"] = serialize_data_resources(resources, schema_name=name)
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
-
-    def _assert_revision_visibility(
-        self,
-        resources: tuple[DataResourceMetadata, ...],
-    ) -> None:
-        """Validate revision resources when a schema is actually built."""
-
-        from angee.graphql.revisions import validate_revision_visibility
-
-        for resource in resources:
-            if resource.model is None or "revisions" not in resource.capabilities:
-                continue
-            validate_revision_visibility(resource.model)
 
     def _schema_types(self, parts: SchemaParts) -> tuple[object, ...]:
         """Return concrete and native extension types registered with Strawberry."""

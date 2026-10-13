@@ -14,7 +14,6 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.parties.mixins import LinkSource
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
 
 
@@ -194,7 +193,6 @@ class IntakeCampaign(IntakeAccessCase):
             self.assertEqual(row.party_id is None, row.pk == eligible.pk)
 
 
-
 class IntakeDenormalizedCampaign(IntakeCampaign):
     storage = "denormalized"
 
@@ -328,12 +326,9 @@ class CaptureCampaign(TransactionTestCase):
             self.assertEqual(need.access_verdict, None)
         # The claimed address is unverified: its link waits for review and decides nothing.
         handle = apps.get_model("parties", "Handle")._base_manager.get(platform="email", value=email)
-        link = apps.get_model("parties", "PartyHandle")._base_manager.get(handle=handle, party_id=needs[0].party_id)
+        link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
         self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
-        self.assertEqual(
-            link.metadata["evidence_refs"],
-            [{"model": need._meta.label, "id": public_id_of(need)} for need in needs],
-        )
+        self.assertEqual(link.evidence, [{"model": need._meta.label, "id": public_id_of(need)} for need in needs])
         self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
 
     def test_email_capture_requires_confirmed_sender_link_and_replays_once(self):
@@ -342,13 +337,14 @@ class CaptureCampaign(TransactionTestCase):
             self.channel.intake_queue = self.queue
             self.channel.save(update_fields=("intake_queue",))
             party = apps.get_model("parties", "Party").objects.for_user(self.actor)
-            handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
-            links = apps.get_model("parties", "PartyHandle")
-            links.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=False)
+            handle = apps.get_model("parties", "Handle").objects.upsert(
+                platform="email", value=email, created_by_id=self.actor.pk
+            )
+            party.with_actor(self.actor).statements_for("handle").set(aspect="handle", handle=handle, values={})
         for key, confirmed in (("suggested", False), ("confirmed", True)):
             with system_context(reason="tests.t3.email"):
                 if confirmed:
-                    links.objects.link(party, handle, source=LinkSource.MANUAL, is_confirmed=True)
+                    party.with_actor(self.actor).confirm(aspect="handle", handle=handle, values={})
                 parsed = ParsedMessage(
                     external_id=key,
                     platform="email",

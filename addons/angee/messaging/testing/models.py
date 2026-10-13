@@ -28,10 +28,8 @@ from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
-from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import Party as AbstractParty
-from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
@@ -103,16 +101,6 @@ class Handle(AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
-
-
-class PartyHandle(AbstractPartyHandle):
-    """Concrete identity link registered before source-model test table setup."""
-
-    class Meta(AbstractPartyHandle.Meta):
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_party_handle"
-        rebac_resource_type = "parties/party_handle"
 
 
 class Fragment(AbstractFragment):
@@ -261,20 +249,6 @@ class Organization(AbstractOrganization, Party):
         rebac_resource_type = "parties/organization"
 
 
-
-class MergeVeto(AbstractMergeVeto):
-    """Concrete keep-separate pair used by parties-schema imports across the suite."""
-
-    class Meta(AbstractMergeVeto.Meta):
-        """Django model options for the canonical test merge veto."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_merge_veto"
-        rebac_resource_type = "parties/merge_veto"
-
-
-
 class Address(AbstractAddress):
     """Concrete party address used by contact-ingest tests."""
 
@@ -285,7 +259,6 @@ class Address(AbstractAddress):
         app_label = "parties"
         db_table = "test_parties_address"
         rebac_resource_type = "parties/address"
-
 
 
 class Circle(AbstractCircle):
@@ -300,7 +273,6 @@ class Circle(AbstractCircle):
         rebac_resource_type = "parties/circle"
 
 
-
 class CircleMember(AbstractCircleMember):
     """Concrete circle membership used by parties-schema imports across the suite."""
 
@@ -311,7 +283,6 @@ class CircleMember(AbstractCircleMember):
         app_label = "parties"
         db_table = "test_parties_circle_member"
         rebac_resource_type = "parties/circle_member"
-
 
 
 class RelationshipKind(AbstractRelationshipKind):
@@ -326,7 +297,6 @@ class RelationshipKind(AbstractRelationshipKind):
         rebac_resource_type = "parties/relationship_kind"
 
 
-
 class Relationship(AbstractRelationship):
     """Concrete relationship edge used by parties-schema imports across the suite."""
 
@@ -337,7 +307,6 @@ class Relationship(AbstractRelationship):
         app_label = "parties"
         db_table = "test_parties_relationship"
         rebac_resource_type = "parties/relationship"
-
 
 
 class Reaction(AbstractReaction):
@@ -352,7 +321,6 @@ class Reaction(AbstractReaction):
         rebac_resource_type = "messaging/reaction"
 
 
-
 class MessageStar(AbstractMessageStar):
     """Concrete message star used by messaging tests."""
 
@@ -365,7 +333,6 @@ class MessageStar(AbstractMessageStar):
         rebac_resource_type = "messaging/message_star"
 
 
-
 class MessageEdge(AbstractMessageEdge):
     """Concrete cross-message edge used by messaging tests."""
 
@@ -376,7 +343,6 @@ class MessageEdge(AbstractMessageEdge):
         app_label = "messaging"
         db_table = "test_messaging_message_edge"
         rebac_resource_type = "messaging/message_edge"
-
 
 
 class Participant(AbstractParticipant):

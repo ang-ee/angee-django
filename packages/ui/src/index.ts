@@ -88,11 +88,3 @@ export * from "./fragments";
 export * from "./chrome";
 export * from "./communication";
 export * from "./preview";
-
-// Resource revisions still compose UI record history surfaces; Hasura dialect
-// hooks and authored operations live in `@angee/refine`.
-export {
-  useResourceRevisions,
-  type UseResourceRevisionsOptions,
-  type UseResourceRevisionsResult,
-} from "./data/revisions";

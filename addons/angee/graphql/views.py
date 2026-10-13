@@ -13,7 +13,9 @@ from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
+from strawberry.types import ExecutionResult
 
+from angee.base.changesets import mark_changeset_failed
 from angee.base.identity import public_id_of
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.view_as import ViewAs
@@ -22,12 +24,25 @@ from graphql import GraphQLError, get_operation_ast, parse
 logger = logging.getLogger("angee.graphql.view_as")
 
 
+class AngeeGraphQLView(GraphQLView):
+    """Strawberry's Django view, closing the request's changeset as failed on handled errors.
+
+    GraphQL reports handled errors on a 200 response, which the status-based
+    request middleware cannot see; the result seam the view owns marks them.
+    """
+
+    def process_result(self, request: HttpRequest, result: ExecutionResult) -> Any:
+        if result.errors:
+            mark_changeset_failed()
+        return super().process_result(request, result)
+
+
 @cache
 def _get_view(schema_name: str) -> Any:
     """Return the Django view for one named GraphQL schema."""
 
     schema = GraphQLSchemas.from_discovery().build(schema_name)
-    return GraphQLView.as_view(
+    return AngeeGraphQLView.as_view(
         schema=schema,
         graphql_ide=getattr(settings, "ANGEE_GRAPHQL_IDE", None),
     )
@@ -51,7 +66,7 @@ def graphql_endpoint(request: HttpRequest, schema_name: str) -> HttpResponse:
                 if isinstance(payload, dict):
                     operation = payload.get("operationName")
                     document = payload.get("query")
-            except (ValueError, UnicodeDecodeError):
+            except ValueError, UnicodeDecodeError:
                 pass
         if operation is None and isinstance(document, str):
             try:
@@ -63,7 +78,8 @@ def graphql_endpoint(request: HttpRequest, schema_name: str) -> HttpResponse:
         logger.warning(
             "GraphQL view-as denied: real_actor=%s target=%s schema=%s operation=%s",
             public_id_of(user) if user is not None and user.is_authenticated else None,
-            request.headers.get("X-Angee-View-As"), schema_name,
+            request.headers.get("X-Angee-View-As"),
+            schema_name,
             operation if isinstance(operation, str) else None,
         )
         return JsonResponse(

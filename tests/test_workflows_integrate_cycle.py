@@ -269,7 +269,7 @@ def test_success_sums_stream_outputs_including_mapped_partitions(cycle_factory, 
 
         def run(self, ctx):
             return ctx.done(StreamStageOutput(
-                counts={"cycle_items": int(ctx.input.partition)}, discrepancy_ids=[], evidence=[],
+                counts={"cycle_items": int(ctx.input.partition)}, failure_ids=[], evidence=[],
             ))
 
     register_step(CountedStream)

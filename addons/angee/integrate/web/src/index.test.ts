@@ -204,7 +204,7 @@ describe("integrate addon manifest", () => {
     expect(sections.map(({ id, address, impl }) => ({ id, address, impl }))).toEqual([
       { id: INTEGRATION_STREAMS_TAB_ID, address: `${INTEGRATION_MODEL}#sections`, impl: undefined },
     ]);
-    expect((integrate.routes ?? []).some((route) => /stream|discrepancy|record-link/.test(route.name)))
+    expect((integrate.routes ?? []).some((route) => /stream|failure|record-link/.test(route.name)))
       .toBe(false);
     expect(integrate.widgets?.["angee.integrate.integrationSyncCursor"]).toBeDefined();
   });

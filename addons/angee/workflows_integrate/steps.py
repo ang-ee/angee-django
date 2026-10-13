@@ -16,7 +16,7 @@ from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import Bridge
-from angee.integrate.states import DiscrepancyKind, StreamPhase
+from angee.integrate.states import StreamPhase, SyncFailureKind
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import DecisionStep
@@ -38,23 +38,23 @@ class StreamStageInput(StreamReference):
 
 
 class StreamStageOutput(BaseModel):
-    """Acknowledged page counts and current stream/discrepancy evidence."""
+    """Acknowledged page counts and current stream/failure evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     counts: dict[str, int]
-    discrepancy_ids: list[str]
+    failure_ids: list[str]
     evidence: list[DecisionRecordReference]
 
     @classmethod
     def for_streams(cls, streams: list[Any], *, counts: dict[str, int]) -> StreamStageOutput:
         """Project unresolved truth through its manager for the admitted partitions."""
-        discrepancies = list(apps.get_model("integrate", "SyncDiscrepancy").objects.unresolved().filter(
-            stream__in=streams,
-        ).order_by("pk"))
+        failures = [row for stream in streams for row in stream.sync_failures(open_only=True)]
+        links = {row.link.pk: row.link for row in failures if row.link is not None}
+
         return cls(
             counts=counts,
-            discrepancy_ids=[public_id_of(row) for row in discrepancies],
-            evidence=[_reference(row) for row in [*streams, *discrepancies]],
+            failure_ids=[row.id for row in failures],
+            evidence=[_reference(row) for row in [*streams, *links.values()]],
         )
 
 
@@ -76,13 +76,12 @@ class CoverageInput(BaseModel):
         """Resolve each declared partition through the durable epoch owner."""
         manager = apps.get_model("integrate", "SyncStream").objects
         return [
-            _pull_only(manager.current_for_bridge(bridge, row.key).get(partition=row.partition))
-            for row in self.streams
+            _pull_only(manager.current_for_bridge(bridge, row.key).get(partition=row.partition)) for row in self.streams
         ]
 
 
 class RescanConfig(BaseModel):
-    """Bounded work and the polling interval for externally resolved discrepancies."""
+    """Bounded work and the polling interval for externally resolved failures."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     reconcile_seconds: int = Field(default=60, ge=1)
@@ -111,14 +110,18 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
             stream = _pull_only(open_stream(bridge, ctx.input.key, ctx.input.partition, adapter))
             page = advance_stream(stream, adapter, page_bound=ctx.input.page_bound)
         progress, resets = page.check_continuation(
-            previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
+            previous=ctx.state.get("progress"),
+            resets=ctx.state.get("resets", 0),
         )
         cycle_items = ctx.state.get("cycle_items", 0) + page.count
         if not page.exhausted:
             return ctx.next_page({"cycle_items": cycle_items, "progress": progress, "resets": resets})
-        return ctx.done(StreamStageOutput.for_streams(
-            [page.stream], counts={"page_items": page.count, "cycle_items": cycle_items},
-        ))
+        return ctx.done(
+            StreamStageOutput.for_streams(
+                [page.stream],
+                counts={"page_items": page.count, "cycle_items": cycle_items},
+            )
+        )
 
 
 class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
@@ -136,7 +139,7 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
     retry = RetryPolicy(max_attempts=3)
 
     def run(self, ctx: StepContext) -> Settlement:
-        """Bound recovery work before testing the current discrepancy truth."""
+        """Bound recovery work before testing the current failure truth."""
         bridge = _bridge_subject(ctx)
         streams = ctx.input.current_streams(bridge)
         index = ctx.state.get("rescan_index", 0)
@@ -149,59 +152,70 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
                 page = advance_stream(stream, adapter, page_bound=ctx.config.rescan_bound)
         if page is not None:
             progress, resets = page.check_continuation(
-                previous=ctx.state.get("progress"), resets=ctx.state.get("resets", 0),
+                previous=ctx.state.get("progress"),
+                resets=ctx.state.get("resets", 0),
             )
             if not page.exhausted:
                 return ctx.next_page({"rescan_index": index, "progress": progress, "resets": resets})
         if index + 1 < len(streams):
             return ctx.next_page({"rescan_index": index + 1})
         output = StreamStageOutput.for_streams(
-            ctx.input.current_streams(bridge), counts={"streams": len(streams)},
+            ctx.input.current_streams(bridge),
+            counts={"streams": len(streams)},
         )
-        if output.discrepancy_ids:
+        if output.failure_ids:
             return ctx.wait(until=ctx.now + timedelta(seconds=ctx.config.reconcile_seconds), state={"rescan_index": 0})
         return ctx.done(output)
 
 
 class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
-    """Ask independent questions; direct domain edits resolve the discrepancies."""
+    """Ask independent questions; direct domain edits resolve the failures."""
 
     key = "integrate_conflicts"
     label = "Review sync conflicts"
 
     def ask(self, ctx: StepContext) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
-        conflicts = (
-            apps.get_model("integrate", "SyncDiscrepancy")
-            .objects.unresolved()
-            .filter(
-                stream__in=streams,
-                kind=DiscrepancyKind.CONFLICT,
-            )
-            .order_by("pk")
+        conflicts = [
+            row
+            for stream in streams
+            for row in stream.sync_failures(open_only=True)
+            if row.kind == SyncFailureKind.CONFLICT
+        ]
+        # Decisions reference permission-bearing owners, never a JSON state slot.
+        records = tuple(
+            {
+                (owner._meta.label, owner.pk): owner
+                for row in conflicts
+                for owner in (row.link if row.link is not None else row.stream,)
+            }.values()
         )
-        records = tuple(conflicts.select_related("stream"))
+
         if records:
-            return ctx.ask(DecisionRequest(
-                kind="review-sync-conflict", records=records, assignees=(ctx.actor,), requester=None,
-                proposal=DecisionProposal.model_validate({"multiple": True, "alternatives": [
-                    {"key": public_id_of(row), "label": f"Recheck {row}", "outcome": "done"}
-                    for row in records
-                ]}),
-                context=DecisionContext(references=tuple(_reference(row.stream) for row in records)),
-            ))
+            return ctx.ask(
+                DecisionRequest(
+                    kind="review-sync-conflict",
+                    records=records,
+                    assignees=(ctx.actor,),
+                    requester=None,
+                    proposal=DecisionProposal.model_validate(
+                        {
+                            "multiple": True,
+                            "alternatives": [
+                                {"key": public_id_of(row), "label": f"Recheck {row}", "outcome": "done"}
+                                for row in records
+                            ],
+                        }
+                    ),
+                    context=DecisionContext(references=tuple(_reference(row.stream) for row in conflicts)),
+                )
+            )
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
 
     def continue_with(self, ctx: StepContext, decision: Any, outcome: str) -> Settlement:
         streams = ctx.input.current_streams(_bridge_subject(ctx))
-        if (
-            apps.get_model("integrate", "SyncDiscrepancy")
-            .objects.unresolved()
-            .filter(
-                stream__in=streams,
-                kind=DiscrepancyKind.CONFLICT,
-            )
-            .exists()
+        if any(
+            row.kind == SyncFailureKind.CONFLICT for stream in streams for row in stream.sync_failures(open_only=True)
         ):
             raise ValidationError({"conflicts": "Resolve the sync conflicts before retrying this step."})
         return ctx.done(StreamStageOutput.for_streams(streams, counts={"streams": len(streams)}))
@@ -232,8 +246,15 @@ def _stream_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl]:
     try:
         with closing(bridge.backend) as adapter:
             yield adapter
-    except (AdapterContractError, ImproperlyConfigured, PermissionDenied, ValidationError,
-            Retryable, Superseded, SoftTimeLimitExceeded):
+    except (
+        AdapterContractError,
+        ImproperlyConfigured,
+        PermissionDenied,
+        ValidationError,
+        Retryable,
+        Superseded,
+        SoftTimeLimitExceeded,
+    ):
         raise
     except Exception as error:  # noqa: BLE001 -- adapters quarantine semantic errors in the page owner.
         raise Retryable("Stream transport failed.") from error

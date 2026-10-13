@@ -15,10 +15,39 @@ from rebac import SubjectRef
 from rebac.resources import model_for_resource_type
 
 from angee.base.fields import SqidField
-from angee.base.models import AngeeModel
 from angee.base.scoping import read_scoped_queryset
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+class PublicIdentity(models.Model):
+    """Model-owned public identity, shared without importing composed model bases."""
+
+    class Meta:
+        abstract = True
+
+    @property
+    def public_id(self) -> str:
+        """Return the stable public identifier for this model instance."""
+
+        value = self.public_id_value()
+        return "" if value in (None, "") else str(value)
+
+    def public_id_value(self) -> Any:
+        """Return the raw public identifier value owned by this instance."""
+
+        return self.pk
+
+    @classmethod
+    def public_id_from_pk(cls, value: Any) -> str:
+        """Return the public id encoded from this model's primary-key value."""
+
+        return "" if value in (None, "") else str(value)
+
+    @classmethod
+    def public_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Return the primary-key lookup; public-id fields override this contract."""
+        return {cls._meta.pk.name: value}
 
 
 def relation_permission_validator(actor: Any) -> Any:
@@ -28,6 +57,7 @@ def relation_permission_validator(actor: Any) -> Any:
     standing permission through the model's existing queryset scope. A submitted
     relation requires an actor; schema-only validation omits this hook.
     """
+
     def validate_relation(validator: Any, relation: dict[str, Any], value: Any, schema: Any) -> Any:
         if not isinstance(value, str):
             return
@@ -36,12 +66,13 @@ def relation_permission_validator(actor: Any) -> Any:
             return
         try:
             model = apps.get_model(relation["resource"])
-        except (LookupError, ValueError):
+        except LookupError, ValueError:
             yield SchemaValidationError("The relation target is unavailable.")
             return
         queryset = read_scoped_queryset(model, actor, action=relation.get("permission", "read"))
         if value not in instances_from_public_ids(model, [value], queryset=queryset):
             yield SchemaValidationError("The selected record is absent or inaccessible.")
+
     return validate_relation
 
 
@@ -105,7 +136,7 @@ def public_id_lookup(
 
     if public_identity is not None:
         return public_identity.public_id_lookup(model, value)
-    if issubclass(model, AngeeModel):
+    if issubclass(model, PublicIdentity):
         return model.public_id_lookup(value)
     pk = model._meta.pk
     return {pk.name: value} if pk is not None else {}
@@ -121,7 +152,10 @@ def instance_from_public_id(
     """Resolve one public identity through the shared batch owner."""
 
     return instances_from_public_ids(
-        model, (value,), queryset=queryset, public_identity=public_identity,
+        model,
+        (value,),
+        queryset=queryset,
+        public_identity=public_identity,
     ).get(value)
 
 
@@ -171,7 +205,7 @@ def instances_from_public_ids(
             if value is not None:
                 lookups[public_id] = (field.name, value)
                 values_by_field[field.name].add(value)
-        except (TypeError, ValueError, ValidationError):
+        except TypeError, ValueError, ValidationError:
             continue
     instances = {
         (field_name, value): instance
@@ -255,3 +289,4 @@ def public_subject_ref(subject: SubjectRef) -> SubjectRef:
         field.public_id_from_value(subject.subject_id),
         subject.optional_relation,
     )
+

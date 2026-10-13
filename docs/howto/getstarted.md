@@ -127,8 +127,8 @@ Concretely, today:
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
   the framework core (including composition from source models to `runtime/`),
   and the base addons: GraphQL via strawberry-django, relationship-based
-  authorization (REBAC), aggregates, tiered resources, history/revisions, and
-  the React frontend (layouts, list/board/form views).
+  authorization (REBAC), aggregates, tiered resources, changeset history with a
+  History tab and revert, and the React frontend (layouts, list/board/form views).
 - **Also landed.** Agents, integrations, knowledge, storage, communications,
   and MCP are available as addons. Knowledge's retrieval seam includes a skeleton
   `knowledge_graph_pgvector` plugin using lexical search; embeddings and Graph RAG
@@ -391,7 +391,10 @@ set the Ollama inference provider row's `base_url` to
 To run one-shot management commands against the stack host (build the runtime,
 migrate, sync permissions, load data, check GraphQL SDL), drive its `manage.py`
 through `uv` from the controlling stack root. [Checks](../checks.md#composition-and-schema)
-owns the prerequisites and ordering. To work on a change in
+owns the prerequisites and ordering. A rendered `manage.py` only calls
+`angee.compose.manage.main()`, which attributes a one-shot command's writes to one
+changeset; a `manage.py` from before that entrypoint fails its first captured write
+with the remedy — re-render it from the project template. To work on a change in
 isolation, add a Jujutsu (jj) workspace of the framework's source store under
 the stack's `workspaces/` directory. Its bookmark is named `<stack>/<name>`, the
 stack's name being the branch namespace so stacks sharing one source store or

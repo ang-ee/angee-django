@@ -172,7 +172,13 @@ def test_release_clears_only_selected_rows_for_the_named_owner_without_saves():
         post_save.disconnect(capture, sender=OwnedRow)
     assert count == 1
     assert saves == []
-    assert list(OwnedRow.history.order_by("history_id").values()) == history_before
+    history_after = list(OwnedRow.history.order_by("history_id").values())
+    assert history_after[:-1] == history_before
+    assert (history_after[-1]["id"], history_after[-1]["owner_id"], history_after[-1]["history_type"]) == (
+        selected.pk,
+        None,
+        "~",
+    )
     with system_context(reason="test.ownership.release.inspect"):
         for row in (selected, outside, other_row):
             row.refresh_from_db()

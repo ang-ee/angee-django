@@ -96,7 +96,7 @@ export function GraphPage(): React.ReactElement {
         "parties.Party",
         "parties.Relationship",
         "parties.CircleMember",
-        "parties.PartyHandle",
+        "parties.PartyStatement",
         "parties.Handle",
       ],
     },

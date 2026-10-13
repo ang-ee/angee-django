@@ -13,7 +13,7 @@ from rebac import system_context
 
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
-from angee.messaging.testing.models import Directory, Handle, Party, PartyHandle, Person
+from angee.messaging.testing.models import Directory, Handle, Party, Person
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
@@ -96,7 +96,8 @@ def test_native_httpx2_multistatus_and_case_insensitive_redirect(monkeypatch: py
 
 def test_http_refusal_is_an_integration_error_without_vendor_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        HttpClient, "transport_factory",
+        HttpClient,
+        "transport_factory",
         staticmethod(lambda **_: httpx2.MockTransport(lambda request: httpx2.Response(503, content=b"secret=private"))),
     )
     with pytest.raises(CardDavError) as refused:
@@ -150,7 +151,7 @@ def test_connect_probe_failure_writes_no_rows(
     assert result.errors[0].extensions == {"code": "INTERNAL"}
     assert probe_atomic_states == [False]
     with system_context(reason="test.parties.carddav.probe_failure.verify"):
-        for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, PartyHandle):
+        for model in (Credential, Vendor, Integration, Directory, Handle, Party, Person, Party.statements.model):
             assert not model._base_manager.exists(), model._meta.label
 
 
@@ -202,7 +203,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         integration = Integration.objects.get(pk=directory.pk)
         handle = Handle.objects.get()
         person = Person.objects.get()
-        link = PartyHandle.objects.get()
+        link = Party.statements.handles().get()
 
         assert credential.user_id == admin.pk
         assert credential.name == "CardDAV — Ada Contacts"
@@ -219,11 +220,15 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert handle.owner_id == admin.pk
         assert (handle.platform, handle.value) == ("email", "ada@example.com")
         assert person.user_id == admin.pk
-        assert link.party_id == person.pk
+        assert link.subject_id == person.pk
         assert link.handle_id == handle.pk
-        assert link.source == "carddav"
+        assert link.source_kind == "person"
+        assert link.asserted_by == f"auth/user:{admin.pk}"
+        assert link.rank == link.StatementRank.NORMAL
+        assert link.link_id is None
+        assert link.evidence == [{"model": integration._meta.label, "id": integration.public_id}]
         assert link.confidence == 1.0
-        assert link.is_confirmed is True
+        assert link.is_confirmed is False
 
 
 def _connect_carddav(admin: Any) -> Any:

@@ -35,7 +35,6 @@ from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
@@ -1258,7 +1257,6 @@ def _projects_schema_bucket(
             _LINK_RESOURCE.query,
             _BINDING_RESOURCE.query,
             _ACTIVITY_TYPE_RESOURCE.query,
-            revisions(project_type),
             ConsoleRecordTaskQuery if task_type is ConsoleTaskType else PublicRecordTaskQuery,
         ],
         "mutation": [

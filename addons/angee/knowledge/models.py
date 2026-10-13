@@ -18,7 +18,6 @@ from graphlib import CycleError, TopologicalSorter
 from itertools import islice
 from typing import Any, ClassVar, cast
 
-import reversion
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -37,6 +36,7 @@ from rebac import (
 from rebac.mixins import RebacModelBase
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import write_group
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import (
@@ -45,7 +45,6 @@ from angee.base.mixins import (
     CreationKeyQuerySet,
     HistoryMixin,
     OwnerMixin,
-    RevisionMixin,
     TrashMixin,
     TrashQuerySet,
 )
@@ -244,13 +243,13 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         if owned:
             vault.sudo(reason="knowledge.vault.create").save()
         else:
-            # Native bulk insertion bypasses OwnerMixin's insert default. As for
-            # the cloned pages, explicit audit stamps and the save notification
-            # retain history without assigning a temporary owner.
-            self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
-            post_save.send(
-                sender=self.model, instance=vault, created=True, raw=False, using=self.db, update_fields=None,
-            )
+            # Native bulk insertion bypasses OwnerMixin's insert default.
+            # Notify lifecycle subscribers within the captured write's group.
+            with write_group():
+                self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
+                post_save.send(
+                    sender=self.model, instance=vault, created=True, raw=False, using=self.db, update_fields=None,
+                )
         return vault.with_actor(actor)
 
 
@@ -364,7 +363,8 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         The clone owner supplies actor-readable source pages. Their unchanged
         scalar values retain source validation; tree edges are checked here and
         database constraints still apply. Insert all pages, restore their parent
-        links, and batch native history before notifying the remaining subscribers.
+        links, then notify lifecycle subscribers. History capture belongs to the
+        shared write owner.
         """
 
         user_id = actor_user_id(actor)
@@ -391,24 +391,20 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         }
         batch = list(copies.values())
         elevated = self.sudo(reason="knowledge.page.clone")
-        elevated.bulk_create(batch)
-        children = []
-        for pk, page in copies.items():
-            page.with_actor(actor)
-            if pages[pk].parent_id is not None:
-                page.parent = copies[pages[pk].parent_id]
-                children.append(page)
-        if children:
-            elevated.bulk_update(children, ["parent"])
-        self.model.history.db_manager(self.db).bulk_history_create(batch)
-        for page in batch:
-            page.skip_history_when_saving = True
-            try:
+        with write_group():
+            elevated.bulk_create(batch)
+            children = []
+            for pk, page in copies.items():
+                page.with_actor(actor)
+                if pages[pk].parent_id is not None:
+                    page.parent = copies[pages[pk].parent_id]
+                    children.append(page)
+            if children:
+                elevated.bulk_update(children, ["parent"])
+            for page in batch:
                 post_save.send(
                     sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
                 )
-            finally:
-                del page.skip_history_when_saving
         return copies
 
 
@@ -868,25 +864,26 @@ class MarkdownPageManager(AngeeManager):
         """
 
         copies = []
-        with system_context(reason="knowledge.vault.clone.markdown"):
-            for source in bodies:
-                page = pages[source.pk]
-                body = self.model(
-                    **{field.attname: getattr(page, field.attname) for field in page._meta.concrete_fields},
-                    page_ptr=page,
-                    kind=source.kind,
-                    body=source.body,
-                    body_hash=source.body_hash,
-                    word_count=source.word_count,
+        with write_group():
+            with system_context(reason="knowledge.vault.clone.markdown"):
+                for source in bodies:
+                    page = pages[source.pk]
+                    body = self.model(
+                        **{field.attname: getattr(page, field.attname) for field in page._meta.concrete_fields},
+                        page_ptr=page,
+                        kind=source.kind,
+                        body=source.body,
+                        body_hash=source.body_hash,
+                        word_count=source.word_count,
+                    )
+                    body.save_base(raw=True, force_insert=True, using=self.db)
+                    copies.append(body.with_actor(actor))
+            apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
+            for body in copies:
+                post_save.send(
+                    sender=self.model, instance=body, created=True,
+                    raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
                 )
-                body.save_base(raw=True, force_insert=True, using=self.db)
-                copies.append(body.with_actor(actor))
-        apps.get_model("knowledge", "Link").objects.rebuild_many(copies)
-        for body in copies:
-            post_save.send(
-                sender=self.model, instance=body, created=True,
-                raw=False, using=self.db, update_fields=None, knowledge_backlinks_rebuilt=True,
-            )
 
     def write_body(self, page: Any, body: str, *, expected_hash: str | None = None) -> Any:
         """Update ``page``'s markdown body, last-write-wins.
@@ -983,18 +980,16 @@ class SectionOp(StrEnum):
     PREPEND = "prepend"
 
 
-class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
+class MarkdownPage(HistoryMixin, models.Model, metaclass=RebacModelBase):
     """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
-    ``word_count`` are derived on save. Body edits are versioned through
-    ``revisions`` so they can be rolled back.
+    ``word_count`` are derived on save. The child declares its own ``history``
+    so snapshots include the body alongside inherited page metadata.
     """
 
     runtime = True
     extends = "knowledge.Page"
-
-    revisioned_fields = ("body",)
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
@@ -1245,9 +1240,6 @@ class MarkdownPage(RevisionMixin, models.Model, metaclass=RebacModelBase):
                 field_names |= {"body_hash", "word_count", "updated_at"}
                 kwargs["update_fields"] = field_names
         super().save(*args, **kwargs)
-        if reversion.is_active():
-            # django-reversion follows MTI parent links when reading field_dict.
-            reversion.add_to_revision(self.page_ptr)
 
 
 # ---------------------------------------------------------------------------

@@ -100,10 +100,10 @@ test.describe("addon route smoke", () => {
 
   test("parties review uses Party for the party display-name column", async ({ page }) => {
     await gotoAuthenticatedRoute(page, "/parties/review");
-    const handleLinks = page
-      .getByRole("heading", { name: "Handle links" })
+    const statements = page
+      .getByRole("heading", { name: "Statements" })
       .locator("xpath=ancestor::section");
-    const table = handleLinks.getByRole("table");
+    const table = statements.getByRole("table");
 
     await expect(table.getByRole("columnheader", { name: "Party", exact: true })).toBeVisible();
     await expect(table.getByRole("columnheader", { name: "Contact", exact: true })).toHaveCount(0);

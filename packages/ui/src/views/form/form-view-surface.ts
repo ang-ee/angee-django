@@ -9,6 +9,7 @@ import {
   relationRepresentationForPath,
   useModelMetadata,
   useSchemaFieldMetadata,
+  type DataResourceMetadata,
   type ModelMetadata,
   type Row,
   holdsPermission,
@@ -120,8 +121,8 @@ export interface RecordTabDescriptor {
   badge?: React.ReactNode;
   /** Active lets a retained panel suspend queries and shell publications. */
   render: (context: RecordPanelContext & { active: boolean }) => React.ReactNode;
-  /** Shown only while the loaded record satisfies it; absent until the record loads. */
-  visibleWhen?: (record: Row) => boolean;
+  /** Shown only while the loaded record and the form's resource satisfy it; absent until the record loads. */
+  visibleWhen?: (record: Row, resource: DataResourceMetadata | null) => boolean;
   /**
    * Keep the panel's React state and effects mounted while inactive. Base UI
    * mounts it eagerly; render receives active=false and must suspend its reads
@@ -349,10 +350,10 @@ export function useFormViewSurface({
           ...parsePageTabs(entry.content as React.ReactNode).map(
             (tab, childOrder) => ({
               kind: "tab" as const,
-              tab: entry.permission === undefined && !rowDependent ? tab : { ...tab, visibleWhen: (record: Row) =>
+              tab: entry.permission === undefined && !rowDependent ? tab : { ...tab, visibleWhen: (record: Row, resource: DataResourceMetadata | null) =>
                 (entry.permission === undefined || holdsPermission(record, entry.permission))
                 && (!rowDependent || sectionAdmits(entry.id, record))
-                && (tab.visibleWhen?.(record) ?? true) },
+                && (tab.visibleWhen?.(record, resource) ?? true) },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -756,12 +757,12 @@ export function useFormViewSurface({
       : deleteAction;
   const recordTabList = mergeRecordTabs(
     (isCreate ? EMPTY_RECORD_TABS : recordTabs ?? EMPTY_RECORD_TABS).filter((tab) =>
-      !tab.visibleWhen || (tabRecord != null && tab.visibleWhen(tabRecord))),
+      !tab.visibleWhen || (tabRecord != null && tab.visibleWhen(tabRecord, dataResource))),
     (isCreate ? [] : contributedDeclarations).flatMap((declaration): RecordTabDescriptor[] => {
       if (declaration.kind !== "tab") return [];
       const tab = declaration.tab;
       if (tab.hidden || (tab.visibleWhen &&
-        (tabRecord == null || !tab.visibleWhen(tabRecord)))) return [];
+        (tabRecord == null || !tab.visibleWhen(tabRecord, dataResource)))) return [];
       return [{
         id: tab.id,
         label: tab.label,

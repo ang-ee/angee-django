@@ -15,6 +15,7 @@ from django.core import checks, signing
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import models
+from django.db.models import Exists, OuterRef
 from django.db.models.functions import Coalesce
 from rebac import (
     RebacMixin,
@@ -29,15 +30,23 @@ from rebac import (
 )
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
-from rebac.managers import RebacManager, RebacQuerySet, TrackedQuerySet
+from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.actors import instance_actor
+from angee.base.identity import PublicIdentity
 from angee.base.impl import ImplClassField
-from angee.base.mixins import SqidMixin, TimestampMixin
+from angee.base.merge import named_in_relationships, references
+from angee.base.mixins import (
+    MergeContractMixin,
+    SqidMixin,
+    TimestampMixin,
+    TrashQuerySet,
+)
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
+from angee.base.querysets import AngeeUnscopedQuerySet as AngeeUnscopedQuerySet
 from angee.base.querysets import _AngeeQuerySetMixin
 from angee.base.scoping import lock_if_supported
 from angee.base.tiers import ResourceTier
@@ -98,7 +107,10 @@ class AngeeQuerySet(
 
         rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
         return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
-            "_count", actor=actor, default=0, output_field=models.IntegerField(),
+            "_count",
+            actor=actor,
+            default=0,
+            output_field=models.IntegerField(),
         )
 
     def keyset_page(
@@ -146,9 +158,7 @@ class AngeeQuerySet(
         if around is not None and before_cursor is None and after_cursor is None:
             # Bound the first window around an already authorized record. The
             # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(
-                self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2]
-            )
+            newer = list(self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2])
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
@@ -184,27 +194,6 @@ class AngeeQuerySet(
             has_older_than_through=below,
             has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
         )
-
-
-class AngeeUnscopedQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
-    TrackedQuerySet[_ModelT],
-):
-    """Angee queryset API for intentionally permission-naive managers.
-
-    Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics. It
-    composes the library's tracked writes required by a declared base manager.
-    """
-
-    def scoped_for_aggregate(self) -> Self:
-        """Return this queryset for permission-naive aggregation.
-
-        The manager deliberately supplies no row authorization; aggregation
-        preserves that same explicit unscoped policy.
-        """
-
-        return self
 
 
 class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[misc]
@@ -253,6 +242,19 @@ class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[m
         return actor
 
 
+class StatementSubjectQuerySet(TrashQuerySet, AngeeQuerySet):
+    """Canonical asserted rows, retaining withdrawn subjects and their identities."""
+
+    def canonical(self) -> Any:
+        statements = self.model.statements.model._base_manager.filter(subject_id=OuterRef("pk"))
+        remaining = statements.exclude(status=self.model.statements.model.StatementStatus.WITHDRAWN)
+        return self.untrashed().filter(~Exists(statements) | Exists(remaining))
+
+
+class StatementSubjectManager(AngeeManager.from_queryset(StatementSubjectQuerySet)):  # type: ignore[misc]
+    """Shared scope for canonical models whose presence is asserted."""
+
+
 class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]
     """Manager backed by AngeeUnscopedQuerySet."""
 
@@ -262,11 +264,21 @@ class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         return cast(AngeeUnscopedQuerySet[Any], super().get_queryset())
 
 
-class AngeeModel(TimestampMixin, RebacMixin):
+class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin):
     """Abstract base model for Angee source and runtime models."""
 
     objects = AngeeManager()
     """Default REBAC manager with Angee queryset conveniences."""
+
+    _angee_base = AngeeUnscopedManager()
+    """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
+    def revert_removal(self, *, using: str, reason: str = "") -> None:
+        """Remove a reverted creation only when no retained evidence points at it."""
+
+        if named_in_relationships(self) or any(reference.retains(self) for reference in references(type(self))):
+            raise ValidationError(f"{self._meta.label} {self.pk}: retained rows prevent removal without a trash owner.")
+        self.delete(using=using)
 
     extends: str | None = None
     """Optional ``app_label.ModelName`` target this source model extends."""
@@ -286,7 +298,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     its own class body to opt in, matching ``runtime``'s structural-marker shape.
     """
 
-    catalogue_tier: str = ResourceTier.MASTER
+    catalogue_tier: str = str(ResourceTier.MASTER)
     """Resource tier the catalogue rows belong to; read non-inherited."""
 
     catalogue_tiers: tuple[str, ...] | None = None
@@ -305,6 +317,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Django model options for Angee's abstract model base."""
 
         abstract = True
+        base_manager_name = "_angee_base"
 
     def delete_blocker(self) -> str | None:
         """Return a public-safe deletion refusal, or ``None`` when allowed.
@@ -626,9 +639,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         selected = tuple(declaration) if relations is None else tuple(dict.fromkeys(relations))
         unknown = tuple(relation for relation in selected if relation not in declaration)
         if unknown:
-            raise ValueError(
-                f"{type(self)._meta.label} does not declare grantable relation {unknown[0]!r}."
-            )
+            raise ValueError(f"{type(self)._meta.label} does not declare grantable relation {unknown[0]!r}.")
         self.validate_record_access_target()
         for permission in sorted({declaration[relation] for relation in selected}):
             self.require_access(permission)
@@ -751,8 +762,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
             return []
         return [
             checks.Error(
-                f"{cls._meta.label} must use its primary key as its REBAC identity; "
-                f"got {resource_id_attr(cls)!r}.",
+                f"{cls._meta.label} must use its primary key as its REBAC identity; got {resource_id_attr(cls)!r}.",
                 obj=cls,
                 id="angee.E018",
             )
@@ -856,40 +866,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
             return field.resolve_class(default)
         return field.resolve_for(self)
 
-    @property
-    def public_id(self) -> str:
-        """Return the stable public identifier for this model instance."""
-
-        value = self.public_id_value()
-        if value in (None, ""):
-            return ""
-        return str(value)
-
     @classmethod
     def from_public_id(cls, value: str) -> Self | None:
         """Return the instance addressed by ``value``, if one exists."""
 
         queryset = cast(AngeeQuerySet[Self], cls._default_manager.all())
         return queryset.from_public_id(value)
-
-    @classmethod
-    def public_id_lookup(cls, value: str) -> dict[str, Any]:
-        """Return the Django lookup for this model's public identifier."""
-
-        return {cls._meta.pk.name: value}
-
-    @classmethod
-    def public_id_from_pk(cls, value: Any) -> str:
-        """Return the public id encoded from this model's primary-key value."""
-
-        if value in (None, ""):
-            return ""
-        return str(value)
-
-    def public_id_value(self) -> Any:
-        """Return the raw public identifier value owned by this instance."""
-
-        return self.pk
 
     def broadcasts_changes(self) -> bool:
         """Return whether this row's saves/deletes broadcast on ``changes`` subscriptions.

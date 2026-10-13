@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
@@ -24,7 +25,6 @@ Address = messaging_models.Address
 Circle = messaging_models.Circle
 Organization = messaging_models.Organization
 Person = messaging_models.Person
-PartyHandle = messaging_models.PartyHandle
 Handle = messaging_models.Handle
 
 
@@ -53,7 +53,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "created_at",
         "id",
         "family_name",
-        "folder",
         "given_name",
         "updated_at",
     }
@@ -61,12 +60,11 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "display_name",
         "created_at",
         "family_name",
-        "folder",
         "given_name",
         "updated_at",
     }
     assert metadata.aggregate_fields == ("id",)
-    assert set(metadata.query.axes) == {"folder", "created_at"}
+    assert set(metadata.query.axes) == {"created_at"}
     assert metadata.capabilities == (
         "list",
         "detail",
@@ -75,10 +73,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "create",
         "update",
     )
-    assert metadata.query.axes["folder"].field == "folder"
-    assert metadata.query.fields["folder"].relation.model == "parties.Folder"
-    assert metadata.query.fields["folder"].relation.identity_path == "folder.id"
-    assert metadata.query.axes["folder"].server.label_key == "folder__name"
     assert metadata.query.identity.field == "id"
 
     serialized = schema._schema.extensions["angee"]["resources"]
@@ -93,7 +87,7 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert person["roots"]["create"] == "insert_people_one"
     assert person["roots"]["update"] == "update_people_by_pk"
     assert person["roots"]["delete"] is None
-    assert list(person["query"]["axes"]) == ["folder", "created_at"]
+    assert list(person["query"]["axes"]) == ["created_at"]
     group_dimensions = person["query"]["axes"]
     assert {
         field: (
@@ -103,7 +97,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         )
         for field, dimension in group_dimensions.items()
     } == {
-        "folder": ("FOLDER", "folder_id", "relation"),
         "created_at": ("CREATED_AT", "created_at", "date"),
     }
     created_at_extractions = {
@@ -152,17 +145,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
         "birthday",
         "anniversary",
     ]
-    assert person["query"]["fields"]["folder"]["relation"] == {
-        "model": "parties.Folder",
-        "identityPath": "folder.id",
-        "labelPath": "folder.name",
-    }
-    folder_field = {field["name"]: field for field in person["fields"]}["folder"]
-    assert folder_field["kind"] == "relation"
-    assert folder_field["widget"] == "many2one"
-    assert folder_field["readable"] is True
-    assert folder_field["relationModelLabel"] == "parties.Folder"
-    assert person["query"]["fields"]["folder"]["relation"]["labelPath"] == "folder.name"
     display_name_field = {field["name"]: field for field in person["fields"]}["display_name"]
     assert display_name_field["creatable"] is True
     assert display_name_field["updatable"] is True
@@ -190,9 +172,7 @@ def test_resource_metadata_omits_concrete_kinds_the_schema_does_not_expose() -> 
     organization = parties_schema._ORGANIZATION_RESOURCE
     withheld = {id(organization.query), id(organization.mutation), *map(id, organization.types)}
     parts = {
-        key: tuple(
-            surface for surface in parties_schema.schemas["public"].get(key, ()) if id(surface) not in withheld
-        )
+        key: tuple(surface for surface in parties_schema.schemas["public"].get(key, ()) if id(surface) not in withheld)
         for key in SCHEMA_PART_KEYS
     }
     schema = GraphQLSchemas([SchemaAddon({"public": parts})]).build("public")
@@ -208,7 +188,6 @@ def test_contact_resource_metadata_uses_human_relation_labels() -> None:
     resources = {item.model_label: item for item in _schema("public").angee_resources}
 
     assert resources["parties.Handle"].record_representation == "value"
-    assert resources["parties.PartyHandle"].record_representation == "display_name"
 
 
 def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
@@ -233,8 +212,8 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert "delete_handles_by_pk" not in mutations
     assert {
         "propose_manual_contact",
-        "confirm_party_handle",
-        "dismiss_party_handle",
+        "confirm_party_statement",
+        "dismiss_party_statement",
     } <= set(mutations)
 
     address = resources["parties.Address"]
@@ -416,74 +395,6 @@ def test_circle_console_insert_establishes_private_creator_access(
     assert updated == {"id": created["id"], "description": "Creator write"}
 
 
-def test_a_confirmed_link_reads_as_confirmed_with_its_producer(composed_tables: None) -> None:
-    """The Identity tab's shape: confirming keeps the producer's source beside the confirmed flag."""
-
-    admin = _platform_admin("party-handle-confirmed-admin")
-    with system_context(reason="test.parties.confirmed_link.seed"):
-        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
-        handle = Handle.objects.create(
-            platform="email", value="ada@example.com", normalized_value="ada@example.com", created_by_id=admin.pk,
-        )
-        link = PartyHandle.objects.link(party, handle, confidence=0.4, source="carddav", created_by_id=admin.pk)
-    link.with_actor(admin).confirm()
-
-    query = "query Links { party_handles { id source confidence is_confirmed is_dismissed } }"
-    rows = _data(execute_schema(_schema("public"), query, user=admin))["party_handles"]
-
-    assert rows == [
-        {"id": link.sqid, "source": "CARDDAV", "confidence": 0.4, "is_confirmed": True, "is_dismissed": False}
-    ]
-
-
-def test_party_handle_display_name_projects_only_readable_components(composed_tables: None) -> None:
-    """Association labels stay human-readable without leaking protected Handle values."""
-
-    admin = _platform_admin("party-handle-label-admin")
-    link_reader = User.objects.create_user(username="party-handle-label-link-reader")
-    party_reader = User.objects.create_user(username="party-handle-label-party-reader")
-    handle_reader = User.objects.create_user(username="party-handle-label-handle-reader")
-    full_reader = User.objects.create_user(username="party-handle-label-full-reader")
-    with system_context(reason="test.parties.party_handle_label.seed"):
-        party = messaging_models.Party.objects.create(
-            display_name="Readable counterparty",
-            created_by_id=admin.pk,
-        )
-        handle = Handle.objects.create(
-            platform="email",
-            value="contact@example.com",
-            normalized_value="contact@example.com",
-            created_by_id=admin.pk,
-        )
-        link = PartyHandle.objects.link(
-            party,
-            handle,
-            confidence=0.4,
-            source="manual",
-            created_by_id=admin.pk,
-        )
-    for reader in (link_reader, party_reader, handle_reader, full_reader):
-        _grant_reader(link, reader)
-    for reader in (party_reader, full_reader):
-        _grant_reader(party, reader)
-    for reader in (handle_reader, full_reader):
-        _grant_reader(handle, reader)
-
-    schema = _schema("public")
-    query = "query AssociationLabel { party_handles { id display_name } }"
-    link_only = _data(execute_schema(schema, query, user=link_reader))["party_handles"]
-    party_only = _data(execute_schema(schema, query, user=party_reader))["party_handles"]
-    handle_only = _data(execute_schema(schema, query, user=handle_reader))["party_handles"]
-    fully_readable = _data(execute_schema(schema, query, user=full_reader))["party_handles"]
-
-    assert link_only == [{"id": link.sqid, "display_name": "Contact association"}]
-    assert party_only == [{"id": link.sqid, "display_name": "Readable counterparty"}]
-    assert handle_only == [{"id": link.sqid, "display_name": "contact@example.com"}]
-    assert fully_readable == [
-        {"id": link.sqid, "display_name": "Readable counterparty — contact@example.com"}
-    ]
-
-
 def _schema(name: str) -> Any:
     parts = {key: tuple(parties_schema.schemas[name].get(key, ())) for key in SCHEMA_PART_KEYS}
     return GraphQLSchemas([SchemaAddon({name: parts})]).build(name)
@@ -575,3 +486,95 @@ def test_contact_resources_accept_declared_consumer_fields(
             }
     finally:
         importlib.reload(parties_schema)
+
+
+def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(composed_tables: None) -> None:
+    """The Identity tab's shape: confirming publishes the person's preferred statement; the producer keeps its row."""
+
+    admin = _platform_admin("party-statement-confirmed-admin")
+    with system_context(reason="test.parties.confirmed_statement.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        handle = Handle.objects.create(
+            platform="email",
+            value="ada@example.com",
+            normalized_value="ada@example.com",
+            created_by_id=admin.pk,
+        )
+        rule = messaging_models.Party.objects.rule_source("display_name")
+        producer = messaging_models.Party.objects.assert_handle(party, handle, asserted_by=rule, confidence=0.4)
+        decision = producer.with_actor(admin).confirm()
+
+    query = "query Statements { party_statements { id source_kind confidence is_confirmed is_dismissed } }"
+    rows = _data(execute_schema(_schema("public"), query, user=admin))["party_statements"]
+
+    assert rows == [
+        {"id": decision.sqid, "source_kind": "PERSON", "confidence": 1.0, "is_confirmed": True, "is_dismissed": False}
+    ]
+    with system_context(reason="test.parties.confirmed_statement.read"):
+        producer.refresh_from_db()
+    assert (producer.source_kind, producer.confidence, producer.is_confirmed) == ("rule", 0.4, False)
+
+
+def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables: None) -> None:
+    """``asserted_by`` names a principal only when the reader may read it; evidence keeps its own gates."""
+
+    from angee.base.mixins import SourceKind
+    from tests.conftest import make_integration
+
+    admin = _platform_admin("statement-visibility-admin")
+    reader = User.objects.create_user(username="statement-visibility-reader")
+    with system_context(reason="test.parties.statement_visibility.seed"):
+        party = messaging_models.Party.objects.create(display_name="Ada Lovelace", created_by_id=admin.pk)
+        private = messaging_models.Party.objects.create(display_name="Private", created_by_id=admin.pk)
+        _grant_reader(party, reader)
+        directory = make_integration("statement-visibility-directory", model=messaging_models.Directory)
+        card_handle = Handle.objects.create(platform="email", value="card@example.com", created_by_id=admin.pk)
+        own_handle = Handle.objects.create(platform="email", value="own@example.com", created_by_id=admin.pk)
+        for handle in (card_handle, own_handle):
+            _grant_reader(handle, reader)
+        statement_model = messaging_models.Party.statements.model
+        card = statement_model._base_manager.create(
+            subject=party,
+            handle=card_handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(directory)),
+            source_kind=SourceKind.DIRECTORY,
+        )
+        own = statement_model._base_manager.create(
+            subject=party,
+            handle=own_handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(reader)),
+            source_kind=SourceKind.PERSON,
+            evidence=[
+                {"model": "parties.Party", "id": party.public_id},
+                {"model": "parties.Party", "id": private.public_id},
+            ],
+        )
+
+    query = """
+        query Statements { party_statements(order_by: [{created_at: asc}]) { id asserted_by evidence { model id } } }
+    """
+    as_reader = _data(execute_schema(_schema("public"), query, user=reader))["party_statements"]
+    assert as_reader == [
+        {"id": card.sqid, "asserted_by": "directory", "evidence": []},
+        {
+            "id": own.sqid,
+            "asserted_by": str(public_subject_ref(to_subject_ref(reader))),
+            "evidence": [{"model": "parties.Party", "id": party.public_id}],
+        },
+    ]
+    as_admin = _data(execute_schema(_schema("public"), query, user=admin))["party_statements"]
+    assert as_admin[0]["asserted_by"] == str(public_subject_ref(to_subject_ref(directory)))
+    assert as_admin[1]["evidence"] == [
+        {"model": "parties.Party", "id": party.public_id},
+        {"model": "parties.Party", "id": private.public_id},
+    ]
+
+
+def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:
+    """No handle-column axis: its group keys would read handle rows the reader may not read."""
+
+    sdl = str(_schema("public"))
+    assert "HANDLE__VALUE" not in sdl
+    assert "SUBJECT__DISPLAY_NAME" in sdl

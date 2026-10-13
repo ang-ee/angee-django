@@ -123,12 +123,80 @@ addon (discovered by convention); `django-zed-rebac` owns sync.
 **Principal** — an identity that acts: a row in the swappable
 `AUTH_USER_MODEL` table and its
 `auth/user` REBAC subject. The row may represent a person or a service. Every
-fact that answers "who" (audit stamps, history rows, revision authors) is an FK
-to that table.
+user-backed audit and history stamps refer to that table. Changeset attribution
+also accepts non-user REBAC subjects.
 
-**Actor** — the `auth/user` REBAC subject bound to the current operation (the
-`django-zed-rebac` actor context). Its subject ID is the user's database primary
-key; `actor_user_id` converts that canonical value to the FK's Python type.
+**Actor** — the REBAC `SubjectRef` bound to the current operation. For an
+`auth/user` subject its ID is the user's database primary key; `actor_user_id`
+converts it to the FK's Python type and returns no user for other subject types.
+
+**Changeset** — attribution for one logical write, owned by
+[`changeset()`](../angee/base/changesets.py) and stored by the
+[provenance addon](../addons/angee/provenance/models.py).
+
+**Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
+classifies the logical work, including `pull`/`push` for sync, `import` for a
+one-shot import and `seed` for seed loads. The
+[`Changeset` enums](../addons/angee/provenance/models.py) own that vocabulary.
+
+**Write group** — an internal ephemeral identity for nested ORM dispatch. Its
+deduplication ends with the dispatch; successive writes in one changeset remain
+distinct history events.
+
+**Statement** — one source's current stance on one aspect of one subject row
+(Wikibase's statement: claim, references, rank). Each canonical model declaring
+`statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
+beside its history table, read through the subject like history rows and
+written only by `statements.set()` and the status verbs
+([owner](../angee/base/mixins.py)).
+
+**Aspect** — a declared field group of a canonical model, optionally with a
+typed member (a Handle, a counterparty), carrying its survivorship strategy and
+source precedence. The aspect is the unit of resolution; a value field belongs
+to exactly one aspect, and consumer donors contribute aspects additively.
+
+**Survivorship** — how an aspect's asserted normal-rank statements resolve onto
+the operational row: `SOURCE_PRIORITY`, `MOST_RECENT(date_field)`,
+`MOST_COMPLETE`, `HIGHEST_TRUST` (MDM names). Preferred person statements always
+precede it; the winner is marked **applied** and its values materialise on the
+row. A re-derivation, never a migration, when a knob flips.
+
+**SourceKind** — the assertion-time classification of the asserting principal:
+`PERSON`, `SYSTEM_OF_RECORD`, `DIRECTORY`, `NETWORK`, `IMPORT`, `SEED`,
+`DOCUMENT`, `EXTRACTION`, `RULE`. Resolved through
+`StatementSourceMixin.source_kind` and retained on the statement; precedence is
+declared per aspect, never globally.
+
+**Authoritative** — the per-stream knob (`SyncStream.authoritative`) that makes a
+`SYSTEM_OF_RECORD` source the system of record for the aspects naming its kind,
+ahead of people's normal-rank statements; unset, the stream is a system of
+reference below people (DAMA). A person's confirm or dismiss stays on top.
+
+**Rank / snak / status** — a statement's three facts (Wikibase): rank
+`preferred`/`normal` (a PERSON writes `preferred`; seeded install data may hold a standing decision), snak
+`value`/`some_value`/`no_value`, and status `asserted`/`withdrawn`/
+`quarantined`/`deprecated` — the source's current stance. Canonical candidates
+are asserted; `confirm()` writes a preferred value, `dismiss()` a preferred
+no-value that clears the aspect's values and keeps a removal durable.
+
+**Applied** — the statement survivorship chose for its aspect and member: one per
+current key, the row `provenance(field)` returns, flagged on the statement so a
+trace is one indexed read.
+
+**Withdraw / quarantine** — `withdraw` is a source retracting its stance
+(`status=withdrawn`; the row and its history stay); `quarantined` is a stance
+held back from resolution (PREMIS). Sync's quarantine of a failed inbound
+application is a **SyncFailure**, not a statement status.
+
+**SyncFailure** — one failed inbound application or refused write-back, retained
+on its `RecordLink` (or on the `SyncStream` when no link exists) with kind, code,
+source hash, mapping version, details, attempts, retry and resolution. The one
+noun for that state; "discrepancy" is retired.
+
+**Rule / Seed** — provenance's persisted non-user principals: `Rule` (one row per
+registered rule or matcher, kind RULE, created by the owning resource
+declaration) and `Seed` (one row per seed load, kind SEED). They assert the
+statements no person or integration made.
 
 **User (row)** — the database-layer principal record. Not synonymous with "a
 human" or "a login": `kind` distinguishes `person` from `service`, and only
@@ -316,13 +384,14 @@ that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
 The Handle's owner records the **control** fact (who may act through it), while
-**PartyHandle** records the **identity** fact (which Party it reaches); neither
-fact implies the other. A **suggestion** is an undecided PartyHandle below 0.5
-confidence: it awaits review and never decides which Party the Handle reaches.
-A PartyHandle is **asserted** when a directory card restates it, a person added
-it, or a human confirmed it; any other source makes it an **inference** (an
-inferred link), which no card publishes. Provenance and confidence are separate:
-an inference at full confidence may decide the owner yet stays off the card.
+**PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
+member); neither fact implies the other. A **suggestion** is an asserted
+normal statement below 0.5 confidence: it awaits review and never decides which
+Party the Handle reaches. A person's preferred value confirms membership; a
+preferred no-value dismisses it durably. Applied directory/person statements
+and confirmations publish to a card. Other sources remain inferences even at
+full confidence. Reads follow Party authorization, with separate Handle and
+evidence gates.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
@@ -333,6 +402,20 @@ which is a set of authorization principals.
 
 **Relationship** — the single typed Party-to-Party factual edge, including
 employment as one relationship kind rather than a separate identity model.
+It remains canonical for tracked or free-text, time-bounded counterparties;
+its asserted values live in its own statement table. Address is likewise a
+canonical, referencable subject with independently retained source assertions.
+
+**same_as** — a symmetric identity statement on an ordered Party pair.
+Preferred no-value keeps both directions separate. Preferred value awaits a
+merge action whose input chooses the survivor; survivorship never merges rows.
+The pointing model's **merge_contract** owns statement union and retained
+supersession through the existing reference dispatcher.
+
+**Revert** — a Changeset restoring each row's pre-boundary state and re-running
+survivorship after refusing later touches. Created subjects use trash where
+available; their statements withdraw rather than disappear. A **document** is
+the deterministic changeset/history export consumed by a future archive sink.
 
 **Tie** — a derived Party-to-Party interaction edge. **Cadence** is the human,
 per-user stay-in-touch intent; recomputable interaction evidence and personal

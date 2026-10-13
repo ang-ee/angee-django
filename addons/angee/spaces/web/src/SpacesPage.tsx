@@ -160,7 +160,6 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
       { field: "party.display_name", header: t("group.roster.party") },
       { field: "role", header: t("group.roster.role") },
       { field: "is_confirmed" },
-      { field: "source" },
       { field: "created_at" },
     ],
     [t],
@@ -220,7 +219,7 @@ export function GroupRosterTab({ recordId, form }: RecordPanelContext): React.Re
         resource="spaces.Membership"
         presentation="embedded"
         fields={[
-          "id", "party.display_name", "role", "is_confirmed", "source", "created_at",
+          "id", "party.display_name", "role", "is_confirmed", "created_at",
           "permissions", "notification_policy", "subtype_keys",
         ]}
         baseFilter={{ group: { exact: recordId } }}

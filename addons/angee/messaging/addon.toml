@@ -54,3 +54,8 @@ module = "runtime_migrations.channel_sync_status"
 name = "message_trash"
 app_label = "messaging"
 module = "runtime_migrations.message_trash"
+
+[[migrations]]
+name = "participant_thread_identity"
+app_label = "messaging"
+module = "runtime_migrations.participant_thread_identity"

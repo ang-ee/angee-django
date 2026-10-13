@@ -22,10 +22,8 @@ import {
   extractDeletePreview,
   extractFacet,
   extractGroupBy,
-  extractRevisions,
   extractSaveResult,
   groupByRequest,
-  revisionsRequest,
   saveRequest,
   type ActionOutcome,
   type AggregateBucket,
@@ -36,7 +34,6 @@ import {
   type FacetRequestSpec,
   type GroupByRequestOptions,
   type GroupByResult,
-  type ResourceRevision,
   type ResourceFacetResult,
   type ResourceSaveVariables,
 } from "../operations";
@@ -137,14 +134,6 @@ export interface UseAngeeDeletePreviewResult {
   error: HttpError | null;
   mutate: (variables: DeletePreviewVariables) => Promise<DeletePreview | null>;
   reset: () => void;
-}
-
-export interface UseAngeeRevisionsResult {
-  revisions: readonly ResourceRevision[];
-  count: number;
-  fetching: boolean;
-  error: HttpError | null;
-  refetch: () => void;
 }
 
 export interface UseAngeeResourceSaveResult {
@@ -565,44 +554,6 @@ export function useAngeeResourceSave(
     fetching: run.mutation.isPending,
     error: run.mutation.error,
     reset: run.mutation.reset,
-  };
-}
-
-export function useAngeeRevisions(
-  target: CustomGraphQLOperationTarget | null,
-  id: string | null | undefined,
-  options: DialectDocumentOptions & { enabled?: boolean },
-): UseAngeeRevisionsResult {
-  const { document, enabled = true } = options;
-  const canQuery =
-    enabled && target !== null && id !== null && id !== undefined && id !== "";
-  const request = useMemo(
-    () =>
-      canQuery && target && id
-        ? revisionsRequest(target, id, { document })
-        : null,
-    [canQuery, document, id, target],
-  );
-  const run = useCustom<BaseRecord, HttpError>({
-    url: "",
-    method: "post",
-    dataProviderName: request?.dataProviderName,
-    meta: request?.meta,
-    queryOptions: { enabled: canQuery },
-  });
-  const data = run.query.data?.data ?? run.result.data;
-  const revisions = useMemo(
-    () => (request ? extractRevisions(data, request.root) : []),
-    [data, request],
-  );
-  return {
-    revisions,
-    count: revisions.length,
-    fetching: run.query.isFetching,
-    error: run.query.error,
-    refetch: () => {
-      void run.query.refetch();
-    },
   };
 }
 

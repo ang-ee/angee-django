@@ -1,6 +1,7 @@
 """Real eligibility, ACP, workflow and reply owners; fake inference and dispatch."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Queue
@@ -81,9 +82,14 @@ READ_TOOLS = {"read_comment_thread", "read_message_text", "search_pages", "list_
 class ConversationPromptTests(SimpleTestCase):
     def test_prompt_exposes_only_subject_identity_and_bound_json(self):
         context = {"kind": "record", "type": "messaging/message", "sqid": "msg_example"}
-        self.assertEqual(render_prompt(
-            "Answer {subject[sqid]} in {input[language]}.", context=context, data={"language": "French"},
-        ), "Answer msg_example in French.")
+        self.assertEqual(
+            render_prompt(
+                "Answer {subject[sqid]} in {input[language]}.",
+                context=context,
+                data={"language": "French"},
+            ),
+            "Answer msg_example in French.",
+        )
         for template in ("{subject.channel.credential.secret_value}", "{subject[channel]}", "{run.run_as}"):
             with self.subTest(template=template), self.assertRaises(ValidationError):
                 render_prompt(template, context=context, data={})
@@ -102,18 +108,32 @@ class CommentReplyTests(TransactionTestCase):
             self.owner = get_user_model().objects.create_user(username="reply-owner")
             self.other = get_user_model().objects.create_user(username="reply-other")
             self.agent = Agent.objects.create(
-                name="Comment assistant", owner=self.owner, runtime_class="pydantic", runtime_status="running",
+                name="Comment assistant",
+                owner=self.owner,
+                runtime_class="pydantic",
+                runtime_status="running",
             )
             vendor = apps.get_model("integrate", "Vendor").objects.create(slug="reply-feed", display_name="Feed")
             handle = apps.get_model("parties", "Handle").objects.create(platform="youtube", value="publisher")
             self.feed = Feed.objects.create(
-                vendor=vendor, owner=self.owner, handle=handle, lifecycle="connected",
-                feed_backend_class="manual", live_since=timezone.now() - timedelta(minutes=1),
+                vendor=vendor,
+                owner=self.owner,
+                handle=handle,
+                lifecycle="connected",
+                feed_backend_class="manual",
+                live_since=timezone.now() - timedelta(minutes=1),
             )
             self.channel = apps.get_model("messaging", "Channel").objects.get(pk=self.feed.pk)
-            self.post = land_posts(self.feed, [ParsedPost(
-                ParsedMessage(external_id="post", platform="youtube", sent_at=timezone.now()), is_original_post=True,
-            )], owner_id=self.owner.pk)[0]
+            self.post = land_posts(
+                self.feed,
+                [
+                    ParsedPost(
+                        ParsedMessage(external_id="post", platform="youtube", sent_at=timezone.now()),
+                        is_original_post=True,
+                    )
+                ],
+                owner_id=self.owner.pk,
+            )[0]
         with actor_context(self.admin):
             sync_builtin_tool_catalogue()
             self.server = builtin_mcp_server()
@@ -128,28 +148,43 @@ class CommentReplyTests(TransactionTestCase):
         self.workflow = self.make_workflow("comment-reply")
         with actor_context(self.admin):
             trigger = Trigger.objects.create(
-                workflow=self.workflow, source="message_ingested", channel=self.feed,
+                workflow=self.workflow,
+                source="message_ingested",
+                channel=self.feed,
                 condition={"direction": {"_eq": "inbound"}, "is_original_post": {"_eq": False}},
             )
             Trigger.objects.enable(trigger, actor=self.admin)
         with system_context(reason="public comment ingest"):
-            self.comment = land_posts(self.feed, [ParsedPost(ParsedMessage(
-                external_id="comment", platform="youtube", in_reply_to="post", sent_at=timezone.now(),
-                sender=ParsedHandle(platform="youtube", value="author"),
-                body=ParsedPart(type="text/plain", role="body", text="Can you help?"),
-            ))], owner_id=self.owner.pk)[0]
+            self.comment = land_posts(
+                self.feed,
+                [
+                    ParsedPost(
+                        ParsedMessage(
+                            external_id="comment",
+                            platform="youtube",
+                            in_reply_to="post",
+                            sent_at=timezone.now(),
+                            sender=ParsedHandle(platform="youtube", value="author"),
+                            body=ParsedPart(type="text/plain", role="body", text="Can you help?"),
+                        )
+                    )
+                ],
+                owner_id=self.owner.pk,
+            )[0]
 
     def document(self):
         return {
             "nodes": {
                 "check": {"step": "check_replied", "next": {"open": "converse"}},
                 "converse": {
-                    "step": "start_conversation", "input": {"from": "input", "project": True},
+                    "step": "start_conversation",
+                    "input": {"from": "input", "project": True},
                     "config": {"agent": self.agent.sqid, "prompt_template": "Prepare an answer for {subject[sqid]}."},
                     "next": {"done": "schedule", "no_reply": "close"},
                 },
                 "schedule": {
-                    "step": "schedule_reply", "input": {"from": "converse"},
+                    "step": "schedule_reply",
+                    "input": {"from": "converse"},
                     "next": {"scheduled": "close", "replied": "close"},
                 },
                 "close": {"step": "close_conversation", "input": {"from": "converse"}},
@@ -179,8 +214,11 @@ class CommentReplyTests(TransactionTestCase):
         run = system_queryset(WorkflowRun).get(subject_object_id=self.comment.pk)
         run_until(run)
         step = self.step(run)
-        self.assertEqual((self.step(run, "check").outcome, step.status, step.waiting_kind),
-                         ("open", "waiting", "record"), step.failure_reason)
+        self.assertEqual(
+            (self.step(run, "check").outcome, step.status, step.waiting_kind),
+            ("open", "waiting", "record"),
+            step.failure_reason,
+        )
         self.assertIsNotNone(step.wake_at)
         self.assertEqual(step.attempt, 1)
         session = instance_from_public_id(AgentSession, step.state["session"], queryset=system_queryset(AgentSession))
@@ -196,7 +234,8 @@ class CommentReplyTests(TransactionTestCase):
         step = self.step(run)
         past = timezone.now() - timedelta(seconds=1)
         system_queryset(StepRun).filter(pk=step.pk).update(
-            state={**step.state, "deadline": past.isoformat()}, wake_at=past,
+            state={**step.state, "deadline": past.isoformat()},
+            wake_at=past,
         )
         self.assertEqual(runner.wake(), 1)
         return run_until(run)
@@ -219,16 +258,26 @@ class CommentReplyTests(TransactionTestCase):
         self.assertIn("approval", self.step(run, "schedule").notes[0]["message"])
         self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
         self.assertFalse(system_queryset(StepWatch).filter(step_run__run=run).exists())
-        self.assertTrue(system_queryset(apps.get_model("workflows", "StepRecord")).filter(
-            run=run, label="Reply", operation="created", object_id=reply.pk,
-        ).exists())
+        self.assertTrue(
+            system_queryset(apps.get_model("workflows", "StepRecord"))
+            .filter(
+                run=run,
+                label="Reply",
+                operation="created",
+                object_id=reply.pk,
+            )
+            .exists()
+        )
 
     def test_resource_loader_installs_a_publisherless_comment_reply_workflow(self):
         ledger = apps.get_model("resources", "Resource")
         agents = apps.get_app_config("agents")
         with system_context(reason="installed reply reference"):
             ledger.objects.bind_instance(
-                addon=agents, xref="installed_reply_agent", instance=self.agent, source="agents",
+                addon=agents,
+                xref="installed_reply_agent",
+                instance=self.agent,
+                source="agents",
             )
         document = self.document()
         document["nodes"]["converse"]["config"]["agent"] = "agents.installed_reply_agent"
@@ -237,13 +286,25 @@ class CommentReplyTests(TransactionTestCase):
             (root / "addon.toml").write_text(
                 '[addon]\nname = "tests.reply_install"\n[resources]\ninstall = [{path = "workflow.yaml"}]\n',
             )
-            (root / "workflow.yaml").write_text(yaml.safe_dump({
-                "_meta": {"model": "workflows.Workflow"},
-                "rows": [{"xref": "reply", "fields": {
-                    "key": "installed-comment-reply", "name": "Installed comment reply",
-                    "subject_model": "messaging.Message", "publish": True, "draft": document,
-                }}],
-            }))
+            (root / "workflow.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "_meta": {"model": "workflows.Workflow"},
+                        "rows": [
+                            {
+                                "xref": "reply",
+                                "fields": {
+                                    "key": "installed-comment-reply",
+                                    "name": "Installed comment reply",
+                                    "subject_model": "messaging.Message",
+                                    "publish": True,
+                                    "draft": document,
+                                },
+                            }
+                        ],
+                    }
+                )
+            )
             module = ModuleType("tests.reply_install")
             module.__file__ = str(root / "__init__.py")
             addon = AppConfig(module.__name__, module)
@@ -258,8 +319,9 @@ class CommentReplyTests(TransactionTestCase):
         run = start_run(workflow, actor=workflow.user, subject=self.comment)
         run_until(run)
         self.assertEqual(self.step(run).status, "waiting", self.step(run).failure_reason)
-        session = instance_from_public_id(AgentSession, self.step(run).state["session"],
-                                         queryset=system_queryset(AgentSession))
+        session = instance_from_public_id(
+            AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+        )
         self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "pending")
         self.complete(run, session)
         self.assertEqual((run.status, run.outcome), ("succeeded", "scheduled"))
@@ -267,11 +329,15 @@ class CommentReplyTests(TransactionTestCase):
     def test_agent_editor_cannot_grant_caller_to_themselves_or_anyone_else(self):
         with system_context(reason="agent call delegation fixture"):
             editor = get_user_model().objects.create_user(username="reply-editor")
-            write_relationships([
-                RelationshipTuple(
-                    resource=to_object_ref(self.agent), relation="editor", subject=to_subject_ref(editor),
-                ),
-            ])
+            write_relationships(
+                [
+                    RelationshipTuple(
+                        resource=to_object_ref(self.agent),
+                        relation="editor",
+                        subject=to_subject_ref(editor),
+                    ),
+                ]
+            )
         agent = self.agent.with_actor(editor)
         self.assertTrue(agent.has_access("write"))
         self.assertTrue(agent.has_access("share"))
@@ -319,7 +385,7 @@ class CommentReplyTests(TransactionTestCase):
         with ThreadPoolExecutor(max_workers=1) as pool:
             with transaction.atomic():
                 system_queryset(AgentSession, lock=("self",)).get(pk=session.pk)
-                contender = pool.submit(cancel)
+                contender = pool.submit(copy_context().run, cancel)
                 pid = started.get(timeout=10)
                 deadline = monotonic() + 10
                 while monotonic() < deadline:
@@ -343,7 +409,10 @@ class CommentReplyTests(TransactionTestCase):
 
     def test_cancellation_of_a_continued_session_stops_only_the_runs_turn(self):
         session = AgentSession.objects.start(
-            self.agent, owner=self.workflow.user, context=record_view_context(self.comment), actor=self.workflow.user,
+            self.agent,
+            owner=self.workflow.user,
+            context=record_view_context(self.comment),
+            actor=self.workflow.user,
         )
         run = start_run(self.workflow, actor=self.workflow.user, subject=self.comment, input={"session": session.sqid})
         run_until(run)
@@ -388,7 +457,9 @@ class CommentReplyTests(TransactionTestCase):
     def test_existing_held_reply_ends_before_opening_a_session(self):
         with actor_context(self.owner):
             existing = self.comment.reply_to_comment(
-                body="Already answered.", actor=self.owner, creation_key="existing",
+                body="Already answered.",
+                actor=self.owner,
+                creation_key="existing",
             )
         self.assertEqual(Trigger.objects.drain(), 1)
         run = system_queryset(WorkflowRun).get(subject_object_id=self.comment.pk)
@@ -410,10 +481,22 @@ class CommentReplyTests(TransactionTestCase):
 
     def native_answer(self):
         with system_context(reason="native channel answer"):
-            land_posts(self.feed, [ParsedPost(ParsedMessage(
-                external_id="native-answer", platform="youtube", in_reply_to="comment", sent_at=timezone.now(),
-                sender=ParsedHandle(platform="youtube", value="publisher"), body=ParsedPart(text="Native answer"),
-            ))], owner_id=self.owner.pk)
+            land_posts(
+                self.feed,
+                [
+                    ParsedPost(
+                        ParsedMessage(
+                            external_id="native-answer",
+                            platform="youtube",
+                            in_reply_to="comment",
+                            sent_at=timezone.now(),
+                            sender=ParsedHandle(platform="youtube", value="publisher"),
+                            body=ParsedPart(text="Native answer"),
+                        )
+                    )
+                ],
+                owner_id=self.owner.pk,
+            )
 
     def test_native_answer_during_inference_settles_replied_and_closes_the_session(self):
         run, session = self.waiting_run()
@@ -429,7 +512,9 @@ class CommentReplyTests(TransactionTestCase):
         self.complete(run, session, node="schedule")
         turn = system_queryset(AgentTurn).get(session=session)
         existing = self.comment.reply_to_comment(
-            body=turn.text, actor=self.workflow.user, local={"agent_turn": turn.sqid},
+            body=turn.text,
+            actor=self.workflow.user,
+            local={"agent_turn": turn.sqid},
             creation_key=f"workflow-reply:{run.sqid}",
         )
         self.native_answer()
@@ -445,8 +530,9 @@ class CommentReplyTests(TransactionTestCase):
                 workflow = self.make_workflow(f"empty-answer-{index}")
                 run = start_run(workflow, actor=workflow.user, subject=self.comment)
                 run_until(run)
-                session = instance_from_public_id(AgentSession, self.step(run).state["session"],
-                                                 queryset=system_queryset(AgentSession))
+                session = instance_from_public_id(
+                    AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+                )
                 self.fake.outcome = TurnOutcome(kind="completed", text=text)
                 self.complete(run, session)
                 self.assertEqual((run.status, run.outcome, run.output["text"]), ("succeeded", "no_reply", text))
@@ -468,7 +554,9 @@ class CommentReplyTests(TransactionTestCase):
             self.feed.save(update_fields=["reply_hold"])
         with actor_context(self.workflow.user):
             replay = self.comment.reply_to_comment(
-                body=turn.text, actor=self.workflow.user, local={"agent_turn": turn.sqid},
+                body=turn.text,
+                actor=self.workflow.user,
+                local={"agent_turn": turn.sqid},
                 creation_key=reply.client_creation_key,
             )
         self.assertEqual((replay.pk, replay.status, replay.scheduled_at), (reply.pk, "draft", None))
@@ -531,8 +619,9 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
         self.assertEqual(system_queryset(AgentTurn).filter(session=session).count(), 1)
         self.assertEqual(system_queryset(AgentSession).count(), 2)
-        session = instance_from_public_id(AgentSession, self.step(run).state["session"],
-                                         queryset=system_queryset(AgentSession))
+        session = instance_from_public_id(
+            AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+        )
         self.fake.outcome = TurnOutcome(kind="completed", text="Recovered answer.")
         self.complete(run, session)
         self.assertEqual((run.outcome, self.replies().count()), ("scheduled", 1))
@@ -567,8 +656,9 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual(run.status, "failed")
         self.assertIn("deadline", self.step(run).failure_reason)
         self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "canceled")
-        self.assertEqual(sum(call.args[0] == "agents.run_session" for call in self.tasks.call_args_list),
-                         MAX_PENDING_REDISPATCHES)
+        self.assertEqual(
+            sum(call.args[0] == "agents.run_session" for call in self.tasks.call_args_list), MAX_PENDING_REDISPATCHES
+        )
 
     def test_running_turn_deadline_cancellation_survives_failed_body_rollback(self):
         run, session = self.waiting_run()
@@ -656,12 +746,17 @@ class CommentReplyTests(TransactionTestCase):
     def test_resync_tool_grants_reconciles_every_agents_reader_membership(self):
         agents = []
         with system_context(reason="legacy reader memberships"):
-            for index, (lifecycle, runtime, enabled) in enumerate((
-                ("ready", "pydantic", True), ("deprovisioned", "pydantic", True),
-                ("ready", "claude_code", True), ("ready", "pydantic", False),
-            )):
-                agent = Agent.objects.create(name=f"Legacy reader {index}", owner=self.owner, runtime_class=runtime,
-                                             resource_reader=enabled)
+            for index, (lifecycle, runtime, enabled) in enumerate(
+                (
+                    ("ready", "pydantic", True),
+                    ("deprovisioned", "pydantic", True),
+                    ("ready", "claude_code", True),
+                    ("ready", "pydantic", False),
+                )
+            ):
+                agent = Agent.objects.create(
+                    name=f"Legacy reader {index}", owner=self.owner, runtime_class=runtime, resource_reader=enabled
+                )
                 Agent.objects.filter(pk=agent.pk).update(lifecycle=lifecycle)
                 agent.refresh_from_db()
                 if index == 0:
@@ -673,8 +768,10 @@ class CommentReplyTests(TransactionTestCase):
         resync_tool_grants()
         resync_tool_grants()
         with system_context(reason="reconciled reader memberships"):
-            self.assertEqual([RESOURCE_READER_ROLE in set(containers_of(agent.user)) for agent in agents],
-                             [True, False, False, False])
+            self.assertEqual(
+                [RESOURCE_READER_ROLE in set(containers_of(agent.user)) for agent in agents],
+                [True, False, False, False],
+            )
 
     def test_catalogue_sync_errors_leave_provisioning_state_unchanged(self):
         ledger = apps.get_model("resources", "Resource")
@@ -692,8 +789,10 @@ class CommentReplyTests(TransactionTestCase):
                 self.assertFalse(result.ok)
                 self.assertIn("external server" if failure == "external_server" else "another record", result.message)
                 after = system_queryset(Agent).get(pk=self.agent.pk)
-                self.assertEqual((after.lifecycle, after.runtime_status, after.last_error, after.updated_at),
-                                 (before.lifecycle, before.runtime_status, before.last_error, before.updated_at))
+                self.assertEqual(
+                    (after.lifecycle, after.runtime_status, after.last_error, after.updated_at),
+                    (before.lifecycle, before.runtime_status, before.last_error, before.updated_at),
+                )
                 self.server.config = {"builtin": "angee"}
                 self.server.save(update_fields=["config"])
 
@@ -722,8 +821,9 @@ class CommentReplyTests(TransactionTestCase):
         workflow = self.make_workflow("reader-only-workflow", can_reply=False)
         run = start_run(workflow, actor=workflow.user, subject=self.comment)
         run_until(run)
-        session = instance_from_public_id(AgentSession, self.step(run).state["session"],
-                                         queryset=system_queryset(AgentSession))
+        session = instance_from_public_id(
+            AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+        )
         self.complete(run, session)
         self.assertEqual(run.status, "failed")
         self.assertFalse(self.replies().exists())
@@ -776,7 +876,9 @@ class CommentReplyTests(TransactionTestCase):
         self.complete(run, session)
         workflow = load_workflow(
             {"nodes": {"schedule": {"step": "schedule_reply"}}, "results": [{"from": "schedule"}]},
-            actor=self.admin, key="foreign-scheduling", subject_model="messaging.Message",
+            actor=self.admin,
+            key="foreign-scheduling",
+            subject_model="messaging.Message",
         )
         foreign = start_run(workflow, actor=self.admin, subject=self.comment, input=self.step(run).output)
         run_until(foreign)
@@ -800,9 +902,12 @@ class CommentReplyTests(TransactionTestCase):
             with ThreadPoolExecutor(max_workers=1) as worker:
                 with transaction.atomic():
                     AgentSession.objects.start(
-                        self.agent, owner=self.workflow.user, context={}, actor=self.workflow.user,
+                        self.agent,
+                        owner=self.workflow.user,
+                        context={},
+                        actor=self.workflow.user,
                     )
-                    worker.submit(select_server).result(timeout=10)
+                    worker.submit(copy_context().run, select_server).result(timeout=10)
         else:
             with transaction.atomic(), actor_context(self.admin):
                 AgentSession.objects.start(self.agent, owner=self.workflow.user, context={}, actor=self.workflow.user)
@@ -814,20 +919,30 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual(system_queryset(MCPServer).count(), 1)
         sync_builtin_tool_catalogue()
         self.assertEqual(builtin_mcp_server().pk, self.server.pk)
-        self.assertEqual(set(system_queryset(MCPTool).filter(server=self.server, name__in=READ_TOOLS)
-                             .values_list("name", flat=True)), READ_TOOLS)
+        self.assertEqual(
+            set(
+                system_queryset(MCPTool).filter(server=self.server, name__in=READ_TOOLS).values_list("name", flat=True)
+            ),
+            READ_TOOLS,
+        )
         self.assertFalse(system_queryset(MCPTool).filter(name="reply_to_comment").exists())
 
     def test_resource_document_publishes_an_agent_xref_without_rewriting_its_draft(self):
         with actor_context(self.admin):
             apps.get_model("resources", "Resource").objects.bind_instance(
-                addon=apps.get_app_config("agents"), xref="reply_agent", instance=self.agent, source="participants",
+                addon=apps.get_app_config("agents"),
+                xref="reply_agent",
+                instance=self.agent,
+                source="participants",
             )
             document = self.document()
             document["nodes"]["converse"]["config"]["agent"] = "agents.reply_agent"
             workflow = Workflow.objects.install_definition(
-                key="xref-reply", name="Referenced reply", subject_model="messaging.Message",
-                draft=document, actor=self.admin,
+                key="xref-reply",
+                name="Referenced reply",
+                subject_model="messaging.Message",
+                draft=document,
+                actor=self.admin,
             )
             self.assertEqual(workflow.published.document["nodes"]["converse"]["config"]["agent"], self.agent.sqid)
 
@@ -835,15 +950,21 @@ class CommentReplyTests(TransactionTestCase):
         ledger = apps.get_model("resources", "Resource")
         with system_context(reason="publishing reference identities"):
             ledger.objects.bind_instance(
-                addon=apps.get_app_config("agents"), xref="publisher_agent", instance=self.agent, source="participants",
+                addon=apps.get_app_config("agents"),
+                xref="publisher_agent",
+                instance=self.agent,
+                source="participants",
             )
         document = self.document()
         document["nodes"]["converse"]["config"]["agent"] = "agents.publisher_agent"
         # The unrelated ambient actor must not replace the explicit publisher.
         with actor_context(self.other):
             workflow = Workflow.objects.install_definition(
-                key="explicit-xref", name="Explicit publisher", draft=document,
-                subject_model="messaging.Message", actor=self.admin,
+                key="explicit-xref",
+                name="Explicit publisher",
+                draft=document,
+                subject_model="messaging.Message",
+                actor=self.admin,
             )
         self.assertEqual(workflow.published.document["nodes"]["converse"]["config"]["agent"], self.agent.sqid)
         resolved, issues = Workflow.objects._resolved_document(document, self.admin)
@@ -852,7 +973,9 @@ class CommentReplyTests(TransactionTestCase):
         _, issues = Workflow.objects._resolved_document(document, self.other)
         self.assertTrue(any(issue.code == "config_reference" for issue in issues))
         with patch.object(
-            ledger.objects.__class__, "resolve_config_reference", side_effect=PermissionDenied("No read"),
+            ledger.objects.__class__,
+            "resolve_config_reference",
+            side_effect=PermissionDenied("No read"),
         ):
             _, issues = Workflow.objects._resolved_document(document, self.admin)
         self.assertTrue(any(issue.code == "config_reference" and "No read" in issue.message for issue in issues))
@@ -861,12 +984,22 @@ class CommentReplyTests(TransactionTestCase):
         ledger = apps.get_model("resources", "Resource")
         with system_context(reason="map body reference identity"):
             ledger.objects.bind_instance(
-                addon=apps.get_app_config("agents"), xref="map_agent", instance=self.agent, source="participants",
+                addon=apps.get_app_config("agents"),
+                xref="map_agent",
+                instance=self.agent,
+                source="participants",
             )
-        document = {"nodes": {"mapped": {"step": "map", "body": {
-            "step": "start_conversation",
-            "config": {"agent": "agents.map_agent", "prompt_template": "Read {subject[sqid]}."},
-        }}}}
+        document = {
+            "nodes": {
+                "mapped": {
+                    "step": "map",
+                    "body": {
+                        "step": "start_conversation",
+                        "config": {"agent": "agents.map_agent", "prompt_template": "Read {subject[sqid]}."},
+                    },
+                }
+            }
+        }
         resolved, issues = Workflow.objects._resolved_document(document, self.admin)
         self.assertFalse(issues)
         self.assertEqual(resolved["nodes"]["mapped"]["body"]["config"]["agent"], self.agent.sqid)
@@ -887,14 +1020,19 @@ class CommentReplyTests(TransactionTestCase):
         addon = apps.get_app_config("agents")
         ledger = apps.get_model("resources", "Resource")
         resource = build_resource(
-            Agent, ResourceEntry(addon=addon, tier=ResourceTier.INSTALL, source_value="reader-policy"),
-            ledger_model=ledger, addon_aliases={"agents": addon.name, addon.name: addon.name},
+            Agent,
+            ResourceEntry(addon=addon, tier=ResourceTier.INSTALL, source_value="reader-policy"),
+            ledger_model=ledger,
+            addon_aliases={"agents": addon.name, addon.name: addon.name},
         )
         rows = tablib.Dataset(headers=["_xref", "resource_reader", "mcp_tools"])
         rows.append(["narrow_assistant", False, [f"agents.tool_{name}" for name in sorted(READ_TOOLS)]])
         with system_context(reason="agent reader import policy"):
             ledger.objects.bind_instance(
-                addon=addon, xref="narrow_assistant", instance=self.agent, source="reader-policy",
+                addon=addon,
+                xref="narrow_assistant",
+                instance=self.agent,
+                source="reader-policy",
             )
             self.assertTrue(provision_agent(self.agent.sqid).ok)
             self.assertIn(RESOURCE_READER_ROLE, set(containers_of(self.agent.user)))
@@ -908,16 +1046,29 @@ class CommentReplyTests(TransactionTestCase):
         ledger = apps.get_model("resources", "Resource")
         aliases = {"agents": addon.name, addon.name: addon.name}
         resource = build_resource(
-            Agent, ResourceEntry(addon=addon, tier=ResourceTier.INSTALL, source_value="installed-agents"),
-            ledger_model=ledger, addon_aliases=aliases,
+            Agent,
+            ResourceEntry(addon=addon, tier=ResourceTier.INSTALL, source_value="installed-agents"),
+            ledger_model=ledger,
+            addon_aliases=aliases,
         )
         rows = tablib.Dataset(headers=["_xref", "name", "owner", "runtime_class", "mcp_tools"])
-        rows.append(["installed_assistant", "Installed assistant", "agents.reply_owner", "pydantic",
-                     [f"agents.tool_{name}" for name in sorted(READ_TOOLS)]])
+        rows.append(
+            [
+                "installed_assistant",
+                "Installed assistant",
+                "agents.reply_owner",
+                "pydantic",
+                [f"agents.tool_{name}" for name in sorted(READ_TOOLS)],
+            ]
+        )
         with system_context(reason="installed agent resource"):
             ledger.objects.bind_instance(addon=addon, xref="reply_owner", instance=self.owner, source="participants")
             result = resource.import_data(
-                rows, dry_run=False, raise_errors=True, use_transactions=True, actor=self.admin,
+                rows,
+                dry_run=False,
+                raise_errors=True,
+                use_transactions=True,
+                actor=self.admin,
             )
             self.assertFalse(result.has_errors())
             installed = resolve_ledger_xref("agents.installed_assistant")

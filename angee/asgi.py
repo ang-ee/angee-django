@@ -175,12 +175,18 @@ def _application() -> Any:
 
 
 def websocket_application(patterns: list[object]) -> ASGIApp:
-    """Compose the shared cookie/Origin boundary for addon WebSocket routes."""
+    """Compose the shared cookie/Origin and attribution boundaries for addon WebSocket routes.
+
+    Each connection scope owns one changeset (:class:`~angee.base.middleware.ChangesetScopeMiddleware`),
+    the counterpart of the HTTP request middleware for consumer writes.
+    """
 
     from channels.auth import AuthMiddlewareStack
     from channels.routing import URLRouter
 
-    return _WebsocketOriginValidator(AuthMiddlewareStack(URLRouter(patterns)))
+    from angee.base.middleware import ChangesetScopeMiddleware
+
+    return _WebsocketOriginValidator(AuthMiddlewareStack(ChangesetScopeMiddleware(URLRouter(patterns))))
 
 
 class _WebsocketOriginValidator:

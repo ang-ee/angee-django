@@ -37,7 +37,6 @@ from angee.graphql.ids import (
     to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
@@ -729,7 +728,6 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
         KnowledgeQuery,
         _VAULT_RESOURCE.query,
         _PAGE_RESOURCE.query,
-        revisions(MarkdownPageType, name="markdownPage"),
     ],
     "mutation": [
         KnowledgeMutation,

@@ -1,21 +1,23 @@
-"""Frozen evidence facts, retained derivation links, and admission readability."""
+"""Frozen evidence facts, retained derivation links, and evidence readability."""
+
+from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import models
 from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
-from angee.base.identity import instances_from_public_ids
+from angee.base.identity import instances_from_public_ids, public_id_for
 from angee.base.mixins import AppendOnlyModel
 from angee.base.models import AngeeDataModel
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
 
 
@@ -37,6 +39,82 @@ class EvidenceFact(BaseModel):
     authority: FactAuthority
 
 
+class EvidenceReference(BaseModel):
+    """Frozen public identity of one origin record."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    model: str
+    id: str
+
+    @classmethod
+    def of(cls, record: models.Model) -> EvidenceReference:
+        """Name a saved record by the model its generic pointers resolve to and its public id."""
+
+        pointer_model = generic_pointer_model(type(record))
+        return cls(model=pointer_model._meta.label, id=public_id_for(pointer_model, record.pk))
+
+
+def _readable(
+    refs: Sequence[EvidenceReference], actor: Any, *, permission: str, standing: bool
+) -> dict[EvidenceReference, Any]:
+    """Resolve the records ``actor`` holds ``permission`` on, one scoped query per model.
+
+    An unknown model label is a broken store and fails fast. A model without a
+    REBAC resource type has no standing permission: admission (``standing``)
+    refuses it, display simply finds nothing readable there.
+    """
+
+    grouped: dict[str, set[str]] = {}
+    for ref in refs:
+        grouped.setdefault(ref.model.lower(), set()).add(ref.id)
+    resolved: dict[EvidenceReference, Any] = {}
+    for label, ids in sorted(grouped.items()):
+        try:
+            model = apps.get_model(label)
+        except (LookupError, ValueError) as error:
+            raise ValidationError({"context": "Unknown referenced model."}) from error
+        if not model_resource_type(model):
+            if standing:
+                raise PermissionDenied("Referenced records require a standing permission.")
+            continue
+        found = instances_from_public_ids(
+            model, sorted(ids), queryset=read_scoped_queryset(model, actor, action=permission)
+        )
+        resolved.update((EvidenceReference(model=label, id=public_id), record) for public_id, record in found.items())
+    return resolved
+
+
+def readable_evidence(
+    refs: Sequence[EvidenceReference],
+    actor: Any,
+    *,
+    permission: str = "read",
+) -> list[EvidenceReference]:
+    """Return the references whose records ``actor`` may read, in their stored order."""
+
+    readable = _readable(refs, actor, permission=permission, standing=False)
+    return [ref for ref in refs if EvidenceReference(model=ref.model.lower(), id=ref.id) in readable]
+
+
+def readable_records(
+    refs: Sequence[EvidenceReference],
+    actors: Sequence[Any],
+    *,
+    permission: str = "read",
+) -> list[Any]:
+    """Admit references only when every actor holds ``permission`` on every record."""
+
+    if not actors:
+        raise ValidationError("Evidence admission requires a reader.")
+    wanted = {EvidenceReference(model=ref.model.lower(), id=ref.id) for ref in refs}
+    records: dict[EvidenceReference, Any] = {}
+    for actor in actors:
+        records = _readable(refs, actor, permission=permission, standing=True)
+        if set(records) != wanted:
+            raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
+    return [records[ref] for ref in sorted(wanted, key=lambda ref: (ref.model, ref.id))]
+
+
 class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
     """One retained edge from an evidence owner to a canonical source record."""
 
@@ -48,48 +126,3 @@ class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
 
     class Meta:
         abstract = True
-
-
-class DerivedFromRelation(GenericRelation):
-    """Query retained derivation links without collecting them on source deletion.
-
-    Declare on the canonical source model, matching the links' content type.
-    """
-
-    def bulk_related_objects(self, objs: Sequence[models.Model], using: str = DEFAULT_DB_ALIAS) -> list[models.Model]:
-        return []
-
-
-class EvidenceReference(BaseModel):
-    """Frozen public identity required by evidence admission."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    model: str
-    id: str
-
-
-def readable_records(
-    refs: Sequence[EvidenceReference], actors: Sequence[Any], *, permission: str = "read",
-) -> list[Any]:
-    """Check a standing permission in one scoped query per actor and model."""
-
-    if not actors:
-        raise ValidationError("Evidence admission requires a reader.")
-    grouped: dict[str, set[str]] = {}
-    for ref in refs:
-        grouped.setdefault(ref.model.lower(), set()).add(ref.id)
-    records: list[Any] = []
-    for label, ids in sorted(grouped.items()):
-        try:
-            model = apps.get_model(label)
-        except (LookupError, ValueError) as error:
-            raise ValidationError({"context": "Unknown referenced model."}) from error
-        if not model_resource_type(model):
-            raise PermissionDenied("Referenced records require a standing permission.")
-        for actor in actors:
-            scoped = read_scoped_queryset(model, actor, action=permission)
-            found = instances_from_public_ids(model, ids, queryset=scoped)
-            if set(found) != ids:
-                raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
-        records.extend(found.values())
-    return records

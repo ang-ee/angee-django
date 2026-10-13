@@ -61,7 +61,7 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, OptimisticLockMixin, OwnerMixin, TrashMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OptimisticLockMixin, OwnerMixin, SourceKind, TrashMixin
 from angee.base.models import AngeeDataModel
 from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -1080,6 +1080,12 @@ class Channel(Bridge):
 
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
+
+    @property
+    def source_kind(self) -> SourceKind | None:
+        """The selected protocol declares whether this channel asserts statements, and as what."""
+
+        return cast("type[ChannelBackend]", self.resolve_impl("backend_class")).source_kind
 
     def can_reconcile_delivery(self) -> bool:
         """Read the concrete capability's backend declaration without opening it."""
@@ -2789,9 +2795,13 @@ class Participant(AuditMixin, AngeeDataModel):
 
     The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
     its queryable projection, so the inbox can group/filter by participant.
+    One row states one fact: a handle's role on a message, or, without a message,
+    in a thread. A merge moving a handle's rows onto one already stating the same
+    fact drops the moved copy (``merge_identity``).
     """
 
     runtime = True
+    merge_identity = (("message", "handle", "role"), ("thread", "handle", "role"))
 
     class ParticipantRole(models.TextChoices):
         """The RFC-5322 envelope role of a participant."""
@@ -2839,6 +2849,11 @@ class Participant(AuditMixin, AngeeDataModel):
                 condition=models.Q(message__isnull=False),
                 name="uq_participant_message_handle_role",
             ),
+            models.UniqueConstraint(
+                fields=("thread", "handle", "role"),
+                condition=models.Q(message__isnull=True),
+                name="uq_participant_thread_handle_role",
+            ),
         )
 
     def __str__(self) -> str:
@@ -2863,9 +2878,12 @@ class Reaction(AuditMixin, AngeeDataModel):
     ``handle IS NOT NULL``. A row whose ``handle`` was ``SET_NULL`` by a later
     ``Handle`` delete is de-attributed history, not a live reactor, so it falls out
     of the invariant rather than colliding (SQL treats NULLs as distinct regardless).
+    A merge moving a reactor's rows onto a handle that already reacted the same way
+    drops the moved copy (``merge_identity``).
     """
 
     runtime = True
+    merge_identity = (("message", "handle", "reaction"),)
 
     sqid_prefix = "rxn_"
     message = models.ForeignKey(

@@ -71,7 +71,6 @@ function CircleMembershipList({
       anchor === "person"
         ? { field: "circle.name", header: t("person.circleName") }
         : { field: "party.display_name", header: t("circle.memberParty") },
-      { field: "source" },
       { field: "confidence" },
     ],
     [anchor, t],
@@ -111,7 +110,6 @@ function CircleMembershipList({
         fields={[
           "id",
           anchor === "person" ? "circle.name" : "party.display_name",
-          "source",
           "confidence",
         ]}
         baseFilter={{

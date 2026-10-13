@@ -60,6 +60,7 @@ from angee.base.transitions import StateTransitions, save_state, transition
 from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
+from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
@@ -387,7 +388,7 @@ class InferenceModelManager(AngeeManager):
         for model in self.with_actor(actor).select_related("provider").order_by("-is_default", "pk"):
             try:
                 model.require_usable(actor, role, uses=uses)
-            except (PermissionDenied, InferenceModelUnavailable):
+            except PermissionDenied, InferenceModelUnavailable:
                 continue
             models.append(model)
         return tuple(models)
@@ -603,7 +604,7 @@ class InferenceModel(AuditMixin, AngeeDataModel):
         return InferenceResult(response=response, usage=usage, output=output)
 
 
-class SkillManager(AngeeManager):
+class SkillManager(VcsOutputManager, AngeeManager):
     """Manager owning the reconcile of skill rows from a skill source."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -631,7 +632,7 @@ class SkillManager(AngeeManager):
         return len(descriptors)
 
 
-class Skill(AuditMixin, AngeeDataModel):
+class Skill(VcsOutput, AuditMixin, AngeeDataModel):
     """One skill discovered under an ``integrate_vcs.Source`` (``source_kind="skill"``).
 
     The operator mounts the skill's directory into an agent's workspace; Django keeps

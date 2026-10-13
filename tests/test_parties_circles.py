@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -10,28 +11,38 @@ from typing import Any
 import pytest
 import yaml
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
+from rebac.actors import to_subject_ref
 
-from angee.messaging.backends import ParsedHandle
+from angee.base.mixins import SourceKind, StatementSourceMixin
+from angee.integrate.states import StreamKind
+from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.backends import ManualChannelBackend
 from angee.messaging.testing.models import (
     Address,
+    Channel,
     Circle,
     CircleMember,
+    Directory,
     Folder,
     Handle,
+    Message,
     Organization,
+    Participant,
     Party,
-    PartyHandle,
     Person,
+    Reaction,
     Relationship,
     RelationshipKind,
+    Thread,
 )
 from angee.parties.backends import ParsedAddress, ParsedContact
-from angee.parties.connections import ParsedConnection, ingest_connection
-from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.tags.testing.models import Tag, TagAssignment
+from tests.conftest import make_integration
 from tests.test_messaging import _grant
 
 User = get_user_model()
@@ -56,20 +67,20 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
 
     with actor_context(owner):
         with pytest.raises(ValidationError):
-            PartyHandle.objects.propose_manual_contact(
+            Party.objects.propose_manual_contact(
                 party,
                 platform="email",
                 value="not-an-email",
                 actor=owner,
             )
         with pytest.raises(ValidationError):
-            PartyHandle.objects.propose_manual_contact(
+            Party.objects.propose_manual_contact(
                 party,
                 platform="phone",
                 value="123",
                 actor=owner,
             )
-        link = PartyHandle.objects.propose_manual_contact(
+        link = Party.objects.propose_manual_contact(
             party,
             platform="email",
             value="contact@example.test",
@@ -77,7 +88,7 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
             actor=owner,
         )
         link.dismiss()
-        repeated = PartyHandle.objects.propose_manual_contact(
+        repeated = Party.objects.propose_manual_contact(
             party,
             platform="email",
             value="contact@example.test",
@@ -88,7 +99,7 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     repeated.refresh_from_db()
     repeated.handle.refresh_from_db()
     assert repeated.pk == link.pk
-    assert repeated.source == LinkSource.MANUAL
+    assert repeated.source_kind == "person"
     assert not repeated.is_confirmed
     assert repeated.is_dismissed
     assert repeated.handle.label == "Contact"
@@ -116,13 +127,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
             label="Authoritative label",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            confirmed_party,
-            shared,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
+        confirmed_party.with_actor(owner).confirm(aspect="handle", handle=shared, values={})
         reader_handle = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="reader-shared@example.test",
@@ -138,7 +143,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     _grant(reader_handle, "reader", reader)
 
     with actor_context(owner):
-        proposed = PartyHandle.objects.propose_manual_contact(
+        proposed = Party.objects.propose_manual_contact(
             target,
             platform="email",
             value="shared@example.test",
@@ -146,7 +151,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
             actor=owner,
         )
         with pytest.raises(PermissionDenied, match="cannot add this contact point"):
-            PartyHandle.objects.propose_manual_contact(
+            Party.objects.propose_manual_contact(
                 target,
                 platform="phone",
                 value=hidden.value,
@@ -155,7 +160,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     with actor_context(reader):
         assert reader_handle.with_actor(reader).has_access("read")
         assert not reader_handle.has_access("write")
-        reader_proposed = PartyHandle.objects.propose_manual_contact(
+        reader_proposed = Party.objects.propose_manual_contact(
             reader_target,
             platform="email",
             value="reader-shared@example.test",
@@ -170,174 +175,16 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     assert shared.label == "Authoritative label"
     assert shared.party_id == confirmed_party.pk
     assert shared.party_link_confirmed
-    assert proposed.party_id == target.pk
+    assert proposed.subject_id == target.pk
     assert not proposed.is_confirmed
     assert not proposed.is_dismissed
     assert reader_handle.label == "Shared read-only label"
     # A manual claim awaits review, so it does not decide the shared handle's owner.
     assert reader_handle.party_id is None
     assert not reader_handle.party_link_confirmed
-    assert reader_proposed.party_id == reader_target.pk
+    assert reader_proposed.subject_id == reader_target.pk
     assert not reader_proposed.is_confirmed
     assert not reader_proposed.is_dismissed
-
-
-@pytest.mark.django_db(transaction=True)
-def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
-    composed_tables: None,
-) -> None:
-    """Social connections land one Person, unconfirmed but decisive by id, and map employment to Relationship."""
-
-    del composed_tables
-    with system_context(reason="test connection ingest"):
-        owner = _user("connection-owner")
-        RelationshipKind._base_manager.create(
-            slug="acquaintance",
-            name="Acquaintance",
-        )
-        RelationshipKind._base_manager.create(
-            slug="employee",
-            name="Employee",
-            inverse_name="Employer",
-            other_party_kind="organization",
-        )
-        parsed = ParsedConnection(
-            handle=ParsedHandle(
-                platform="linkedin",
-                value="Ada Lovelace",
-                external_id="https://linkedin.example/ada",
-                display_name="Ada Lovelace",
-            ),
-            email="ada@example.com",
-            organization="Analytical Engines",
-            title="Programmer",
-            connected_at=date(2026, 1, 2),
-            provenance="linkedin_takeout",
-        )
-        first = ingest_connection(parsed, created_by_id=owner.pk)
-        second = ingest_connection(parsed, created_by_id=owner.pk)
-
-    assert second.pk == first.pk
-    assert Person._base_manager.filter(pk=first.pk).count() == 1
-    assert PartyHandle._base_manager.filter(party=first, is_confirmed=False, confidence=1.0).count() == 2
-    social_handle = Handle._base_manager.get(platform="linkedin")
-    social_link = PartyHandle._base_manager.get(party=first, handle=social_handle)
-    assert (social_handle.party_id, social_handle.party_link_confirmed) == (first.pk, False)
-    assert social_link.source == LinkSource.IMPORT
-    assert social_link.metadata["provenance"] == "linkedin_takeout"
-    acquaintance = Relationship._base_manager.get(kind__slug="acquaintance")
-    employment = Relationship._base_manager.get(kind__slug="employee")
-    assert acquaintance.other_party_id == first.pk
-    assert acquaintance.started_at == date(2026, 1, 2)
-    assert employment.other_name == "Analytical Engines"
-    assert employment.title == "Programmer"
-    assert Relationship._base_manager.count() == 2
-
-
-@pytest.mark.django_db(transaction=True)
-def test_a_name_only_connection_awaits_review_and_reimports_onto_the_same_person(composed_tables: None) -> None:
-    """A name can match a stranger: its link lands for review, and a re-import never mints a second person."""
-
-    del composed_tables
-    with system_context(reason="test name-only connection"):
-        owner = _user("name-only-connection")
-        RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
-        parsed = ParsedConnection(
-            handle=ParsedHandle(
-                platform="facebook",
-                value="Grace Hopper",
-                display_name="Grace Hopper",
-                metadata={"identity_confidence": "name_only"},
-            ),
-            provenance="facebook_takeout",
-        )
-        person = ingest_connection(parsed, created_by_id=owner.pk)
-        link = PartyHandle._base_manager.get(party=person)
-        handle = link.handle
-        assert (link.confidence, link.is_confirmed) == (0.4, False)
-        assert handle.party_id is None
-        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [link.pk]
-        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
-    with actor_context(owner):
-        link.dismiss()
-    with system_context(reason="test name-only connection reimport"):
-        assert ingest_connection(parsed, created_by_id=owner.pk).pk == person.pk
-        link.refresh_from_db()
-        assert link.is_dismissed
-        assert Person._base_manager.filter(display_name="Grace Hopper").count() == 1
-
-
-def _reimported_connection(owner: Any) -> tuple[Any, Any, Any]:
-    """A LinkedIn takeout connection's email, linked by its import; the re-import repeats it."""
-
-    RelationshipKind._base_manager.create(slug="acquaintance", name="Acquaintance")
-    parsed = ParsedConnection(
-        handle=ParsedHandle(platform="linkedin", value="Grace Hopper", display_name="Grace Hopper"),
-        email="grace@example.com",
-        provenance="linkedin_takeout",
-    )
-    person = ingest_connection(parsed, created_by_id=owner.pk)
-    email = Handle._base_manager.get(platform=Handle.Platform.EMAIL, value="grace@example.com")
-    return person, email, lambda: ingest_connection(parsed, created_by_id=owner.pk)
-
-
-def _reclaimed_own_handle(owner: Any) -> tuple[Any, Any, Any]:
-    """A connect flow's confirmed self-link; reconnecting claims the same address again."""
-
-    def claim() -> Any:
-        return Handle.objects.claim_own(
-            owner, platform=Handle.Platform.EMAIL, value="hopper@work.example", source=LinkSource.OAUTH
-        )
-
-    handle = claim()
-    return Person.objects.for_user(owner), handle, claim
-
-
-def _confirmed_by_caller(owner: Any) -> tuple[Any, Any, Any]:
-    """An imported suggestion that a caller later confirms (supplier onboarding's shape)."""
-
-    party = Party._base_manager.create(display_name="Supplier", created_by=owner)
-    handle = Handle.objects.upsert(
-        platform=Handle.Platform.EMAIL, value="bills@supplier.example", created_by_id=owner.pk
-    )
-    PartyHandle.objects.link(party, handle, confidence=0.4, source=LinkSource.IMPORT, created_by_id=owner.pk)
-
-    def confirm() -> Any:
-        return PartyHandle.objects.link(
-            party, handle, confidence=1.0, source=LinkSource.MANUAL, is_confirmed=True, created_by_id=owner.pk
-        )
-
-    return party, handle, confirm
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("arrange", [_reimported_connection, _reclaimed_own_handle, _confirmed_by_caller])
-def test_a_confirming_caller_never_reverses_a_dismissal(composed_tables: None, arrange: Any) -> None:
-    """A re-import, a reconnect or a confirming caller keeps a person's dismissal; only their confirm lifts it."""
-
-    del composed_tables
-    owner = _user(f"dismissal-{arrange.__name__.strip('_')}")
-    with system_context(reason="test dismissal arrange"):
-        party, handle, relink = arrange(owner)
-        link = PartyHandle._base_manager.get(party=party, handle=handle)
-    with actor_context(owner):
-        link.dismiss()
-    with system_context(reason="test dismissal relink"):
-        dismissed = PartyHandle._base_manager.get(pk=link.pk)
-        relink()
-        link.refresh_from_db()
-        handle.refresh_from_db()
-    assert (link.is_dismissed, link.is_confirmed) == (True, False)
-    assert (link.source, link.confidence) == (dismissed.source, dismissed.confidence)
-    assert handle.party_id != party.pk
-
-    with actor_context(owner):
-        link.confirm()
-    with system_context(reason="test dismissal confirm"):
-        link.refresh_from_db()
-        handle.refresh_from_db()
-    assert (link.is_dismissed, link.is_confirmed) == (False, True)
-    assert (handle.party_id, handle.party_link_confirmed) == (party.pk, True)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -452,13 +299,10 @@ def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tup
     for index, (confidence, is_confirmed) in enumerate(links):
         party = Party._base_manager.create(display_name=f"Party {index}", created_by=owner)
         claims.append(
-            PartyHandle.objects.link(
-                party,
-                handle,
-                confidence=confidence,
-                source=LinkSource.CARDDAV,
-                is_confirmed=is_confirmed,
-                created_by_id=owner.pk,
+            (
+                party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
+                if is_confirmed
+                else Party.objects.assert_handle(party, handle, asserted_by=owner, confidence=confidence)
             )
         )
     return handle, claims
@@ -467,17 +311,19 @@ def _contested_handle(owner: Any, value: str, *links: tuple[float, bool]) -> tup
 def _in_link_order(links: list[Any]) -> list[Any]:
     """Return ``links`` in the order the model ranks equal links."""
 
-    return list(PartyHandle._base_manager.filter(pk__in=[link.pk for link in links]).order_by("sqid"))
+    return list(
+        Party.statements.filter(pk__in=[link.pk for link in links]).order_by(*Party.statements.model.trust_ordering)
+    )
 
 
 def _name(link: Any, name: str) -> None:
-    party = link.party
+    party = link.subject
     party.display_name = name
     party.save(update_fields=["display_name", "updated_at"])
 
 
 def _resolved_owner(handle: Any) -> Any:
-    PartyHandle.objects.resolve(handle)
+    Handle.objects.resolve(handle)
     handle.refresh_from_db()
     return handle.party_id
 
@@ -494,7 +340,7 @@ def test_an_equal_tie_resolves_to_the_party_with_a_real_name(composed_tables: No
         first, second = _in_link_order(links)
         _name(first, nameless)
         _name(second, "Ada Lovelace")
-        assert _resolved_owner(handle) == second.party_id
+        assert _resolved_owner(handle) == second.subject_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -505,12 +351,12 @@ def test_a_real_name_never_outranks_a_confirmation_or_a_stronger_score(composed_
         handle, (confirmed, named) = _contested_handle(owner, "confirmed@example.com", (1.0, True), (1.0, False))
         _name(confirmed, "Unknown")
         _name(named, "Ada Lovelace")
-        assert _resolved_owner(handle) == confirmed.party_id
+        assert _resolved_owner(handle) == confirmed.subject_id
 
         handle, (stronger, named) = _contested_handle(owner, "stronger@example.com", (1.0, False), (0.9, False))
         _name(stronger, "Unknown")
         _name(named, "Ada Lovelace")
-        assert _resolved_owner(handle) == stronger.party_id
+        assert _resolved_owner(handle) == stronger.subject_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -520,73 +366,66 @@ def test_an_all_nameless_tie_keeps_the_link_order(composed_tables: None) -> None
         handle, links = _contested_handle(_user("tie-nameless"), "nobody@example.com", (1.0, False), (1.0, False))
         for link in links:
             _name(link, "Unknown")
-        assert _resolved_owner(handle) == _in_link_order(links)[0].party_id
+        assert _resolved_owner(handle) == _in_link_order(links)[0].subject_id
 
 
 @pytest.mark.django_db(transaction=True)
-def test_moving_links_to_another_handle_folds_each_partys_decisions_and_evidence(composed_tables: None) -> None:
-    """A party on both handles keeps one link with both decisions and evidence; a lone link moves as it is."""
+def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(composed_tables: None) -> None:
+    """A party stating both spellings keeps the stronger current; the weaker stays superseded with its evidence."""
 
     del composed_tables
-    first, second, third = ({"model": "messaging.Message", "id": f"msg_{index}"} for index in range(3))
-    with system_context(reason="test move links"):
-        owner = _user("move-links")
+    with system_context(reason="test move statements"):
+        owner = _user("move-statements")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324870@lid", created_by=owner)
         phone = Handle._base_manager.create(platform="whatsapp", value="+18583421935", created_by=owner)
         confirmed, dismissed, stronger = (
             Party._base_manager.create(display_name=name, created_by=owner) for name in ("Bob", "Robert", "Rob")
         )
-        for party, handle, confidence, is_confirmed, is_dismissed, metadata in (
-            (confirmed, alias, 1.0, True, False, {"claim": "alias", "seen": 1, "evidence_refs": [first, third]}),
-            (confirmed, phone, 0.6, False, True, {"claim": "phone", "evidence_refs": [second, first]}),
-            (dismissed, alias, 0.6, False, True, {}),
-            (stronger, alias, 0.3, False, True, {}),
-            (stronger, phone, 0.9, False, False, {}),
-        ):
-            PartyHandle._base_manager.create(
-                party=party, handle=handle, confidence=confidence, source=LinkSource.IMPORT,
-                is_confirmed=is_confirmed, is_dismissed=is_dismissed, metadata=metadata, created_by=owner,
-            )
-        PartyHandle.objects.resolve(alias)
+        confirmed.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+        folded = Party.objects.assert_handle(confirmed, phone, asserted_by=owner, confidence=0.6, evidence=[alias])
+        Party.objects.assert_handle(dismissed, alias, asserted_by=owner, confidence=0.6)
+        dismissed.with_actor(owner).dismiss(aspect="handle", handle=alias)
+        Party.objects.assert_handle(stronger, alias, asserted_by=owner, confidence=0.3)
+        Party.objects.assert_handle(stronger, phone, asserted_by=owner, confidence=0.9)
         alias.refresh_from_db()
         assert alias.party_id == confirmed.pk
 
-        PartyHandle.objects.move_links(alias, phone)
+        Party.objects.move_handle_statements(alias, phone)
 
-        links = {
-            party_id: (confidence, is_confirmed, is_dismissed, metadata)
-            for party_id, confidence, is_confirmed, is_dismissed, metadata in PartyHandle._base_manager.filter(
-                handle=phone
-            ).values_list("party_id", "confidence", "is_confirmed", "is_dismissed", "metadata")
+        current = {
+            row.subject_id: (row.confidence, row.is_confirmed, row.is_dismissed)
+            for row in Party.statements.filter(handle=phone).current()
         }
-        phone.refresh_from_db()
-        alias.refresh_from_db()
-        confirmed.refresh_from_db()
-        assert not PartyHandle._base_manager.filter(handle=alias).exists()
+        superseded = list(Party.statements.filter(handle=phone, superseded__isnull=False).order_by("confidence"))
+        for row in (phone, alias, confirmed, folded):
+            row.refresh_from_db()
+        assert not Party.statements.filter(handle=alias).exists()
         assert alias.party_id is None
 
-    assert links == {
-        confirmed.pk: (1.0, True, False, {"claim": "phone", "seen": 1, "evidence_refs": [second, first, third]}),
-        dismissed.pk: (0.6, False, True, {}),
-        stronger.pk: (0.9, False, True, {}),
+    assert current == {
+        confirmed.pk: (1.0, True, False),
+        dismissed.pk: (1.0, False, True),
+        stronger.pk: (0.9, False, False),
     }
+    assert [(row.subject_id, row.confidence) for row in superseded] == [(stronger.pk, 0.3), (confirmed.pk, 0.6)]
+    assert (folded.superseded_id is not None, folded.evidence) == (True, superseded[1].evidence)
     assert (phone.party_id, phone.party_link_confirmed) == (confirmed.pk, True)
     assert confirmed.handle_count == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_moving_a_handles_only_link_leaves_it_unowned(composed_tables: None) -> None:
+def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None) -> None:
     """Nothing is deleted, so the move itself re-resolves the handle it empties and recounts its owner."""
 
     del composed_tables
-    with system_context(reason="test move lone link"):
-        owner = _user("move-lone-link")
+    with system_context(reason="test move lone statement"):
+        owner = _user("move-lone-statement")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324871@lid", created_by=owner)
         phone = Handle._base_manager.create(platform="whatsapp", value="+18583421936", created_by=owner)
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
-        PartyHandle.objects.link(party, alias, source=LinkSource.IMPORT, created_by_id=owner.pk)
+        Party.objects.assert_handle(party, alias, asserted_by=owner)
 
-        PartyHandle.objects.move_links(alias, phone)
+        Party.objects.move_handle_statements(alias, phone)
 
         for row in (alias, phone, party):
             row.refresh_from_db()
@@ -594,52 +433,231 @@ def test_moving_a_handles_only_link_leaves_it_unowned(composed_tables: None) -> 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_folded_link_keeps_the_source_link_would_keep(composed_tables: None) -> None:
-    """A card's assertion folded with an import stays the card's, so the card keeps publishing the number."""
+def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: None) -> None:
+    """A source stating both spellings keeps its stronger statement current; the weaker is retained, not deleted."""
 
     del composed_tables
-    with system_context(reason="test move links source"):
-        owner = _user("move-links-source")
+    with system_context(reason="test move statements fold"):
+        owner = _user("move-statements-fold")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324872@lid", created_by=owner)
         phone = Handle._base_manager.create(platform="whatsapp", value="+18583421937", created_by=owner)
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
-        PartyHandle.objects.link(party, alias, confidence=0.9, source=LinkSource.CARDDAV, created_by_id=owner.pk)
-        PartyHandle.objects.link(party, phone, confidence=1.0, source=LinkSource.IMPORT, created_by_id=owner.pk)
+        weaker = Party.objects.assert_handle(party, alias, asserted_by=owner, confidence=0.9)
+        stronger = Party.objects.assert_handle(party, phone, asserted_by=owner, confidence=1.0)
 
-        PartyHandle.objects.move_links(alias, phone)
+        Party.objects.move_handle_statements(alias, phone)
 
-        link = PartyHandle._base_manager.get(handle=phone, party=party)
-        assert (link.source, link.confidence) == (LinkSource.CARDDAV, 1.0)
-        assert PartyHandle.objects.asserted().filter(pk=link.pk).exists()
+        weaker.refresh_from_db()
+        stronger.refresh_from_db()
+        assert (weaker.handle_id, weaker.superseded_id, weaker.applied) == (phone.pk, stronger.pk, False)
+        assert (stronger.superseded_id, stronger.applied) == (None, True)
+        assert Party.statements.asserted().filter(pk=stronger.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_moving_links_from_a_handle_already_gone_moves_nothing(composed_tables: None) -> None:
+def test_moving_statements_from_a_handle_already_gone_moves_nothing(composed_tables: None) -> None:
     """A second resolver run racing the first finds its alias merged away and leaves the survivor alone."""
 
     del composed_tables
-    with system_context(reason="test move links gone"):
-        owner = _user("move-links-gone")
+    with system_context(reason="test move statements gone"):
+        owner = _user("move-statements-gone")
         alias = Handle._base_manager.create(platform="whatsapp", value="113352894324873@lid", created_by=owner)
         phone = Handle._base_manager.create(platform="whatsapp", value="+18583421938", created_by=owner)
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
-        PartyHandle.objects.link(party, phone, source=LinkSource.IMPORT, created_by_id=owner.pk)
+        Party.objects.assert_handle(party, phone, asserted_by=owner)
         Handle._base_manager.filter(pk=alias.pk).delete()
 
-        PartyHandle.objects.move_links(alias, phone)
+        Party.objects.move_handle_statements(alias, phone)
 
         phone.refresh_from_db()
     assert phone.party_id == party.pk
-    assert PartyHandle._base_manager.filter(handle=phone).count() == 1
+    assert Party.statements.filter(handle=phone).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_confirmation_writes_only_the_decision_and_stays_asserted(
+def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_publishes(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A confirmed inference keeps its producer's source and score, is asserted, and leaves review.
+    """The statement key carries its source: a takeout's alias and a card's number stay two current stances."""
 
-    A source that owns the link's score (an Odoo import) can therefore be confirmed.
+    del composed_tables
+    monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
+    statements = Party.statements.model
+    with system_context(reason="test mixed-source move"):
+        owner = _user("move-mixed-sources")
+        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324875@lid", created_by=owner)
+        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421940", created_by=owner)
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
+        directory = make_integration("move-mixed-directory", model=Directory)
+        assert StatementSourceMixin.kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        imported, carded = (
+            statements._base_manager.create(
+                subject=party,
+                handle=handle,
+                aspect="handle",
+                asserted_by=str(to_subject_ref(source)),
+                source_kind=kind,
+                confidence=confidence,
+            )
+            for handle, source, kind, confidence in (
+                (alias, takeout, SourceKind.IMPORT, 1.0),
+                (phone, directory, SourceKind.DIRECTORY, 0.9),
+            )
+        )
+        Party.statements.resolve(subject=party, aspect="handle")
+
+        Party.objects.move_handle_statements(alias, phone)
+
+        for row in (imported, carded, phone):
+            row.refresh_from_db()
+        published = set(Party.statements.asserted().filter(handle=phone).values_list("pk", flat=True))
+    assert [(row.handle_id, row.superseded_id) for row in (imported, carded)] == [(phone.pk, None), (phone.pk, None)]
+    assert (carded.applied, imported.applied, phone.party_id) == (True, False, party.pk)
+    assert published == {carded.pk}
+
+
+def _handle_merge_fixture(slug: str, digits: str) -> tuple[Any, Any, Any]:
+    """An owner, a WhatsApp ``@lid`` alias and the phone handle it resolves to."""
+
+    owner = _user(slug)
+    alias = Handle._base_manager.create(platform="whatsapp", value=f"11335289432{digits}@lid", created_by=owner)
+    phone = Handle._base_manager.create(platform="whatsapp", value=f"+1858342{digits}", created_by=owner)
+    return owner, alias, phone
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_statements(
+    composed_tables: None,
+) -> None:
+    del composed_tables
+    with system_context(reason="test handle merge fill"):
+        owner, alias, phone = _handle_merge_fixture("merge-handle-fill", "1941")
+        Handle._base_manager.filter(pk=alias.pk).update(
+            owner=owner, label="work", display_name="Bob (LID)", is_verified=True, metadata={"jid": "a", "lid": "b"}
+        )
+        Handle._base_manager.filter(pk=phone.pk).update(display_name="Bob", metadata={"jid": "p"})
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        stance = party.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
+
+        kept = Handle.objects.merge(alias, into=phone)
+
+        stance.refresh_from_db()
+    assert kept.pk == phone.pk
+    assert not Handle._base_manager.filter(pk=alias.pk).exists()
+    assert (kept.owner_id, kept.label, kept.display_name, kept.is_verified) == (owner.pk, "work", "Bob", True)
+    assert kept.metadata == {"jid": "p", "lid": "b"}
+    assert (stance.handle_id, stance.is_confirmed, kept.party_id, kept.party_link_confirmed) == (
+        phone.pk,
+        True,
+        party.pk,
+        True,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_handle_holds(
+    composed_tables: None,
+) -> None:
+    """A participation, reaction or tag the phone handle already has is one fact; the rest moves."""
+
+    del composed_tables
+    with system_context(reason="test handle merge references"):
+        owner, alias, phone = _handle_merge_fixture("merge-handle-references", "1942")
+        channel = make_integration("merge-handle-channel", model=Channel, backend_class="manual")
+        thread, other_thread = Thread.objects.create(owner=owner), Thread.objects.create(owner=owner)
+        message = Message._base_manager.create(
+            channel=channel,
+            thread=thread,
+            external_id="merge-handle-message",
+            direction="inbound",
+            status="synced",
+            message_type="email",
+            sender=alias,
+            created_by=owner,
+        )
+        role = Participant.ParticipantRole
+        for handle in (alias, phone):
+            Participant._base_manager.create(message=message, thread=thread, handle=handle, role=role.FROM)
+            Participant._base_manager.create(thread=thread, handle=handle, role=role.TO)
+            Reaction._base_manager.create(message=message, handle=handle, reaction="👍")
+        moved_participant = Participant._base_manager.create(thread=other_thread, handle=alias, role=role.TO)
+        moved_reaction = Reaction._base_manager.create(message=message, handle=alias, reaction="❤️")
+        vip, work = Tag.objects.create(name="VIP"), Tag.objects.create(name="Work")
+        handle_type = ContentType.objects.get_for_model(Handle)
+        for handle, tag in ((alias, vip), (phone, vip), (alias, work)):
+            TagAssignment._base_manager.create(tag=tag, content_type=handle_type, object_id=handle.pk)
+
+        Handle.objects.merge(alias, into=phone)
+
+        message.refresh_from_db()
+        moved_participant.refresh_from_db()
+        moved_reaction.refresh_from_db()
+        participants = Counter(
+            Participant._base_manager.filter(handle=phone).values_list("thread_id", "message_id", "role")
+        )
+        reactions = sorted(Reaction._base_manager.filter(handle=phone).values_list("reaction", flat=True))
+        tags = sorted(
+            TagAssignment._base_manager.filter(content_type=handle_type, object_id=phone.pk).values_list(
+                "tag__name", flat=True
+            )
+        )
+    assert message.sender_id == phone.pk
+    assert (moved_participant.handle_id, moved_reaction.handle_id) == (phone.pk, phone.pk)
+    assert participants == Counter(
+        [(thread.pk, message.pk, role.FROM), (thread.pk, None, role.TO), (other_thread.pk, None, role.TO)]
+    )
+    assert reactions == sorted(["👍", "❤️"])
+    assert tags == ["VIP", "Work"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_a_handle_a_concurrent_fold_removed_does_nothing(composed_tables: None) -> None:
+    del composed_tables
+    with system_context(reason="test handle merge vanished"):
+        owner, alias, phone = _handle_merge_fixture("merge-handle-vanished", "1943")
+        party = Party._base_manager.create(display_name="Bob", created_by=owner)
+        Party.objects.assert_handle(party, phone, asserted_by=owner)
+
+        assert Handle.objects.merge(alias, into=phone).pk == phone.pk
+        assert Handle.objects.merge(alias, into=phone) is None
+
+        phone.refresh_from_db()
+    assert phone.party_id == party.pk
+    assert Party.statements.filter(handle=phone).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -> None:
+    """Two platforms are two contact points, never one's spelling of the other."""
+
+    del composed_tables
+    with system_context(reason="test handle merge platforms"):
+        owner, alias, _phone = _handle_merge_fixture("merge-handle-platforms", "1944")
+        email = Handle._base_manager.create(platform="email", value="bob-1944@example.test", created_by=owner)
+
+        with pytest.raises(ValidationError, match="same platform"):
+            Handle.objects.merge(alias, into=email)
+
+        kept = set(Handle._base_manager.filter(pk__in=(alias.pk, email.pk)).values_list("pk", flat=True))
+    assert kept == {alias.pk, email.pk}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_consumer_host_reaches_the_rule_sources_through_the_parties_test_plugin(statement_sources: None) -> None:
+    """A host without the framework's composed tables loads parties' install-tier principals from its plugin."""
+
+    del statement_sources
+    for key in ("normalized_twin", "email_domain", "display_name", "signature_phone", "source_sender"):
+        assert Party.objects.rule_source(key).key == f"parties.{key}"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_confirmation_writes_only_the_decision_and_stays_asserted(composed_tables: None) -> None:
+    """Confirming a rule's suggestion writes the person's preferred statement beside the untouched producer.
+
+    A source that owns the suggestion's score (an Odoo import, a matching rule)
+    keeps its row, score and kind; the handle leaves review and is asserted.
     """
 
     del composed_tables
@@ -647,26 +665,22 @@ def test_a_confirmation_writes_only_the_decision_and_stays_asserted(
         owner = _user("confirm-producer")
         party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
         handle = Handle._base_manager.create(platform="email", value="ada@example.com", created_by=owner)
-        link = PartyHandle.objects.link(party, handle, confidence=0.4, source=LinkSource.RULE, created_by_id=owner.pk)
-        assert not PartyHandle.objects.asserted().filter(pk=link.pk).exists()
-    saved: list[Any] = []
-    original = PartyHandle.save
+        rule = Party.objects.rule_source("display_name")
+        producer = Party.objects.assert_handle(party, handle, asserted_by=rule, confidence=0.4)
+        assert not Party.statements.asserted().filter(pk=producer.pk).exists()
+        assert Party.statements.to_review().filter(pk=producer.pk).exists()
+        before = (producer.updated_at, producer.rank, producer.confidence, producer.source_kind)
 
-    def save(self: Any, *args: Any, **kwargs: Any) -> None:
-        saved.append(kwargs.get("update_fields"))
-        original(self, *args, **kwargs)
+        decision = producer.with_actor(owner).confirm()
 
-    monkeypatch.setattr(PartyHandle, "save", save)
-    with actor_context(owner):
-        link.confirm()
-    with system_context(reason="test confirm keeps producer read"):
-        link.refresh_from_db()
+        producer.refresh_from_db()
         handle.refresh_from_db()
-        assert (link.source, link.confidence, link.is_confirmed) == (LinkSource.RULE, 0.4, True)
-        assert PartyHandle.objects.asserted().filter(pk=link.pk).exists()
-        assert not PartyHandle.objects.to_review().filter(pk=link.pk).exists()
+        assert (producer.updated_at, producer.rank, producer.confidence, producer.source_kind) == before
+        assert (decision.subject_id, decision.handle_id, decision.is_confirmed) == (party.pk, handle.pk, True)
+        assert decision.pk != producer.pk
+        assert Party.statements.asserted().filter(pk=decision.pk).exists()
+        assert not Party.statements.to_review().filter(handle=handle).exists()
         assert handle.party_id == party.pk
-    assert saved == [["is_confirmed", "is_dismissed", "updated_at"]]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -679,20 +693,8 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
         alicia = Party._base_manager.create(display_name="Alicia", created_by=owner)
         handle = Handle._base_manager.create(platform="email", value="a@example.com", created_by=owner)
-        strong = PartyHandle.objects.link(
-            alice,
-            handle,
-            confidence=0.9,
-            source=LinkSource.IMPORT,
-            created_by_id=owner.pk,
-        )
-        weak = PartyHandle.objects.link(
-            alicia,
-            handle,
-            confidence=0.4,
-            source=LinkSource.LLM,
-            created_by_id=owner.pk,
-        )
+        strong = Party.objects.assert_handle(alice, handle, asserted_by=owner, confidence=0.9)
+        weak = Party.objects.assert_handle(alicia, handle, asserted_by=owner, confidence=0.4)
 
         handle.refresh_from_db()
         alice.refresh_from_db()
@@ -713,50 +715,23 @@ def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
 
         # A re-sync re-linking the dismissed pair must not resurrect it: the
         # dismissed row already exists, so resolution still ignores it.
-        PartyHandle.objects.link(
-            alice,
-            handle,
-            confidence=0.95,
-            source=LinkSource.IMPORT,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, handle, asserted_by=owner, confidence=0.95)
         handle.refresh_from_db()
         assert handle.party_id is None
 
         # A human confirm outranks any score and clears the dismissal; the link keeps
         # its producer's source and score.
         strong.refresh_from_db()
-        strong.with_actor(owner).confirm()
+        strong = strong.with_actor(owner).confirm()
         handle.refresh_from_db()
         strong.refresh_from_db()
         assert handle.party_id == alice.pk
         assert handle.party_link_confirmed is True
         assert strong.is_confirmed and not strong.is_dismissed
-        assert (strong.source, strong.confidence) == (LinkSource.IMPORT, 0.9)
+        assert strong.source_kind == "person"
 
         # Low-confidence, undecided links are exactly the review queue.
-        assert list(PartyHandle.objects.to_review().values_list("pk", flat=True)) == [weak.pk]
-
-        with pytest.raises(TypeError, match="transitions must use"):
-            PartyHandle.objects.filter(pk=weak.pk).update(confidence=0.8)
-        weak.confidence = 0.8
-        with pytest.raises(TypeError, match="transitions must use"):
-            PartyHandle.objects.bulk_update([weak], ["confidence"])
-        with pytest.raises(TypeError, match="must be created through"):
-            PartyHandle.objects.bulk_create(
-                [
-                    PartyHandle(
-                        party=alice,
-                        handle=handle,
-                        confidence=0.5,
-                        source=LinkSource.IMPORT,
-                        created_by_id=owner.pk,
-                    )
-                ]
-            )
-        weak.refresh_from_db()
-        assert weak.confidence == 0.4
-        assert PartyHandle.objects.filter(handle=handle).count() == 2
+        assert list(Party.statements.to_review().values_list("pk", flat=True)) == [weak.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -777,7 +752,7 @@ def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None,
 
 @pytest.mark.django_db(transaction=True)
 def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> None:
-    """Handle.claim_own sets the owner (control) and a confirmed self-link (identity)."""
+    """Handle.claim_own sets the owner (control) and a normal person statement (identity)."""
 
     del composed_tables
     with system_context(reason="test claim_own"):
@@ -786,13 +761,13 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
             user,
             platform=Handle.Platform.EMAIL,
             value="nils@work.example",
-            source=LinkSource.OAUTH,
+            asserted_by=user,
         )
         again = Handle.objects.claim_own(
             user,
             platform=Handle.Platform.EMAIL,
             value="nils@work.example",
-            source=LinkSource.OAUTH,
+            asserted_by=user,
         )
 
         handle.refresh_from_db()
@@ -801,10 +776,10 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
         assert set(Handle.objects.owned_by(user).values_list("pk", flat=True)) == {handle.pk}
         person = Person.objects.for_user(user)
         assert handle.party_id == person.pk
-        assert handle.party_link_confirmed is True
-        link = PartyHandle.objects.get(handle=handle, party=person)
-        assert link.is_confirmed and link.source == LinkSource.OAUTH and link.confidence == 1.0
-        assert PartyHandle.objects.filter(handle=handle, party=person).count() == 1
+        assert handle.party_link_confirmed is False
+        link = Party.statements.get(handle=handle, subject=person)
+        assert not link.is_confirmed and link.source_kind == "person" and link.confidence == 1.0
+        assert Party.statements.filter(handle=handle, subject=person).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -819,28 +794,28 @@ def test_claim_own_records_a_contested_identity_without_reassigning_control(comp
             first_user,
             platform=Handle.Platform.EMAIL,
             value="shared@example.com",
-            source=LinkSource.OAUTH,
+            asserted_by=first_user,
         )
         contested = Handle.objects.claim_own(
             competing_user,
             platform=Handle.Platform.EMAIL,
             value="shared@example.com",
-            source=LinkSource.OAUTH,
+            asserted_by=competing_user,
         )
 
         first_person = Person.objects.for_user(first_user)
         competing_person = Person.objects.for_user(competing_user)
-        first_link = PartyHandle.objects.get(handle=handle, party=first_person)
-        competing_link = PartyHandle.objects.get(handle=handle, party=competing_person)
+        first_link = Party.statements.get(handle=handle, subject=first_person)
+        competing_link = Party.statements.get(handle=handle, subject=competing_person)
 
     contested.refresh_from_db()
     assert contested.pk == handle.pk
     assert contested.owner_id == first_user.pk
     assert contested.party_id == first_person.pk
-    assert first_link.is_confirmed and first_link.confidence == 1.0
+    assert not first_link.is_confirmed and first_link.confidence == 1.0
     assert not competing_link.is_confirmed
     assert competing_link.confidence == 0.3
-    assert competing_link.source == LinkSource.OAUTH
+    assert competing_link.source_kind == "person"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -874,21 +849,15 @@ def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: N
         owner = _user("iris")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
         resolved = Handle._base_manager.create(platform="email", value="a.lice@gmail.com", created_by=owner)
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            confidence=1.0,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
 
         fresh = Handle._base_manager.create(platform="email", value="alice+news@gmail.com", created_by=owner)
-        link = PartyHandle.objects.suggest_for(fresh)
+        link = Party.objects.suggest_for(fresh)
 
     assert link is not None
     fresh.refresh_from_db()
     assert fresh.party_id == alice.pk
-    assert link.source == LinkSource.EMAIL_MATCH
+    assert link.source_kind == "rule"
     assert not link.is_confirmed
     assert link.confidence == 1.0
 
@@ -912,24 +881,14 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
             value="a.lice+other@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            alicia,
-            competing_twin,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
+        Party.objects.assert_handle(alicia, competing_twin, asserted_by=owner, confidence=1.0)
 
         resolved.refresh_from_db()
-        result = PartyHandle.objects.suggest_for(resolved)
+        result = Party.objects.suggest_for(resolved)
 
     assert result is None
-    assert list(PartyHandle._base_manager.filter(handle=resolved).values_list("party_id", flat=True)) == [alice.pk]
+    assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -945,30 +904,26 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
             value="a.lice@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            resolved,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, resolved, asserted_by=owner, confidence=1.0)
         unknown = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="alice+unknown@gmail.com",
             created_by=owner,
         )
-        dismissed = PartyHandle.objects.suggest_for(unknown)
+        dismissed = Party.objects.suggest_for(unknown)
         assert dismissed is not None
-        dismissed.with_actor(owner).dismiss()
+        dismissed = dismissed.with_actor(owner).dismiss()
 
-        repeated = PartyHandle.objects.suggest_for(unknown)
+        repeated = Party.objects.suggest_for(unknown)
 
     dismissed.refresh_from_db()
     unknown.refresh_from_db()
-    assert repeated is not None and repeated.pk == dismissed.pk
+    assert repeated is not None
+    assert repeated.subject_id == dismissed.subject_id
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert unknown.party_id is None
-    assert PartyHandle._base_manager.filter(party=alice, handle=unknown).count() == 1
+    assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -990,34 +945,24 @@ def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None)
             value="al.ice+home@gmail.com",
             created_by=owner,
         )
-        PartyHandle.objects.link(
-            alice,
-            first,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            alicia,
-            second,
-            source=LinkSource.MANUAL,
-            created_by_id=owner.pk,
-        )
+        Party.objects.assert_handle(alice, first, asserted_by=owner, confidence=1.0)
+        Party.objects.assert_handle(alicia, second, asserted_by=owner, confidence=1.0)
         fresh = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="alice+new@gmail.com",
             created_by=owner,
         )
 
-        winner = PartyHandle.objects.suggest_for(fresh)
-        links = list(PartyHandle.objects.filter(handle=fresh).order_by("party_id"))
+        winner = Party.objects.suggest_for(fresh)
+        links = list(Party.statements.filter(handle=fresh).order_by("subject_id"))
 
     assert winner is not None
-    by_party = {link.party_id: link for link in links}
+    by_party = {link.subject_id: link for link in links}
     assert set(by_party) == {alice.pk, alicia.pk}
     assert by_party[alice.pk].confidence == 1.0
     assert by_party[alicia.pk].confidence == 0.3
     assert all(not link.is_confirmed for link in links)
-    assert all(link.source == LinkSource.EMAIL_MATCH for link in links)
+    assert all(link.source_kind == "rule" for link in links)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1029,13 +974,13 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None
         owner = _user("omar")
         acme = Organization._base_manager.create(display_name="Acme", domain="acme.com", created_by=owner)
         handle = Handle._base_manager.create(platform="email", value="bob@acme.com", created_by=owner)
-        link = PartyHandle.objects.suggest_for(handle)
+        link = Party.objects.suggest_for(handle)
 
     assert link is not None
-    assert link.party_id == acme.pk
+    assert link.subject_id == acme.pk
     assert link.confidence == 0.4
     assert not link.is_confirmed
-    assert link.source == LinkSource.RULE
+    assert link.source_kind == "rule"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1046,7 +991,7 @@ def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
     with system_context(reason="test suggest noop"):
         owner = _user("nadia")
         handle = Handle._base_manager.create(platform="email", value="stranger@nowhere.example", created_by=owner)
-        link = PartyHandle.objects.suggest_for(handle)
+        link = Party.objects.suggest_for(handle)
 
     assert link is None
     handle.refresh_from_db()
@@ -1130,7 +1075,7 @@ def test_relationship_kind_end_legality_requires_org_counterparty(
 
 @pytest.mark.django_db(transaction=True)
 def test_merged_into_flattens_transitively(composed_tables: None) -> None:
-    """Party.merge_into atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
+    """Party.merge atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
 
     del composed_tables
     with system_context(reason="test merge"):
@@ -1139,12 +1084,12 @@ def test_merged_into_flattens_transitively(composed_tables: None) -> None:
         b = Party._base_manager.create(display_name="B", created_by=owner)
         c = Party._base_manager.create(display_name="C", created_by=owner)
 
-        a.merge_into(b)
+        b.with_actor(owner).merge(records=[a.public_id])
         a.refresh_from_db()
         assert a.merged_into_id == b.pk
 
         # Merging B into C repoints A forward in the same write — no two-hop chain.
-        b.merge_into(c)
+        c.with_actor(owner).merge(records=[b.public_id])
         a.refresh_from_db()
         b.refresh_from_db()
         assert a.merged_into_id == c.pk
@@ -1167,7 +1112,7 @@ def test_has_real_name_rejects_placeholder_and_letterless_names() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_merge_into_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
+def test_merge_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
     """The verb rejects A→B when B→A exists; the database is the direct-write floor."""
 
     del composed_tables
@@ -1175,10 +1120,10 @@ def test_merge_into_rejects_reversal_and_database_rejects_self_merge(composed_ta
         owner = _user("reversal")
         a = Party._base_manager.create(display_name="A", created_by=owner)
         b = Party._base_manager.create(display_name="B", created_by=owner)
-        b.merge_into(a)
+        a.with_actor(owner).merge(records=[b.public_id])
 
-        with pytest.raises(ValidationError, match="reverse"):
-            a.merge_into(b)
+        with pytest.raises(ValidationError, match="canonical"):
+            b.with_actor(owner).merge(records=[a.public_id])
 
         a.merged_into = a
         with pytest.raises(IntegrityError), transaction.atomic():
@@ -1192,7 +1137,12 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     del composed_tables
     with system_context(reason="test carddav employment"):
         owner = _user("carddav")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        directory = make_integration(
+            owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
+        )
+        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact-1")
         employee = RelationshipKind._base_manager.create(
             slug="employee",
             name="Employee",
@@ -1208,11 +1158,11 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             role="Programmer",
         )
 
-        person = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
+        person = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
         synced = Relationship._base_manager.get(
             party=person,
             kind=employee,
-            source=LinkSource.CARDDAV,
+            pk__in=Relationship.statements.filter(link=link).values("subject_id"),
             other_party__isnull=True,
         )
         first_pk = synced.pk
@@ -1221,16 +1171,15 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
         manual = Relationship._base_manager.create(
             party=person,
             kind=employee,
-            source=LinkSource.MANUAL,
             other_name="Human-maintained employer",
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
+        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link, target=person)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
-            source=LinkSource.CARDDAV,
+            pk__in=Relationship.statements.filter(link=link).values("subject_id"),
             other_party__isnull=True,
         )
 
@@ -1241,7 +1190,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             title="Principal Mathematician",
             role="Research lead",
         )
-        Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk)
+        Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
 
     assert synced.other_name == "Analytical Engines"
@@ -1252,15 +1201,16 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
     assert unchanged.updated_at == first_updated_at
     assert refreshed.title == "Principal Mathematician"
     assert refreshed.notes == "Research lead"
-    assert Relationship._base_manager.filter(pk=manual.pk, source=LinkSource.MANUAL).exists()
+    assert Relationship._base_manager.filter(pk=manual.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
 def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> None:
     """A card address updates its matching row and keeps its coordinates and primary flag.
 
-    A new address is created, and only a row the card no longer lists goes: two
-    equal card addresses are two rows, and listing the address once leaves one.
+    A new address is created, and only a row the card no longer lists loses the
+    card's statement: two equal card addresses are two rows, and listing the
+    address once leaves one of them asserted.
     """
 
     del composed_tables
@@ -1268,10 +1218,15 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
     work = ParsedAddress(label="work", street="2 Side St", city="Shelbyville", country="US")
     with system_context(reason="test carddav addresses"):
         owner = _user("carddav-addresses")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        directory = make_integration(
+            owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
+        )
+        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
         card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
-        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk)
+        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk, link=link)
         assert Address._base_manager.filter(party=person, label="work").count() == 2
         located = Address._base_manager.get(party=person, label="home")
         located.latitude, located.longitude, located.is_primary = 39.8, -89.6, True
@@ -1279,51 +1234,23 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
 
         moved = ParsedAddress(label="Home", street="1  MAIN st", city="springfield", country="US")
         office = ParsedAddress(label="office", street="3 Far Rd", city="Ogdenville", country="US")
-        Party.objects.ingest_contact(replace(card, addresses=(moved, work, office)), folder=folder,
-                                     created_by_id=owner.pk)
+        Party.objects.ingest_contact(
+            replace(card, addresses=(moved, work, office)),
+            folder=folder,
+            created_by_id=owner.pk,
+            link=link,
+            target=person,
+        )
         rows = list(Address._base_manager.filter(party=person).order_by("pk"))
+        asserted = set(
+            Address.statements.filter(subject__in=rows, link=link).canonical().values_list("subject_id", flat=True)
+        )
 
     kept = next(row for row in rows if row.pk == located.pk)
     assert (kept.label, kept.street, kept.city) == ("Home", "1  MAIN st", "springfield")
     assert (kept.latitude, kept.longitude, kept.is_primary) == (39.8, -89.6, True)
-    assert sorted(row.label for row in rows) == ["Home", "office", "work"]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_a_card_dropping_a_value_keeps_a_persons_decision_on_it(composed_tables: None) -> None:
-    """Only an undecided card link goes with its value; a dismissal or a confirmation stays."""
-
-    del composed_tables
-    emails = tuple((value, "", False) for value in ("kept@example.com", "dismissed@example.com",
-                                                    "confirmed@example.com", "dropped@example.com"))
-    with system_context(reason="test carddav decisions"):
-        owner = _user("carddav-decisions")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
-        RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
-        card = ParsedContact(uid="contact-3", display_name="Ada Lovelace", emails=emails)
-        person = Party.objects.ingest_contact(card, folder=folder, created_by_id=owner.pk)
-        rows = PartyHandle._base_manager.filter(party=person).select_related("handle")
-        links = {link.handle.value: link for link in rows}
-        PartyHandle.objects.link(
-            person, links["confirmed@example.com"].handle, source=LinkSource.CARDDAV, is_confirmed=True,
-            created_by_id=owner.pk,
-        )
-    with actor_context(owner):
-        links["dismissed@example.com"].dismiss()
-    with system_context(reason="test carddav drops values"):
-        Party.objects.ingest_contact(replace(card, emails=emails[:1]), folder=folder, created_by_id=owner.pk)
-        remaining = {
-            value: (source, is_confirmed, is_dismissed)
-            for value, source, is_confirmed, is_dismissed in PartyHandle._base_manager.filter(party=person).values_list(
-                "handle__value", "source", "is_confirmed", "is_dismissed"
-            )
-        }
-
-    assert remaining == {
-        "kept@example.com": (LinkSource.CARDDAV, False, False),
-        "dismissed@example.com": (LinkSource.CARDDAV, False, True),
-        "confirmed@example.com": (LinkSource.CARDDAV, True, False),
-    }
+    assert sorted(row.label for row in rows if row.pk in asserted) == ["Home", "office", "work"]
+    assert len(rows) == 4
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1333,55 +1260,18 @@ def test_ingest_contact_requires_employee_relationship_kind(composed_tables: Non
     del composed_tables
     with system_context(reason="test carddav missing kind"):
         owner = _user("missing-kind")
-        folder = Folder._base_manager.create(name="Contacts", created_by=owner)
+        directory = make_integration(
+            owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
+        )
+        folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
+        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact-2")
         parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
 
         with pytest.raises(ValidationError, match="employee.*RelationshipKind"):
-            Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk)
+            Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
 
-    assert not Person._base_manager.filter(source_uid="contact-2").exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_counter_signals_reresolve_on_direct_link_delete(composed_tables: None) -> None:
-    """The PartyHandle post_delete receiver re-resolves and recounts a raw link delete.
-
-    A raw ``delete()`` (or a queryset/cascade delete) bypasses ``dismiss()``, so the
-    resolved owner and its ``handle_count`` would drift without the signal.
-    """
-
-    del composed_tables
-    with system_context(reason="test counters"):
-        owner = _user("sam")
-        alice = Party._base_manager.create(display_name="Alice", created_by=owner)
-        bob = Party._base_manager.create(display_name="Bob", created_by=owner)
-        handle = Handle._base_manager.create(platform="email", value="a@example.com", created_by=owner)
-        strong = PartyHandle.objects.link(
-            alice,
-            handle,
-            confidence=0.9,
-            source=LinkSource.IMPORT,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            bob,
-            handle,
-            confidence=0.6,
-            source=LinkSource.LLM,
-            created_by_id=owner.pk,
-        )
-        alice.refresh_from_db()
-        assert alice.handle_count == 1
-
-        # Deleting the winning link demotes the handle to the next candidate and
-        # recounts BOTH parties — with no dismiss() call to drive it.
-        strong.delete()
-        handle.refresh_from_db()
-        alice.refresh_from_db()
-        bob.refresh_from_db()
-        assert handle.party_id == bob.pk
-        assert alice.handle_count == 0
-        assert bob.handle_count == 1
+    assert not Person._base_manager.filter(display_name="Grace").exists()
 
 
 def test_seed_vocabulary_matches_model_contract() -> None:
@@ -1414,3 +1304,128 @@ def test_seed_vocabulary_matches_model_contract() -> None:
     assert "inverse_name" not in by_slug["friend"], "friend is symmetric"
     # Employment kinds pin the counterparty to an organisation.
     assert by_slug["employee"]["other_party_kind"] == "organization"
+
+
+def _system_of_record_statement(party: Any, source: Any, link: Any, **values: Any) -> Any:
+    """A retained SYSTEM_OF_RECORD stance backed by ``link``, as an Odoo companion asserts it."""
+
+    return Party.statements.model._base_manager.create(
+        subject=party,
+        aspect="identity",
+        asserted_by=str(to_subject_ref(source)),
+        source_kind=SourceKind.SYSTEM_OF_RECORD,
+        link=link,
+        **values,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(composed_tables: None) -> None:
+    """Declaring or flipping ``SyncStream.authoritative`` re-derives the subjects; preferred stays on top (§11.2)."""
+
+    del composed_tables
+    with system_context(reason="test authoritative stream"):
+        owner = _user("authority-owner")
+        party = Party._base_manager.create(display_name="Ada (me)", created_by=owner)
+        source = make_integration("authority-system-of-record", model=Directory)
+        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "partner-1", target=party)
+        party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})
+        _system_of_record_statement(party, source, link, display_name="Ada (odoo)")
+        Party.statements.resolve(subject=party, aspect="identity")
+        party.refresh_from_db()
+        assert party.display_name == "Ada (me)"
+
+        # The adapter's declaration carries the fact: redeclaring flips the current generation.
+        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA, authoritative=True)
+        assert stream.authoritative is True
+        party.refresh_from_db()
+        assert party.display_name == "Ada (odoo)"
+        assert Party.statements.model._base_manager.get(link=link).applied
+
+        SyncStream.objects.set_authoritative(stream, False)
+        party.refresh_from_db()
+        assert party.display_name == "Ada (me)"
+
+        party.with_actor(owner).confirm(aspect="identity", values={"display_name": "Ada"})
+        SyncStream.objects.set_authoritative(stream, True)
+        party.refresh_from_db()
+        assert party.display_name == "Ada"
+        assert SyncStream.objects.bump_generation(stream).authoritative is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: None) -> None:
+    """Authority alone decides between the system of record and a person's normal stance, not row age.
+
+    An upgrade's folds record the system of record first and the person's stance beside it,
+    so the person's row is the newer one: once the stream is authoritative, precedence ranks
+    the system of record first instead of tying both at the head of the order.
+    """
+
+    del composed_tables
+    with system_context(reason="test authoritative stream over a later edit"):
+        owner = _user("authority-later-owner")
+        party = Party._base_manager.create(display_name="Ada (odoo)", created_by=owner)
+        source = make_integration("authority-later-system-of-record", model=Directory)
+        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "partner-1", target=party)
+        _system_of_record_statement(party, source, link, display_name="Ada (odoo)")
+        party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})
+        party.refresh_from_db()
+        assert party.display_name == "Ada (me)"
+
+        SyncStream.objects.set_authoritative(stream, True)
+        party.refresh_from_db()
+        assert party.display_name == "Ada (odoo)"
+        assert Party.statements.model._base_manager.get(link=link).applied
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(composed_tables: None) -> None:
+    """A person's older, weaker normal statement outranks a directory's newer full-confidence one."""
+
+    del composed_tables
+    with system_context(reason="test handle precedence"):
+        owner = _user("precedence-owner")
+        handle = Handle._base_manager.create(platform="email", value="shared@example.com", created_by=owner)
+        person_party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
+        card_party = Party._base_manager.create(display_name="Ada Card", created_by=owner)
+        directory = make_integration("precedence-directory", model=Directory)
+        Party.objects.assert_handle(person_party, handle, asserted_by=owner, confidence=0.9)
+        Party.statements.model._base_manager.create(
+            subject=card_party,
+            handle=handle,
+            aspect="handle",
+            asserted_by=str(to_subject_ref(directory)),
+            source_kind=SourceKind.DIRECTORY,
+            confidence=1.0,
+        )
+        Party.statements.resolve(subject=card_party, aspect="handle", members={"handle": handle})
+        handle.refresh_from_db()
+        assert handle.party_id == person_party.pk
+
+        # Within one kind, confidence still decides before recency.
+        stronger = Party._base_manager.create(display_name="Ada Stronger", created_by=owner)
+        Party.objects.assert_handle(stronger, handle, asserted_by=owner, confidence=1.0)
+        handle.refresh_from_db()
+        assert handle.party_id == stronger.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dismissing_an_identity_value_clears_it_and_confirming_the_stance_restores_it(composed_tables: None) -> None:
+    """A preferred no-value applies: the removal sticks; ``Statement.confirm`` re-applies the retained values."""
+
+    del composed_tables
+    with system_context(reason="test identity dismissal"):
+        owner = _user("dismiss-owner")
+        party = Party._base_manager.create(display_name="Ada", created_by=owner)
+        stance = party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada"})
+        party.with_actor(owner).dismiss(aspect="identity")
+        party.refresh_from_db()
+        assert party.display_name == ""
+        assert party.statements.provenance("display_name").get().is_dismissed
+        restored = stance.with_actor(owner).confirm()
+        party.refresh_from_db()
+        assert party.display_name == "Ada"
+        assert (restored.is_confirmed, restored.applied) == (True, True)

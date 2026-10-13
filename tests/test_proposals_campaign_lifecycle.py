@@ -19,6 +19,7 @@ from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.conftest import Drive
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_models import Proposal, Round, Topic
+from tests.t3_campaign import relationship_snapshot
 
 pytest_plugins = ("tests.proposals_campaign",)
 
@@ -356,7 +357,7 @@ def test_provisioning_replay_resumes_topics_shells_tracks_and_dedicated_drives(c
         "topics": [{"key": "approach", "name": "Approach"}, {"key": "delivery", "name": "Delivery"}],
     }
     people = [c.person("responder"), c.person("peer")]
-    before = active_relationship_model().objects.count()
+    before = relationship_snapshot()
     with actor_context(manager):
         first = Round.objects.provision(project, template, manager, people[:1])
         replay = Round.objects.provision(project, template, manager, people)
@@ -364,7 +365,7 @@ def test_provisioning_replay_resumes_topics_shells_tracks_and_dedicated_drives(c
         for replacement in ({"opening_policy": "answers"}, {"topics": [{"key": "other", "name": "Other"}]}):
             with pytest.raises(ValidationError, match="different"):
                 Round.objects.provision(project, {**template, **replacement}, manager, people)
-    assert active_relationship_model().objects.count() == before
+    assert relationship_snapshot() == before
     assert Topic._base_manager.filter(round=first).count() == 2
     shells = list(Proposal._base_manager.filter(round=first).order_by("pk"))
     assert len(shells) == 2

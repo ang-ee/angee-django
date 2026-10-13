@@ -215,12 +215,6 @@ export interface ByIdVariables extends Record<string, unknown> {
   id: string;
 }
 
-export interface ResourceRevision extends Record<string, unknown> {
-  id: string;
-  created_at: string;
-  comment: string | null;
-}
-
 export interface CustomGraphQLRequest {
   dataProviderName: string;
   root: string;
@@ -348,19 +342,6 @@ export function actionRequest(
     dataProviderName: options.dataProviderName ?? "default",
     root,
     meta: mutationMeta(options.document, variables),
-  };
-}
-
-export function revisionsRequest(
-  target: CustomGraphQLOperationTarget,
-  id: string,
-  options: { document: unknown },
-): CustomGraphQLRequest {
-  const operation = operationTarget(target);
-  return {
-    dataProviderName: operation.dataProviderName,
-    root: operation.root,
-    meta: queryMeta(options.document, { id }),
   };
 }
 
@@ -496,37 +477,6 @@ export function runActionResult(
   if (!outcome) return undefined;
   if (!outcome.ok) throw new Error(outcome.message);
   return outcome.message;
-}
-
-export function extractRevisions(
-  data: unknown,
-  root: string,
-): readonly ResourceRevision[] {
-  return arrayValue(recordValue(data)?.[root]).flatMap((row) => {
-    if (!isRecord(row) || typeof row.id !== "string") return [];
-    return [
-      {
-        ...row,
-        id: row.id,
-        created_at: typeof row.created_at === "string" ? row.created_at : "",
-        comment: typeof row.comment === "string" ? row.comment : null,
-      },
-    ];
-  });
-}
-
-const REVISION_META_FIELDS = new Set([
-  "id",
-  "created_at",
-  "comment",
-  "__typename",
-]);
-
-export function revisionSnapshot(revision: ResourceRevision): unknown {
-  for (const [field, value] of Object.entries(revision)) {
-    if (!REVISION_META_FIELDS.has(field) && value != null) return value;
-  }
-  return "";
 }
 
 export function groupDimension(
