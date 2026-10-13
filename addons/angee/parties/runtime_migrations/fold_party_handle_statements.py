@@ -30,11 +30,12 @@ Retained evidence, per carrier source:
   attribution awaits its ruling. Contradictory import attribution blocks.
 - ``oauth``: the login self-claim is the owning user's own decision, a preferred
   PERSON statement by the handle's owner (else its creator).
-- A confirmed ``manual`` carrier that still names a producer (a claim, rule evidence,
-  an import label): until 2026-10-11 a confirmation rewrote the producer's source to
-  ``manual`` and kept its metadata, so it folds as every older confirmed link does, the
-  person's, with the producer's record references as evidence; other producer clues on
-  a ``manual`` or ``oauth`` carrier still block.
+- A decided ``manual`` carrier that still names a producer (a claim, rule evidence, an
+  import label): until 2026-10-11 a confirmation rewrote the producer's source to
+  ``manual`` and kept its metadata, and a later dismissal kept both, so it folds as every
+  older decided link does, the person's (a source assertion by its creator and the
+  decider's stance), with the producer's record references as evidence; producer clues
+  on an undecided ``manual`` carrier or an ``oauth`` one still block.
 - Confirm/dismiss: a preferred PERSON stance by the recorded decider (``updated_by``,
   else ``created_by``) when that account is a person. A decision whose recorded
   actor is a service account or absent is a system decision: a normal statement
@@ -187,12 +188,14 @@ def _source(legacy, row, metadata, party, handle, refs, origins, notices):
     if sum(clues) > 1:
         raise Blocked("PartyHandle", row.pk, "merged metadata names several producers")
     if row.source in ("manual", "oauth"):
-        if any(clues) and not (row.source == "manual" and row.is_confirmed):
+        decided = row.is_confirmed or row.is_dismissed
+        if any(clues) and not (row.source == "manual" and decided):
             raise Blocked("PartyHandle", row.pk, f"{row.source} source conflicts with retained producer evidence")
         if any(clues):
-            # Until 2026-10-11 a confirmation rewrote the producer's source to "manual" and
-            # left its metadata: the person's link, with the producer's references as evidence.
-            notices["producer link a person confirmed before its source was kept: folded as the person's"] += 1
+            # Until 2026-10-11 a confirmation rewrote the producer's source to "manual" and left
+            # its metadata, and a later dismissal kept both: the person's link, decided as recorded,
+            # with the producer's references as evidence.
+            notices["producer link a person decided before its source was kept: folded as the person's"] += 1
         owner = handle.owner_id if row.source == "oauth" else None
         actor = next((pk for pk in (owner, row.created_by_id) if legacy.person(pk)), None)
         if actor is not None:

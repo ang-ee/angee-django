@@ -16,6 +16,7 @@ from django.urls import path
 from rebac import system_context
 
 from angee.base.changesets import changeset, changeset_model_label, current_changeset
+from angee.base.refs import concrete_child_models
 from angee.base.serialization import canonical_json_sha256
 from angee.messaging.testing.models import Party
 from tests.conftest import create_user
@@ -97,7 +98,9 @@ def test_tracked_save_and_queryset_update_query_budgets(composed_tables: None) -
         f"UPDATE {party_table}",
         f"SELECT {party_table}",
         f"INSERT {history_table}",
-        *(f"SELECT {child._meta.db_table}" for child in sorted(Party.__subclasses__(), key=lambda c: c._meta.db_table)),
+        # The capture's owner names the installed children: a class another module derived
+        # from Party under isolate_apps stays a Python subclass until it is collected.
+        *(f"SELECT {child._meta.db_table}" for child in concrete_child_models(Party)),
     ]
 
 
