@@ -21,23 +21,22 @@ export interface DaemonLogStream {
   streaming: boolean;
 }
 
-const SERVICE_LOG_TAIL = 500;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 
 // Build the structured per-service log socket URL from the same-origin daemon
 // endpoint: swap the graphql path for the logs-stream path, http→ws, carrying the
-// operator bearer (it passes the admin/operator tier) and a `tail` backlog.
+// operator bearer (it passes the admin/operator tier). No `tail`: the daemon owns
+// how much backlog a follow replays, and refuses one a runtime cannot replay whole.
 function serviceLogsSocketUrl(
   endpoint: string,
   token: string,
   name: string,
-  tail: number,
 ): string {
   const url = new URL(endpoint, window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/graphql\/?$/, "")}/services/${encodeURIComponent(name)}/logs/stream`;
-  url.search = `tail=${tail}&token=${encodeURIComponent(token)}`;
+  url.search = `token=${encodeURIComponent(token)}`;
   return url.toString();
 }
 
@@ -56,13 +55,14 @@ function parseLogFrame(data: unknown): string | null {
 }
 
 /**
- * A service's live logs over the v0.6 structured `/services/{name}/logs/stream`
- * WebSocket: the socket replays `tail` backlog then follows live, framing each
- * line as a `LogLine` (exact per-service attribution + best-effort level). A
- * transient drop reconnects with capped backoff (re-following without re-replaying
- * the backlog); a fatal close is terminal. The connection token is read from a ref
- * so its 15-minute rotation hot-swaps on the next reconnect rather than tearing
- * down the live socket and wiping the on-screen buffer.
+ * A service's live logs over the structured `/services/{name}/logs/stream`
+ * WebSocket: the socket replays the daemon's backlog then follows live, framing
+ * each line as a `LogLine` (exact per-service attribution + best-effort level). A
+ * transient drop reconnects with capped backoff, and the reconnect's replay
+ * replaces the on-screen buffer: every follow replays a backlog, so keeping the old
+ * lines would show them twice, and the replay carries what the gap missed. A fatal
+ * close is terminal. The connection token is read from a ref so its 15-minute
+ * rotation hot-swaps on the next reconnect rather than tearing down the live socket.
  */
 export function useServiceLogStream(name: string | undefined): DaemonLogStream {
   const connection = useOperatorConnection();
@@ -96,12 +96,11 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
 
     const open = (): void => {
       if (disposed) return;
-      const ws = new WebSocket(
-        serviceLogsSocketUrl(endpoint, tokenRef.current, name, connectedOnce ? 0 : SERVICE_LOG_TAIL),
-      );
+      const ws = new WebSocket(serviceLogsSocketUrl(endpoint, tokenRef.current, name));
       socket = ws;
       ws.onopen = () => {
         if (disposed) return;
+        if (connectedOnce) setLines([]);
         connectedOnce = true;
         attempt = 0;
         setStatus("live");

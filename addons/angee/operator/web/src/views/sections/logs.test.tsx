@@ -32,6 +32,10 @@ class FakeWebSocket {
   emitClose(code: number): void {
     this.onclose?.({ code } as CloseEvent);
   }
+
+  emitLine(message: string): void {
+    this.onmessage?.({ data: JSON.stringify({ message }) } as MessageEvent);
+  }
 }
 
 describe("useServiceLogStream", () => {
@@ -65,6 +69,40 @@ describe("useServiceLogStream", () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(FakeWebSocket.instances).toHaveLength(2);
+
+    unmount();
+  });
+
+  test("leaves the backlog to the daemon, and a reconnect's replay replaces the buffer", async () => {
+    const { result, unmount } = renderHook(() => useServiceLogStream("web"));
+    const first = FakeWebSocket.instances[0]!;
+    // The daemon refuses a follow backlog a local runtime cannot replay whole, and
+    // replays its default on every follow: the console names no `tail`.
+    expect(first.url).toBe("ws://daemon.test/services/web/logs/stream?token=TOKEN");
+
+    act(() => {
+      first.emitOpen();
+      first.emitLine("boot");
+      first.emitLine("ready");
+    });
+    expect(result.current.lines).toEqual(["boot", "ready"]);
+
+    act(() => {
+      first.emitClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    const second = FakeWebSocket.instances[1]!;
+    expect(second.url).toBe(first.url);
+    // Old lines stay on screen until the new follow opens; then its replay is the buffer.
+    expect(result.current.lines).toEqual(["boot", "ready"]);
+    act(() => {
+      second.emitOpen();
+      second.emitLine("ready");
+      second.emitLine("request served");
+    });
+    expect(result.current.lines).toEqual(["ready", "request served"]);
 
     unmount();
   });
