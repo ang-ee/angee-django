@@ -8,6 +8,7 @@ import {
   SERVICE_STOP_MUTATION,
 } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
+import { serviceActive } from "../../data/service-state";
 import { useOperatorAction } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
 import { useRunDaemonAction } from "../parts/run-action";
@@ -74,7 +75,7 @@ export function useServiceActions(refetch: () => void): {
         start.run,
         (service) => ({ name: service.name }),
         false,
-        (service) => service.status.toLowerCase() !== "running",
+        (service) => !serviceActive(service),
       ),
       named(
         "serviceRestart",
@@ -83,7 +84,7 @@ export function useServiceActions(refetch: () => void): {
         restart.run,
         (service) => ({ name: service.name }),
         false,
-        (service) => service.status.toLowerCase() === "running",
+        serviceActive,
       ),
       named(
         "serviceStop",
@@ -92,7 +93,7 @@ export function useServiceActions(refetch: () => void): {
         stop.run,
         (service) => ({ name: service.name }),
         false,
-        (service) => service.status.toLowerCase() === "running",
+        serviceActive,
       ),
       named(
         "delete_services_by_pk",

@@ -40,7 +40,6 @@ export type {
   GitOpsTopology,
   GitOpsLink,
   GitOpsSummary,
-  CommitRef,
   MutationResult,
 } from "./data/types";
 

@@ -60,6 +60,8 @@ export const enOperatorMessages: Record<string, string> = {
   "services.column.runtime": "Runtime",
   "services.column.status": "Status",
   "services.column.health": "Health",
+  "services.status.exit": "exit {code}",
+  "services.status.restarts": "restarts: {count}",
   "services.start": "Start",
   "services.restart": "Restart",
   "services.stop": "Stop",

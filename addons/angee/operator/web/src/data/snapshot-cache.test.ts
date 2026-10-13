@@ -7,7 +7,7 @@ import { updateSnapshotQueries } from "./snapshot-cache";
 import type { OperatorSnapshotQueryData, OperatorSnapshotQueryVariables } from "./types";
 
 const none: OperatorSnapshotQueryVariables = { wantOverview: false, wantServices: false, wantWorkspaces: false, wantSources: false, wantGitOps: false, wantOperations: false, wantTemplates: false, wantSecrets: false };
-const service = { id: "worker", name: "worker", runtime: "process", status: "running", health: null };
+const service = { id: "worker", name: "worker", runtime: "process", status: "Running", outcome: "running", exitCode: null, restarts: 0, health: null };
 const servicesKey = authoredQueryKey(SNAPSHOT_QUERY, { ...none, wantServices: true }, OPERATOR_PROVIDER);
 const sourcesKey = authoredQueryKey(SNAPSHOT_QUERY, { ...none, wantSources: true }, OPERATOR_PROVIDER);
 

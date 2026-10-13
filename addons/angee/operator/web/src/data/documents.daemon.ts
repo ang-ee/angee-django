@@ -20,6 +20,9 @@ export const OperatorServiceStateFields = graphql(`
     name
     runtime
     status
+    outcome
+    exitCode
+    restarts
     health
   }
 `);
@@ -31,6 +34,7 @@ export const OperatorWorkspaceRefFields = graphql(`
     path
     template
     processComposePort
+    playwrightMcpUrl
     ttl
     ttlExpiresAt
   }
@@ -89,9 +93,11 @@ export const OperatorSourceStateFields = graphql(`
     ref
     currentRef
     dirty
+    upstream
     ahead
     behind
     pushed
+    error
   }
 `);
 
