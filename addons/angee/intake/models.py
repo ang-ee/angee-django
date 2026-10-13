@@ -21,7 +21,7 @@ from rebac.relation_loading import relation_actor
 from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, HistoryMixin, MergeContractMixin, OptimisticLockMixin
+from angee.base.mixins import AuditMixin, HistoryMixin, OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import MergePolicy
 from angee.base.scoping import bind_actor, system_queryset
@@ -344,7 +344,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             yield report
 
 
-class Need(ResourceLoadMixin, MergeContractMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
+class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
     """One external or manually-authored request attached to one semantic target."""
 
     runtime = True
