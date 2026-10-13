@@ -450,12 +450,6 @@ export const enUiMessages: Record<string, string> = {
   "chatter.recordTrail": "Related records",
   "chatter.previousRecord": "Back {number}",
   "chatter.openRecord": "Open full record",
-  "chatter.tabComments": "Comments",
-  "chatter.tabHistory": "History",
-  "chatter.noComments": "No comments yet",
-  "chatter.commentsHint": "Comments will appear here.",
-  "chatter.noHistory": "No history yet",
-  "chatter.historyHint": "Changes to this record will appear here.",
   // Message + chat surface primitives (communication/message, communication/chat).
   "message.composer.send": "send",
   "message.composer.newline": "newline",

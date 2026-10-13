@@ -16,15 +16,15 @@ const CREATE_PERSONAL_DASHBOARD = `
   }
 `;
 
-const ARCHIVE_PERSONAL_DASHBOARD = `
-  mutation ArchiveRecordSharingDashboard(
+const TRASH_PERSONAL_DASHBOARD = `
+  mutation TrashRecordSharingDashboard(
     $id: ID!
     $expectedRevision: Int!
   ) {
-    set_personal_dashboard_archived(
+    set_personal_dashboard_trashed(
       id: $id
       expected_revision: $expectedRevision
-      archived: true
+      trashed: true
     ) { status message }
   }
 `;
@@ -222,11 +222,11 @@ test.describe("shared record access", () => {
         page.getByRole("button", { name: "Share", exact: true }),
       ).toHaveCount(1);
     } finally {
-      const archived = await consoleApi.query(ARCHIVE_PERSONAL_DASHBOARD, {
+      const removed = await consoleApi.query(TRASH_PERSONAL_DASHBOARD, {
         id: dashboard!.id,
         expectedRevision: dashboard!.revision,
       });
-      expect(archived.errors).toBeUndefined();
+      expect(removed.errors).toBeUndefined();
     }
   });
 

@@ -212,7 +212,8 @@ class DuplicateLinkTests(WorkCase):
         self.assertTrue(self.scoped(moved, self.outsider))
         self.assertFalse(self.scoped(moved, self.reader))
         before = list(active_relationship_model().objects.order_by("pk").values())
-        self.as_user(source, self.outsider).mark_duplicate(canonical)
+        with actor_context(self.admin):
+            self.as_user(source, self.admin).mark_duplicate(canonical)
         moved.refresh_from_db()
         self.assertEqual(moved.object_id, canonical.pk)
         self.assertFalse(self.Link._base_manager.filter(pk=collision.pk).exists())

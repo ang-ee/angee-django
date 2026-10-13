@@ -54,14 +54,14 @@ beforeEach(() => {
   state.loading = false;
   state.error = null;
   state.count = null;
-  loadState = { status: "absent", capabilities: { canEdit: false, canReset: false, canArchive: false } };
+  loadState = { status: "absent", capabilities: { canEdit: false, canReset: false, canTrash: false } };
   registry = {
     definitions: { overview: definition }, resourceDefaults: {},
     widgetKinds: Object.fromEntries(BUILTIN_DASHBOARD_WIDGET_KINDS.map((kind) => [kind.id, kind])),
     store: {
       useDashboard: () => ({
         state: loadState, reload: unused, save: unused, reset: unused,
-        createPersonal: unused, duplicate: unused, archive: unused,
+        createPersonal: unused, duplicate: unused, trash: unused,
       }),
       useCatalogue: () => ({ summaries: [], loading: false, error: null, refresh: () => {}, createPersonal: unused }),
       useWidgetVisibility: () => ({ allowed: state.allowed, loading: state.loading, error: state.error }),
@@ -165,7 +165,7 @@ test("absent dashboards use the server edit answer and declaration can turn edit
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   cleanup();
-  loadState = { status: "absent", capabilities: { canEdit: true, canReset: false, canArchive: false } };
+  loadState = { status: "absent", capabilities: { canEdit: true, canReset: false, canTrash: false } };
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
   cleanup();
@@ -175,7 +175,7 @@ test("absent dashboards use the server edit answer and declaration can turn edit
 
 test("a changed declared revision replaces an older stored layout and still honors server capabilities", () => {
   loadState = {
-    status: "ready", capabilities: { canEdit: false, canReset: true, canArchive: false },
+    status: "ready", capabilities: { canEdit: false, canReset: true, canTrash: false },
     snapshot: { schemaVersion: 1, columns: 12, widgets: [{ ...widget, id: "stale", title: "Old widget", visibility: undefined }] },
     persistedId: "1", revision: 3, declarationRevision: "old", name: "Saved", description: "",
   };
@@ -189,7 +189,7 @@ test("a changed declared revision replaces an older stored layout and still hono
 test("the visible layout is the source for duplication when a declaration advances", () => {
   const stale = { schemaVersion: 1 as const, columns: 12, widgets: [{ ...widget, id: "stale" }] };
   const ready: Extract<DashboardLoadState, { status: "ready" }> = {
-    status: "ready", capabilities: { canEdit: true, canReset: true, canArchive: false },
+    status: "ready", capabilities: { canEdit: true, canReset: true, canTrash: false },
     snapshot: stale, persistedId: "1", revision: 3, declarationRevision: "old", name: "Saved",
   };
   const target = { scope: "addon" as const, key: "overview" };
@@ -214,7 +214,7 @@ test("a statistic uses its loaded value in the heading and body", () => {
 test("an undeclared fallback does not replace a personal saved layout", () => {
   const saved = { schemaVersion: 1 as const, columns: 12, widgets: [{ ...widget, id: "saved", title: "Saved widget", visibility: undefined }] };
   loadState = {
-    status: "ready", capabilities: { canEdit: false, canReset: false, canArchive: false },
+    status: "ready", capabilities: { canEdit: false, canReset: false, canTrash: false },
     snapshot: saved, persistedId: "1", revision: 2, declarationRevision: "", name: "Personal",
   };
   renderDashboard(<DashboardSurface target={{ scope: "personal", id: "1" }} fallbackSnapshot={{

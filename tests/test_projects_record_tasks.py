@@ -36,7 +36,7 @@ from angee.base.fields import SqidField
 from angee.compose.migrations import DropGuardAutodetector
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
 from angee.projects.runtime_migrations import record_tasks
-from angee.projects.testing.models import Project, Queue, Stage, Task
+from angee.projects.testing.models import Project, Queue, Task
 from angee.projects.upgrade import GUARD_DISPATCH_UID, check_cutover_guard, record_task_types
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
 from tests.conftest import create_platform_admin
@@ -84,7 +84,8 @@ def test_record_tasks_answer_to_their_records_readers_and_writers() -> None:
     with actor_context(writer):
         task = Task.objects.schedule(_as(writer, doc), title="Chase the supplier")
     assert task.assignee_id == writer.pk
-    assert task.subject_id == ThreadAttachment._base_manager.get(object_id=doc.pk, role="chatter").pk
+    assert task.subject_object_id == doc.pk
+    assert task.subject_content_type_id == ContentType.objects.get_for_model(doc).pk
     with actor_context(reader):
         assert list(Task.objects.for_record(_as(reader, doc))) == [task]
         with pytest.raises(PermissionDenied):
@@ -104,12 +105,11 @@ def test_a_records_reader_reads_its_tasks_subject_pointer_without_loading_the_ed
     with actor_context(owner):
         task = Task.objects.schedule(_as(owner, doc), title="Answer the memo")
     with actor_context(reader):
-        (row,) = Task.objects.for_record(_as(reader, doc)).annotate(**Task.subject_pointer_annotations())
+        (row,) = Task.objects.for_record(_as(reader, doc))
         with CaptureQueriesContext(connection) as queries:
-            pointer = row.subject_pointer()
+            reference = row.record_ref
     assert queries.captured_queries == []
-    reference = pointer.record_ref
-    assert (row.pk, pointer.label) == (task.pk, "Supplier memo")
+    assert row.pk == task.pk
     assert (reference.model_label, reference.public_id) == ("chatterdemo.ChatterDoc", doc.sqid)
 
 
@@ -159,29 +159,24 @@ def test_a_task_takes_record_tasks_under_its_own_grants() -> None:
     assert _posts() == ["Done: Call the supplier"]
 
 
-def test_a_concealed_tasks_holders_lose_its_record_tasks() -> None:
-    """Concealing a task withholds the record tasks about it, and through them its title."""
+def test_trash_withholds_record_tasks_from_readers_but_keeps_removal_authority() -> None:
+    """The subject's trash policy governs its tasks; deleters can inspect and restore."""
 
-    owner = _user("concealed-owner")
+    owner, reader = _user("concealed-owner"), _user("concealed-reader")
     with system_context(reason="test.record_tasks.concealed"):
         queue = Queue.objects.create(name="Concerns", key="CN", owner=owner)
-        removed = Stage.objects.create(queue=queue, name="Removed", category="canceled", conceals=True)
         concern = Task.objects.create(title="Concealed concern", queue=queue, owner=owner)
         follow_up = Task.objects.schedule(concern, title="Call about it", assignee=owner)
-    with actor_context(owner):
+    _grant(concern, "reader", reader)
+    with actor_context(reader):
         assert Task.objects.filter(pk=follow_up.pk).exists()
-    verbs = ("read", "write", "share", "delete", "comment", "widen", "transfer")
-    assert all(Task._base_manager.get(pk=follow_up.pk).with_actor(owner).has_access(verb) for verb in verbs)
     with actor_context(owner):
-        Task.objects.create(title="Before concealing", subject_id=follow_up.subject_id)
-    with system_context(reason="test.record_tasks.conceal"):
-        Task._base_manager.filter(pk=concern.pk).update(stage=removed)
-    with actor_context(owner):
+        concern.with_actor(owner).trash(reason="Removed")
+        assert Task.objects.filter(pk=follow_up.pk).exists()
+    with actor_context(reader):
         assert not Task.objects.filter(pk=follow_up.pk).exists()
         with pytest.raises(PermissionDenied):
-            Task.objects.create(title="After concealing", subject_id=follow_up.subject_id)
-    concealed = Task._base_manager.get(pk=follow_up.pk).with_actor(owner)
-    assert not [verb for verb in verbs if concealed.has_access(verb)]
+            Task.objects.schedule(concern.with_actor(reader), title="After concealing")
 
 
 def test_a_record_task_is_assigned_only_to_someone_who_reads_the_record() -> None:

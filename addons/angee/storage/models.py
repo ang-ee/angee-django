@@ -82,6 +82,9 @@ from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
+    HierarchyMixin,
+    HierarchyQuerySet,
+    HistoryMixin,
     ItemOwnershipMixin,
     OwnerMixin,
     OwnerQuerySet,
@@ -385,7 +388,11 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
         return posixpath.join(*parts)
 
 
-class FolderManager(AngeeManager):
+class FolderQuerySet(HierarchyQuerySet[Any], AngeeQuerySet[Any]):
+    """Actor-scoped folder trees with paths maintained by HierarchyMixin."""
+
+
+class FolderManager(AngeeManager.from_queryset(FolderQuerySet)):  # type: ignore[misc]
     """Manager owning gated folder creation."""
 
     def create_in_drive(self, *, drive_id: str, name: str, parent_id: str = "", description: str = "") -> Any:
@@ -516,7 +523,7 @@ class FolderManager(AngeeManager):
             return pruned
 
 
-class Folder(AuditMixin, AngeeDataModel):
+class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """Tree node inside a drive, or a per-user smart folder.
 
     A real folder has a ``drive`` and filesystem-style uniqueness on
@@ -528,6 +535,8 @@ class Folder(AuditMixin, AngeeDataModel):
     runtime = True
 
     sqid_prefix = "fld_"
+    hierarchy_scope_fields = ("drive",)
+    owner_container = "drive"
 
     objects = FolderManager()
 
@@ -543,24 +552,10 @@ class Folder(AuditMixin, AngeeDataModel):
         blank=True,
         related_name="folders",
     )
-    parent = models.ForeignKey(
-        "self",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="children",
-    )
     # A single path segment, mirrored from an external source; one observed iOS
     # backup cache-directory segment exceeded 200 characters. Match File.filename.
     name = models.CharField(max_length=512)
     description = models.TextField(blank=True)
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name="+",
-    )
     is_virtual = models.BooleanField(default=False, db_index=True, editable=False)
     smart_kind = StateField(
         choices_enum=SmartKind,
@@ -569,7 +564,7 @@ class Folder(AuditMixin, AngeeDataModel):
         editable=False,
     )
 
-    class Meta:
+    class Meta(HierarchyMixin.Meta):
         """Django model options for folders."""
 
         abstract = True
@@ -605,52 +600,30 @@ class Folder(AuditMixin, AngeeDataModel):
         return self.name
 
     def clean(self) -> None:
-        """Reject drive-less real folders, cross-drive parents, and cycles."""
+        """Validate the drive boundary and native hierarchy before a form save."""
 
         super().clean()
-        self._validate_tree(lock=False)
+        self._validate_drive()
+        parent = self._hierarchy_parent()
+        self._reject_cross_scope_parent(parent)
+        self._reject_cycle(parent)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the folder after revalidating mutable tree facts."""
+        """Validate folder kinds; native hierarchy owns parent and drive moves."""
 
         update_fields = kwargs.get("update_fields")
-        if self._tree_fields_touched(update_fields):
-            with transaction.atomic():
-                self._validate_tree(lock=True)
-                super().save(*args, **kwargs)
-            return
+        if update_fields is None or {
+            "drive", "drive_id", "parent", "parent_id", "is_virtual",
+        }.intersection(update_fields):
+            self._validate_drive()
         super().save(*args, **kwargs)
 
-    def _validate_tree(self, *, lock: bool) -> None:
-        """Validate this folder's drive/parent chain, optionally locking ancestors."""
-
+    def _validate_drive(self) -> None:
         if self.is_virtual:
-            return
-        if self.drive_id is None:
+            if self.parent_id is not None:
+                raise ValidationError({"parent": "A smart folder must be a root."})
+        elif self.drive_id is None:
             raise ValidationError({"drive": "A folder requires a drive."})
-        if not self.parent_id:
-            return
-        queryset = system_queryset(type(self), lock=("self",) if lock else None)
-        ancestor_id = self.parent_id
-        visited: set[Any] = {self.pk} if self.pk is not None else set()
-        while ancestor_id is not None:
-            if ancestor_id in visited:
-                raise ValidationError({"parent": "A folder cannot contain itself."})
-            visited.add(ancestor_id)
-            ancestor = queryset.filter(pk=ancestor_id).values("drive_id", "parent_id").first()
-            if ancestor is None:
-                return
-            if ancestor["drive_id"] != self.drive_id:
-                raise ValidationError({"parent": "Parent folder belongs to another drive."})
-            ancestor_id = ancestor["parent_id"]
-
-    @staticmethod
-    def _tree_fields_touched(update_fields: Any) -> bool:
-        """Return whether a save touches facts that define the folder tree."""
-
-        if update_fields is None:
-            return True
-        return bool({"drive", "drive_id", "parent", "parent_id", "is_virtual"} & set(update_fields))
 
 
 class MimeType(AngeeDataModel):
@@ -1304,7 +1277,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             locked.grant_record_access("viewer", user)
 
 
-class File(TaggedModel, TrashMixin, OwnerMixin, AngeeDataModel):
+class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.
@@ -1891,7 +1864,7 @@ class FileAttachmentManager(AngeeManager):
         return attachment
 
 
-class FileAttachment(AuditMixin, RecordRefMixin, AngeeDataModel):
+class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` or

@@ -1,0 +1,11 @@
+// Portfolio records carry tasks independently of chatter.
+// @rebac_package: portfolio
+// @rebac_schema_revision: 6
+
+definition projects/task {
+    relation subject_product: portfolio/product // rebac:field=subject
+    relation subject_initiative: portfolio/initiative // rebac:field=subject
+
+    permission subject_read = subject_product->read + subject_initiative->read
+    permission subject_write = subject_product->write + subject_initiative->write
+}

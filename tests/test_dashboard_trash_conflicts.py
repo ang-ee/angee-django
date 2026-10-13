@@ -1,4 +1,4 @@
-"""Dashboard archive conflicts."""
+"""Dashboard trash conflicts."""
 
 from __future__ import annotations
 
@@ -15,34 +15,33 @@ from angee.dashboards.models import Dashboard
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("stale", [False, True])
-def test_dashboard_archive_locks_and_checks_revision(monkeypatch: pytest.MonkeyPatch, stale: bool) -> None:
-    """Dashboard archive locks and checks revision."""
-    locked = Mock(revision=3, is_archived=False)
+def test_dashboard_trash_locks_and_checks_revision(monkeypatch: pytest.MonkeyPatch, stale: bool) -> None:
+    """Dashboard trash locks and checks revision."""
+    locked = Mock(revision=3, is_trashed=False)
     locked.require_revision.side_effect = lambda expected: require_revision(expected=expected, current=locked.revision)
-    locked.sudo.return_value = locked
+    locked.with_actor.return_value = locked
     rows = Mock()
     rows.get.return_value = locked
 
-    class ArchiveTarget:
+    class TrashTarget:
         DashboardScope = Dashboard.DashboardScope
         scope = "personal"
         pk = 7
         _state = SimpleNamespace(db="default", adding=False)
         system_queryset = Mock(return_value=rows)
-        actor = Mock(return_value="actor")
-        has_access = Mock(return_value=True)
+        require_access = Mock(return_value="actor")
 
     atomic = Mock(side_effect=lambda **kwargs: nullcontext())
     monkeypatch.setattr(dashboard_models.transaction, "atomic", atomic)
-    target = ArchiveTarget()
+    target = TrashTarget()
     if stale:
         with pytest.raises(StaleRevisionError):
-            Dashboard.set_personal_archived(target, archived=True, expected_revision=2)
-        locked.save.assert_not_called()
+            Dashboard.set_personal_trashed(target, trashed=True, expected_revision=2)
+        locked.trash.assert_not_called()
     else:
-        Dashboard.set_personal_archived(target, archived=True, expected_revision=3)
-        locked.save.assert_called_once_with(update_fields=["is_archived"])
-        assert locked.is_archived is True
+        Dashboard.set_personal_trashed(target, trashed=True, expected_revision=3)
+        locked.trash.assert_called_once_with()
+        locked.restore.assert_not_called()
         assert locked.revision == 3
-    ArchiveTarget.system_queryset.assert_called_once_with(lock=("self",))
+    TrashTarget.system_queryset.assert_called_once_with(lock=("self",))
     atomic.assert_called_once_with()

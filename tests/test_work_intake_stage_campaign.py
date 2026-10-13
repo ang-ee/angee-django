@@ -8,6 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.merge import references
 from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
 from angee.projects.testing.models import Link, Project, Queue, Stage, Task
 from angee.spaces.testing.models import Membership
@@ -48,12 +49,12 @@ def test_concealment_revokes_held_instances_and_all_list_shapes(queue_case, role
         # has no intake donor; current admission is exercised in the emitted host.
         [need] = Need._base_manager.bulk_create([Need(task=task, body="Legacy evidence")])
         thread = task.message_thread()
-        message = Message._base_manager.filter(thread=thread).first()
     with actor_context(people["owner"]):
+        message = task.with_actor(people["owner"]).message_post("Visible discussion")
         changing = Task.objects.get(pk=task.pk)
         changing.stage = removed
         changing.save(update_fields=("stage",))
-    allowed = role == "admin"
+    allowed = role in {"owner", "manager", "admin"}
     for permission in ("read", "write", "share", "comment", "delete"):
         assert held.has_access(permission) is allowed
         assert Task.objects.with_actor(actor).with_action(permission).filter(pk=task.pk).exists() is allowed
@@ -76,8 +77,7 @@ def test_concealment_revokes_held_instances_and_all_list_shapes(queue_case, role
                 held.message_post("Refused comment")
     with actor_context(people["admin"]):
         restored = Task.objects.get(pk=task.pk)
-        restored.stage = Stage.resolve_default(restored.queue)
-        restored.save(update_fields=("stage",))
+        restored.restore()
     assert Task.objects.with_actor(actor).filter(pk=task.pk).exists()
 
 
@@ -161,7 +161,8 @@ def test_link_retargeting_reads_live_without_writing_either_tuple_store(queue_ca
     assert link.with_actor(people["member"]).has_access("read")
     before = relationship_snapshot()
     with system_context(reason="tests.t3.move_links"), CaptureQueriesContext(connection) as queries:
-        source._move_links_to(target)
+        edge = next(reference for reference in references(Task) if reference.model is Link)
+        edge.move(edge.rows(source), survivor=target)
     link.refresh_from_db()
     assert link.object_id == target.pk
     assert not link.with_actor(people["member"]).has_access("read")

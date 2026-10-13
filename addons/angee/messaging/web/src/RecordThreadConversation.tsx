@@ -1,4 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { HistoryEntrySummary } from "@angee/provenance";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
@@ -38,6 +39,7 @@ import {
 
 const RECIPIENT_MODELS = ["iam.User"] as const;
 const SEARCH_DEBOUNCE_MS = 300;
+const TIMELINE_PAGE_SIZE = 50;
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉"] as const;
 const FINISHED_UPLOAD_STATUSES = new Set<UploadTask["status"]>([
   "done",
@@ -128,15 +130,20 @@ export function RecordThreadConversation({
   const [search, setSearch] = React.useState("");
   const [debouncedSearch] = useDebounce(search.trim(), SEARCH_DEBOUNCE_MS);
   const activeSearch = stream && !stream.search ? "" : debouncedSearch;
+  const pageKey = JSON.stringify([modelLabel, recordId, activeSearch]);
+  const [page, setPage] = React.useState({ key: pageKey, offset: 0 });
+  const timelineOffset = page.key === pageKey ? page.offset : 0;
   const variables = React.useMemo(
     () => ({
       modelLabel,
       recordId,
       search: activeSearch,
-      messageLimit: 50,
+      messageLimit: TIMELINE_PAGE_SIZE,
+      includeHistory: !stream,
+      timelineOffset: stream ? 0 : timelineOffset,
       messageTypes: stream ? [...(stream.messageTypes ?? [])] : [],
     }),
-    [modelLabel, recordId, activeSearch, stream?.messageTypes, Boolean(stream)],
+    [modelLabel, recordId, activeSearch, stream?.messageTypes, Boolean(stream), timelineOffset],
   );
   const threadQuery = useAuthoredQuery(RecordThreadDocument, variables, {
     enabled,
@@ -218,7 +225,9 @@ export function RecordThreadConversation({
       t,
     ],
   );
-  const messageResultCount = threadPayload?.message_result_count ?? 0;
+  const timelineCount = threadPayload?.timeline_count ?? 0;
+  const messageResultCount = stream ? threadPayload?.message_result_count ?? 0 : timelineCount;
+  const timeline = threadPayload?.timeline ?? [];
   // Messages arrive server-ordered (chronological ascending); render them verbatim.
   const messages = threadPayload?.messages ?? [];
 
@@ -430,7 +439,7 @@ export function RecordThreadConversation({
         placeholder={t("chatter.search")}
         aria-label={t("chatter.search")}
       /> : null}
-      {messages.length > 0 ? (
+      {timeline.length > 0 ? (
         <div className="space-y-3">
           {activeSearch ? (
             <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
@@ -438,8 +447,12 @@ export function RecordThreadConversation({
             </div>
           ) : null}
           <MessageFeed label={t("chatter.feedLabel")}>
-            {messages.map((message) => (
-              <MessageFeedRow
+            {timeline.map((entry) => {
+              if (entry.__typename === "HistorySummaryType") {
+                return <HistoryEntrySummary key={`change:${entry.id}`} entry={entry} model={modelLabel} id={recordId} />;
+              }
+              const message = entry;
+              return <MessageFeedRow
                 key={`message:${message.id}`}
                 message={message}
                 editing={editingMessageId === message.id}
@@ -459,8 +472,8 @@ export function RecordThreadConversation({
                 onToggleReaction={handleToggleReaction}
                 onToggleStarred={handleToggleStarred}
                 onMarkDone={handleMarkMessageDone}
-              />
-            ))}
+              />;
+            })}
           </MessageFeed>
         </div>
       ) : (
@@ -473,6 +486,19 @@ export function RecordThreadConversation({
           className="min-h-40 p-4"
         />
       )}
+          {!stream && (timelineOffset > 0 || timelineCount > TIMELINE_PAGE_SIZE) ? (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" disabled={timelineOffset === 0 || threadQuery.isFetching}
+                onClick={() => setPage({ key: pageKey, offset: Math.max(0, timelineOffset - TIMELINE_PAGE_SIZE) })}>
+                {t("timeline.newer")}
+              </Button>
+              <Button size="sm" variant="ghost"
+                disabled={timelineOffset + TIMELINE_PAGE_SIZE >= timelineCount || threadQuery.isFetching}
+                onClick={() => setPage({ key: pageKey, offset: timelineOffset + TIMELINE_PAGE_SIZE })}>
+                {t("timeline.older")}
+              </Button>
+            </div>
+          ) : null}
       {threadPayload?.removed_message_count ? (
         <RemovedMessages
           modelLabel={modelLabel}
@@ -852,10 +878,6 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   // actor-scoped sender projection as a fallback.
   const author = message.is_self ? t("message.you") :
     message.author_label || message.sender?.display_name || message.sender?.value || t("message.author");
-  const trackingValues = [...message.tracking_values].sort(
-    (left, right) =>
-      left.position - right.position || left.field_label.localeCompare(right.field_label),
-  );
   const timestamp = message.sent_at ?? message.created_at;
   const subtypeDescription = message.subtype?.description || message.subtype?.name || "";
   const directionTag = directionLabel(message.direction, t);
@@ -900,25 +922,6 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
         {edited ? <>{streamVerb ? " · " : null}{t("chatter.editedMeta")}
           {message.edited_at ? <> <RelativeTime value={message.edited_at} /></> : null}</> : null}
       </> : undefined}
-      tracking={
-        trackingValues.length > 0 ? (
-          <dl className="space-y-1 rounded-6 bg-surface-inset p-2">
-            {trackingValues.map((tracking) => (
-              <div
-                key={tracking.id}
-                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-2 text-13"
-              >
-                <dt className="truncate font-medium text-fg-muted">{tracking.field_label}</dt>
-                <dd className="min-w-0 text-fg">
-                  <span className="text-fg-muted">{tracking.old_display || "—"}</span>
-                  <span aria-hidden="true"> → </span>
-                  <span>{tracking.new_display || "—"}</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        ) : undefined
-      }
       reactions={
         reactions.length > 0 ? (
           <ReactionBar
@@ -1133,7 +1136,6 @@ function normaliseMessagePartValue(value: string | null | undefined): string {
 
 function replyKindLabel(message: { message_type?: string | null }, t: MessagingT): string {
   if (message.message_type === "NOTIFICATION") return t("message.kindNote");
-  if (message.message_type === "AUTO_COMMENT") return t("message.kindUpdate");
   return t("message.kindMessage");
 }
 

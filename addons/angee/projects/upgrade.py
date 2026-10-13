@@ -19,19 +19,19 @@ CUTOVER_ORIGIN = "angee.projects:record_tasks"
 """The cutover's runtime-migration origin, as projects' addon.toml declares it."""
 
 GUARD_DISPATCH_UID = "projects.record_tasks.refuse_incomplete_cutover"
-RECORD_ARMS = ("record_read", "record_write")
+RECORD_ARMS = ("subject_read", "subject_write")
 
 
 def record_task_types() -> set[str]:
     """Return the record types the current composition lets take record tasks.
 
-    The record arms on ``messaging/thread_attachment`` are unions of arrows through
+    The record arms on ``projects/task`` are unions of arrows through
     its target relations (messaging's contract), so a type takes record tasks
     when both arms reach it through some arrow. The schema is the composition's
     sources on disk, not the database's synced copy.
     """
 
-    attachment = installed.get_model("messaging", "ThreadAttachment")
+    attachment = installed.get_model("projects", "Task")
     resource_type = model_resource_type(attachment)
     schema = effective_rebac_schema(installed.get_app_config(attachment._meta.app_label))
     definition = schema.get_definition(resource_type) if schema is not None and resource_type else None
@@ -54,8 +54,8 @@ def refuse_undeclared_record_types(state_apps: Any, using: str) -> None:
     """Refuse while a released activity sits on a record type that takes no record tasks.
 
     A record task answers to its record alone, so an activity on a record type
-    whose owner declares no ``record_read`` and ``record_write`` on
-    ``messaging/thread_attachment`` would become a task only administrators reach.
+    whose owner declares no ``subject_read`` and ``subject_write`` on
+    ``projects/task`` would become a task only administrators reach.
     The declarations are a fact of the current composition (:func:`record_task_types`);
     ``state_apps`` holds the released activities ``migrate`` is about to convert.
     """
@@ -80,7 +80,7 @@ def refuse_undeclared_record_types(state_apps: Any, using: str) -> None:
         raise CommandError(
             "record activities sit on record types that take no record tasks: " + "; ".join(undeclared)
             + ". A record task answers to its record alone, so these would reach only administrators. "
-            "Declare record_read and record_write for these types on messaging/thread_attachment in their "
+            "Declare subject_read and subject_write for these types on projects/task in their "
             "owner's permissions.extends.zed (or delete the activities), then migrate again."
         )
 

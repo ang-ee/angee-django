@@ -93,7 +93,7 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
         return [row for row in candidates if row.confidence >= self.REVIEW_CONFIDENCE]
 
     def apply_handle(self, *, member: Mapping[str, Any], **kwargs: Any) -> None:
-        apps.get_model("parties", "Handle").objects.resolve(member["handle"])
+        apps.get_model("parties", "Handle").objects.db_manager(self._state.db).resolve(member["handle"])
 
     record_links = RetainedGenericRelation(
         "integrate.RecordLink", content_type_field="target_content_type", object_id_field="target_object_id"
@@ -147,13 +147,6 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
     )
     """The party's own avatar (a directory card's ``PHOTO``), on storage's image drive every signed-in user reads."""
     handle_count = models.PositiveIntegerField(default=0, db_index=True)
-    merged_into = models.ForeignKey(
-        "self",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="merged_from",
-    )
     introduced_by = models.ForeignKey(
         "self",
         null=True,
@@ -247,21 +240,6 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
                     if RelationshipKind.PartyKind(kind).model() is child_model:
                         return cast(RelationshipKind.PartyKind, kind)
         return None
-
-    def canonical(self) -> Party:
-        """Return the surviving party this one resolves to, following merge pointers.
-
-        The merge owner flattens redirects; this method still follows a longer
-        chain and guards a cycle so legacy/corrupt data cannot loop during a read.
-        """
-
-        seen = {self.pk}
-        party = self
-        while party.merged_into_id is not None and party.merged_into_id not in seen:
-            seen.add(party.merged_into_id)
-            # Keep inherited calls bound to Person/Organization's concrete table.
-            party = type(self)._base_manager.get(pk=party.merged_into_id)
-        return party
 
     def apply_merge_field_overrides(
         self,
@@ -395,12 +373,6 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
         super().validate_merge(merged)
-        if (
-            self.is_trashed
-            or self.merged_into_id is not None
-            or any(row.is_trashed or row.merged_into_id is not None for row in merged)
-        ):
-            raise ValidationError("Only canonical parties can be merged.")
         for row in merged:
             pair = self.same_as.for_pair(self, row)
             if (
@@ -420,7 +392,7 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
         """Keep the redirect and its history under the authorized merge changeset."""
 
         merged.merged_into = self
-        merged.save(update_fields=("merged_into", "updated_at"))
+        merged.save(using=self._state.db, update_fields=("merged_into", "updated_at"))
 
 
 class Person(models.Model, metaclass=RebacModelBase):
@@ -504,7 +476,7 @@ class Organization(models.Model, metaclass=RebacModelBase):
         rebac_resource_type = "parties/organization"
 
 
-class Handle(TaggedModel, AuditMixin, AngeeDataModel):
+class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
@@ -517,6 +489,7 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
 
     runtime = True
     rebac_grantable = {"reader": "write"}
+    retains_merged = True
 
     class Platform(models.TextChoices):
         """The kind of channel a handle reaches a party through."""
@@ -665,6 +638,44 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
                 kwargs["update_fields"] = [*update_fields, "normalized_value"]
         super().save(*args, **kwargs)
 
+    def validate_merge(self, merged: Sequence[Any]) -> None:
+        """A contact alias keeps its platform and the directory identity lock order."""
+
+        super().validate_merge(merged)
+        if any(row.platform != self.platform for row in merged):
+            raise ValidationError("Only handles on the same platform can be merged.")
+        apps.get_model("parties", "Party").objects.db_manager(self._state.db).lock_identity_rows(
+            party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
+        )
+
+    def merge_fields(self, merged: Sequence[Any], **options: Any) -> None:
+        """Fill missing contact display/control facts; retain the survivor's choices."""
+
+        super().merge_fields(merged, **options)
+        for row in merged:
+            filled = []
+            for name in ("owner", "label", "display_name", "is_verified"):
+                attname = self._meta.get_field(name).attname
+                if not getattr(self, attname) and getattr(row, attname):
+                    setattr(self, attname, getattr(row, attname))
+                    filled.append(name)
+            metadata = {**(row.metadata or {}), **(self.metadata or {})}
+            if metadata != self.metadata:
+                self.metadata = metadata
+                filled.append("metadata")
+            if filled:
+                self.save(using=self._state.db, update_fields=(*filled, "updated_at"))
+            if self.avatar_id is None and row.avatar_id is not None:
+                type(self).objects.db_manager(self._state.db).set_avatar(self, row.avatar)
+
+    def retire_merged(self, merged: Any) -> None:
+        """Recompute identity projections after shared reference moves, then redirect."""
+
+        owner = type(self).objects.db_manager(self._state.db)
+        owner.resolve(merged)
+        owner.resolve(self)
+        super().retire_merged(merged)
+
     def _party_links_resolved(self) -> None:
         """Run addon contributions after this handle's owner is fully resolved.
 
@@ -687,7 +698,7 @@ class Handle(TaggedModel, AuditMixin, AngeeDataModel):
             .objects.handle_statements(
                 actor=instance_actor(self),
             )
-            .canonical()
+            .applied()
             .filter(subject_id=self.party_id, handle_id=self.pk)
             .first()
         )

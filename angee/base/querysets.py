@@ -62,6 +62,13 @@ def record_history(model: type[models.Model]) -> ModelHistory | None:
     return model_history(model)
 
 
+class MergeableQuerySet(models.QuerySet[_ModelT]):
+    """Operational identities; compose trash and archival scopes independently."""
+
+    def canonical(self) -> Any:
+        return super().canonical().filter(merged_into__isnull=True)
+
+
 class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
     """Shared lookup, locking and history capture, preserving each manager's policy.
 
@@ -71,6 +78,11 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
     """
 
     model: type[_ModelT]
+
+    def canonical(self) -> Any:
+        """All rows until an owning capability narrows the operational scope."""
+
+        return self
 
     def update(self, **kwargs: Any) -> int:
         """Capture stored state after an authorized write of frozen, locked keys."""
@@ -245,7 +257,9 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         subjects = read_scoped_queryset(self.model.statement_subject_model, actor)
         return self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
 
-    def canonical(self) -> Any:
+    def applied(self) -> Any:
+        """Standing value assertions selected by survivorship."""
+
         return self.current().filter(
             status=self.model.StatementStatus.ASSERTED, applied=True, snak=self.model.StatementSnak.VALUE
         )

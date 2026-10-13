@@ -61,7 +61,6 @@ class FreshnessTask(TaskWork, AbstractTask):
     thread_attachments = None
     thread_create_log = False
     thread_create_autofollow_author = False
-    thread_tracking_fields = ()
 
     class Meta(AbstractTask.Meta):
         abstract = False

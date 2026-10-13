@@ -101,3 +101,9 @@ Not built in the first version: timers on decisions, automatic answers, any cons
 `RecordTimeline` receives only `record`, a `{model, id}` or array of those.
 `useRecordTimelinePane({record, side})` publishes it through the existing right
 chatter or left primary-pane host; the default contribution is `record#aside`.
+
+Each step body opens a fresh run changeset whose origin is the WorkflowRun. Actor
+attribution follows the step actor; a handled failure marks that boundary failed.
+Database bodies retain their savepoint rollback, while IO bodies preserve their
+existing transaction boundary. StepWatch pointer moves are historized for merge
+reversal.

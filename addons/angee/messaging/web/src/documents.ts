@@ -21,6 +21,7 @@ export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
 // queries and the invalidation set every chatter mutation republishes. One owner,
 // shared by both chatter panes.
 export const READ_MODELS = [
+  "provenance.Changeset",
   "parties.Handle",
   "messaging.Thread",
   THREAD_ATTACHMENT_MODEL,
@@ -126,6 +127,7 @@ export const MessagePartFields = graphql(`
 export const MessageReaderFields = graphql(`
   fragment MessageReaderFields on MessageType {
     id
+    channel { id display_name }
     title
     preview
     sent_at
@@ -246,14 +248,6 @@ export const RecordMessageFields = graphql(`
     reaction_groups {
       ...RecordReactionGroupFields
     }
-    tracking_values {
-      id
-      position
-      field_name
-      field_label
-      old_display
-      new_display
-    }
     parts {
       ...MessagePartFields
     }
@@ -265,6 +259,7 @@ export const RecordMessageFields = graphql(`
 export const TranscriptMessageFields = graphql(`
   fragment TranscriptMessageFields on MessageType {
     id
+    channel { id display_name }
     feed_order_key
     direction
     preview
@@ -291,9 +286,11 @@ export const ThreadTranscriptDocument = graphql(`
     $throughCursor: String
     $afterCursor: String
     $anchor: String! = ""
+    $allCopies: Boolean! = false
   ) {
     thread_message_feed(
       thread_id: $threadId
+      all_copies: $allCopies
       before_cursor: $beforeCursor
       through_cursor: $throughCursor
       after_cursor: $afterCursor
@@ -310,13 +307,30 @@ export const ThreadTranscriptDocument = graphql(`
 `);
 
 export const ThreadTranscriptRevalidateDocument = graphql(`
-  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!) {
-    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids) {
+  query MessagingThreadTranscriptRevalidate($threadId: ID!, $ids: [ID!]!, $allCopies: Boolean! = false) {
+    thread_message_feed_revalidate(thread_id: $threadId, ids: $ids, all_copies: $allCopies) {
       messages {
         ...TranscriptMessageFields
       }
       absent_ids
     }
+  }
+`);
+
+export const MessageSourceCopiesDocument = graphql(`
+  query MessagingMessageSourceCopies($id: ID!) {
+    message_source_copies(id: $id) {
+      ...TranscriptMessageFields
+      external_id
+      permissions
+      channel { id display_name }
+    }
+  }
+`);
+
+export const IdentifyMessageSourceCopyDocument = graphql(`
+  mutation MessagingIdentifyMessageSourceCopy($left: ID!, $right: ID!, $same: Boolean!) {
+    identify_message_source_copy(left: $left, right: $right, same: $same)
   }
 `);
 
@@ -356,6 +370,8 @@ export const RecordThreadDocument = graphql(`
     $after: ID = null
     $around: ID = null
     $messageTypes: [String!] = []
+    $includeHistory: Boolean = false
+    $timelineOffset: Int = 0
   ) {
     record_thread(
       input: {
@@ -367,6 +383,8 @@ export const RecordThreadDocument = graphql(`
         after: $after
         around: $around
         message_types: $messageTypes
+        include_history: $includeHistory
+        timeline_offset: $timelineOffset
       }
     ) {
       error
@@ -375,6 +393,12 @@ export const RecordThreadDocument = graphql(`
       permissions
       thread {
         ...RecordThreadSummaryFields
+      }
+      timeline_count
+      timeline {
+        __typename
+        ... on RecordMessageType { ...RecordMessageFields }
+        ... on HistorySummaryType { ...HistoryEntrySummaryFields }
       }
       message_result_count
       removed_message_count
@@ -757,38 +781,13 @@ export const SetRecordFollowingDocument = graphql(`
   }
 `);
 
-// History reads only retained system updates. Ordinary conversation, follower,
-// and recipient payloads remain owned by Comments; tasks about the record by projects.
-export const RecordHistoryThreadDocument = graphql(`
-  query MessagingRecordHistoryThread($modelLabel: String!, $recordId: ID!) {
-    record_thread(
-      input: {
-        model_label: $modelLabel
-        record_id: $recordId
-        message_types: ["AUTO_COMMENT", "NOTIFICATION"]
-        message_limit: 100
-      }
-    ) {
-      error
-      error_code
-      message_result_count
-      messages {
-        ...RecordMessageFields
-      }
-    }
-  }
-`);
-
 export type ThreadTranscriptRow =
   DocumentType<typeof ThreadTranscriptDocument>["thread_message_feed"]["messages"][number];
 export type PartListRow = DocumentType<typeof MessagingPartListRow>;
 export type MessageReaderData = DocumentType<typeof MessageReaderFields>;
 
 export type RecordThreadPayload = DocumentType<typeof RecordThreadDocument>["record_thread"];
-export type RecordHistoryThreadPayload =
-  DocumentType<typeof RecordHistoryThreadDocument>["record_thread"];
 export type RecordMessageRow = NonNullable<RecordThreadPayload["messages"]>[number];
-export type RecordHistoryMessageRow = NonNullable<RecordHistoryThreadPayload["messages"]>[number];
 export type RecordNotificationRow = NonNullable<RecordThreadPayload["notifications"]>[number];
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];

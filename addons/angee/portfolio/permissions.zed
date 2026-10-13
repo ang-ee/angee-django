@@ -17,6 +17,9 @@ definition portfolio/product {
     permission read   = authenticated + manager->effective_member
     permission write  = manager->effective_member
     permission delete = manager->effective_member
+    permission transfer = manager->effective_member
+    permission write__owner = transfer
+
 }
 
 definition portfolio/initiative {
@@ -26,6 +29,9 @@ definition portfolio/initiative {
     permission read   = authenticated + manager->effective_member
     permission write  = manager->effective_member
     permission delete = manager->effective_member
+    permission transfer = manager->effective_member
+    permission write__owner = transfer
+
 }
 
 definition portfolio/initiative_project {

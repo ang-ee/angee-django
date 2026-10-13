@@ -17,7 +17,7 @@ import {
 } from "@angee/ui/dashboard/headless";
 
 import {
-  ArchiveDashboardDocument,
+  TrashDashboardDocument,
   CreatePersonalDashboardDocument,
   DashboardDocument,
   DashboardSummariesDocument,
@@ -47,7 +47,7 @@ type FullPayload = NonNullable<
   | DocumentType<typeof CreatePersonalDashboardDocument>["create_personal_dashboard"]
   | DocumentType<typeof SaveDashboardDocument>["save_dashboard"]
   | DocumentType<typeof DuplicateDashboardDocument>["duplicate_dashboard"]
-  | DocumentType<typeof ArchiveDashboardDocument>["set_personal_dashboard_archived"]
+  | DocumentType<typeof TrashDashboardDocument>["set_personal_dashboard_trashed"]
 >;
 type ErrorPayload = Pick<FullPayload, "status" | "current_revision" | "message">;
 
@@ -55,7 +55,7 @@ function capabilities(payload: FullPayload): DashboardCapabilities {
   return {
     canEdit: Boolean(payload.can_edit),
     canReset: Boolean(payload.can_reset),
-    canArchive: Boolean(payload.can_archive),
+    canTrash: Boolean(payload.can_trash),
   };
 }
 
@@ -88,7 +88,7 @@ function loadState(
   fetching: boolean,
   error: Error | null,
 ): DashboardLoadState {
-  const rights = payload ? capabilities(payload) : { canEdit: false, canReset: false, canArchive: false };
+  const rights = payload ? capabilities(payload) : { canEdit: false, canReset: false, canTrash: false };
   if (error) return { status: "error", error, capabilities: rights };
   if (!payload) return fetching ? { status: "loading", capabilities: rights } : { status: "unavailable", capabilities: rights };
   if (payload.status === "absent") return { status: "absent", capabilities: rights };
@@ -135,7 +135,7 @@ function useDashboard(target: DashboardTarget) {
   const [saveMutation] = useAuthoredMutation(SaveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [resetMutation] = useAuthoredMutation(ResetDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [duplicateMutation] = useAuthoredMutation(DuplicateDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [archiveMutation] = useAuthoredMutation(ArchiveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
+  const [trashMutation] = useAuthoredMutation(TrashDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const createPersonal = useCreatePersonal();
 
   return {
@@ -168,10 +168,10 @@ function useDashboard(target: DashboardTarget) {
       });
       return saveResult(result?.duplicate_dashboard);
     }, [duplicateMutation]),
-    archive: React.useCallback(async (id: string, expectedRevision: number, archived: boolean) => {
-      const result = await archiveMutation({ id, expectedRevision, archived });
-      return saveResult(result?.set_personal_dashboard_archived);
-    }, [archiveMutation]),
+    trash: React.useCallback(async (id: string, expectedRevision: number, trashed: boolean) => {
+      const result = await trashMutation({ id, expectedRevision, trashed });
+      return saveResult(result?.set_personal_dashboard_trashed);
+    }, [trashMutation]),
 
   };
 }
@@ -250,11 +250,11 @@ function useCatalogue(): DashboardCatalogueBinding {
       presets: row.presets,
       revision: row.revision,
       customized: row.scope !== "PERSONAL",
-      available: !row.is_archived,
+      available: !row.is_trashed,
       capabilities: {
         canEdit: row.can_edit,
         canReset: row.scope !== "PERSONAL" && row.can_edit,
-        canArchive: row.can_archive,
+        canTrash: row.can_trash,
       },
     })), [rows]);
   return {

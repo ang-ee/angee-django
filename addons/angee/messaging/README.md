@@ -1,5 +1,40 @@
 # Messaging contracts
 
+Record chatter and source conversations have different identity. Chatter folds
+through core `MergeableMixin`: the retired thread redirects to its survivor,
+while its messages, follower occurrences and history stay on their physical rows.
+The current record owns read and post admission. Comments includes a single
+bounded timeline of comments and native provenance history; History remains a
+record tab provided by provenance. `TrackingValue` and save-time chatter tracking
+are retired. The upgrade preserves every old tracking column in the retained
+notification's `legacy_tracking` metadata and writes an ordinary readable body.
+
+Source threads and messages remain channel occurrences. Applied native `same_as`
+pair assertions choose a readable display representative only after the caller's
+account and search filters. Both ends of every display link must be readable;
+a hidden copy never hides a visible one or connects otherwise separate visible
+copies. Show source copies exposes each available channel and reply transport.
+Reply, correction, delivery, unread cursors and provider purge always address the
+selected physical occurrence. An RFC Message-ID match can assert email identity;
+account-local chat/provider ids cannot.
+
+People can keep source copies separate or confirm identity through the same
+reversible statement owner. A separation that conflicts with another applied
+identity path is refused until those assertions are withdrawn. Source identity
+decisions take one transaction-scoped database lock across message and thread
+graphs before endpoint locks, and refusal rolls back an empty pair carrier.
+Automatic observations respect applied separation without failing a committed
+message ingest. Existing copies are observed once through the seeded rule's
+resource-load hook, after migrations and permission grants; a completed changeset
+marks success. Failed resource loads roll back that mark and retry on the next load.
+
+The channel-thread upgrade preserves message ids and source payloads, separates
+old shared physical containers, and rebases every original and copied follow to
+its own channel at the old chronological cutoff. Retained pair evidence protects
+its endpoints from destructive channel purge. Disconnect the channel to stop
+synchronization while preserving that evidence; purge reports the retained
+evidence as a blocker.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and

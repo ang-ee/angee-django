@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 19
+// @rebac_schema_revision: 20
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -28,7 +28,14 @@ definition messaging/thread {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = channel->read + owner + editor + reader + admin->member
+    relation merged_into: messaging/thread // rebac:field=merged_into
+    relation active: messaging/thread // rebac:const={"target_id":"active","filters":{"merged_into_id__isnull":true}}
+    relation identity_role: provenance/role // rebac:const=messaging_identity_source
+    permission identity_source = identity_role->effective_member
+    permission available = authenticated
+    permission read_direct = channel->read + owner + editor + reader + identity_source + admin->member
+    permission read = (active->available & read_direct) + merged_into->read_direct
+    permission assert_identity = write + identity_source
     permission write  = channel->write + owner + editor + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member
@@ -52,8 +59,11 @@ definition messaging/message {
     // authenticated. Arrow-only through `trashed`; never check it directly.
     permission conceal = authenticated
     permission withheld = trashed->conceal
+    relation identity_role: provenance/role // rebac:const=messaging_identity_source
+    permission identity_source = identity_role->effective_member
+    permission assert_identity = write + identity_source
     permission create = authenticated
-    permission read   = ((thread->read + channel->read + editor + reader) - withheld) + channel->write + admin->member
+    permission read   = ((thread->read + channel->read + editor + reader) - withheld) + channel->write + identity_source + admin->member
     permission send_held = channel->write + admin->member
     permission write  = thread->write + channel->write + editor + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member
@@ -74,17 +84,6 @@ definition messaging/message {
 // under system context; its access rides on the thread. Files carry source
 // conversations, declared here.
 //
-// A row elsewhere can be about a record through the record's chatter edge. It
-// inherits the record's access from `record_read` and `record_write`, which the
-// record type's owner unions in beside its `target` relation:
-//
-//     permission record_read = doc->read
-//     permission record_write = doc->write
-//
-// They stay apart from `target_write`, which also names record types whose own
-// access may depend on such rows. `record_withheld` names whom a record withholds
-// its rows from (a concealed record conceals them too). `authenticated - row->attached` holds exactly
-// while a row points at no edge.
 definition messaging/thread_attachment {
     relation thread: messaging/thread // rebac:field=thread
     relation file: storage/file // rebac:field=target
@@ -96,14 +95,9 @@ definition messaging/thread_attachment {
     relation admin: angee/role // rebac:const=admin
 
     permission target_write = file->write
-    permission record_read = nil
-    permission record_write = nil
-    permission record_withheld = nil
 
     // Arrow-only through `source`: never check `retains` directly.
     permission retains = authenticated
-    // Arrow-only from a row about a record: never check `attached` directly.
-    permission attached = authenticated
     permission create = source->retains & target_write
     permission read   = thread->read + editor + reader + admin->member
     permission write  = thread->write + editor + admin->member
@@ -146,18 +140,6 @@ definition messaging/part {
     permission read   = message->read + editor + reader + admin->member
     permission write  = message->write + editor + admin->member
     permission delete = message->delete + admin->member
-}
-
-definition messaging/tracking_value {
-    relation message: messaging/message // rebac:field=message
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = message->read + editor + reader + admin->member
-    permission write  = message->write + editor + admin->member
-    permission delete = message->write + admin->member
 }
 
 // A Fragment is content-addressed and shared across owners (dedup by text hash),

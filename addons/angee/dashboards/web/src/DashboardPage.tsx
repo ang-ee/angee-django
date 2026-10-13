@@ -116,12 +116,12 @@ function StoredDashboardPage({ target, registry, store }: {
     }
   };
 
-  const archive = async () => {
+  const trash = async () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
     setPending(true);
     setError(null);
     try {
-      await binding.archive(target.id, state.revision, true);
+      await binding.trash(target.id, state.revision, true);
       await preferences.patchPreferences((current) => ({
         ...current,
         [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
@@ -188,11 +188,11 @@ function StoredDashboardPage({ target, registry, store }: {
                     <ActionTrigger glyph="copy" onClick={() => void duplicate()}>
                       {t("common.duplicate")}
                     </ActionTrigger>
-                    {target.scope === "personal" && state.capabilities.canArchive ? (
+                    {target.scope === "personal" && state.capabilities.canTrash ? (
                       <>
                         <DropdownMenu.Separator />
-                        <ActionTrigger variant="danger" glyph="archive" onClick={() => void archive()}>
-                          {t("common.archive")}
+                        <ActionTrigger variant="danger" glyph="trash" onClick={() => void trash()}>
+                          {t("common.trash")}
                         </ActionTrigger>
                       </>
                     ) : null}
