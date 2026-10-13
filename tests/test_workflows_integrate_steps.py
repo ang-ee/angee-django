@@ -4,12 +4,15 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import ValidationError
 from rebac import system_context
+from rebac.actors import to_subject_ref
 
+from angee.base.mixins import SourceKind
 from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
@@ -24,6 +27,7 @@ from angee.integrate.streams import (
     open_stream,
 )
 from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.messaging.testing.models import Party
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
@@ -43,7 +47,7 @@ def cycle(execution, register_step, monkeypatch):
     """A real owner-scoped bridge with deterministic bounded transport."""
     administrator, _ = execution
     bridge = make_integration("workflow-stream", model=SyncCycleTestBridge)
-    extracted, applied, rescanned = [], [], []
+    extracted, applied, rescanned, declared = [], [], [], []
     local_hashes = {}
     transport = SimpleNamespace(
         identity_reads=True,
@@ -52,6 +56,7 @@ def cycle(execution, register_step, monkeypatch):
         fail=False,
         pages=None,
         direction=StreamDirection.PULL,
+        authoritative=False,
     )
 
     class Adapter(BridgeImpl):
@@ -60,12 +65,14 @@ def cycle(execution, register_step, monkeypatch):
             return transport.identity_reads
 
         def streams(self, *, deadline=None):
+            declared.append(transport.partitions)
             return tuple(
                 StreamDefinition(
                     "records",
                     partition=partition,
                     kind=StreamKind.RECORD_REPLICA,
                     direction=transport.direction,
+                    authoritative=transport.authoritative,
                 )
                 for partition in transport.partitions
             )
@@ -135,6 +142,7 @@ def cycle(execution, register_step, monkeypatch):
         extracted=extracted,
         applied=applied,
         rescanned=rescanned,
+        declared=declared,
     )
 
 
@@ -177,6 +185,39 @@ def test_stream_pages_commit_cursors_and_sum_only_finalized_counts(cycle):
     assert applied_history().count() == 2
     cycle.bridge.refresh_from_db()
     assert cycle.bridge.last_sync_items == 2
+
+
+def test_a_drain_opens_an_existing_stream_against_its_current_declaration(cycle):
+    """A declaration that became authoritative reaches a stream the cycle did not create, and its subjects re-rank."""
+    with system_context(reason="test stream became authoritative"):
+        owner = get_user_model().objects.create_user(username="authority-owner")
+        party = Party._base_manager.create(display_name="Ada (me)", created_by=owner)
+        stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
+        link = RecordLink.objects.observe(stream, "partner-1", target=party)
+        party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})
+        Party.statements.model._base_manager.create(
+            subject=party,
+            aspect="identity",
+            asserted_by=str(to_subject_ref(cycle.bridge)),
+            source_kind=SourceKind.SYSTEM_OF_RECORD,
+            link=link,
+            display_name="Ada (source)",
+        )
+        Party.statements.resolve(subject=party, aspect="identity")
+    party.refresh_from_db()
+    assert not stream.authoritative and party.display_name == "Ada (me)"
+
+    cycle.transport.authoritative = True
+    cycle.declared.clear()
+    run = cycle.start(StreamStage, {"key": "records", "page_bound": 1})
+    run_until(run)
+
+    assert run.status == "succeeded"
+    assert SyncStream.objects.current_for_bridge(cycle.bridge, "records").get().authoritative is True
+    party.refresh_from_db()
+    assert party.display_name == "Ada (source)"
+    # Two pages, one declaration: the first page opens the stream, the second resumes it.
+    assert len(cycle.extracted) == 2 and len(cycle.declared) == 1
 
 
 def test_lost_lease_resumes_after_the_committed_cursor(cycle, monkeypatch):

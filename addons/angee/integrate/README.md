@@ -52,6 +52,9 @@ what the stream states (`SyncStream.authoritative`, read by statement survivorsh
 changing it re-derives the linked subjects through `SyncStreamManager.set_authoritative`.
 Direction or snapshot changes open a new baseline generation and retain links,
 policy and failures. Adapter-private deletion policy remains in stream `config`.
+A changed declaration reaches an existing stream when a drain opens it:
+[`open_stream`](streams.py) always reconciles the stream with its declaration, on
+the generic sync and on a workflow cycle alike.
 A declared snapshot with no reconciliation interval closes after its baseline;
 explicit resync opens a new generation. Missing cadence alone never means read-once.
 
