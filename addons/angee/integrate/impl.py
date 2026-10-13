@@ -79,7 +79,12 @@ class BridgeImpl(IntegrationImpl):
     """Declare identity reads; otherwise retries request a fresh baseline."""
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Declare each independently ordered partition exactly once."""
+        """Declare each independently ordered partition exactly once.
+
+        The generic sync declares once per cycle. A workflow cycle declares once per
+        drained partition (``workflows_integrate.StreamStage``), so an adapter synced
+        through one declares from local state, without transport.
+        """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
     def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
