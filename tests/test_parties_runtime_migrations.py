@@ -795,12 +795,17 @@ def test_a_sender_claim_written_before_the_reference_rename_folds_its_listed_ref
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_claim_a_person_confirmed_before_sources_were_kept_folds_as_the_persons_link(
+def test_a_claim_a_person_decided_before_sources_were_kept_folds_as_the_persons_link(
     legacy: LegacyHost, seeded: dict[str, Any], capsys
 ) -> None:
-    """Until 2026-10-11 a confirmation rewrote the producer's source to manual and kept its claim metadata."""
+    """Until 2026-10-11 a confirmation rewrote the producer's source to manual and kept its claim metadata.
 
-    person = seeded["person"]
+    A dismissal after it kept both. Such a carrier folds as any decided manual link: its
+    creator's source assertion and the decider's stance, with the claim's references as
+    evidence. An undecided manual carrier naming a producer still blocks.
+    """
+
+    person, service = seeded["person"], seeded["service"]
     ref = {
         "model": "parties.Party",
         "id": fold_party_handle_statements.Legacy(legacy.apps, connection.alias).public_id(
@@ -808,40 +813,51 @@ def test_a_claim_a_person_confirmed_before_sources_were_kept_folds_as_the_person
         ),
     }
     carriers = {}
-    for confirmed, value in ((True, "confirmed-claim@example.test"), (False, "unconfirmed-claim@example.test")):
+    for decision, value in (
+        ("confirmed", "confirmed-claim@example.test"),
+        ("dismissed", "dismissed-claim@example.test"),
+        ("undecided", "undecided-claim@example.test"),
+    ):
         handle = legacy.create(
-            "parties.Handle", platform="email", value=value, normalized_value=value, created_by=person
+            "parties.Handle", platform="email", value=value, normalized_value=value, created_by=service
         )
-        carriers[confirmed] = legacy.create(
+        carriers[decision] = legacy.create(
             "parties.PartyHandle",
             party=seeded["organization"],
             handle=handle,
             source="manual",
             confidence=1.0,
-            is_confirmed=confirmed,
-            created_by=person,
+            is_confirmed=decision == "confirmed",
+            is_dismissed=decision == "dismissed",
+            created_by=service,
             updated_by=person,
             metadata={"claim": "source_sender", "evidence": [ref]},
         )
 
     rows, _notices = preflight_party_folds.blockers(legacy.apps, connection.alias)
     assert [(row.pk, row.reason) for row in rows] == [
-        (carriers[False].pk, "manual source conflicts with retained producer evidence")
+        (carriers["undecided"].pk, "manual source conflicts with retained producer evidence")
     ]
-    legacy.rows("parties.PartyHandle").filter(pk=carriers[False].pk).delete()
+    legacy.rows("parties.PartyHandle").filter(pk=carriers["undecided"].pk).delete()
     legacy.apply(fold_party_handle_statements)
 
-    statements = _statements(legacy, seeded["organization"], handle_id=carriers[True].handle_id)
-    # Creator and decider are one person, so the confirmation is that person's one stance on the pair.
-    [statement] = statements
-    assert (statement.asserted_by, statement.source_kind, statement.rank, statement.applied) == (
-        _user(person),
-        "person",
-        "preferred",
-        True,
-    )
-    assert statement.evidence == [ref]
-    assert "1 x producer link a person confirmed before its source was kept: folded as the person's" in (
+    seed = legacy.rows("provenance.Seed").get(key=fold_party_handle_statements.SYSTEM_KEY)
+    creator = {
+        "model": "iam.User",
+        "id": fold_party_handle_statements.Legacy(legacy.apps, connection.alias).public_id("iam.user", service.pk),
+    }
+    for decision, snak in (("confirmed", "value"), ("dismissed", "no_value")):
+        statements = _statements(legacy, seeded["organization"], handle_id=carriers[decision].handle_id)
+        # The service account created the claim: the source assertion is the fold's seed's;
+        # the person decided it: the applied stance is the person's.
+        assert {(row.asserted_by, row.source_kind, row.rank, row.snak, row.applied) for row in statements} == {
+            (f"provenance/seed:{seed.pk}", "seed", "normal", "value", False),
+            (_user(person), "person", "preferred", snak, True),
+        }
+        assert all(ref in row.evidence for row in statements)
+        [assertion] = [row for row in statements if row.source_kind == "seed"]
+        assert creator in assertion.evidence  # the service account that created the claim stays named
+    assert "2 x producer link a person decided before its source was kept: folded as the person's" in (
         capsys.readouterr().out
     )
 
