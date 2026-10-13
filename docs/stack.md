@@ -329,6 +329,7 @@ calendar.
 | ruff | Python lint and format | Repo checks |
 | mypy | Python type checking | Strict backend checks |
 | pytest + pytest-django + pytest-xdist + pytest-randomly | Backend tests, native test-database setup and transactional flush, worker isolation, and opt-in randomized ordering | Synthetic projects, addon-owned [`workflows`](../addons/angee/workflows/testing/__init__.py) and [`integrate`](../addons/angee/integrate/testing/__init__.py) test compositions, central [`decisions`](../addons/angee/decisions/testing/models.py) model registration; generic [`composed_tables`](../angee/testing/fixtures.py) permission synchronization; CI schedules SQLite tests by file |
+| pytest-split | Splitting the suite into duration-balanced shards from stored test durations | The CI `uv` lane's six shards and the committed [`.test_durations`](../.test_durations); [Checks](checks.md#what-ci-actually-runs) owns when to refresh it |
 | Faker | Test and seed data generation | Bulk lorem fixtures (e.g. `seed_lorem_notes`) |
 | Vitest | TypeScript and React tests | Frontend unit checks; optional peer for `@angee/refine/testing`, which owns provider spies, and the `@angee/app/vitest` config entry. Tests declare direct workspace dependencies for fixture owners such as `@angee/metadata/testing`. |
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
