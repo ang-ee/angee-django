@@ -39,6 +39,9 @@ module = "runtime_migrations.party_aspect_schema"
 name = "fold_party_handle_statements"
 app_label = "parties"
 module = "runtime_migrations.fold_party_handle_statements"
+# The first applied body refused a producer link a person had dismissed, where this one
+# folds it; a stack that body completed on held none, so its copies stay valid.
+compatible_source_sha256 = ["3ae0a2699c3a52481b2c3938a323a1cbb9abc391cd510b4639455f2a7debd891"]
 
 [[migrations]]
 name = "fold_party_aspects"
