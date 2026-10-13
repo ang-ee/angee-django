@@ -4214,15 +4214,24 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         link.save_without_historical_record(using=self.db, update_fields=("target_content_type", "target_object_id"))
 
     def revalidate(self, link: Any, *, target: Any = UNSET) -> Any:
-        """Restore a verified identity without advancing its application base."""
+        """Restore a verified identity without advancing its application base.
+
+        A link already current on the same target is left unsaved: the delivery's
+        observation recorded it, and a save would repeat that snapshot in history.
+        """
+        fields = ("target_content_type_id", "target_object_id", "status", "tombstoned_at")
         locked = self.lock_if_supported().get(pk=link.pk)
+        before = [getattr(locked, name) for name in fields]
         if target is not UNSET:
             self._set_target(locked, target)
         locked.status = LinkStatus.CURRENT
         locked.tombstoned_at = None
         locked.update_sync_status()
-        locked.save(update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"])
-        for name in ("target_content_type_id", "target_object_id", "status", "tombstoned_at"):
+        if [getattr(locked, name) for name in fields] != before:
+            locked.save(
+                update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"]
+            )
+        for name in fields:
             setattr(link, name, getattr(locked, name))
         return locked
 

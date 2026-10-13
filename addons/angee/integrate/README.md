@@ -36,8 +36,8 @@ the transport's remote-version fence. Neither makes the two systems atomic.
 Only the driver promotes a primary link; adapters return `ApplyResult` evidence.
 
 Each applied record retains the observe row and the application-evidence row
-(commit 8 review ruling). Pinning `applied_base` creates no pointer-only history
-row. History retention is unbounded: deployments budget both full snapshots and
+(commit 8 review ruling); a record delivered again unchanged retains only its
+observe row. Pinning `applied_base` creates no pointer-only history row. History retention is unbounded: deployments budget both full snapshots and
 the snapshots from generation changes, when retained links follow the new epoch.
 The Streams tab's link history drill-down is the provenance
 [History timeline](../provenance/README.md#history-surface) for the link: one
