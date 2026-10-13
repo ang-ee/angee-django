@@ -223,7 +223,10 @@ type JobState {
   """
   exitCode: Int
 
-  """Why a job failed without an exit status, or was skipped."""
+  """
+  Why a job failed without an exit status, or was skipped, or is still pending
+  on a service the runtime keeps restarting.
+  """
   reason: String
 }
 
@@ -338,9 +341,24 @@ type Query {
   gitOpsTopology(withCommits: Int): GitOpsTopology
   sourceDiff(name: String!, ref: String): [DiffFile!]!
   workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
-  stackLogs(services: [String!], limit: Int): String!
-  serviceLogs(name: String!, limit: Int): String!
-  workspaceLogs(name: String!, limit: Int): String!
+
+  """
+  The last `tail` lines of each service or job (0 or absent: 200, at most
+  10000). Container lines come first, as docker compose orders them, then
+  local lines grouped by service in the order requested (by name when none is
+  named). The read is kept within `limit` bytes (0, absent or above 1 MiB:
+  1 MiB) by its last whole lines in that order, so a small limit can leave out
+  the services read first. A read the limit shortens starts with a
+  `[truncated]` line, counted in the limit; a limit of 12 bytes or less leaves
+  that line alone, longer than a limit below 12. A local service or job holds
+  its last 1000 lines in the process-compose supervisor; its full output is in
+  run/logs/<name>.log under the stack root.
+  """
+  stackLogs(services: [String!], limit: Int, tail: Int): String!
+
+  """The last `tail` lines of one service, as in `stackLogs`."""
+  serviceLogs(name: String!, limit: Int, tail: Int): String!
+  workspaceLogs(name: String!, limit: Int): String! @deprecated(reason: "A workspace is files and has no logs (angee-operator#110); always empty, removed in a later release. Read the logs of the services and jobs that mount it.")
   mcpDescriptor: JSON
   secretValue(name: String!): SecretValue
   file(source: String!, path: String!): FileContent!
@@ -391,12 +409,49 @@ type ServiceState {
   id: ID!
   name: String!
   runtime: String!
+
+  """
+  The runtime's own state, such as process-compose's `Completed` or docker
+  compose's `exited`. `outcome` is the verdict.
+  """
   status: String!
+
+  """
+  The runtime state as the stack summary counts it: running, completed (exit
+  0), failed (a non-zero exit, or the command could not start), restarting (it
+  exited and the runtime's restart policy is starting it again), stopped
+  (ended by a stop signal), skipped (a dependency failed), pending, never-run
+  (the runtime holds no state for it) or unknown (the runtime could not be
+  queried). Empty when the runtime was not read, as in a create or update
+  result.
+  
+  A local service killed by any signal reads as stopped, not failed:
+  process-compose reports exit code -1 alike for a crash by signal, a SIGKILL
+  from outside (such as the OOM killer) and a deliberate stop.
+  """
+  outcome: String
+
+  """
+  Exit status of a service that ended, when the runtime reports one. A
+  restarting local service reports the exit that ended its last run; docker
+  compose reports none for a restarting container.
+  """
+  exitCode: Int
+
+  """
+  How many times the runtime's restart policy has restarted the service since
+  it was last started. Only process-compose reports it; a container service
+  reads 0.
+  """
+  restarts: Int!
   health: String
 
   """
   Why a skipped service did not run: the failed job or service its dependency
-  chain stopped at, such as `job deps failed (exit 1)`.
+  chain stopped at, such as `job deps failed (exit 1)`. For a failed service
+  whose command could not start, it says so. For a pending service waiting on
+  a service the runtime keeps restarting, it names that service, such as
+  `waiting for service db: restarting (exit 1, 3 restarts)`.
   """
   reason: String
 }
@@ -424,6 +479,7 @@ type ServicesGroupKey {
   status: String
   runtime: String
   health: String
+  outcome: String
 }
 
 input ServicesGroupOrder {
@@ -435,6 +491,7 @@ enum ServicesGroupableField {
   STATUS
   RUNTIME
   HEALTH
+  OUTCOME
 }
 
 input ServicesHaving {
@@ -621,14 +678,15 @@ type StackSummary {
 Counts of declared entries by observed outcome. total counts every entry;
 pending, stopped, never-run and unobserved entries count only there. failed
 counts entries that exited non-zero or could not start (a service stopped by a
-signal is not failed); skipped counts entries skipped because a dependency
-failed.
+signal is not failed); restarting counts services the runtime is restarting
+after they exited; skipped counts entries skipped because a dependency failed.
 """
 type StatusCounts {
   total: Int!
   running: Int!
   completed: Int!
   failed: Int!
+  restarting: Int!
   skipped: Int!
 }
 
@@ -657,8 +715,14 @@ type Subscription {
   templates(where: templates_bool_exp, order_by: [templates_order_by!], limit: Int, offset: Int): [TemplateDescriptor!]!
   secrets(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): [SecretRef!]!
   onGitOpsTopologyChange: GitOpsTopology!
-  onServiceLogs(name: String!): String!
-  onWorkspaceLogs(name: String!): String!
+
+  """
+  Follows a service's logs after replaying its last `tail` lines (0 or absent:
+  200). A local service replays at most 256: past that process-compose drops
+  the newest lines of the replay, so a larger tail is refused.
+  """
+  onServiceLogs(name: String!, tail: Int): String!
+  onWorkspaceLogs(name: String!): String! @deprecated(reason: "A workspace is files and has no logs (angee-operator#110); the stream ends at once, removed in a later release. Follow the services and jobs that mount it.")
   onWorkspaceStatusChange(name: String!): WorkspaceStatus!
 
   """Emitted whenever the aggregate stack snapshot's hash changes."""
@@ -808,8 +872,8 @@ type WorkspaceStatus {
   template: String!
   inputs: JSON
   sources: [WorkspaceSourceStatus!]!
-  chain: [String!]!
-  chainRoot: String
+  chain: [String!]! @deprecated(reason: "A workspace no longer renders a stack (angee-operator#110); always empty, removed in a later release.")
+  chainRoot: String @deprecated(reason: "A workspace no longer renders a stack (angee-operator#110); always empty, removed in a later release.")
   allocations: JSON
   processComposePort: Int
   playwrightMcpName: String
@@ -819,8 +883,8 @@ type WorkspaceStatus {
   ttlExpiresAt: String
   expired: Boolean!
   mountedBy: [WorkspaceMountRef!]!
-  innerStack: StackStatus
-  innerError: String
+  innerStack: StackStatus @deprecated(reason: "The operator no longer reads a stack inside a workspace (angee-operator#110); query that stack's own operator. Always null, removed in a later release.")
+  innerError: String @deprecated(reason: "The operator no longer reads a stack inside a workspace (angee-operator#110). Always empty, removed in a later release.")
 }
 
 type jobs_aggregate {
@@ -918,6 +982,7 @@ input services_bool_exp {
   name: String_comparison_exp
   runtime: String_comparison_exp
   status: String_comparison_exp
+  outcome: String_comparison_exp
   health: String_comparison_exp
 }
 
@@ -939,6 +1004,7 @@ input services_order_by {
   name: order_by
   runtime: order_by
   status: order_by
+  outcome: order_by
   health: order_by
 }
 

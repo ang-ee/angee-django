@@ -1,3 +1,4 @@
+import { serviceVerdict } from "./service-state";
 import type { ServiceState } from "./types";
 
 export interface ApplicationHealth {
@@ -16,8 +17,11 @@ export function applicationHealth(
   );
   if (unhealthy) return { status: "failed", service: unhealthy.name, detail: unhealthy.health ?? null, readinessUnavailable: false };
 
-  const stopped = services.find((service) => service.status.toLowerCase() !== "running");
-  if (stopped) return { status: "unavailable", service: stopped.name, detail: stopped.status, readinessUnavailable: false };
+  const failed = services.find((service) => serviceVerdict(service) === "failed");
+  if (failed) return { status: "failed", service: failed.name, detail: serviceVerdict(failed), readinessUnavailable: false };
+
+  const down = services.find((service) => serviceVerdict(service) !== "running");
+  if (down) return { status: "unavailable", service: down.name, detail: serviceVerdict(down), readinessUnavailable: false };
 
   const waiting = services.find((service) => !service.health);
   if (waiting) return { status: "running", service: waiting.name, detail: null, readinessUnavailable: true };
