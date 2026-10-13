@@ -97,8 +97,10 @@ def plan(apps, db, *, folded=True):
     The preflight composes the pre-fold checks (enrollment identity, link retention,
     extension data, MergeVeto references); the retirement itself also proves the
     folded anti-link stances. The aspect fold proves its own statements before it
-    writes. A card no link retains is a notice: the fold left its local values on the
-    canonical columns unasserted (ruling (b)), and the column drops.
+    writes. A card whose raw vCard no link retains is a notice: only those wire bytes
+    leave with the dropped column, and its values keep the attribution the aspect fold
+    gave them (the directory's where an applied snapshot proves them; ruling (b) leaves a
+    local edit without a person unasserted).
     """
     problems, notices = [], []
     with system_context(reason="retire.party_carriers"):
@@ -123,7 +125,9 @@ def plan(apps, db, *, folded=True):
                     problems.append(Problem("Party", row.pk, "no RecordLink retains the directory card"))
                     continue
                 if row.raw_vcard and not _retained_vcard(apps, db, links, row.raw_vcard):
-                    notices.append(f"Party {row.pk}: card not retained on any link; its local values stay unasserted")
+                    notices.append(
+                        f"Party {row.pk}: raw vCard not retained on any link; only its wire bytes leave with the column"
+                    )
                 if row.extensions and not any(
                     payload.get("extensions") == row.extensions for payload in _payloads(apps, db, links)
                 ):

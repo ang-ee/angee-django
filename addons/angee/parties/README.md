@@ -86,8 +86,9 @@ retained evidence, discarded legacy data and reversal contracts; the rules are:
   directory value equal to the applied snapshot is
   the directory's; a local edit is the editing person's, or stays unasserted.
 - **The preflight covers the retirements too.** Enrollment identity, link retention,
-  extension data and MergeVeto references are checked before anything drops; a card no
-  link retains is reported, its local values stay unasserted and the column drops.
+  extension data and MergeVeto references are checked before anything drops; a card whose
+  raw vCard no link retains is reported: only those wire bytes leave with the column, and
+  its values keep the attribution the aspect fold gave them.
   spaces' roster-label drop waits for the parties statement schema, so it runs after the
   preflight on a stack with parties.
 - **Parity before drops.** Each retirement proves the folded evidence before its

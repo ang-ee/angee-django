@@ -703,11 +703,14 @@ def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
     legacy.apply(circle_member_decisions)
     legacy.apply(retire_party_handle)
     legacy.rows("parties.Party").filter(pk=seeded["card"].pk).update(raw_vcard=VCARD.replace("Olek", "Someone"))
-    # A card no link retains (a local edit with no actor) is a notice, not a refusal (ruling (b)):
-    # the fold left its values unasserted and the preflight and the retirement both say so.
+    # A card whose raw vCard no link retains is a notice, not a refusal (ruling (b)): only its wire
+    # bytes leave with the column, its values keep their folded statements, and both checks say so.
     problems, notices = retire_party_carriers.plan(legacy.apps, connection.alias, folded=False)
     assert problems == []
-    assert f"Party {seeded['card'].pk}: card not retained on any link; its local values stay unasserted" in notices
+    assert (
+        f"Party {seeded['card'].pk}: raw vCard not retained on any link; only its wire bytes leave with the column"
+        in notices
+    )
     legacy.apply(retire_party_carriers)
     assert "raw_vcard" not in {field.name for field in legacy.model("parties.Party")._meta.fields}
 
@@ -787,6 +790,58 @@ def test_a_sender_claim_written_before_the_reference_rename_folds_its_listed_ref
         [statement] = _statements(legacy, seeded["organization"], handle_id=carrier.handle_id)
         assert (statement.asserted_by, statement.source_kind, statement.evidence) == (sender, "rule", [ref])
     assert "1 x source_sender claim over a rule suggestion: its overwritten evidence keys dropped" in (
+        capsys.readouterr().out
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_claim_a_person_confirmed_before_sources_were_kept_folds_as_the_persons_link(
+    legacy: LegacyHost, seeded: dict[str, Any], capsys
+) -> None:
+    """Until 2026-10-11 a confirmation rewrote the producer's source to manual and kept its claim metadata."""
+
+    person = seeded["person"]
+    ref = {
+        "model": "parties.Party",
+        "id": fold_party_handle_statements.Legacy(legacy.apps, connection.alias).public_id(
+            "parties.party", seeded["manual"].pk
+        ),
+    }
+    carriers = {}
+    for confirmed, value in ((True, "confirmed-claim@example.test"), (False, "unconfirmed-claim@example.test")):
+        handle = legacy.create(
+            "parties.Handle", platform="email", value=value, normalized_value=value, created_by=person
+        )
+        carriers[confirmed] = legacy.create(
+            "parties.PartyHandle",
+            party=seeded["organization"],
+            handle=handle,
+            source="manual",
+            confidence=1.0,
+            is_confirmed=confirmed,
+            created_by=person,
+            updated_by=person,
+            metadata={"claim": "source_sender", "evidence": [ref]},
+        )
+
+    rows, _notices = preflight_party_folds.blockers(legacy.apps, connection.alias)
+    assert [(row.pk, row.reason) for row in rows] == [
+        (carriers[False].pk, "manual source conflicts with retained producer evidence")
+    ]
+    legacy.rows("parties.PartyHandle").filter(pk=carriers[False].pk).delete()
+    legacy.apply(fold_party_handle_statements)
+
+    statements = _statements(legacy, seeded["organization"], handle_id=carriers[True].handle_id)
+    # Creator and decider are one person, so the confirmation is that person's one stance on the pair.
+    [statement] = statements
+    assert (statement.asserted_by, statement.source_kind, statement.rank, statement.applied) == (
+        _user(person),
+        "person",
+        "preferred",
+        True,
+    )
+    assert statement.evidence == [ref]
+    assert "1 x producer link a person confirmed before its source was kept: folded as the person's" in (
         capsys.readouterr().out
     )
 
