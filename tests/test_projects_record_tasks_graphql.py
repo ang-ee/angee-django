@@ -119,3 +119,11 @@ class RecordTaskGraphQLTests(WorkCase):
         self.assertFalse(hidden.errors, hidden.errors)
         self.assertEqual(hidden.data["record_tasks"], [])
 
+
+    def test_a_record_type_without_chatter_is_refused_with_its_code(self):
+        person = {"model": "parties.Person", "id": self.Person._base_manager.get(user=self.owner).sqid}
+        with self.assertNoLogs("angee.graphql.schema", level="ERROR"):
+            listed = self.raw(LIST, person, self.owner)
+            scheduled = self.raw(SCHEDULE, {**person, "title": "No"}, self.owner)
+        for result in (listed, scheduled):
+            self.assertEqual([error.extensions.get("code") for error in result.errors], ["BAD_RECORD"])
