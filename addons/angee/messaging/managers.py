@@ -87,7 +87,7 @@ from angee.messaging.delivery import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
-from angee.messaging.source_copies import SourceCopyQuerySet, observe_email_identity
+from angee.messaging.source_copies import observe_email_identity
 from angee.parties.managers import Signing
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
@@ -614,7 +614,7 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     )
 
 
-class ThreadQuerySet(SourceCopyQuerySet, MergeableQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
+class ThreadQuerySet(MergeableQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for message threads."""
 
     def inbox(self) -> ThreadQuerySet:
@@ -797,8 +797,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         manager owns the deterministic-key namespace (``chat:`` beside
         ``subj:``/``msg:``), so adapters pass raw conversation ids and never
         compose prefixes. Every source thread is channel-scoped: two accounts
-        retain separate transport and membership occurrences. Reversible same_as
-        evidence groups readable copies for display. The hint's ``modality``/
+        retain separate transport and membership occurrences, and ``same_as``
+        evidence folds one into the other as a redirect. The hint's ``modality``/
         ``visibility`` land on a newly created thread only — a broadcast source
         names its feed public at the adapter that knows it, instead of every
         public source re-owning the visibility default. Its ``title`` also fills
@@ -963,6 +963,10 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         # Channel deletion authorizes its thread teardown even when a thread has
         # another owner; the thread's own delete gate remains owner/admin-only.
         with system_context(reason="messaging.channel.teardown"), mute_changes(), transaction.atomic():
+            for model in (message_model, self.model):
+                # A copy in another channel outlives its purged survivor as a canonical row.
+                purged = model.objects.for_channel(channel).order_by().values("pk")
+                model._base_manager.filter(merged_into__in=purged).update(merged_into=None)
             message_model.objects.for_channel(channel).delete()
             self.for_channel(channel).delete()
 
@@ -2269,7 +2273,7 @@ class ReactionManager(AngeeManager):
         return len(rows)
 
 
-class MessageQuerySet(SourceCopyQuerySet, TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+class MessageQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
 
     def for_creation_key(self, scope: Any, key: str | None, fingerprint: str) -> Any | None:
@@ -2334,15 +2338,6 @@ class MessageQuerySet(SourceCopyQuerySet, TrashQuerySet[Any], CreationKeyQuerySe
         """Return messages belonging to one thread."""
 
         return cast(MessageQuerySet, self.filter(thread_id__in=thread.member_threads().values("pk")))
-
-    def for_conversation(self, thread: Any) -> MessageQuerySet:
-        """Readable equivalent source threads, leaving transport roots physical."""
-
-        threads = apps.get_model("messaging", "Thread").objects.all()
-        if actor := self.actor() or current_actor():
-            threads = threads.with_actor(actor)
-        sources = threads.source_copies(thread).values("pk")
-        return cast(MessageQuerySet, self.filter(thread_id__in=models.Subquery(sources)))
 
     def for_channel(self, channel: Any) -> MessageQuerySet:
         """Return the messages that belong to ``channel`` — the purge-scope predicate.
@@ -2532,7 +2527,7 @@ class MessageQuerySet(SourceCopyQuerySet, TrashQuerySet[Any], CreationKeyQuerySe
         if terms:
             queryset = queryset.distinct()
         if not all_copies:
-            queryset = queryset.representatives()
+            queryset = queryset.canonical()
         return cast(MessageQuerySet, queryset.order_by("-_order_at", "-pk"))
 
     @staticmethod

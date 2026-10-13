@@ -207,15 +207,16 @@ def test_personal_dashboard_trash_retains_widgets_and_restores_under_revision(da
             dashboard=dashboard, widget_key="body", kind="markdown", title="Body", data={},
         )
     with actor_context(owner):
-        removed = dashboard.with_actor(owner).set_personal_trashed(trashed=True, expected_revision=dashboard.revision)
+        removed = DashboardTarget.objects.trash_targets().get(pk=dashboard.pk)
+        removed.trash()
         assert removed.is_trashed
         assert removed.trashed_by_id == owner.pk
         assert DashboardTargetWidget.objects.filter(pk=widget.pk).exists()
-        restored = removed.set_personal_trashed(trashed=False, expected_revision=removed.revision)
-        assert not restored.is_trashed
-        assert restored.trashed_at is None
-        assert restored.revision > dashboard.revision
-        assert DashboardTargetWidget in restored.history_scope()
+        removed.restore()
+        assert not removed.is_trashed
+        assert removed.trashed_at is None
+        assert removed.revision > dashboard.revision
+        assert DashboardTargetWidget in removed.history_scope()
 
 
 def test_resource_reload_preserves_unchanged_installed_reads_without_tuples(

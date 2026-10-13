@@ -9,31 +9,29 @@ record tab provided by provenance. `TrackingValue` and save-time chatter trackin
 are retired. The upgrade preserves every old tracking column in the retained
 notification's `legacy_tracking` metadata and writes an ordinary readable body.
 
-Source threads and messages remain channel occurrences. Applied native `same_as`
-pair assertions choose a readable display representative only after the caller's
-account and search filters. Both ends of every display link must be readable;
-a hidden copy never hides a visible one or connects otherwise separate visible
-copies. Show source copies exposes each available channel and reply transport.
-Reply, correction, delivery, unread cursors and provider purge always address the
-selected physical occurrence. An RFC Message-ID match can assert email identity;
-account-local chat/provider ids cannot.
-
-People can keep source copies separate or confirm identity through the same
-reversible statement owner. A separation that conflicts with another applied
-identity path is refused until those assertions are withdrawn. Source identity
-decisions take one transaction-scoped database lock across message and thread
-graphs before endpoint locks, and refusal rolls back an empty pair carrier.
-Automatic observations respect applied separation without failing a committed
-message ingest. Existing copies are observed once through the seeded rule's
-resource-load hook, after migrations and permission grants; a completed changeset
-marks success. Failed resource loads roll back that mark and retry on the next load.
+Source threads and messages remain channel occurrences. A native `same_as` pair
+statement is the identity fact, and applying it folds the newer copy into the
+older through core `MergeableMixin` as a retained redirect (`merged_into`): no
+message, member, cursor or part moves, so reply, correction, delivery, unread
+cursors and provider purge always address the physical occurrence. Readers
+collapse copies through `canonical()`, which keeps showing a copy whose survivor
+the reader cannot reach, so an account that sees only its own channel still sees
+the message. Show source copies lists the survivor and every readable copy with
+its channel and reply transport. The `messaging.source_identity` rule asserts an
+RFC Message-ID match after the envelope commits (account-local chat/provider ids
+are never compared); people confirm or keep copies separate through the same
+statement, and a kept-separate decision splits the redirect and refuses a later
+fold. The pair rule principal is granted read and write on threads and messages
+like the parties statement sources.
 
 The channel-thread upgrade preserves message ids and source payloads, separates
-old shared physical containers, and rebases every original and copied follow to
-its own channel at the old chronological cutoff. Retained pair evidence protects
-its endpoints from destructive channel purge. Disconnect the channel to stop
-synchronization while preserving that evidence; purge reports the retained
-evidence as a blocker.
+old shared physical containers, redirects each copied container to its original
+and each email's newer copies to its oldest row, and rebases every original and
+copied follow to its own channel at the old chronological cutoff. Retained pair
+evidence protects its endpoints from destructive channel purge (statements are
+never deleted, so purge reports the evidence as a blocker; disconnect the
+channel to stop synchronization). A redirect without evidence, such as one the
+upgrade wrote, releases its copy when the survivor's channel is purged.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from

@@ -23,7 +23,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
 
 from angee.base.actors import actor_user_id
-from angee.messaging.source_copies import SourceRepresentative
 
 
 class InboxCoverage(BaseModel):
@@ -346,16 +345,17 @@ class MessageInbox:
         """The one intersection used by conversation rows, counts and selection status."""
 
         scoped = self.scoped(self.coverage(coverage), sender=sender, circle=circle)
-        return self.matching(scoped, search).representatives()
+        return self.matching(scoped, search).canonical()
 
     def _conversation_rows(self, rows: Any) -> Any:
-        # An unreadable thread is not an exposed grouping identity. Its readable
-        # messages remain independently reachable as standalone sections.
+        # A conversation groups under the readable survivor of its thread's
+        # redirect. An unreadable thread is not an exposed grouping identity: its
+        # readable messages remain independently reachable as standalone sections.
+        visible = Subquery(self.threads.order_by().values("pk"))
         return rows.annotate(
             _conversation=Case(
-                When(thread_id__in=Subquery(self.threads.order_by().values("pk")), then=SourceRepresentative(
-                    F("thread_id"), pairs=self.threads.identity_pairs(), visible=self.threads,
-                )),
+                When(thread__merged_into__in=visible, then=F("thread__merged_into_id")),
+                When(thread_id__in=visible, then=F("thread_id")),
                 default=-F("pk"),
                 output_field=models.BigIntegerField(),
             )

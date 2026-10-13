@@ -17,7 +17,6 @@ import {
 } from "@angee/ui/dashboard/headless";
 
 import {
-  TrashDashboardDocument,
   CreatePersonalDashboardDocument,
   DashboardDocument,
   DashboardSummariesDocument,
@@ -47,7 +46,6 @@ type FullPayload = NonNullable<
   | DocumentType<typeof CreatePersonalDashboardDocument>["create_personal_dashboard"]
   | DocumentType<typeof SaveDashboardDocument>["save_dashboard"]
   | DocumentType<typeof DuplicateDashboardDocument>["duplicate_dashboard"]
-  | DocumentType<typeof TrashDashboardDocument>["set_personal_dashboard_trashed"]
 >;
 type ErrorPayload = Pick<FullPayload, "status" | "current_revision" | "message">;
 
@@ -135,7 +133,6 @@ function useDashboard(target: DashboardTarget) {
   const [saveMutation] = useAuthoredMutation(SaveDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [resetMutation] = useAuthoredMutation(ResetDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const [duplicateMutation] = useAuthoredMutation(DuplicateDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
-  const [trashMutation] = useAuthoredMutation(TrashDashboardDocument, { invalidateModels: DASHBOARD_MODELS });
   const createPersonal = useCreatePersonal();
 
   return {
@@ -168,11 +165,6 @@ function useDashboard(target: DashboardTarget) {
       });
       return saveResult(result?.duplicate_dashboard);
     }, [duplicateMutation]),
-    trash: React.useCallback(async (id: string, expectedRevision: number, trashed: boolean) => {
-      const result = await trashMutation({ id, expectedRevision, trashed });
-      return saveResult(result?.set_personal_dashboard_trashed);
-    }, [trashMutation]),
-
   };
 }
 

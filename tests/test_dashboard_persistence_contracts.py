@@ -34,19 +34,19 @@ def test_personal_creation_still_validates_key_field_length():
         assert not DashboardTarget.objects.exists()
 
 
-def test_trash_bumps_once_noops_without_bumping_and_rejects_stale_revision():
+def test_shared_trash_bumps_the_revision_once_per_change_and_refuses_a_repeat():
+    """The shared trash owner moves a personal dashboard; each change counts one revision."""
+
     owner = create_user("owner")
     with actor_context(owner):
         row = DashboardTarget.objects.create_personal(owner, name="Original", client_creation_key="request")
-        removed = row.set_personal_trashed(trashed=True, expected_revision=1)
-        assert (removed.is_trashed, removed.revision) == (True, 2)
-        unchanged = removed.set_personal_trashed(trashed=True, expected_revision=2)
-        assert unchanged.revision == 2
-        with pytest.raises(StaleRevisionError) as caught:
-            row.set_personal_trashed(trashed=False, expected_revision=1)
-        assert (caught.value.expected, caught.value.current) == (1, 2)
-        reopened = unchanged.set_personal_trashed(trashed=False, expected_revision=2)
-        assert (reopened.is_trashed, reopened.revision) == (False, 3)
+        row.trash()
+        assert (row.is_trashed, row.revision) == (True, 2)
+        with pytest.raises(ValidationError):
+            row.trash()
+        assert DashboardTarget._base_manager.get(pk=row.pk).revision == 2
+        row.restore()
+        assert (row.is_trashed, row.revision) == (False, 3)
 
 
 def test_snapshot_update_bumps_once_and_missing_or_stale_expectation_keeps_content(monkeypatch):

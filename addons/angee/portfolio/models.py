@@ -164,13 +164,8 @@ class Product(OwnerMixin, HistoryMixin, AngeeDataModel):
             ),
         )
 
-    @classmethod
-    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
-        """Preserve promotion lineage on the original retained identity."""
-
-        if reference.name == "originated_from":
-            return None
-        return NotImplemented
+    # Promotion lineage stays on the original retained identity.
+    merge_policies = {"originated_from": MergePolicy.KEEP}
 
     def __str__(self) -> str:
         """Return the Product name."""

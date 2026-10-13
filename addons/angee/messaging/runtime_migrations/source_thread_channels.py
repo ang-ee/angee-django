@@ -2,8 +2,10 @@
 
 Messages keep their primary keys and source payloads. Only their container and
 its per-message participant/notification pointers move. Source attachments on
-the old container remain retained; same_as observations reconnect readable
-copies without changing any transport or receipt.
+the old container remain retained. What one shared container showed as one
+conversation stays one: each copied container redirects to the original, and an
+email received through two accounts redirects its newer copies to the oldest
+(``merged_into``), the same retained redirect later ``same_as`` evidence writes.
 """
 
 from django.db import migrations, models, router
@@ -94,7 +96,7 @@ def retain_channel_occurrences(apps, schema_editor):
             if original.channel_id == channel_id:
                 continue
             occurrence = copy_row(original, using=alias, channel_id=channel_id, owner_id=None,
-                                  message_count=0, last_message_at=None)
+                                  message_count=0, last_message_at=None, merged_into_id=original.pk)
             moved = messages.filter(thread_id=original.pk, channel_id=channel_id)
             moved_ids = moved.order_by().values("pk")
             participants.filter(message_id__in=moved_ids).update(thread_id=occurrence.pk)
@@ -140,12 +142,30 @@ def retain_channel_occurrences(apps, schema_editor):
                 count=models.Count("pk"), latest=models.Max("sent_at"),
             )
             threads.filter(pk=thread_id).update(message_count=totals["count"], last_message_at=totals["latest"])
+    # One email received through several accounts: its newer copies redirect to the oldest.
+    emails = messages.filter(message_type="email", channel__isnull=False).exclude(external_id="")
+    groups = emails.values("platform", "external_id").annotate(
+        first=models.Min("pk"), copies=models.Count("pk"),
+    ).filter(copies__gt=1).order_by("first")
+    for group in groups.iterator():
+        emails.filter(platform=group["platform"], external_id=group["external_id"]).exclude(
+            pk=group["first"],
+        ).update(merged_into_id=group["first"])
+
+
+def redirect(model):
+    return models.ForeignKey(
+        f"messaging.{model}", null=True, blank=True, editable=False, on_delete=models.PROTECT,
+        related_name="merged_from",
+    )
 
 
 class Migration(migrations.Migration):
     # RuntimeMigrations.plan appends the generated app leaf.
     dependencies = []
     operations = [
+        migrations.AddField("thread", "merged_into", redirect("Thread")),
+        migrations.AddField("message", "merged_into", redirect("Message")),
         migrations.RemoveConstraint(model_name="thread", name=OLD),
         migrations.RunPython(retain_channel_occurrences, hints={"model_name": "thread"}),
         migrations.AddConstraint(

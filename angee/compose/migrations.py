@@ -25,15 +25,12 @@ from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.operations.base import Operation
 from django.db.migrations.operations.fields import FieldOperation, RemoveField
-from django.db.migrations.operations.models import CreateModel, DeleteModel, IndexOperation, ModelOperation
+from django.db.migrations.operations.models import DeleteModel, IndexOperation, ModelOperation
 from django.db.migrations.operations.special import SeparateDatabaseAndState
 from django.db.migrations.state import ProjectState
 from django.db.models.expressions import DatabaseDefault
-from simple_history.exceptions import NotHistoricalModelError
-from simple_history.utils import get_history_model_for_model
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config
-from angee.base.history_migrations import HistoryBaseline
 from angee.base.runtime_migrations import ORIGIN_ATTR
 from angee.compose.history import HistoricalRuntimeConfig, historical_labels
 from angee.fs import write_atomic
@@ -673,7 +670,7 @@ class RetiredTableOperation(SeparateDatabaseAndState):
 
 
 class DropGuardAutodetector(MigrationAutodetector):
-    """Django's autodetector with safe drops and native history checkpoints.
+    """Django's autodetector, refusing to drop a column or table that still holds data.
 
     ``makemigrations`` detects changes before writing, so a refusal leaves no
     migration file behind; ``migrate`` shares the autodetector, so its pending
@@ -698,9 +695,6 @@ class DropGuardAutodetector(MigrationAutodetector):
     For migration-only historical labels, generated table operations retain
     Django's state transitions but skip database work when the table is absent.
     Already-recorded retirements produce no new state diff or migration name.
-
-    Adding native history to an existing model also emits a frozen checkpoint
-    after its complete schema, so the first tracked update has a prior state.
     """
 
     def changes(
@@ -710,14 +704,9 @@ class DropGuardAutodetector(MigrationAutodetector):
         convert_apps: set[str] | None = None,
         migration_name: str | None = None,
     ) -> dict[str, list[Migration]]:
-        """Return native schema changes and checkpoints, refusing populated drops."""
+        """Return Django's changes, or refuse when a removed column or table holds data."""
 
-        changes = super().changes(graph, None, convert_apps, migration_name)
-        self._history_baselines(changes, graph)
-        if trim_to_apps:
-            # Checkpoints may also need a changed parent column that native
-            # schema dependencies alone would allow Django to trim away.
-            changes = self._trim_to_apps(changes, trim_to_apps)
+        changes = super().changes(graph, trim_to_apps, convert_apps, migration_name)
         refusals = [
             refusal
             for app_label, app_migrations in sorted(changes.items())
@@ -772,72 +761,6 @@ class DropGuardAutodetector(MigrationAutodetector):
                             table = field.remote_field.through._meta.db_table
                     migration.operations[index] = RetiredTableOperation(table, operation)
         return changes
-
-    def _history_baselines(self, changes: dict[str, list[Migration]], graph: MigrationGraph) -> None:
-        """Append frozen checkpoints after native source/history schema changes.
-
-        Django may split history foreign keys into a later migration or place
-        history in another app. A separate trailing migration can depend on all
-        completed schemas without creating a cycle between their schema nodes.
-        Native descriptors and their tracked fields own the mapping; historical
-        model names do not encode whether a model is a history table.
-        """
-
-        created = {
-            (app_label, operation.name_lower)
-            for app_label, migrations in changes.items()
-            for migration in migrations
-            for operation in migration.operations
-            if isinstance(operation, CreateModel)
-        }
-        schema_tips = {
-            app_label: [(app_label, migrations[-1].name)]
-            for app_label, migrations in changes.items() if migrations
-        }
-        baselines: dict[str, Migration] = {}
-        for source in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
-            if source._meta.proxy or not source._meta.managed:
-                continue
-            source_key = (source._meta.app_label, source._meta.model_name)
-            old_name = self.renamed_models.get(source_key, source_key[1])
-            if (source_key[0], old_name) not in self.from_state.models:
-                continue
-            try:
-                history = get_history_model_for_model(source)
-            except NotHistoricalModelError:
-                continue
-            history_key = (history._meta.app_label, history._meta.model_name)
-            if history_key not in created:
-                continue
-
-            fields = tuple(
-                (field.attname, history._meta.get_field(field.name).attname)
-                for field in history.tracked_fields
-            )
-            if not any(origin == source._meta.pk.attname for origin, _target in fields):
-                raise ImproperlyConfigured(f"{history._meta.label}: history must include the source primary key.")
-            history_fields = {field.name: field for field in history._meta.fields}
-            if relation := history_fields.get("history_relation"):
-                fields += ((source._meta.pk.attname, relation.attname),)
-            null_fields = tuple(
-                history_fields[name].attname for name in ("history_user", "history_user_id", "changeset")
-                if name in history_fields
-            )
-            operation = HistoryBaseline(source._meta.label_lower, history._meta.label_lower, fields, null_fields)
-            app_label = history._meta.app_label
-            baseline = baselines.setdefault(app_label, Migration("history_baseline", app_label))
-            baseline.operations.append(operation)
-            owners = {source._meta.app_label, app_label}
-            owners.update(field.model._meta.app_label for field in history.tracked_fields)
-            dependencies = set(baseline.dependencies)
-            for owner in sorted(owners):
-                dependencies.update(schema_tips.get(owner, graph.leaf_nodes(owner)))
-            baseline.dependencies = sorted(dependencies)
-
-        for app_label, baseline in sorted(baselines.items()):
-            number = (self.parse_number(changes[app_label][-1].name) or 0) + 1
-            baseline.name = f"{number:04d}_{baseline.suggest_name()[:100]}"
-            changes[app_label].append(baseline)
 
     def _populated(self, app_label: str, operation: RemoveField) -> Iterator[str]:
         """Describe each target database where the removed field's storage holds data."""

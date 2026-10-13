@@ -35,7 +35,6 @@ from angee.base.actors import instance_actor
 from angee.base.changesets import changeset, current_changeset
 from angee.base.fields import StateField
 from angee.base.mixins import (
-    HierarchyMixin,
     SourceKind,
     SqidMixin,
     StatementSourceMixin,
@@ -343,10 +342,9 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                     if target is not None and target != index:
                         if phase == 2:
                             graph[target].add(index)
-                        elif batch[target][2].history_type == "-" or (
-                            isinstance(row, HierarchyMixin) and field.name == "parent"
-                        ):
-                            # Hierarchy saves also validate existing ancestors.
+                        elif batch[target][2].history_type == "-" or issubclass(type(row), field.related_model):
+                            # A row saves against the restored state of a row of its own
+                            # model it names (a hierarchy parent, a merge redirect).
                             # Other existing rows already satisfy each other's FKs.
                             graph[index].add(target)
             ordering = TopologicalSorter(graph)

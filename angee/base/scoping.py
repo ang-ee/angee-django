@@ -3,17 +3,61 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from itertools import batched
 from typing import Any, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet
 from django.db import connections, models
+from rebac import check_new, to_subject_ref
+from rebac.backends import backend
+from rebac.field_backing import _proposed_forward_relationships
 from rebac.resources import model_resource_type
+from rebac.schema.introspection import relation_dependencies
 from rebac.watch import KEY_CHUNK
 from rebac.watch import by_key as native_by_key
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRelationships:
+    """The relations a row would carry for one action, as rebac's candidate preflight reads them.
+
+    This is the one adapter over rebac's field-backing owner (still private
+    there): a caller asks about a row that is not, or not yet, the stored one (an
+    unsaved task's assignee, a retained history snapshot) and checks a subject
+    against the relations its fields and ledger would give it.
+    """
+
+    resource_type: str
+    definition: Any
+    required: frozenset[str]
+    relationships: dict[str, Any]
+
+    def allows(self, subject: Any, action: str) -> bool:
+        """Whether ``subject`` may perform ``action`` on the candidate these relations describe."""
+
+        return check_new(
+            subject=to_subject_ref(subject), action=action, resource_type=self.resource_type,
+            relationships=self.relationships,
+        ).allowed
+
+
+def candidate_relationships(instance: models.Model, action: str, *, using: str | None) -> CandidateRelationships | None:
+    """Read the relations ``instance`` would carry for ``action``; ``None`` when its type has no definition."""
+
+    resource_type = model_resource_type(type(instance))
+    if resource_type is None:
+        return None
+    schema = backend().schema()
+    definition = schema.get_definition(resource_type)
+    if definition is None:
+        return None
+    required = frozenset(relation_dependencies(schema, resource_type, action))
+    relationships = _proposed_forward_relationships(instance, definition, required_relations=required, using=using)
+    return CandidateRelationships(resource_type, definition, required, relationships)
 
 
 def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:

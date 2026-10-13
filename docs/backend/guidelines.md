@@ -1929,7 +1929,9 @@ the survivor; survivorship never moves records. See [parties](../../addons/angee
 
 [`MergeableMixin`](../../angee/base/merge.py) owns operational redirects, actor
 admission and the system fold. Models declare domain refusals and carry/retire
-hooks; pointing rows declare `MergePolicy` and their collision contract. Retained
+hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
+entry in `merge_policies` where its `on_delete` implies the wrong one) and their
+collision contract. Retained
 references include their historical versions. Redirects flatten in the same
 changeset and protect their survivor from deletion. `canonical()` selects
 operational identities; statement querysets use `applied()` for winning value

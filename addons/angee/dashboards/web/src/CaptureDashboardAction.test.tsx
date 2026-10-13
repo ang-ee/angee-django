@@ -44,7 +44,7 @@ beforeEach(() => {
       state: { status: "ready", capabilities, persistedId: target.id, revision: 1,
         name: "My dashboard", declarationRevision: "", snapshot: { ...snapshot, widgets: [] } },
       reload: vi.fn(async () => {}), save: mocks.save, reset: vi.fn(async () => {}),
-      createPersonal: write, duplicate: write, trash: write,
+      createPersonal: write, duplicate: write,
     }),
   };
 });

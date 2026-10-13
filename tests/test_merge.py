@@ -387,6 +387,18 @@ def test_a_history_key_keeps_pointing_at_the_merged_record() -> None:
     assert {ref.policy for ref in history} == {MergePolicy.KEEP}
 
 
+def test_a_declared_lineage_key_keeps_pointing_at_the_merged_record() -> None:
+    """A pointing model's ``merge_policies`` names a key whose policy its ``on_delete`` does not imply."""
+
+    lineage = [
+        ref for ref in references(Task)
+        if isinstance(ref, ForeignKeyReference) and ref.model is Project and ref.field.name == "converted_from"
+    ]
+    assert Project.merge_policies == {"converted_from": MergePolicy.KEEP}
+    assert [ref.policy for ref in lineage] == [MergePolicy.KEEP]
+    assert Project._meta.get_field("converted_from").remote_field.on_delete is not DO_NOTHING
+
+
 def test_a_key_to_a_multi_table_child_points_and_moves_by_the_shared_key() -> None:
     """``Task.queue`` points at ``Queue``, a child of ``Group``: a group merge reads and moves it by the shared key."""
 

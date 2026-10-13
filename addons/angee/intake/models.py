@@ -23,6 +23,7 @@ from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, MergeContractMixin, OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.refs import MergePolicy
 from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
@@ -442,12 +443,13 @@ class Need(ResourceLoadMixin, MergeContractMixin, HistoryMixin, OptimisticLockMi
             models.Index(fields=("task", "created_at", "id")),
         )
 
+    # The prior task identity stays on the request as history.
+    merge_policies = {"original_task": MergePolicy.KEEP}
+
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> NotImplementedType | None:
-        """Retarget requests through their assignment owner and preserve prior task identity."""
+        """Retarget requests through their assignment owner."""
 
-        if reference.name == "original_task":
-            return None
         if reference.name != "task":
             return NotImplemented
         for need in rows.order_by("pk").lock_if_supported():

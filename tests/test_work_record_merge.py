@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, actor_context, system_context
 
 from tests.composed_host import run_composed_tests
@@ -28,6 +29,25 @@ class RecordMergeTests(WorkCase):
         self.assertEqual(need_version.changeset_id, task_version.changeset_id)
         self.assertEqual(task_version.changeset.activity, "merge")
         self.assertFalse(apps.get_model("projects", "TaskRelation")._base_manager.exists())
+
+    def test_a_fold_refuses_what_removal_refuses_before_anything_moves(self):
+        source, canonical = self.task("Triage"), self.task("Ready")
+        Need = apps.get_model("intake", "Need")
+        Project = apps.get_model("projects", "Project")
+        with system_context(reason="tests.work.merge.promoted"):
+            [need] = Need._base_manager.bulk_create([Need(task=source, body="Promoted request")])
+            Project._base_manager.create(title="Promoted", converted_from=source, owner=self.owner)
+        blocked = {
+            task.pk
+            for condition, _message in self.Task.merge_blockers()
+            for task in self.Task._base_manager.filter(condition)
+        }
+        self.assertEqual(blocked, {source.pk})
+        with actor_context(self.owner), self.assertRaisesMessage(ValidationError, "promoted task cannot be removed"):
+            self.as_user(source).mark_duplicate(canonical)
+        source.refresh_from_db()
+        need.refresh_from_db()
+        self.assertEqual((source.merged_into_id, source.is_trashed, need.task_id), (None, False, source.pk))
 
     def test_duplicate_merge_requires_write_on_both_tasks(self):
         source = self.task("Triage", owner=self.outsider, visibility="restricted")

@@ -35,6 +35,9 @@ def historical_source_threads(transactional_db, isolated_upgrade_database):
     add("Message", [
         ("thread", models.ForeignKey("messaging.Thread", models.CASCADE)),
         ("channel", models.ForeignKey("messaging.Channel", models.CASCADE)),
+        ("message_type", models.CharField(max_length=20, default="chat")),
+        ("platform", models.CharField(max_length=30, default="email")),
+        ("external_id", models.TextField(default="")),
         ("sent_at", models.DateTimeField(null=True)),
         ("created_at", models.DateTimeField()),
         ("is_trashed", models.BooleanField(default=False)),
@@ -77,9 +80,12 @@ def test_channel_split_rebases_original_and_copy_receipts_before_other_source_pu
     channel_a, channel_b = channels.create(), channels.create()
     thread = threads.create(channel=channel_a, platform="email", external_id="shared", message_count=3)
     start = datetime(2026, 1, 1, tzinfo=UTC)
-    before = messages.create(thread=thread, channel=channel_a, sent_at=start, created_at=start)
-    anchor = messages.create(thread=thread, channel=channel_b, sent_at=start + timedelta(seconds=1), created_at=start)
-    after = messages.create(thread=thread, channel=channel_a, sent_at=start + timedelta(seconds=2), created_at=start)
+    before = messages.create(thread=thread, channel=channel_a, sent_at=start, created_at=start,
+                             message_type="email", external_id="<shared@example.com>")
+    anchor = messages.create(thread=thread, channel=channel_b, sent_at=start + timedelta(seconds=1), created_at=start,
+                             message_type="email", external_id="<shared@example.com>")
+    after = messages.create(thread=thread, channel=channel_a, sent_at=start + timedelta(seconds=2), created_at=start,
+                            message_type="email", external_id="<later@example.com>")
     original_edge = attachments.create(thread=thread, role="source")
     original_follow = follows.create(thread=thread, party_id=42, last_read_message=anchor,
                                      attachment=original_edge, notification_policy="email")
@@ -90,10 +96,19 @@ def test_channel_split_rebases_original_and_copy_receipts_before_other_source_pu
     with connection.schema_editor() as editor:
         upgraded = source_thread_channels.Migration("source_thread_channels", "messaging").apply(state.clone(), editor)
     assert not source_thread_channels.applies(upgraded)
+    threads = upgraded.apps.get_model("messaging", "Thread").objects
+    messages = upgraded.apps.get_model("messaging", "Message").objects
     other_thread = threads.get(channel=channel_b)
+    # What one container showed as one conversation stays one: the copy redirects
+    # to the original, and the email received through both accounts to its oldest row.
+    assert other_thread.merged_into_id == thread.pk
+    assert threads.get(pk=thread.pk).merged_into_id is None
     assert messages.get(pk=before.pk).thread_id == thread.pk
     assert messages.get(pk=after.pk).thread_id == thread.pk
     assert messages.get(pk=anchor.pk).thread_id == other_thread.pk
+    assert messages.get(pk=anchor.pk).merged_into_id == before.pk
+    assert messages.get(pk=before.pk).merged_into_id is None
+    assert messages.get(pk=after.pk).merged_into_id is None
     assert follows.get(pk=original_follow.pk).last_read_message_id == before.pk
     copied_follow = follows.get(thread=other_thread, party_id=42)
     assert copied_follow.last_read_message_id == anchor.pk

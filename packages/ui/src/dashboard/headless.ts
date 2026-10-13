@@ -287,7 +287,6 @@ export interface DashboardStoreBinding {
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
   createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
   duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
-  trash: (id: string, expectedRevision: number, trashed: boolean) => Promise<DashboardSaveResult>;
 }
 
 export interface DashboardCatalogueBinding {

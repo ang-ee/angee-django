@@ -374,12 +374,7 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
     def validate_merge(self, merged: Sequence[Any]) -> None:
         super().validate_merge(merged)
         for row in merged:
-            pair = self.same_as.for_pair(self, row)
-            if (
-                pair.statements.current()
-                .filter(applied=True, snak=pair.statements.model.StatementSnak.NO_VALUE)
-                .exists()
-            ):
+            if self.same_as.kept_separate(self, row):
                 raise ValidationError("These parties have been marked to stay separate.")
 
     def merge_fields(self, merged: Sequence[Any], *, field_overrides: Any = None, **options: Any) -> None:

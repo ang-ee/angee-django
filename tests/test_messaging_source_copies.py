@@ -1,4 +1,4 @@
-"""Source identity changes display without moving transport occurrences."""
+"""Source identity folds channel copies into a retained redirect without moving rows."""
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -23,35 +23,41 @@ from tests.test_messaging import channel as channel
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_hidden_older_source_copy_does_not_hide_visible_copy(channel):
+def test_email_copies_fold_into_the_oldest_and_a_reader_without_it_still_reads_their_own(channel):
     other = make_integration("copy-visible", model=Channel, backend_class="manual")
     _ingest([_parsed("shared@example.com")], channel=channel)
     _ingest([_parsed("shared@example.com")], channel=other)
     left, right = Message._base_manager.filter(external_id="shared@example.com").order_by("pk")
     assert left.thread_id != right.thread_id
+    assert right.merged_into_id == left.pk and left.merged_into_id is None
+    assert Thread._base_manager.get(pk=right.thread_id).merged_into_id == left.thread_id
     with actor_context(other.owner):
-        assert list(Message.objects.inbox().representatives().values_list("pk", flat=True)) == [right.pk]
-        assert list(Message.objects.inbox().source_copies(right).values_list("pk", flat=True)) == [right.pk]
+        # The survivor is out of reach, so the copy reads as the message.
+        assert list(Message.objects.inbox().canonical().values_list("pk", flat=True)) == [right.pk]
     grant(channel, "reader", other.owner)
     with actor_context(other.owner):
-        assert list(Message.objects.inbox().representatives().values_list("pk", flat=True)) == [left.pk]
-        local = Message.objects.inbox().filter(channel=other).representatives()
+        assert list(Message.objects.inbox().canonical().values_list("pk", flat=True)) == [left.pk]
+        local = Message.objects.inbox().filter(channel=other).canonical()
         assert list(local.values_list("pk", flat=True)) == [right.pk]
+        assert Message.objects.inbox().for_feed(all_copies=True).count() == 2
 
 
-def test_source_identity_decision_applies_and_dismisses_without_moving_rows(channel):
+def test_a_person_keeps_copies_separate_and_confirms_them_again_without_moving_rows(channel):
     other = make_integration("copy-decision", model=Channel, backend_class="manual", owner=channel.owner)
     _ingest([_parsed("decision@example.com")], channel=channel)
     _ingest([_parsed("decision@example.com")], channel=other)
     rows = list(Message._base_manager.filter(external_id="decision@example.com").order_by("pk"))
     original = [(row.pk, row.channel_id, row.thread_id) for row in rows]
     with actor_context(channel.owner):
-        assert Message.objects.inbox().representatives().count() == 1
+        assert Message.objects.inbox().canonical().count() == 1
         rows[0].identify_source_copy(rows[1], same=False)
-        assert Message.objects.inbox().representatives().count() == 2
+        assert Message._base_manager.get(pk=rows[1].pk).merged_into_id is None
+        assert Message.objects.inbox().canonical().count() == 2
+        with system_context(reason="test"), pytest.raises(ValidationError, match="stay separate"):
+            Message._base_manager.get(pk=rows[0].pk).fold([Message._base_manager.get(pk=rows[1].pk)])
         rows[0].identify_source_copy(rows[1], same=True)
-        assert Message.objects.inbox().representatives().count() == 1
-        assert Message.objects.inbox().for_feed(all_copies=True).count() == 2
+        assert Message._base_manager.get(pk=rows[1].pk).merged_into_id == rows[0].pk
+        assert Message.objects.inbox().canonical().count() == 1
     assert list(Message._base_manager.filter(pk__in=[row.pk for row in rows]).order_by("pk").values_list(
         "pk", "channel_id", "thread_id",
     )) == original
@@ -65,6 +71,25 @@ def test_retained_source_identity_blocks_destructive_channel_purge(channel):
         Channel.objects.purge(channel)
     assert Message._base_manager.filter(channel_id=channel.pk).exists()
     assert Message._base_manager.filter(channel_id=other.pk).exists()
+
+
+def test_purging_a_survivor_without_evidence_releases_its_copy(channel):
+    other = make_integration("copy-released", model=Channel, backend_class="manual", owner=channel.owner)
+    _ingest([_parsed("released-a@example.com")], channel=channel)
+    _ingest([_parsed("released-b@example.com")], channel=other)
+    left = Message._base_manager.get(external_id="released-a@example.com")
+    right = Message._base_manager.get(external_id="released-b@example.com")
+    with system_context(reason="legacy redirect"):
+        # A redirect the upgrade wrote carries no pair evidence; purging the
+        # survivor's channel releases the copy instead of tripping over it.
+        Message._base_manager.filter(pk=right.pk).update(merged_into=left)
+        Thread._base_manager.filter(pk=right.thread_id).update(merged_into=left.thread_id)
+    with actor_context(channel.owner):
+        Channel.objects.purge(channel)
+    assert not Message._base_manager.filter(pk=left.pk).exists()
+    right.refresh_from_db()
+    assert right.merged_into_id is None
+    assert Thread._base_manager.get(pk=right.thread_id).merged_into_id is None
 
 
 def test_chatter_fold_keeps_physical_messages_and_current_record_attachment(composed_tables):
