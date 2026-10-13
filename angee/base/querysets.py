@@ -66,7 +66,17 @@ class MergeableQuerySet(models.QuerySet[_ModelT]):
     """Operational identities; compose trash and archival scopes independently."""
 
     def canonical(self) -> Any:
-        return super().canonical().filter(merged_into__isnull=True)
+        """Rows that redirect nowhere, plus a retained redirect whose survivor these rows do not reach.
+
+        A redirect is identity, not content: a reader this scope withholds the
+        survivor from (an actor's read, a channel filter) still reads the copy it
+        does reach, so a merged record never disappears from a reader who could
+        see only it.
+        """
+
+        rows = super().canonical()
+        survivors = self.filter(pk=models.OuterRef("merged_into_id")).order_by().values("pk")
+        return rows.filter(models.Q(merged_into__isnull=True) | ~models.Exists(survivors))
 
 
 class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):

@@ -8,6 +8,7 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
 - a foreign key Django's delete collects moves to the survivor, except one on an
   append-only model, which can neither move nor outlive the record and so
   blocks, and a ``DO_NOTHING`` key (history), which keeps pointing at the record;
+  the pointing model's ``merge_policies`` names a key whose policy differs;
 - a polymorphic edge (:class:`~angee.base.refs.RecordRefMixin`) follows its
   model's ``merge_policy``, which blocks unless the edge declares another;
 - any other generic foreign key has no declared policy and blocks.
@@ -312,7 +313,13 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
             if relation.parent_link or key in own_links or key in seen:
                 continue
             seen.add(key)
-            if relation.on_delete == DO_NOTHING:
+            declared = (
+                relation.related_model.merge_policies.get(relation.field.name)
+                if issubclass(relation.related_model, MergeContractMixin) else None
+            )
+            if declared is not None:
+                policy = MergePolicy(declared)
+            elif relation.on_delete == DO_NOTHING:
                 policy = MergePolicy.KEEP
             elif issubclass(relation.related_model, AppendOnlyModel):
                 policy = MergePolicy.BLOCK
@@ -398,10 +405,14 @@ class MergeableMixin(models.Model):
 
         A verb and a batched projection share these: a row matching any of them
         cannot be merged. The default (:func:`reference_blockers`) refuses while a
-        ``BLOCK`` reference points at the record. Overrides add the model's own
+        ``BLOCK`` reference points at the record; a model whose merged records
+        stay as redirects with every reference in place has nothing such a
+        reference could lose, so it has none. Overrides add the model's own
         conditions to ``super()``'s.
         """
 
+        if cls.retains_merged and not cls.merge_moves_references:
+            return ()
         return reference_blockers(cls, using=using)
 
     def merge(self, *, records: Sequence[str], **options: Any) -> Self:

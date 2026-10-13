@@ -83,7 +83,7 @@ def test_concealment_revokes_held_instances_and_all_list_shapes(queue_case, role
 
 @pytest.mark.parametrize("method", ("clean", "save"))
 @pytest.mark.parametrize(
-    "mutation", ("default_becomes_concealing", "concealing_default", "rule_and_conceal", "promoted")
+    "mutation", ("default_becomes_concealing", "concealing_default", "rule_and_conceal", "promoted", "populated")
 )
 def test_stage_owner_rejects_concealment_that_breaks_its_invariants(queue_case, method, mutation):
     _, queue, removed, task = queue_case
@@ -98,6 +98,12 @@ def test_stage_owner_rejects_concealment_that_breaks_its_invariants(queue_case, 
             candidate = Stage.objects.create(queue=queue, name="Promoted", category="started")
             Task._base_manager.filter(pk=task.pk).update(stage=candidate)
             Project.objects.create(title="Promoted project", converted_from=task)
+            candidate.conceals = True
+        elif mutation == "populated":
+            # Tasks are trashed by entering a concealing stage, each under its own
+            # authority; a stage edit cannot trash the tasks it already holds.
+            candidate = Stage.objects.create(queue=queue, name="Populated", category="started")
+            Task._base_manager.filter(pk=task.pk).update(stage=candidate)
             candidate.conceals = True
         else:
             candidate = Stage._base_manager.get(pk=queue.default_stage_id)

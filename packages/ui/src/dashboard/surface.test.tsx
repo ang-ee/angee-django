@@ -61,7 +61,7 @@ beforeEach(() => {
     store: {
       useDashboard: () => ({
         state: loadState, reload: unused, save: unused, reset: unused,
-        createPersonal: unused, duplicate: unused, trash: unused,
+        createPersonal: unused, duplicate: unused,
       }),
       useCatalogue: () => ({ summaries: [], loading: false, error: null, refresh: () => {}, createPersonal: unused }),
       useWidgetVisibility: () => ({ allowed: state.allowed, loading: state.loading, error: state.error }),

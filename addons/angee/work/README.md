@@ -44,6 +44,8 @@ reader's restore permission; merge redirects stay in history instead of that lis
 
 Duplicate triage calls the shared Task merge coordinator. The work model only
 validates and projects the duplicate stage; each reference owner moves its rows.
+A task its `remove` blockers refuse (promoted, or in a reserved stage) refuses
+the fold through `merge_blockers` before anything moves.
 `merged_into` is the operational identity, while the duplicate stage and dropped
 reason remain lifecycle facts. The projects-owned frozen [`task_identity` upgrade](../projects/runtime_migrations/task_identity.py) converts old
 duplicate relation rows without deleting old task history. Work’s

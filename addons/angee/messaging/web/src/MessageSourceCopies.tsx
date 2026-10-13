@@ -50,8 +50,8 @@ function SourceCopiesPanel({ id, messageId, renderActions }: SourceCopiesProps &
     {copies.error || error ? <Alert tone="danger">{error || copies.error?.message}</Alert> : null}
     {copies.data?.message_source_copies.map((copy) => {
       const href = recordHref("messaging.Message", copy.id);
-      const canSeparate = copy.id !== messageId && current?.permissions.includes("assert_identity")
-        && copy.permissions.includes("assert_identity");
+      const canSeparate = copy.id !== messageId && current?.permissions.includes("write")
+        && copy.permissions.includes("write");
       return <div key={copy.id} className="space-y-1 border-b border-border-subtle pb-2 last:border-0">
         <p>{t("copies.transport", { channel: copy.channel?.display_name || t("copies.unknownTransport") })}</p>
         <p className="break-all">{copy.external_id}</p>

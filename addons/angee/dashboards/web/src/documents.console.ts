@@ -68,12 +68,3 @@ export const DuplicateDashboardDocument = graphql(`
     }
   }
 `);
-
-export const TrashDashboardDocument = graphql(`
-  mutation TrashDashboard($id: ID!, $expectedRevision: Int!, $trashed: Boolean!) {
-    set_personal_dashboard_trashed(id: $id, expected_revision: $expectedRevision, trashed: $trashed) {
-      status id revision name description snapshot
-      can_edit can_reset can_trash current_revision message
-    }
-  }
-`);

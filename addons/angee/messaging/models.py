@@ -61,7 +61,6 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
-from angee.base.merge import MergeableMixin
 from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
@@ -93,7 +92,7 @@ from angee.messaging.managers import (
     ThreadNotificationManager,
 )
 from angee.messaging.resources import MessageResource
-from angee.messaging.source_copies import SourceCopyMixin, backfill_email_identity
+from angee.messaging.source_copies import SourceCopyMixin
 from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
 from angee.resources.mixins import ResourceLoadMixin
@@ -127,23 +126,6 @@ def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
     if user_id is None:
         raise ValueError("A user or user_id is required to build a subject reference.")
     return to_subject_ref(get_user_model()._base_manager.get(pk=user_id))
-
-
-class SourceIdentityRule(ResourceLoadMixin):
-    """Observe pre-upgrade email copies after the rule and its grants load."""
-
-    extends = "provenance.Rule"
-
-    class Meta:
-        abstract = True
-
-    @classmethod
-    def after_resource_load(cls, instances: Iterable[Any], *, tier: str, source: str) -> None:
-        instances = tuple(instances)
-        for rule in instances:
-            if rule.key == "messaging.source_identity":
-                backfill_email_identity(rule)
-        super().after_resource_load(instances, tier=tier, source=source)
 
 
 class NotificationPolicy(models.TextChoices, StrEnum):
@@ -300,12 +282,6 @@ class ThreadedModelMixin(models.Model):
 
     thread_create_autofollow_author: ClassVar[bool] = True
     """Whether creating a threaded row subscribes the creating actor."""
-
-    thread_create_log: ClassVar[bool] = True
-    """Whether creating a threaded row logs a creation message."""
-
-    thread_creation_subtype_key: ClassVar[str] = "record_created"
-    """Subtype key used for automatic record creation messages."""
 
     thread_team_field: ClassVar[str | None] = None
     """Foreign key whose team implements :class:`ThreadAudienceMixin`."""
@@ -884,13 +860,8 @@ class ThreadedModelMixin(models.Model):
 
         return str(self)
 
-    def message_creation_message(self) -> str:
-        """Return the automatic chatter body logged when this row is created."""
-
-        return f"{capfirst(str(self._meta.verbose_name))} created"
-
     def _message_after_create(self) -> None:
-        """Run Odoo-style chatter side effects after this row is first saved."""
+        """Subscribe the creator; the creation itself is the record's first history line."""
 
         created_by_id = _actor_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -905,13 +876,6 @@ class ThreadedModelMixin(models.Model):
                         user=account,
                         role=self.thread_attachment_role,
                     )
-        message_model = apps.get_model("messaging", "Message")
-        if self.thread_create_log:
-            self.message_system_post(
-                body=self.message_creation_message(),
-                message_type=message_model.MessageKind.NOTIFICATION,
-                subtype_key=self.thread_creation_subtype_key,
-            )
 
     def can_post(self, user: Any = None) -> bool:
         """Return whether the actor may post or react through the declared permission."""
@@ -1276,7 +1240,7 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(MergeableMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
+class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1299,20 +1263,13 @@ class Thread(MergeableMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMi
     synthetic keys (``subj:<normalized>``, ``msg:<id>``, ``record:<label>:<pk>:<role>``)
     may exceed btree's entry limit (a 7,970-char Apple Mail subject is real), so the
     index carries a fixed digest while the exact value stays in the unbounded column.
-    Every source account retains its own thread. Reversible same_as evidence
-    groups readable copies for display without moving messages or read cursors.
+    Every source account retains its own thread. A thread folds as a retained
+    redirect (``merged_into``) with its messages and read cursors in place: a
+    record merge folds the retired record's chatter into the survivor's, and
+    ``same_as`` evidence folds one channel's copy of a conversation into another's.
     """
 
-    retains_merged = True
-    merge_moves_references = False
     history = ModelHistory(inherit=True, excluded_fields=("message_count", "last_message_at"))
-
-    def validate_merge(self, merged: Any) -> None:
-        """Operational redirects join record chatter; source copies use same_as."""
-
-        super().validate_merge(merged)
-        if not self.is_record_attached() or any(not row.is_record_attached() for row in merged):
-            raise ValidationError("Source conversations retain their identity; assert same_as instead.")
 
     def member_threads(self) -> models.QuerySet:
         """Physical chatter containers under the current, flattened survivor."""
@@ -1793,8 +1750,10 @@ class Message(
     Dedup key is ``(channel, external_id)`` — one row per provider event per
     source, carried by the ``MD5(external_id)`` expression constraint so an
     unbounded provider id never overflows a btree entry. The same event reached
-    through two channels is two messages (related through :class:`MessageEdge` /
-    a shared thread), matching the "message identity ≠ content identity" rule.
+    through two channels is two messages, matching the "message identity ≠
+    content identity" rule; ``same_as`` evidence folds the newer copy into the
+    older as a retained redirect (:class:`SourceCopyMixin`), and readers collapse
+    them through ``canonical()``.
     ``parent`` is the single-parent reply pointer (In-Reply-To); richer
     cross-message relations live on :class:`MessageEdge`. The body — including a
     sparse ``TITLE`` part for the subject and ``HEADER`` parts for retained

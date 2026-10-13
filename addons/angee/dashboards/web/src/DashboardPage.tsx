@@ -20,8 +20,9 @@ import {
   useRouteParam,
   useRouteHref,
   useRuntimeUserPreferences,
-  useTrashPrompt,
+  useTrashRecord,
 } from "@angee/ui";
+import { useModelMetadata } from "@angee/metadata";
 import type { DashboardTarget } from "@angee/ui/dashboard/headless";
 import { visibleDashboardSnapshot } from "@angee/ui/dashboard/surface";
 import { useDashboardsT } from "./i18n";
@@ -58,7 +59,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const t = useDashboardsT();
-  const askTrash = useTrashPrompt();
+  const trashRecord = useTrashRecord(useModelMetadata("dashboards.Dashboard")?.resource);
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
   const [pending, setPending] = React.useState(false);
@@ -120,12 +121,11 @@ function StoredDashboardPage({ target, registry, store }: {
 
   const trash = async () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
-    // The one trash confirmation; the dashboard's own verb carries the revision lock.
-    if (!(await askTrash(state.name))) return;
     setPending(true);
     setError(null);
     try {
-      await binding.trash(target.id, state.revision, true);
+      // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
+      if (!(await trashRecord.trash(target.id, state.name))) return;
       await preferences.patchPreferences((current) => ({
         ...current,
         [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),

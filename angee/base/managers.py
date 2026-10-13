@@ -425,6 +425,16 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
             rows if self.instance is None else rows.filter(models.Q(left=self.instance) | models.Q(right=self.instance))
         )
 
+    def kept_separate(self, left: Any, right: Any) -> bool:
+        """Whether an applied keep-separate decision (a preferred no-value) stands between the two."""
+
+        first, second = sorted((left.pk, right.pk))
+        statements = self.model.statements
+        return statements.using(left._state.db or self.db).current().filter(
+            subject__left_id=first, subject__right_id=second, aspect=self.model.pair_name,
+            applied=True, snak=statements.model.StatementSnak.NO_VALUE,
+        ).exists()
+
     def for_pair(self, left: Any, right: Any) -> Any:
         model = self.model._meta.get_field("left").remote_field.model
         if not all(isinstance(row, model) and row.pk is not None for row in (left, right)) or left.pk == right.pk:

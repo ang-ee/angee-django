@@ -405,28 +405,6 @@ class DashboardMutation:
         return DashboardPayload(status="absent")
 
     @strawberry.mutation
-    def set_personal_dashboard_trashed(
-        self,
-        info: strawberry.Info,
-        id: PublicID,
-        expected_revision: int,
-        trashed: bool,
-    ) -> DashboardPayload:
-        session_user(info)
-        row = instance_from_public_id(Dashboard, str(id))
-        if row is None or row.scope != "personal":
-            return DashboardPayload(status="unavailable")
-        try:
-            locked = row.set_personal_trashed(trashed=trashed, expected_revision=expected_revision)
-        except StaleRevisionError as error:
-            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
-        except DashboardConflictError as error:
-            return DashboardPayload(status="conflict", current_revision=error.current_revision)
-        except (ValidationError, PermissionDenied) as error:
-            return DashboardPayload(status="error", message=str(error))
-        return _payload(locked)
-
-    @strawberry.mutation
     def duplicate_dashboard(
         self,
         info: strawberry.Info,

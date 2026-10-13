@@ -28,19 +28,16 @@ from rebac import (
     RebacMixin,
     SubjectRef,
     actor_context,
-    backend,
-    check_new,
     current_actor,
     system_context,
     to_subject_ref,
 )
 from rebac.actors import is_sudo
 from rebac.errors import SchemaError
-from rebac.field_backing import _proposed_forward_relationships, resolve_field_backing
+from rebac.field_backing import resolve_field_backing
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_for_subject_type, model_resource_type
 from rebac.schema import ConstBinding, FieldBinding
-from rebac.schema.introspection import relation_dependencies
 from simple_history.manager import HistoryDescriptor, HistoryManager
 from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
@@ -60,7 +57,7 @@ from angee.base.querysets import (
     _AngeeQuerySetMixin,
     model_history,
 )
-from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
+from angee.base.scoping import by_key, candidate_relationships, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -864,6 +861,13 @@ class MergeContractMixin(models.Model):
     merge_identity: ClassVar[tuple[tuple[str, ...], ...]] = ()
     """Unique field sets whose equal rows state one fact."""
 
+    merge_policies: ClassVar[Mapping[str, Any]] = {}
+    """Foreign keys whose merge policy differs from what their ``on_delete`` implies, by field name.
+
+    A lineage key (``converted_from``) ``KEEP``\\s pointing at the merged record
+    as history, where its delete behaviour alone would move it.
+    """
+
     class Meta:
         abstract = True
 
@@ -1096,14 +1100,10 @@ class ModelHistory(HistoricalRecords):
             if field.attname not in tracked:
                 setattr(target, field.attname, F(field.attname))
         try:
-            schema = backend().schema()
-            definition = schema.get_definition(resource)
-            if definition is None:
+            candidate = candidate_relationships(target, action, using=snapshot._state.db)
+            if candidate is None:
                 return False
-            required = relation_dependencies(schema, resource, action)
-            relations = _proposed_forward_relationships(
-                target, definition, required_relations=required, using=snapshot._state.db,
-            )
+            definition, required, relations = candidate.definition, candidate.required, candidate.relationships
             for relation in definition.relations:
                 if relation.name not in required or isinstance(relation.backing, ConstBinding):
                     continue
@@ -1127,9 +1127,7 @@ class ModelHistory(HistoricalRecords):
                     ).exists():
                         relations[relation.name] = None
                         break
-            return check_new(
-                subject=to_subject_ref(actor), action=action, resource_type=resource, relationships=relations,
-            ).allowed
+            return candidate.allows(actor, action)
         except (
             FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist,
             SchemaError, NotImplementedError, ValidationError, ValueError,

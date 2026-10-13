@@ -498,23 +498,24 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
             project_model = apps.get_model("projects", "Project")
             if project_model._base_manager.filter(converted_from__stage_id=self.pk).exists():
                 raise ValidationError({"conceals": "A stage holding a promoted source task cannot conceal tasks."})
+            # Tasks reach the trash by entering a concealing stage (``Task.save``),
+            # each under its own removal authority; a stage edit never trashes
+            # the tasks it already holds behind the editor's back.
+            task_model = apps.get_model("projects", "Task")
+            stored = type(self)._base_manager.filter(pk=self.pk).values_list("conceals", flat=True).first()
+            if stored is False and task_model._base_manager.filter(stage_id=self.pk, is_trashed=False).exists():
+                raise ValidationError({"conceals": "Remove or move the tasks in this stage before it conceals tasks."})
 
     def locked_fields(self) -> tuple[str, ...]:
         """Lock a system stage's identity; its tone, order and rule flags stay editable."""
 
         return ("name", "category") if self.category in self.SYSTEM_CATEGORIES else ()
 
-    @transaction.atomic
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Keep defaults enterable and apply configured removal through shared trash."""
+        """Keep stage edits consistent with the queue, its mappings and the tasks it holds."""
 
         self._validate_configuration()
         super().save(*args, **kwargs)
-        update_fields = kwargs.get("update_fields")
-        if self.conceals and (update_fields is None or "conceals" in update_fields):
-            task_model = apps.get_model("projects", "Task")
-            with system_context(reason="work.stage.conceal"):
-                task_model.objects.filter(stage=self).trash()
 
 
 class CycleManager(AngeeManager):
@@ -1314,6 +1315,16 @@ class TaskWork(StagedModelMixin):
             raise PermissionDenied(f"Task {permission} access is required.")
         if expected_revision is not None:
             self.require_revision(expected_revision)
+
+    @classmethod
+    def merge_blockers(cls, *, using: str | None = None) -> tuple[tuple[Q, str], ...]:
+        """A fold refuses a task its removal would refuse, before anything moves."""
+
+        removal = tuple(
+            (condition, "; ".join(str(text) for text in error.values()) if isinstance(error, Mapping) else str(error))
+            for condition, error in cls.action_blockers("remove")
+        )
+        return (*super().merge_blockers(using=using), *removal)
 
     def validate_trash(self) -> None:
         """Check stored work blockers under the shared trash owner's row lock."""

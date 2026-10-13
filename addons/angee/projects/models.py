@@ -16,7 +16,6 @@ from django.db.models import F, Q
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
-    check_new,
     current_actor,
     generic_target,
     system_context,
@@ -24,9 +23,7 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.backends import backend
-from rebac.field_backing import _proposed_forward_relationships, canonical_model
-from rebac.resources import model_resource_type
-from rebac.schema.introspection import relation_dependencies
+from rebac.field_backing import canonical_model
 
 from angee.base.actors import actor_user_id
 from angee.base.errors import RecordAccessSubjectRefused
@@ -50,7 +47,7 @@ from angee.base.mixins import (
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import bind_actor, system_queryset
+from angee.base.scoping import bind_actor, candidate_relationships, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
@@ -519,13 +516,8 @@ class Project(
             ),
         )
 
-    @classmethod
-    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
-        """Preserve promotion lineage on the original retained identity."""
-
-        if reference.name == "converted_from":
-            return None
-        return NotImplemented
+    # Promotion lineage stays on the original retained identity.
+    merge_policies = {"converted_from": MergePolicy.KEEP}
 
     def __str__(self) -> str:
         """Return the project title."""
@@ -1407,20 +1399,8 @@ class Task(
             return
         if reference.subject_id == "*":
             raise RecordAccessSubjectRefused()
-        schema = backend().schema()
-        resource_type = model_resource_type(type(self))
-        definition = schema.get_definition(resource_type) if resource_type is not None else None
-        if resource_type is None or definition is None:
-            raise RecordAccessSubjectRefused()
-        relationships = _proposed_forward_relationships(
-            self, definition,
-            required_relations=relation_dependencies(schema, resource_type, "subject_read"),
-            using=self._state.db,
-        )
-        if not check_new(
-            subject=reference, action="subject_read", resource_type=resource_type,
-            relationships=relationships,
-        ).allowed:
+        candidate = candidate_relationships(self, "subject_read", using=self._state.db)
+        if candidate is None or not candidate.allows(reference, "subject_read"):
             raise RecordAccessSubjectRefused()
 
     def thread_audience_members(self) -> Iterable[AudienceMember]:

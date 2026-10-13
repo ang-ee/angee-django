@@ -28,15 +28,15 @@ definition messaging/thread {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
+    // A retained redirect (a folded conversation) also reads through its survivor's
+    // grants; its own grants keep it readable to an account that reaches only it.
     relation merged_into: messaging/thread // rebac:field=merged_into
-    relation active: messaging/thread // rebac:const={"target_id":"active","filters":{"merged_into_id__isnull":true}}
+    // The identity rule asserts same_as statements, which need read and write on both copies.
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
-    permission available = authenticated
     permission read_granted = channel->read + owner + editor + reader + identity_source + admin->member
-    permission read = (active->available & read_granted) + merged_into->read_granted
-    permission assert_identity = write + identity_source
-    permission write  = channel->write + owner + editor + admin->member
+    permission read = read_granted + merged_into->read_granted
+    permission write  = channel->write + owner + editor + identity_source + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member
     permission transfer = owner + admin->member
@@ -61,11 +61,10 @@ definition messaging/message {
     permission withheld = trashed->conceal
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
-    permission assert_identity = write + identity_source
     permission create = authenticated
     permission read   = ((thread->read + channel->read + editor + reader) - withheld) + channel->write + identity_source + admin->member
     permission send_held = channel->write + admin->member
-    permission write  = thread->write + channel->write + editor + admin->member
+    permission write  = thread->write + channel->write + editor + identity_source + admin->member
     permission delete = thread->delete + channel->write + editor + admin->member
 }
 

@@ -731,22 +731,6 @@ class Dashboard(
             return None
         return super().insert_owner_default()
 
-    def set_personal_trashed(self, *, trashed: bool, expected_revision: int) -> Any:
-        """Remove or restore one personal dashboard under its revision lock."""
-
-        if self.scope != self.DashboardScope.PERSONAL:
-            raise ValidationError("Only personal dashboards can be trashed.")
-        actor = self.require_access("delete")
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk).with_actor(actor)
-            locked.require_revision(expected_revision)
-            if locked.is_trashed != trashed:
-                if trashed:
-                    locked.trash()
-                else:
-                    locked.restore()
-        return locked
-
     def snapshot(self) -> dict[str, Any]:
         """Return the complete persisted snapshot in the public wire shape."""
 

@@ -409,7 +409,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
     scheduled_at: auto
     revision: auto
     is_trashed: auto
-    permissions = permissions_field(("write", "delete", "send_held", "assert_identity"))
+    permissions = permissions_field(("write", "delete", "send_held"))
     sender: HandleType | None = actor_scoped_to_one("sender")
 
     @strawberry_django.field(
@@ -661,7 +661,7 @@ class ThreadType(TaggedNode, AngeeNode):
     platform: auto
     modality: auto
     visibility: auto
-    permissions = permissions_field(("write", "assert_identity"))
+    permissions = permissions_field(("write",))
     # Deliberate shape fork vs MessageType.title (a String): the thread's title
     # IS a fragment pointer (grouping keys on it), so the projection exposes the
     # content-addressed row; a message's title is derived text from its part.
@@ -1261,7 +1261,7 @@ class MessagingQuery:
             not_found="thread not found",
         )
         return MessageFeedPage.from_scope(
-            Message.objects.inbox().untrashed().for_conversation(thread),
+            Message.objects.inbox().untrashed().for_thread(thread),
             scope=("thread", str(thread.sqid)),
             search=search,
             all_copies=all_copies,
@@ -1289,22 +1289,16 @@ class MessagingQuery:
             not_found="thread not found",
         )
         return MessageFeedRevalidation.from_scope(
-            Message.objects.inbox().untrashed().for_conversation(thread), ids, search=search, all_copies=all_copies,
+            Message.objects.inbox().untrashed().for_thread(thread), ids, search=search, all_copies=all_copies,
         )
 
     @strawberry.field(name="message_source_copies")
     def message_source_copies(self, id: strawberry.ID) -> list[MessageType]:
-        """Readable physical occurrences; each retains its own reply transport."""
+        """The readable channel occurrences of one message: its survivor and every copy folded into it."""
 
-        message = require_instance_for_id(Message, id, queryset=Message.objects.inbox().untrashed())
-        return Message.objects.inbox().untrashed().source_copies(message).order_by("channel_id", "pk")
-
-    @strawberry.field(name="thread_source_copies")
-    def thread_source_copies(self, id: strawberry.ID) -> list[ThreadType]:
-        """Readable source threads without exposing hidden endpoints or messages."""
-
-        thread = require_instance_for_id(Thread, id, queryset=Thread.objects.inbox())
-        return Thread.objects.inbox().source_copies(thread).order_by("channel_id", "pk")
+        rows = Message.objects.inbox().untrashed()
+        survivor = require_instance_for_id(Message, id, queryset=rows).canonical()
+        return rows.filter(models.Q(pk=survivor.pk) | models.Q(merged_into=survivor)).order_by("channel_id", "pk")
 
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
@@ -1387,19 +1381,11 @@ class MessagingMutation:
 
     @strawberry.mutation(name="identify_message_source_copy")
     def identify_message_source_copy(self, left: strawberry.ID, right: strawberry.ID, same: bool) -> bool:
-        """Apply or dismiss reversible identity evidence; transport rows never move."""
+        """Confirm or dismiss two occurrences as one message; the decision folds or splits the redirect."""
 
         rows = Message.objects.inbox().untrashed()
         first = require_instance_for_id(Message, left, queryset=rows)
         other = require_instance_for_id(Message, right, queryset=rows)
-        first.identify_source_copy(other, same=same)
-        return True
-
-    @strawberry.mutation(name="identify_thread_source_copy")
-    def identify_thread_source_copy(self, left: strawberry.ID, right: strawberry.ID, same: bool) -> bool:
-        rows = Thread.objects.inbox()
-        first = require_instance_for_id(Thread, left, queryset=rows)
-        other = require_instance_for_id(Thread, right, queryset=rows)
         first.identify_source_copy(other, same=same)
         return True
 
