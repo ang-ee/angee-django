@@ -12,7 +12,7 @@ import { serviceDetailPath } from "../../lib/paths";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { OperatorSection } from "../parts/OperatorSection";
 import { OperatorActionButtons } from "../parts/OperatorActionButtons";
-import { StateTag } from "../parts/StateTag";
+import { ServiceStatus } from "../parts/ServiceStatus";
 import { useServiceActions } from "./service-actions";
 
 type ServiceRowData = DaemonRow<ServiceState>;
@@ -49,9 +49,9 @@ export function ServicesPage({ names }: ServicesPageProps = {}): ReactNode {
         render: (service) => <span className={textRoleVariants({ role: "meta" })}>{service.runtime}</span>,
       },
       {
-        field: "status",
+        field: "outcome",
         header: t("services.column.status"),
-        render: (service) => <StateTag state={service.status} />,
+        render: (service) => <ServiceStatus service={service} />,
       },
       {
         field: "health",
@@ -64,7 +64,7 @@ export function ServicesPage({ names }: ServicesPageProps = {}): ReactNode {
 
   const groupOptions: readonly ResourceToolbarGroupOption[] = useMemo(
     () => [
-      { id: "status", label: t("services.column.status"), group: { field: "status" }, type: "value" },
+      { id: "status", label: t("services.column.status"), group: { field: "outcome" }, type: "value" },
       { id: "runtime", label: t("services.column.runtime"), group: { field: "runtime" }, type: "value" },
     ],
     [t],
@@ -127,7 +127,7 @@ export function ServiceRow({ name, emptyContent }: ServiceRowProps): ReactNode {
           <span className="min-w-0 truncate font-medium text-fg">{service.name}</span>
           <span className="whitespace-nowrap text-fg-muted">{service.runtime}</span>
           <span className="whitespace-nowrap">
-            <StateTag state={service.status} />
+            <ServiceStatus service={service} />
           </span>
           <OperatorActionButtons actions={actions} busy={busy} subject={service} />
         </div>

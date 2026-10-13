@@ -4,7 +4,7 @@ import { type ReactElement } from "react";
 import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
 import { useOperatorQuery, useOperatorSnapshot } from "../../data/transport";
-import { StateTag } from "../parts/StateTag";
+import { ServiceStatus } from "../parts/ServiceStatus";
 import { ServiceLogs } from "./logs";
 import { useServiceActions } from "./service-actions";
 import { OperatorActionButtons } from "../parts/OperatorActionButtons";
@@ -41,7 +41,7 @@ export function ServiceDetail(): ReactElement {
       meta={
         service ? (
           <>
-            <StateTag state={service.status} />
+            <ServiceStatus service={service} />
             <span className="text-fg-muted">{service.runtime}</span>
           </>
         ) : null
@@ -65,7 +65,7 @@ export function ServiceDetail(): ReactElement {
               [t("services.column.runtime"), service.runtime],
               [
                 t("services.column.status"),
-                <StateTag state={service.status} />,
+                <ServiceStatus service={service} />,
               ],
               [t("services.column.health"), service.health ?? "—"],
               [
