@@ -9,6 +9,40 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — sync provenance and native history (breaking; ships in 0.3.0)
+
+Upgrade steps and the retired names with their owners now:
+`docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: sync provenance and
+native history".
+
+- A record's facts are statements: who asserted a value, from what evidence,
+  through which link. `StatementsMixin` and `Aspect` (`angee.base.mixins`)
+  declare them, `StatementManager` resolves the winner, and every write runs
+  under a provenance changeset. Parties, circles and spaces memberships,
+  addresses and relationships carry statements instead of `source` columns.
+- django-reversion is retired. `RevisionMixin`, `revisioned_fields`,
+  `angee.graphql.revisions` and each resource's `<resource>_revisions` root are
+  removed, and every stored revision is dropped by ruling. Models keep native
+  history; provenance serves it through `history(model, id)` and
+  `revert_changeset`, and shows it as the form's History tab.
+- Parties: `PartyHandle`, `MergeVeto`, `LinkSource`, `ScoredLinkMixin` and the
+  CardDAV columns on `Party` are folded into statements and record links, then
+  retired by a declared chain that preflights every refusal before it drops.
+  `Party.merge_into` and `PartyManager.merge` give way to the shared record
+  merge (`angee.base.merge`).
+- Integrate: `RecordRevision` and `SyncDiscrepancy` are retired. A link's
+  observations are its native history and a sync failure is a state of its link
+  (`SyncFailure`, `LinkStatus.FAILED`); `SyncStream.authoritative` marks a
+  system of record.
+- Kept as imports until 0.4.0: `angee.base.evidence.DerivedFromRelation` (now
+  `angee.base.refs.RetainedGenericRelation`) and `@angee/ui`'s `RevisionsTab`,
+  which renders a retired notice.
+- GraphQL removals: `confirm_party_handle`, `dismiss_party_handle`, `veto_merge`,
+  `duplicate_party_candidates`, `Party.party_handles`, `Person.folder`, the
+  `source` field on circle members, relationships and space memberships,
+  `resolve_sync_discrepancy`, `retry_sync_discrepancy`,
+  `SyncStream.open_discrepancy_count` and the record link hash bases.
+
 ## Unreleased — django-zed-rebac 0.27
 
 - Require django-zed-rebac 0.27.1. Its read guards refuse filtering or ordering
