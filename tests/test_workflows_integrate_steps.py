@@ -274,6 +274,8 @@ def test_map_keeps_each_partition_cursor_and_collects_its_counts(cycle):
     assert run.status == "succeeded"
     assert [item["output"]["counts"]["cycle_items"] for item in run.output] == [2, 2]
     assert sorted(cycle.applied) == ["east:0", "east:1", "west:0", "west:1"]
+    # Four pages over two partitions: the adapter declares once per drained partition.
+    assert len(cycle.extracted) == 4 and len(cycle.declared) == 2
     cycle.bridge.refresh_from_db()
     assert cycle.bridge.last_sync_items == 4
 
