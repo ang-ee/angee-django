@@ -1452,15 +1452,22 @@ class Aspect:
         A statement from an ``authoritative`` system-of-record stream precedes
         PERSON wherever this aspect lists both kinds: the stream is the system of
         record for the aspect, a plain stream is a system of reference below
-        people. Preferred rank is decided before this, so a person's confirm or
-        dismiss stays on top.
+        people. Every row is placed in one order, so rows of one group compare:
+        where the precedence lists the system of record after PERSON, that order has
+        an authoritative system-of-record place just before PERSON. Preferred rank is
+        decided before this, so a person's confirm or dismiss stays on top.
         """
 
-        kinds = list(self.precedence)
-        if row.authoritative and SourceKind.SYSTEM_OF_RECORD in kinds and SourceKind.PERSON in kinds:
-            kinds.remove(SourceKind.SYSTEM_OF_RECORD)
-            kinds.insert(kinds.index(SourceKind.PERSON), SourceKind.SYSTEM_OF_RECORD)
-        return kinds.index(row.source_kind) if row.source_kind in kinds else len(kinds)
+        kinds = self.precedence
+        index = kinds.index(row.source_kind) if row.source_kind in kinds else len(kinds)
+        if SourceKind.PERSON not in kinds or SourceKind.SYSTEM_OF_RECORD not in kinds:
+            return index
+        person = kinds.index(SourceKind.PERSON)
+        if kinds.index(SourceKind.SYSTEM_OF_RECORD) < person:
+            return index
+        if row.source_kind == SourceKind.SYSTEM_OF_RECORD and row.authoritative:
+            return person
+        return index + 1 if index >= person else index
 
     def coerce_members(
         self, model: type[models.Model], source: SubjectRef, key: dict[str, Any], *, kind: SourceKind

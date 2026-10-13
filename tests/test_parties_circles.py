@@ -1355,6 +1355,33 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(co
 
 
 @pytest.mark.django_db(transaction=True)
+def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: None) -> None:
+    """Authority alone decides between the system of record and a person's normal stance, not row age.
+
+    An upgrade's folds record the system of record first and the person's stance beside it,
+    so the person's row is the newer one: once the stream is authoritative, precedence ranks
+    the system of record first instead of tying both at the head of the order.
+    """
+
+    del composed_tables
+    with system_context(reason="test authoritative stream over a later edit"):
+        owner = _user("authority-later-owner")
+        party = Party._base_manager.create(display_name="Ada (odoo)", created_by=owner)
+        source = make_integration("authority-later-system-of-record", model=Directory)
+        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "partner-1", target=party)
+        _system_of_record_statement(party, source, link, display_name="Ada (odoo)")
+        party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})
+        party.refresh_from_db()
+        assert party.display_name == "Ada (me)"
+
+        SyncStream.objects.set_authoritative(stream, True)
+        party.refresh_from_db()
+        assert party.display_name == "Ada (odoo)"
+        assert Party.statements.model._base_manager.get(link=link).applied
+
+
+@pytest.mark.django_db(transaction=True)
 def test_handle_ownership_ranks_source_precedence_before_confidence_and_recency(composed_tables: None) -> None:
     """A person's older, weaker normal statement outranks a directory's newer full-confidence one."""
 
