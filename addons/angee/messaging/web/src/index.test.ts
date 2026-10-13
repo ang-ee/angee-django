@@ -10,14 +10,11 @@ describe("messaging addon manifest", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
   });
 
-  test("replaces the framework's placeholder tabs with its own, keeping their old ids as aliases", () => {
+  test("contributes gated Comments and Conversations; provenance owns History", () => {
     const aside = messaging.containers?.["record#aside"] as Record<string, unknown>;
     expect(aside).toMatchObject({
-      "chatter.comments": { remove: true },
-      "chatter.history": { remove: true },
       "messaging.comments": { sequence: 10, content: { aliases: ["comments"] } },
-      "messaging.history": { sequence: 20, content: { aliases: ["history", "activity", "messaging.activity"] } },
-      "messaging.sources": { sequence: 30, content: { aliases: ["sources"] } },
+      "messaging.sources": { sequence: 60, content: { aliases: ["sources"] } },
     });
   });
 

@@ -331,4 +331,6 @@ def test_a_handle_merge_gives_the_kept_handle_the_alias_avatar_only_when_it_has_
     with system_context(reason="test handle merge avatar keep merge"):
         kept = Handle.objects.merge(second_alias, into=phone)
     assert kept.avatar_id == alias_avatar.pk
-    assert not Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).exists()
+    assert set(
+        Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).values_list("merged_into_id", flat=True)
+    ) == {phone.pk}

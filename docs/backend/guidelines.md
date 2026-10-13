@@ -1290,8 +1290,8 @@ and current contracts before applying a historical example to a new deployment.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
   by column name.** A subtree that must stay inside a tenant or other scope
   declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
-  by stored id); the mixin rejects a reparent or create under a parent that differs
-  on any listed field. It is generic and iam-free — there is no scope-field-name
+  by stored id); the mixin rejects a parent that differs on any listed field
+  and refuses a scope edit that would strand existing children. It is generic and iam-free — there is no scope-field-name
   fallback, so a scoped tree that omits the declaration silently accepts a parent
   outside its scope. Compose `HierarchyQuerySet` before every other queryset
   guard, including on secondary managers; the base `angee.E021` check rejects
@@ -1918,6 +1918,27 @@ ordering. Preferred person decisions precede normal source ordering; a winning
 preferred no-value clears the aspect's operational values so a dismissal sticks.
 Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
 the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
+
+[`MergeableMixin`](../../angee/base/merge.py) owns operational redirects, actor
+admission and the system fold. Models declare domain refusals and carry/retire
+hooks; pointing rows declare `MergePolicy` and their collision contract. Retained
+references include their historical versions. Redirects flatten in the same
+changeset and protect their survivor from deletion. `canonical()` selects
+operational identities; statement querysets use `applied()` for winning value
+assertions. Source-copy identity remains reversible pair evidence and never
+chooses a transport or moves channel occurrences.
+
+[`HistoryMixin.history_relations`](../../angee/base/mixins.py) declares owned
+reverse-FK collections, such as dashboard widgets or project milestones. These
+rows keep their own history and read gates; document history groups their deltas
+with record identity. An entry may revert from that record only when its complete
+write boundary belongs to the document, or it is the record's operational merge.
+Changes spanning independent documents require their wider owner. Native FK
+relationships order restoration of missing rows. Hierarchy parents are ordered
+also when present, so restoring an earlier tree does not create a temporary cycle;
+other existing rows keep their normal update order. A record task uses its own
+`RecordRefMixin` subject and declared `projects/task` permission arms; chatter is
+an independent capability.
 
 The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
 revert and deterministic lossless export. Closing a boundary writes one bookkeeping

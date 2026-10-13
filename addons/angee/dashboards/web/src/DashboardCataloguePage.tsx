@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useModelMetadata } from "@angee/metadata";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
@@ -11,6 +12,7 @@ import {
   PageBody,
   PageHeader,
   PageToolbar,
+  RemovedRecords,
   Select,
   NavLink,
   textRoleVariants,
@@ -40,6 +42,7 @@ function DashboardCatalogue({ store, registry }: {
   registry: DashboardRegistry;
 }): React.ReactElement {
   const catalogue = store.useCatalogue();
+  const dashboardResource = useModelMetadata("dashboards.Dashboard")?.resource;
   const { resourceViews } = useAppRuntime();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
@@ -80,7 +83,7 @@ function DashboardCatalogue({ store, registry }: {
         revision: 0,
         customized: false,
         available: true,
-        capabilities: { canEdit: definition.editable !== false, canReset: false, canArchive: false },
+        capabilities: { canEdit: definition.editable !== false, canReset: false, canTrash: false },
       });
     }
     return [...merged.values()].sort((left, right) => left.title.localeCompare(right.title));
@@ -178,6 +181,7 @@ function DashboardCatalogue({ store, registry }: {
       {!catalogue.loading && visibleSummaries.length === 0 ? (
         <EmptyState icon="dashboard" title={t("catalogue.empty.title")} description={t("catalogue.empty.description")} />
       ) : null}
+      <RemovedRecords resource={dashboardResource} label={(row) => String(row.name ?? row.id)} fields={["name"]} />
       </PageBody>
     </Page>
   );

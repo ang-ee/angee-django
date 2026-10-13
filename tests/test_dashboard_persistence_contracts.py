@@ -34,19 +34,19 @@ def test_personal_creation_still_validates_key_field_length():
         assert not DashboardTarget.objects.exists()
 
 
-def test_archive_bumps_once_noops_without_bumping_and_rejects_stale_revision():
+def test_trash_bumps_once_noops_without_bumping_and_rejects_stale_revision():
     owner = create_user("owner")
     with actor_context(owner):
         row = DashboardTarget.objects.create_personal(owner, name="Original", client_creation_key="request")
-        archived = row.set_personal_archived(archived=True, expected_revision=1)
-        assert (archived.is_archived, archived.revision) == (True, 2)
-        unchanged = archived.set_personal_archived(archived=True, expected_revision=2)
+        removed = row.set_personal_trashed(trashed=True, expected_revision=1)
+        assert (removed.is_trashed, removed.revision) == (True, 2)
+        unchanged = removed.set_personal_trashed(trashed=True, expected_revision=2)
         assert unchanged.revision == 2
         with pytest.raises(StaleRevisionError) as caught:
-            row.set_personal_archived(archived=False, expected_revision=1)
+            row.set_personal_trashed(trashed=False, expected_revision=1)
         assert (caught.value.expected, caught.value.current) == (1, 2)
-        reopened = unchanged.set_personal_archived(archived=False, expected_revision=2)
-        assert (reopened.is_archived, reopened.revision) == (False, 3)
+        reopened = unchanged.set_personal_trashed(trashed=False, expected_revision=2)
+        assert (reopened.is_trashed, reopened.revision) == (False, 3)
 
 
 def test_snapshot_update_bumps_once_and_missing_or_stale_expectation_keeps_content(monkeypatch):

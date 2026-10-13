@@ -21,11 +21,12 @@ from strawberry.scalars import JSON
 from angee.base.identity import instance_from_public_id
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
-from angee.graphql.capabilities import held_permissions, permission_annotations
+from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.iam.audit import TrashedRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
 
@@ -69,7 +70,7 @@ class DashboardWidgetType(AngeeNode):
 
 
 @strawberry_django.type(Dashboard)
-class DashboardType(AngeeNode):
+class DashboardType(TrashedRefMixin, AngeeNode):
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name,
         only=["name"],
@@ -83,7 +84,9 @@ class DashboardType(AngeeNode):
     spec_version: auto
     revision: auto
     declaration_revision: auto
-    is_archived: auto
+    is_baseline: auto
+    permissions = permissions_field(("write", "delete"))
+    is_trashed: auto
     created_at: auto
     updated_at: auto
 
@@ -107,7 +110,7 @@ class DashboardPayload:
     declaration_revision: str = ""
     can_edit: bool = False
     can_reset: bool = False
-    can_archive: bool = False
+    can_trash: bool = False
     current_revision: int | None = None
     message: str | None = None
 
@@ -122,11 +125,11 @@ class DashboardSummaryType:
     owner: strawberry.ID | None
     owner_label: str | None
     revision: int
-    is_archived: bool
+    is_trashed: bool
     resources: list[str]
     presets: list[str]
     can_edit: bool
-    can_archive: bool
+    can_trash: bool
 
 
 @strawberry.type
@@ -139,7 +142,7 @@ class DashboardSummaryPageType:
 
 
 def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
-    permissions = held_permissions(row, ("write", "archive"))
+    permissions = held_permissions(row, ("write", "delete"))
     widgets = row.widgets.all()
     sources = {
         str(widget.data.get("source", {}).get("resource"))
@@ -164,17 +167,17 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         owner=cast(strawberry.ID | None, user_public_id(row.owner_id)),
         owner_label=user_display_label(row.owner_id, request=request_from_info(info)),
         revision=row.revision,
-        is_archived=row.is_archived,
+        is_trashed=row.is_trashed,
         resources=sorted(sources),
         presets=sorted(presets),
         can_edit="write" in permissions,
-        can_archive=row.scope == "personal" and "archive" in permissions,
+        can_trash=row.scope == "personal" and "delete" in permissions,
     )
 
 
 def _summary_version(user: Any, items: list[DashboardSummaryType]) -> str:
     fingerprint = [
-        [str(item.id), item.revision, item.can_edit, item.can_archive]
+        [str(item.id), item.revision, item.can_edit, item.can_trash]
         for item in sorted(items, key=lambda value: str(value.id))
     ]
     body = json.dumps([str(user.pk), fingerprint], separators=(",", ":"), ensure_ascii=True).encode()
@@ -204,7 +207,7 @@ def _summary_offset(user: Any, version: str, cursor: str | None) -> int:
 
 
 def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
-    permissions = held_permissions(dashboard, ("write", "reset", "archive"))
+    permissions = held_permissions(dashboard, ("write", "reset", "delete"))
     return DashboardPayload(
         status=status,
         id=cast(PublicID, require_public_id(Dashboard, dashboard.pk)),
@@ -215,7 +218,7 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         declaration_revision=dashboard.declaration_revision,
         can_edit="write" in permissions,
         can_reset=dashboard.scope != "personal" and "reset" in permissions,
-        can_archive=dashboard.scope == "personal" and "archive" in permissions,
+        can_trash=dashboard.scope == "personal" and "delete" in permissions,
     )
 
 
@@ -279,8 +282,8 @@ class DashboardQuery:
         if not 1 <= limit <= 100:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
-            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(owner__isnull=True))
-            .annotate(**permission_annotations(Dashboard, ("write", "archive")))
+            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(is_baseline=True))
+            .annotate(**permission_annotations(Dashboard, ("write", "delete")))
             .select_related("owner")
             .prefetch_related("widgets")
             .order_by("sqid")[:5_001]
@@ -402,19 +405,19 @@ class DashboardMutation:
         return DashboardPayload(status="absent")
 
     @strawberry.mutation
-    def set_personal_dashboard_archived(
+    def set_personal_dashboard_trashed(
         self,
         info: strawberry.Info,
         id: PublicID,
         expected_revision: int,
-        archived: bool,
+        trashed: bool,
     ) -> DashboardPayload:
         session_user(info)
         row = instance_from_public_id(Dashboard, str(id))
         if row is None or row.scope != "personal":
             return DashboardPayload(status="unavailable")
         try:
-            locked = row.set_personal_archived(archived=archived, expected_revision=expected_revision)
+            locked = row.set_personal_trashed(trashed=trashed, expected_revision=expected_revision)
         except StaleRevisionError as error:
             return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
@@ -479,7 +482,7 @@ _DASHBOARD_RESOURCE = hasura_model_resource(
     DashboardType,
     model=Dashboard,
     name="dashboards",
-    filterable=["id", "scope", "scope_key", "name", "owner", "is_archived", "updated_at"],
+    filterable=["id", "scope", "scope_key", "name", "owner", "is_trashed", "updated_at"],
     sortable=["name", "scope", "updated_at"],
     aggregatable=["id"],
     groupable=["scope", "owner"],

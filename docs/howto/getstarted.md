@@ -336,7 +336,7 @@ documents what it converts, what it refuses and how long it holds its lock;
   Otherwise `makemigrations` refuses to drop the populated activity tables and
   writes nothing. A stack without activities needs nothing.
 - **Declare the record types that take tasks.** Each record type's owner unions
-  `record_read` and `record_write` for it into `messaging/thread_attachment`
+  `subject_read` and `subject_write` for it into `projects/task`
   in its `permissions.extends.zed`; `migrate` (`--fake` included) refuses the
   cutover while activities sit on undeclared types and names them. A consumer
   carrying the declaration needs angee 0.3.0 or a framework tag that includes

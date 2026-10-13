@@ -19,7 +19,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
 import { CaptureDashboardAction } from "./CaptureDashboardAction";
 
 const target = { scope: "personal", id: "dashboard-1" } as const;
-const capabilities = { canEdit: true, canReset: true, canArchive: true };
+const capabilities = { canEdit: true, canReset: true, canTrash: true };
 const snapshot = { schemaVersion: 1, columns: 12, widgets: [] } as const;
 const saved: DashboardSaveResult = {
   persistedId: target.id, revision: 2, snapshot: { ...snapshot, widgets: [] }, capabilities,
@@ -44,7 +44,7 @@ beforeEach(() => {
       state: { status: "ready", capabilities, persistedId: target.id, revision: 1,
         name: "My dashboard", declarationRevision: "", snapshot: { ...snapshot, widgets: [] } },
       reload: vi.fn(async () => {}), save: mocks.save, reset: vi.fn(async () => {}),
-      createPersonal: write, duplicate: write, archive: write,
+      createPersonal: write, duplicate: write, trash: write,
     }),
   };
 });

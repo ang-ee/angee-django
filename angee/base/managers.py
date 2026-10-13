@@ -391,22 +391,22 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
             if row.superseded_id is None:
                 key = dict(row.current_key(), superseded__isnull=True)
                 key.update(target)
-                kept = self.model._base_manager.filter(**key).exclude(pk=row.pk).first()
+                kept = self.model._base_manager.using(rows.db).filter(**key).exclude(pk=row.pk).first()
                 if kept is not None:
                     winner = min((kept, row), key=lambda item: item.sort_key())
                     loser = row if winner is kept else kept
                     loser.superseded = winner
                     loser.applied = False
-                    loser.save(update_fields=("superseded", "applied"))
+                    loser.save(using=rows.db, update_fields=("superseded", "applied"))
             for name, value in target.items():
                 setattr(row, name, value)
             # Applied rows from different sources also share the destination's key.
             row.applied = False
-            row.save(update_fields=(*columns, "applied"))
+            row.save(using=rows.db, update_fields=(*columns, "applied"))
             subjects.add(row.subject_id)
         for subject_id in sorted(subjects):
-            subject = self.model.statement_subject_model._base_manager.get(pk=subject_id)
-            self.resolve(subject=subject)
+            subject = self.model.statement_subject_model._base_manager.using(rows.db).get(pk=subject_id)
+            self.db_manager(rows.db).resolve(subject=subject)
 
 
 class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]
@@ -416,6 +416,8 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         super().__init__()
         self.model = model
         self.instance = instance
+        if instance is not None:
+            self._db = instance._state.db
 
     def get_queryset(self) -> Any:
         rows = super().get_queryset()
@@ -427,19 +429,25 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         model = self.model._meta.get_field("left").remote_field.model
         if not all(isinstance(row, model) and row.pk is not None for row in (left, right)) or left.pk == right.pk:
             raise ValidationError("A pair requires two distinct persisted endpoints of its declared model.")
+        using = left._state.db or self.db
+        if right._state.db != using:
+            raise ValidationError("Pair endpoints must belong to the same database.")
         actor = instance_actor(left)
         for endpoint in (left, right):
-            if not read_scoped_queryset(model, actor).filter(pk=endpoint.pk).exists():
+            if not read_scoped_queryset(model, actor).using(using).filter(pk=endpoint.pk).exists():
                 raise PermissionDenied("A pair requires read on both endpoints.")
-        ordered = sorted((left.pk, right.pk))
-        with transaction.atomic():
-            list(system_queryset(model, lock=("self",)).filter(pk__in=ordered).order_by("pk"))
-            pair, _ = self.model._base_manager.get_or_create(left_id=ordered[0], right_id=ordered[1])
+        ordered = sorted((left, right), key=lambda endpoint: endpoint.pk)
+        with transaction.atomic(using=using):
+            for endpoint in ordered:
+                endpoint.lock_statement_subject({}, using=using)
+            pair, _ = self.model._base_manager.using(using).get_or_create(
+                left_id=ordered[0].pk, right_id=ordered[1].pk,
+            )
             pair.with_actor(actor)
             if pair.is_trashed:
                 pair.require_statement_write(actor)
                 with system_context(reason="statements.pair.restore"):
-                    pair.restore()
+                    pair.restore(using=using)
         return pair
 
     def merge(self, reference: Any, rows: Any, *, survivor: Any) -> None:
@@ -449,6 +457,6 @@ class StatementPairManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
             other = pair.right if "left" in reference.columns else pair.left
             if other.pk == survivor.pk:
                 continue
-            target = self.for_pair(survivor, other)
-            self.model.statements.merge(None, pair.statements.all(), survivor=target)
-            pair.trash(reason="Merged pair endpoints")
+            target = self.db_manager(rows.db).for_pair(survivor, other)
+            self.model.statements.db_manager(rows.db).merge(None, pair.statements.all(), survivor=target)
+            pair.trash(using=rows.db, reason="Merged pair endpoints")

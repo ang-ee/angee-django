@@ -10,7 +10,6 @@ import { enMessagingMessages } from "./i18n";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
-import { RecordHistoryPane } from "./RecordHistoryPane";
 import { RecordChatterPane } from "./RecordChatterPane";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
@@ -87,6 +86,7 @@ export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAdd
     content: {
       label: "Comments", icon: "comments",
       ...(aliases ? { aliases } : {}),
+      when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
       useCount: useRecordCommentsUnread,
       render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
     },
@@ -130,24 +130,13 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    // Messaging supplies the real comments and history in place of the framework's placeholders.
+    // Messaging contributes record comments and retained source conversations.
     "record#aside": {
-      "chatter.comments": { remove: true },
-      "chatter.history": { remove: true },
       "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-      "messaging.history": {
-        sequence: 20,
-        // "activity" and "messaging.activity" are the former ids, kept in `?chatterTab=` links until angee 0.4.0
-        // removes them (.changeset/chatter-history-tab.md).
-        content: {
-          label: "History", icon: "activity", aliases: ["history", "activity", "messaging.activity"],
-          render: (context) => <RecordHistoryPane context={context} />,
-        },
-      },
       "messaging.sources": {
-        sequence: 30,
+        sequence: 60,
         content: {
-          label: "Sources", icon: "inbox", aliases: ["sources"],
+          label: "Conversations", icon: "inbox", aliases: ["sources"],
           // Only on types whose schema lets a record retain source conversations.
           when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
           render: (context) => <RecordSourceThreadsPane context={context} />,

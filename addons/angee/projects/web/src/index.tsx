@@ -94,12 +94,12 @@ const projects = defineBaseAddon({
   i18n: { projects: enProjectsMessages },
   widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   containers: {
-    // Every record with chatter offers its record tasks beside its comments and history; the task
-    // schema takes them only on record types whose owner declares them.
+    // The direct subject declaration determines which records take tasks.
     "record#aside": {
       "projects.tasks": {
-        sequence: 15,
+        sequence: 20,
         content: {
+          when: (context) => context.route?.recordEdges?.includes(TASK_MODEL) ?? false,
           label: "Tasks", icon: "project-task", aliases: ["tasks"],
           render: (context) => <RecordTasksPane context={context} />,
         },

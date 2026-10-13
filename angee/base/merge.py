@@ -44,13 +44,13 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, models, router, transaction
 from django.db.models import DO_NOTHING, Exists, OuterRef, ProtectedError, Q, RestrictedError
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref
-from rebac.actors import model_can_resolve_subject, to_subject_ref
+from rebac.actors import is_sudo, model_can_resolve_subject, to_subject_ref
 from rebac.errors import NoActorResolvedError
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
@@ -62,7 +62,9 @@ from angee.base.impl import resolve_hooks
 from angee.base.mixins import (
     AppendOnlyModel,
     AuditMixin,
+    HierarchyMixin,
     MergeContractMixin,
+    TrashMixin,
     auto_now_stamps,
     unique_field_sets,
 )
@@ -70,7 +72,7 @@ from angee.base.querysets import model_history
 from angee.base.refs import (
     MergePolicy,
     RecordRefMixin,
-    concrete_child_models,
+    concrete_lineage,
     generic_pointer_model,
 )
 from angee.base.scoping import lock_if_supported, read_scoped_queryset
@@ -113,7 +115,7 @@ class Reference:
 
         raise NotImplementedError
 
-    def pointing(self, target: type[models.Model]) -> Exists:
+    def pointing(self, target: type[models.Model], *, using: str | None = None) -> Exists:
         """Return a condition on ``target`` rows: some row of this reference points at it."""
 
         raise NotImplementedError
@@ -133,12 +135,12 @@ class Reference:
     def rows(self, record: models.Model) -> models.QuerySet[Any]:
         """Return the rows pointing at ``record``, outside any actor scope."""
 
-        return self.model._base_manager.filter(**self.lookup(record))
+        return self.model._base_manager.using(record._state.db).filter(**self.lookup(record))
 
     def retains(self, record: models.Model) -> bool:
         """Include earlier pointer versions when deciding whether evidence survives."""
 
-        if self.rows(record).using(record._state.db).exists():
+        if self.rows(record).exists():
             return True
         return (
             model_history(self.model) is not None
@@ -157,10 +159,11 @@ class Reference:
         if not self.holds(survivor):
             raise ValidationError(f"The record that is kept cannot hold {self.label}.")
         if issubclass(self.model, MergeContractMixin) and self.model.merge_contract is not None:
-            self.model.merge_contract(self, rows, survivor=survivor)
-            return
+            if self.model.merge_contract(self, rows, survivor=survivor) is not NotImplemented:
+                return
+        using = rows.db
         target = self.lookup(survivor)
-        held = self.model._base_manager.filter(**target)
+        held = self.model._base_manager.using(using).filter(**target)
         identity = _merge_identity(self.model)
         for fields, condition in unique_field_sets(self.model):
             if not set(self.columns) <= set(fields):
@@ -184,8 +187,15 @@ class Reference:
                     "resolve that before merging."
                 )
         try:
-            with transaction.atomic():
-                rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
+            with transaction.atomic(using=using):
+                if issubclass(self.model, HierarchyMixin) and self.name == "parent":
+                    # The hierarchy owner validates cycles and maintains every
+                    # descendant path; a bulk FK update would bypass it.
+                    for row in rows.order_by("pk"):
+                        row.parent = survivor
+                        row.save(using=using, update_fields=("parent",))
+                else:
+                    rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
         except IntegrityError as error:
             # A rule the field sets above cannot express (an expression constraint)
             # still refuses the merge instead of failing it.
@@ -219,11 +229,11 @@ class ForeignKeyReference(Reference):
         target = self.field.target_field
         return {self.field.attname: record.pk if target.primary_key else getattr(record, target.attname)}
 
-    def pointing(self, target: type[models.Model]) -> Exists:
+    def pointing(self, target: type[models.Model], *, using: str | None = None) -> Exists:
         """Return a condition on ``target`` rows: a row's key holds the target's value."""
 
         column = "pk" if self.field.target_field.primary_key else self.field.target_field.attname
-        return Exists(self.model._base_manager.filter(**{self.field.attname: OuterRef(column)}))
+        return Exists(self.model._base_manager.using(using).filter(**{self.field.attname: OuterRef(column)}))
 
     def holds(self, survivor: models.Model) -> bool:
         """Return whether ``survivor`` has a row in the model the key points at.
@@ -232,7 +242,8 @@ class ForeignKeyReference(Reference):
         """
 
         related = self.field.related_model
-        return isinstance(survivor, related) or related._base_manager.filter(pk=survivor.pk).exists()
+        return (isinstance(survivor, related)
+                or related._base_manager.using(survivor._state.db).filter(pk=survivor.pk).exists())
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,16 +268,18 @@ class EdgeReference(Reference):
         """Return the pointer's type and id for ``record``."""
 
         model = generic_pointer_model(type(record))
-        return {self.pointer.ct_field: ContentType.objects.get_for_model(model), self.pointer.fk_field: record.pk}
+        content_type = ContentType.objects.db_manager(record._state.db).get_for_model(model)
+        return {self.pointer.ct_field: content_type, self.pointer.fk_field: record.pk}
 
-    def pointing(self, target: type[models.Model]) -> Exists:
+    def pointing(self, target: type[models.Model], *, using: str | None = None) -> Exists:
         """Return a condition on ``target`` rows: an edge row names the target's type and key."""
 
         object_id = self.model._meta.get_field(self.pointer.fk_field)
+        content_type = ContentType.objects.db_manager(using).get_for_model(generic_pointer_model(target))
         return Exists(
-            self.model._base_manager.filter(
+            self.model._base_manager.using(using).filter(
                 **{
-                    self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
+                    self.pointer.ct_field: content_type,
                     self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
                 }
             )
@@ -287,7 +300,7 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
     schema does not declare, so declarations cannot narrow the scan.
     """
 
-    tree = [model, *model._meta.get_parent_list(), *_descendants(model)]
+    tree = concrete_lineage(model)
     own_links = {
         (field.remote_field.through._meta.label, name)
         for owner in tree
@@ -335,6 +348,27 @@ class MergeableMixin(models.Model):
     """
 
     retains_merged: ClassVar[bool] = False
+    """Keep the duplicate's identity even when no other row requires retention."""
+    merge_moves_references: ClassVar[bool] = True
+    """Conversation containers retain their members on the original thread."""
+
+    merged_into = models.ForeignKey(
+        "self", null=True, blank=True, editable=False, on_delete=models.PROTECT, related_name="merged_from",
+    )
+
+    def canonical(self) -> Self:
+        """Resolve the operational survivor; corrupt redirect cycles fail closed."""
+
+        actor, bypass = self.effective_actor(strict=True)
+        rows = type(self)._base_manager if bypass else read_scoped_queryset(type(self), actor)
+        seen = set()
+        record = self
+        while record.merged_into_id is not None:
+            if record.pk in seen:
+                raise ValidationError("A merge redirect contains a cycle.")
+            seen.add(record.pk)
+            record = rows.using(self._state.db).get(pk=record.merged_into_id)
+        return record
 
     SURVIVOR_PERMISSION: ClassVar[str] = "write"
     """The permission a merge needs on the record that is kept."""
@@ -348,7 +382,7 @@ class MergeableMixin(models.Model):
         abstract = True
 
     @classmethod
-    def merge_blockers(cls) -> tuple[tuple[Q, str], ...]:
+    def merge_blockers(cls, *, using: str | None = None) -> tuple[tuple[Q, str], ...]:
         """Return each condition on a merged record that refuses its merge, with its message.
 
         A verb and a batched projection share these: a row matching any of them
@@ -357,7 +391,7 @@ class MergeableMixin(models.Model):
         conditions to ``super()``'s.
         """
 
-        return reference_blockers(cls)
+        return reference_blockers(cls, using=using)
 
     def merge(self, *, records: Sequence[str], **options: Any) -> Self:
         """Merge the records named by public id into this one and return it.
@@ -367,18 +401,21 @@ class MergeableMixin(models.Model):
         """
 
         model = type(self)
+        using = self._state.db or router.db_for_write(model, instance=self)
         actor = instance_actor(self)
         if not records:
             raise ValidationError("Choose the records to merge into this one.")
         if len(records) > MERGE_LIMIT:
             raise ValidationError(f"Merge at most {MERGE_LIMIT} records at once.")
-        with transaction.atomic(), actor_context(actor):
-            found = instances_from_public_ids(model, records, queryset=read_scoped_queryset(model, actor))
+        with transaction.atomic(using=using), actor_context(actor):
+            found = instances_from_public_ids(
+                model, records, queryset=read_scoped_queryset(model, actor).using(using),
+            )
             gone = sorted(set(records) - set(found))
             merged_ids = sorted({row.pk for row in found.values()})
             if self.pk in merged_ids:
                 raise ValidationError("A record cannot be merged into itself.")
-            rows = model._base_manager.filter(pk__in=(self.pk, *merged_ids)).order_by("pk")
+            rows = model._base_manager.using(using).filter(pk__in=(self.pk, *merged_ids)).order_by("pk")
             # The kept record only changes, so new rows may still refer to it; a
             # merged record goes, so nothing new may refer to it before the moves.
             locked = {row.pk: row.with_actor(actor) for row in lock_if_supported(rows, no_key=True)}
@@ -402,21 +439,62 @@ class MergeableMixin(models.Model):
                 merged,
                 carry=carry,
                 retire=survivor.retire_merged,
-                blockers=model.merge_blockers(),
-                retained=self.retains_merged,
+                blockers=model.merge_blockers(using=using),
+                retained=self.retains_merged or isinstance(survivor, TrashMixin),
+                move_references=self.merge_moves_references,
             )
-        self.refresh_from_db()
+        self.refresh_from_db(using=using)
+        return self
+
+    def fold(self, merged: Sequence[Self], **options: Any) -> Self:
+        """Fold as named system work, joining the caller's changeset and locks.
+
+        This entry cannot elevate an actor. It is for admitted merge hooks and
+        system producers; user entrypoints use :meth:`merge`. A joined
+        changeset must use the same database as these records.
+        """
+
+        if not is_sudo():
+            raise PermissionDenied("A system fold requires a system boundary.")
+        if not merged or len(merged) > MERGE_LIMIT:
+            raise ValidationError(f"Choose between one and {MERGE_LIMIT} records to fold.")
+        model = type(self)
+        if any(type(row) is not model or row._state.db != self._state.db for row in merged):
+            raise ValidationError("A fold requires records of the same model and database.")
+        keys = {row.pk for row in merged}
+        if self.pk in keys or self.pk is None or None in keys:
+            raise ValidationError("A fold requires distinct saved records.")
+        ids = sorted(keys)
+        using = self._state.db or router.db_for_write(model, instance=self)
+        with transaction.atomic(using=using):
+            rows = model._base_manager.using(using).filter(pk__in=[self.pk, *ids]).order_by("pk")
+            locked = {row.pk: row for row in lock_if_supported(rows)}
+            if len(locked) != len(ids) + 1:
+                raise ValidationError("A record being folded no longer exists.")
+            survivor = locked[self.pk]
+            duplicates = [locked[pk] for pk in ids]
+
+            def carry() -> None:
+                survivor.validate_merge(duplicates)
+                survivor.merge_fields(duplicates, **options)
+
+            fold_records(
+                survivor, duplicates, carry=carry, retire=survivor.retire_merged,
+                blockers=model.merge_blockers(using=using),
+                retained=self.retains_merged or isinstance(survivor, TrashMixin),
+                move_references=self.merge_moves_references, join=True,
+            )
+        self.refresh_from_db(using=using)
         return self
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
-        """Refuse merging ``merged`` into this record for the model's own reasons; the default adds none.
+        """Only live operational roots merge; model hooks add domain refusals."""
 
-        :func:`fold_records` has already refused a merged record that a
-        :meth:`merge_blockers` condition, a stored relationship or a merge guard
-        holds. Overrides add rules about the pair, such as a recorded "keep separate".
-        """
-
-        del merged
+        if any(
+            row.merged_into_id is not None or (isinstance(row, TrashMixin) and row.is_trashed)
+            for row in (self, *merged)
+        ):
+            raise ValidationError("Only canonical records can be merged.")
 
     def merge_fields(self, merged: Sequence[Self], **options: Any) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""
@@ -426,18 +504,26 @@ class MergeableMixin(models.Model):
             raise ValidationError(f"Unsupported merge options: {', '.join(sorted(options))}.")
 
     def retire_merged(self, merged: Self) -> None:
-        """Remove ``merged`` through the model's delete lock, as the actor; the default deletes it."""
+        """Retain referenced evidence as a redirect; otherwise delete through its lock."""
 
-        locked = merged.lock_for_delete()
+        if self.retains_merged or isinstance(merged, TrashMixin) or merged.retained():
+            merged.merged_into = self
+            merged.save(using=merged._state.db, update_fields=("merged_into",))
+            if isinstance(merged, TrashMixin):
+                merged.trash(using=merged._state.db, reason=MERGE_REASON)
+            return
+        locked = merged.lock_for_delete(queryset=type(merged).system_queryset().using(merged._state.db))
         if locked is None:
             raise ValidationError(f"{merged} no longer exists.")
         try:
-            locked.with_actor(instance_actor(merged)).delete()
+            locked.with_actor(instance_actor(merged)).delete(using=merged._state.db)
         except (ProtectedError, RestrictedError) as error:
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
 
 
-def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
+def reference_blockers(
+    model: type[models.Model], *, using: str | None = None,
+) -> tuple[tuple[Q, str], ...]:
     """Return a refusal condition on ``model`` rows per ``BLOCK`` reference, with its message.
 
     A row a ``BLOCK`` reference points at cannot be merged: the refusal every
@@ -446,7 +532,7 @@ def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
     """
 
     return tuple(
-        (Q(reference.pointing(model)), f"{reference.label} still refer to it.")
+        (Q(reference.pointing(model, using=using)), f"{reference.label} still refer to it.")
         for reference in references(model)
         if reference.policy == MergePolicy.BLOCK
     )
@@ -460,6 +546,8 @@ def fold_records(
     retire: Callable[[Any], object],
     blockers: Sequence[tuple[Q, str]] | None = None,
     retained: bool = False,
+    move_references: bool = True,
+    join: bool = False,
 ) -> None:
     """Fold ``merged`` into ``survivor``, a record of their model, in one merge changeset it is the origin of.
 
@@ -483,10 +571,17 @@ def fold_records(
     """
 
     model = type(survivor)
-    with changeset(fresh=True, activity="merge", origin=survivor):
+    using = survivor._state.db or router.db_for_write(model, instance=survivor)
+    context = current_changeset() if join else None
+    if context is not None and router.db_for_write(type(context), instance=context) != using:
+        raise ValidationError("A fold must share the database of its changeset.")
+    boundary = {} if context is not None else {
+        "fresh": True, "activity": "merge", "origin": survivor,
+    }
+    with changeset(**boundary):
         with system_context(reason=MERGE_REASON):
-            rows = model._base_manager.filter(pk__in=[record.pk for record in merged])
-            for condition, message in reference_blockers(model) if blockers is None else blockers:
+            rows = model._base_manager.using(using).filter(pk__in=[record.pk for record in merged])
+            for condition, message in reference_blockers(model, using=using) if blockers is None else blockers:
                 if rows.filter(condition).exists():
                     raise ValidationError(message)
             guards = resolve_hooks("ANGEE_MERGE_GUARDS")
@@ -497,8 +592,17 @@ def fold_records(
                     if refusal := guard(record):
                         raise ValidationError(refusal)
         carry()
-        moving = [reference for reference in references(model) if reference.policy == MergePolicy.MOVE]
+        moving = [
+            reference for reference in references(model)
+            if move_references and reference.policy == MergePolicy.MOVE
+        ]
         with system_context(reason=MERGE_REASON):
+            if isinstance(survivor, MergeableMixin):
+                # Redirects are identity, even when a container keeps its members.
+                # Tracked updates make flattening reversible with this same merge.
+                model._base_manager.using(using).filter(
+                    merged_into_id__in=[record.pk for record in merged],
+                ).update(merged_into=survivor)
             for record in merged:
                 for reference in moving:
                     pointing = reference.rows(record)
@@ -525,7 +629,7 @@ def named_in_relationships(record: models.Model) -> bool:
 
     model = type(record)
     rows = active_relationship_model().objects.using(record._state.db)
-    for owner in (model, *model._meta.get_parent_list(), *_descendants(model)):
+    for owner in concrete_lineage(model):
         typed, subject = bool(model_resource_type(owner)), model_can_resolve_subject(owner)
         if not (typed or subject):
             continue
@@ -583,11 +687,3 @@ def _merge_identity(model: type[models.Model]) -> frozenset[tuple[str, ...]]:
     if model._meta.auto_created:
         return frozenset(tuple(fields) for fields in model._meta.unique_together)
     return frozenset()
-
-
-def _descendants(model: type[models.Model]) -> Iterator[type[models.Model]]:
-    """Yield the installed multi-table descendants of ``model``, which share its key."""
-
-    for child in concrete_child_models(model):
-        yield child
-        yield from _descendants(child)

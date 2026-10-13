@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 9
+// @rebac_schema_revision: 10
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -13,6 +13,9 @@ definition knowledge/role {
 }
 
 definition knowledge/vault {
+    relation trashed: knowledge/vault // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
+    permission conceal = authenticated
+    permission withheld = trashed->conceal
     relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
     relation viewer: auth/user | auth/group#member
@@ -28,16 +31,18 @@ definition knowledge/vault {
     // Per-row create cannot gate an id-less insert; VaultManager.create_for
     // preflights this expression with `check_new` before the elevated insert.
     permission create = authenticated
-    permission read   = owner + editor + viewer
+    permission read_granted = owner + editor + viewer
                       + vault_viewer->member + vault_editor->member
                       + vault_admin->member + knowledge_admin->member
                       + admin->member
-    permission write  = owner + editor
+    permission write_granted = owner + editor
                       + vault_editor->member + vault_admin->member
                       + knowledge_admin->member + admin->member
     permission delete = owner
                       + vault_admin->member + knowledge_admin->member
                       + admin->member
+    permission read = (read_granted - withheld) + delete
+    permission write = (write_granted - withheld) + delete
     permission transfer = owner + admin->member
     permission share = owner + admin->member
     permission write__owner = transfer
@@ -61,16 +66,14 @@ definition knowledge/page {
     permission conceal = authenticated
     // The exclusion stays outside the recursive grants, so permission SQL grows
     // linearly with tree depth and deep pages keep their vault read.
-    permission withheld = trashed->conceal
+    permission withheld = trashed->conceal + vault->withheld
     permission read_granted = viewer + parent->read_granted + vault->read
     permission write_granted = parent->write_granted + vault->write
     // Preflighted by PageManager.create_in with the vault the row will carry.
     permission create = vault->write
     permission read   = (read_granted - withheld) + vault->delete
     permission write  = (write_granted - withheld) + vault->delete
-    // `parent->delete` matches the FK CASCADE: deleting a folder must pass
-    // the gate on every cascaded child, so the right to delete the parent
-    // carries down the subtree.
+    // Trash authority follows the hierarchy; hard deletion protects children.
     permission delete = parent->delete + vault->delete
 }
 

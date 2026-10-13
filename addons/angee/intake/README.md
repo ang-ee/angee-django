@@ -14,3 +14,8 @@ Decision owner only records chosen keys. The nullable `admitted_user` records
 the account granted access after successful owner application; a verdict alone
 grants no access. Reset or identity replacement clears that receipt. Failed application can be retried through
 the Need verb. Captured messaging webforms keep their own input schema.
+
+Task merges move Needs through their model-owned reference contract and normal
+assignment checks, inside the shared merge changeset. `original_task` retains the
+previous target and its history stays available; the changeset's origin is the
+cause of the write, not a replacement for that operational lineage.

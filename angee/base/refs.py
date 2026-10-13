@@ -33,7 +33,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import DEFAULT_DB_ALIAS, models, router
 from django.utils.text import capfirst
 from rebac import ObjectRef, to_object_ref
 from rebac.field_backing import canonical_model
@@ -114,7 +114,9 @@ def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     ungated one; see :func:`generic_pointer_model`.
     """
 
-    return ContentType.objects.get_for_model(generic_pointer_model(type(record))), record.pk
+    using = record._state.db or router.db_for_read(type(record), instance=record)
+    content_type = ContentType.objects.db_manager(using).get_for_model(generic_pointer_model(type(record)))
+    return content_type, record.pk
 
 
 def is_record_target_model(model: type[models.Model]) -> bool:
@@ -141,6 +143,19 @@ def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models
             key=lambda model: model._meta.label_lower,
         )
     )
+
+
+def concrete_lineage(model: type[models.Model]) -> tuple[type[models.Model], ...]:
+    """Installed concrete tables sharing a record's primary key, in stable order."""
+
+    owners = {model, *model._meta.get_parent_list()}
+    pending = list(owners)
+    while pending:
+        for child in concrete_child_models(pending.pop()):
+            if child not in owners:
+                owners.add(child)
+                pending.append(child)
+    return tuple(sorted(owners, key=lambda owner: owner._meta.label_lower))
 
 
 def concrete_child_accessor(parent_model: type[models.Model], child_model: type[models.Model]) -> str:

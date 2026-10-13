@@ -202,6 +202,18 @@ participants inherit the resources-owned
 `super()`. The renderer has no generic decorator/attribute language or resource
 hook aggregator.
 
+When native history is first added to an existing model, the autodetector uses
+simple-history's registered descriptor and copied fields to emit a trailing
+[`HistoryBaseline`](../angee/base/history_migrations.py) data operation. It waits
+for the complete source, parent and history schema, including foreign keys Django
+splits into later migrations. The emitted operation freezes model labels and
+storage attributes and uses only Django's historical apps, database alias and
+routers when it runs. It checkpoints stored rows in locked batches, skips each
+identity that already has history, and records an unattributed `~` observation at
+upgrade time. It never invents creation history, a user or a changeset; reversing
+the checkpoint retains evidence. Newly created source models need no baseline.
+Keep the operation's import path available for emitted migration history.
+
 The composer emits package/model files, static web projections and effective
 permission extensions, and explicitly materializes addon-owned migrations.
 Django owns the resulting model and migration graphs, `makemigrations`, execution,

@@ -41,15 +41,15 @@ definition messaging/thread {
     relation record_project: projects/project // rebac:field={"path":"attachments__projects_project","filters":{"attachments__role":"chatter"}}
     relation record_task: projects/task // rebac:field={"path":"attachments__projects_task","filters":{"attachments__role":"chatter"}}
 
-    permission read = project->read + record_project->read + record_task->read
+    permission read_direct = project->read + record_project->read + record_task->read
     permission write = project->write
 }
 
 definition knowledge/vault {
     relation project: projects/project // rebac:field=project_bindings__project
 
-    permission read = project->read
-    permission write = project->write
+    permission read_granted = project->read
+    permission write_granted = project->write
     permission share = project->share
 }
 
@@ -66,11 +66,6 @@ definition messaging/thread_attachment {
     relation project: projects/project // rebac:field=target
 
     permission target_write = task->write + project->write
-    // Tasks and projects take record tasks; a task lends its access without its
-    // own subject, so record task access never recurses.
-    permission record_read = task->read_as_subject + project->read
-    permission record_write = task->write_as_subject + project->write
-    permission record_withheld = task->withheld
 }
 
 definition knowledge/record_binding {
@@ -87,4 +82,17 @@ definition tags/tag_assignment {
 
     permission target_read = task->read + project->read
     permission target_write = task->write + project->write
+}
+
+// The task owns its subject edge. Chatter is an independent record capability.
+definition projects/task {
+    relation subject_task: projects/task // rebac:field=subject
+    relation subject_project: projects/project // rebac:field=subject
+    relation subject_party: parties/party // rebac:field=subject
+    relation subject_page: knowledge/page // rebac:field=subject
+    relation subject_vault: knowledge/vault // rebac:field=subject
+
+    permission subject_read = subject_task->read_as_subject + subject_project->read + subject_party->read + subject_page->read + subject_vault->read
+    permission subject_write = subject_task->write_as_subject + subject_project->write + subject_party->write + subject_page->write + subject_vault->write
+    permission subject_withheld = subject_task->withheld
 }

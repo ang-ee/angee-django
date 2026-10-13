@@ -96,6 +96,7 @@ def composed_tables(composed_tables: None) -> None:
 
     del composed_tables
     load_statement_sources()
+    load_source_identity()
 
 
 @pytest.fixture
@@ -607,6 +608,7 @@ class ExtcontribRole(Role):
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 # Every installed backing needs its concrete model before native database setup.
+from angee.messaging.testing.fixtures import load_source_identity  # noqa: E402
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.parties.testing.fixtures import load_statement_sources  # noqa: E402
