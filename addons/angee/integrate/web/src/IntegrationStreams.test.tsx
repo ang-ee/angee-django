@@ -54,7 +54,6 @@ import { IntegrationSyncStream } from "./documents";
 import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
 import {
   RECORD_LINK_MODEL,
-  SYNC_DISCREPANCY_MODEL,
   SYNC_STREAM_MODEL,
   integrationSyncCursorWidget,
 } from "./IntegrationStreams";
@@ -78,12 +77,7 @@ const resources = [...[INTEGRATION_MODEL, "messaging.Channel", CHILD_MODEL].map(
       requiredOnCreate: false,
     })),
   }),
-), testDataResource(SYNC_DISCREPANCY_MODEL, {
-  fields: [{
-    name: "status", kind: "enum", values: ["OPEN", "RETRY", "RESOLVED"].map((value) => ({ value })),
-    readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
-  }],
-})];
+)];
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://integration-streams" });
 const STREAMS_ADDRESS = `${INTEGRATION_MODEL}#sections`;
@@ -214,53 +208,14 @@ describe("Integration Streams contribution", () => {
     expect(listProps().baseFilter).toEqual({ integration: { exact: "bridge_1" } });
     expect(listProps().defaultGroup).toMatchObject({ field: "key" });
     expect(listProps().columns.map((column) => column.field)).toEqual([
-      "key", "partition", "kind", "direction", "generation", "phase", "cursor",
-      "last_advanced_at", "last_reconciled_at", "open_discrepancy_count", "link_count", "resync_required",
+      "key", "partition", "kind", "direction", "generation", "phase", "state", "cursor",
+      "last_advanced_at", "last_reconciled_at", "open_failure_count", "link_count", "resync_required",
     ]);
     expect(listProps().columns.find((column) => column.field === "cursor")?.widget)
       .toBeUndefined();
   });
 
-  test("opens only the selected stream's discrepancies, with Resolve and Retry actions", async () => {
-    await openStreams();
-    await selectRowAction("open-discrepancies", { id: "stream_1", key: "contacts", kind: "RECORD_REPLICA" });
-    await waitFor(() => expect(listProps().resource).toBe(SYNC_DISCREPANCY_MODEL));
-    expect(listProps().baseFilter).toMatchObject({ stream: { exact: "stream_1" } });
-    expect(listProps().baseFilter).toMatchObject({ is_open: { exact: true } });
-    expect(listProps().fields).toContain("is_open");
-    expect(listProps().rowActions?.map((action) => action.label)).toEqual(["Resolve", "Keep remote", "Keep local", "Retry"]);
-    await selectRowAction("resolve", { id: "discrepancy_1", kind: "MISSING_REMOTE", is_open: true });
-    await selectRowAction("retry", { id: "discrepancy_2", kind: "MISSING_REMOTE", is_open: true });
-    expect(state.mutate.mock.calls).toEqual([
-      ["resolveSyncDiscrepancy", "discrepancy_1"],
-      ["retrySyncDiscrepancy", "discrepancy_2"],
-    ]);
-    await screen.findByText("Discrepancies · contacts · address-book");
-    for (const action of listProps().rowActions ?? []) {
-      expect(action.visible({ id: "resolved_1", is_open: false })).toBe(false);
-    }
-  });
 
-  test("conflicts require an explicit keep choice instead of plain resolution", async () => {
-    await openStreams();
-    await selectRowAction("open-discrepancies", { id: "stream_1", kind: "RECORD_REPLICA" });
-    await waitFor(() => expect(listProps().resource).toBe(SYNC_DISCREPANCY_MODEL));
-    const row = { id: "conflict_1", kind: "CONFLICT", is_open: true };
-    expect(listProps().rowActions?.find((action) => action.id === "resolve")?.visible(row)).toBe(false);
-    await selectRowAction("keep-remote", row);
-    await selectRowAction("keep-local", row);
-    expect(state.mutate.mock.calls).toEqual([
-      ["resolveSyncDiscrepancy", "conflict_1", { keep: "REMOTE" }],
-      ["resolveSyncDiscrepancy", "conflict_1", { keep: "LOCAL" }],
-    ]);
-    for (const [id, overwritten] of [["keep-remote", "local"], ["keep-local", "remote"]] as const) {
-      const action = listProps().rowActions?.find((candidate) => candidate.id === id);
-      expect(action?.confirm).toMatchObject({
-        title: expect.any(Function), body: expect.any(Function), confirm: expect.any(Function),
-      });
-      expect(action?.confirm?.body?.(row)).toContain(`overwrite ${overwritten} changes`);
-    }
-  });
 
   test("reloads a stream drill-down from route search and preserves unrelated search", async () => {
     const { router } = renderIntegration(INTEGRATION_MODEL, 2, true,
@@ -284,7 +239,8 @@ describe("Integration Streams contribution", () => {
     await waitFor(() => expect(listProps().resource).toBe(RECORD_LINK_MODEL));
     expect(listProps().baseFilter).toEqual({ stream: { exact: "stream_1" } });
     expect(listProps().columns.map((column) => column.field)).toEqual([
-      "external_key", "status", "origin", "remote_version", "last_seen_at", "record_id",
+      "external_key", "status", "origin", "remote_version", "applied_at", "pinned", "outbox_state", "last_seen_at",
+      "record_id",
     ]);
     expect(listProps().fields).toContain("model_label");
     fireEvent.click(screen.getByRole("button", { name: /back/i }));

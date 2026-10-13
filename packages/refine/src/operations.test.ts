@@ -10,13 +10,10 @@ import {
   extractDeletePreview,
   extractFacet,
   extractGroupBy,
-  extractRevisions,
   extractSaveResult,
   groupByRequest,
   groupDimension,
   runActionResult,
-  revisionSnapshot,
-  revisionsRequest,
   saveRequest,
 } from "./operations";
 
@@ -148,21 +145,6 @@ describe("Hasura custom operations", () => {
       extractSaveResult({ documents_save: row }, "documents_save"),
     ).toEqual(row);
     expect(extractSaveResult({}, "documents_save")).toBeNull();
-  });
-
-  test("builds an authored revisions request with a generated document", () => {
-    const document = {
-      kind: "Document",
-      definitions: [],
-    } as unknown as DocumentNode;
-    const request = revisionsRequest(target("note_revisions"), "note_123", {
-      document,
-    });
-
-    expect(request.dataProviderName).toBe("console");
-    expect(request.root).toBe("note_revisions");
-    expect(request.meta.gqlVariables).toEqual({ id: "note_123" });
-    expect(request.meta.gqlQuery).toBe(document);
   });
 
   test("builds a single-id action mutation for refine custom mutation execution", () => {
@@ -317,30 +299,6 @@ describe("Hasura custom operations", () => {
       message: "Fix the amount.",
       validationErrors: { amount: ["Amount exceeds the limit."] },
     });
-  });
-
-  test("extracts revisions and snapshots changed fields", () => {
-    const [revision] = extractRevisions(
-      {
-        note_revisions: [
-          {
-            id: "rev_2",
-            created_at: "2026-01-02T00:00:00Z",
-            comment: "updated",
-            body: "Second",
-          },
-        ],
-      },
-      "note_revisions",
-    );
-
-    expect(revision).toEqual({
-      id: "rev_2",
-      created_at: "2026-01-02T00:00:00Z",
-      comment: "updated",
-      body: "Second",
-    });
-    expect(revision ? revisionSnapshot(revision) : null).toBe("Second");
   });
 
   test("extracts grouped buckets from typed-key Hasura group responses", () => {

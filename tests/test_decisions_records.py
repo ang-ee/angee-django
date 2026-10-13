@@ -8,8 +8,7 @@ import pytest
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import connection
-from django.db import models
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from pydantic import ValidationError as ContractError
 from rebac import actor_context, system_context

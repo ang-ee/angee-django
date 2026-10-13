@@ -2,7 +2,7 @@
 
 Parties declares the ``ANGEE_PARTIES_SHARED_SENDER_PROVIDERS`` and
 ``ANGEE_PARTIES_SIGNING_PROVIDERS`` hooks and reads no messaging model; messaging's
-autoconfig appends these. ``PartyHandleManager.reconcile_suggestions`` owns the
+autoconfig appends these. ``PartyManager.reconcile_suggestions`` owns the
 contract: a signing provider yields every signing, since a suggestion it no longer
 supports is withdrawn.
 """

@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 13
 
 // A party and its related rows (handles, links, addresses, relationships) are
 // each owned by the user that created them, with platform admins reaching every
@@ -21,17 +21,21 @@ definition parties/party {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation carrier_reader: auth/user | auth/group#member
+    // Admission follows retained source links and registered principal roles.
+    relation directory: integrate/integration // rebac:field=record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
+    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read = read_granted + carrier_reader
     permission read_private = owner + editor + reader + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private
-    permission read__raw_vcard = read_private
-    permission read__extensions = read_private
     permission read__handle_count = read_private
-    permission write  = owner + editor + admin->member
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -43,21 +47,23 @@ definition parties/person {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
+    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read = read_granted
     permission read_private = owner + editor + reader + admin->member
     // Field gates are per resource definition, including inherited columns.
     permission read__notes = read_private
     permission read__first_met_note = read_private
-    permission read__raw_vcard = read_private
-    permission read__extensions = read_private
     permission read__handle_count = read_private
     permission read__birthday = read_private
     permission read__anniversary = read_private
     permission read__nickname = read_private
-    permission write  = owner + editor + admin->member
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -65,11 +71,15 @@ definition parties/organization {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
+    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read = read_granted
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -77,37 +87,14 @@ definition parties/handle {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    // Person assertions retain their typed members' own read admission.
+    relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
-}
-
-definition parties/party_handle {
-    relation owner: auth/user // rebac:field=created_by
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
-}
-
-// A keep-separate decision follows the same per-row ownership shape as the
-// identity claims it governs. Pair canonicalization is a database/model fact;
-// this definition owns only who may read, write, or delete the decision row.
-definition parties/merge_veto {
-    relation owner: auth/user // rebac:field=created_by
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
+    permission read   = owner + editor + reader + statement_source + admin->member
     permission write  = owner + editor + admin->member
     permission delete = owner + admin->member
 }
@@ -116,11 +103,15 @@ definition parties/address {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
+    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read = read_granted
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 
@@ -182,11 +173,16 @@ definition parties/relationship {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
+    relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
+    relation other_directory: integrate/integration // rebac:field=other_party__record_links__stream__integration
+    relation statement_role: provenance/role // rebac:const=parties_statement_source
+    permission statement_source = directory + other_directory + statement_role->effective_member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
+    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read = read_granted
+    permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
 }
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Row } from "@angee/metadata";
+import type { DataResourceMetadata, Row } from "@angee/metadata";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
 
@@ -37,8 +37,12 @@ export interface TabProps {
   hidden?: boolean;
   /** Saved-record fields needed by this tab, selected even while it is hidden. */
   requiredFields?: readonly string[];
-  /** Saved-record visibility; hidden until the record has loaded. */
-  visibleWhen?: (record: Row) => boolean;
+  /**
+   * Saved-record visibility; hidden until the record has loaded. The second
+   * argument is the form's data resource, so a tab contributed to every form
+   * can show only where the resource declares what it reads (`history`).
+   */
+  visibleWhen?: (record: Row, resource: DataResourceMetadata | null) => boolean;
   children?: ReactNode;
 }
 

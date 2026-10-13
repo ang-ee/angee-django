@@ -6,13 +6,14 @@ from types import SimpleNamespace
 import pytest
 from django.db import connection
 from django.db.models.functions import Now
+from django.utils import timezone
 from pydantic import ValidationError
 from rebac import system_context
 
 from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import ConflictKeep, DiscrepancyKind, StreamDirection, StreamKind, StreamPhase
+from angee.integrate.states import ConflictKeep, StreamDirection, StreamKind, StreamPhase, SyncFailureKind
 from angee.integrate.streams import (
     ApplyResult,
     CursorInvalid,
@@ -22,7 +23,7 @@ from angee.integrate.streams import (
     advance_stream,
     open_stream,
 )
-from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
@@ -30,6 +31,7 @@ from angee.workflows_integrate import steps
 from angee.workflows_integrate.steps import ConflictReview, CoverageInput, Rescan, StreamStage
 from angee.workflows_integrate.testing.models import SyncCycleTestBridge
 from tests.conftest import make_integration
+from tests.stream_adapters import applied_history, failure_state
 
 
 class WorkerLost(BaseException):
@@ -44,7 +46,12 @@ def cycle(execution, register_step, monkeypatch):
     extracted, applied, rescanned = [], [], []
     local_hashes = {}
     transport = SimpleNamespace(
-        identity_reads=True, partitions=("",), size=2, fail=False, pages=None, direction=StreamDirection.PULL,
+        identity_reads=True,
+        partitions=("",),
+        size=2,
+        fail=False,
+        pages=None,
+        direction=StreamDirection.PULL,
     )
 
     class Adapter(BridgeImpl):
@@ -55,7 +62,10 @@ def cycle(execution, register_step, monkeypatch):
         def streams(self, *, deadline=None):
             return tuple(
                 StreamDefinition(
-                    "records", partition=partition, kind=StreamKind.RECORD_REPLICA, direction=transport.direction,
+                    "records",
+                    partition=partition,
+                    kind=StreamKind.RECORD_REPLICA,
+                    direction=transport.direction,
                 )
                 for partition in transport.partitions
             )
@@ -67,6 +77,8 @@ def cycle(execution, register_step, monkeypatch):
                 source_payload={"offset": offset},
                 source_hash=f"source-{offset}",
                 local_hash=local_hashes.get(key, ""),
+                mapped_payload={"offset": offset},
+                projection={"offset": offset} if key in local_hashes else None,
             )
 
         def extract(self, stream, page_bound, *, deadline=None):
@@ -96,7 +108,7 @@ def cycle(execution, register_step, monkeypatch):
             assert connection.in_atomic_block
             applied.append(record.external_key)
             local_hashes[record.external_key] = record.source_hash
-            return ApplyResult(local_hash=record.source_hash, mapped_payload=record.source_payload)
+            return ApplyResult(mapped_payload=record.mapped_payload)
 
     monkeypatch.setattr(SyncCycleTestBridge, "backend", property(Adapter), raising=False)
     for step in (StreamStage, Rescan, ConflictReview):
@@ -142,12 +154,8 @@ def wake(run):
 def conflict(cycle, stream, offset):
     with system_context(reason="test retained sync conflict"):
         link = RecordLink.objects.observe(stream, f"{stream.partition}:{offset}")
-        return SyncDiscrepancy.objects.record(
-            stream,
-            link=link,
-            kind=DiscrepancyKind.CONFLICT,
-            code=f"conflict_{offset}",
-            source_hash=f"source-{offset}",
+        return link.record_failure(
+            kind=SyncFailureKind.CONFLICT, code=f"conflict_{offset}", source_hash=f"source-{offset}"
         )
 
 
@@ -166,7 +174,7 @@ def test_stream_pages_commit_cursors_and_sum_only_finalized_counts(cycle):
     assert run.status == "succeeded"
     assert run.output["counts"] == {"page_items": 1, "cycle_items": 2}
     assert cycle.extracted == [("", 1, 0, 1), ("", 1, 1, 1)]
-    assert system_queryset(RecordRevision).count() == 2
+    assert applied_history().count() == 2
     cycle.bridge.refresh_from_db()
     assert cycle.bridge.last_sync_items == 2
 
@@ -200,17 +208,11 @@ def test_lost_lease_resumes_after_the_committed_cursor(cycle, monkeypatch):
     assert run.status == "succeeded"
     assert cycle.applied == [":0", ":1"]
     assert cycle.extracted == [("", 1, 0, 1), ("", 1, 1, 1)]
-    assert system_queryset(RecordRevision).count() == 2
+    assert applied_history().count() == 2
     # Settlement counts acknowledge outputs; the first page committed independently.
     assert run.output["counts"]["cycle_items"] == 1
     assert list(
-        system_queryset(StepAttempt)
-        .filter(step_run=row)
-        .order_by("number")
-        .values_list(
-            "result",
-            flat=True,
-        )
+        system_queryset(StepAttempt).filter(step_run=row).order_by("number").values_list("result", flat=True)
     ) == ["timed_out", "succeeded"]
 
 
@@ -258,12 +260,11 @@ def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
         advance_stream(stream, cycle.adapter)
         with system_context(reason="test due sync identities"):
             for offset in range(2):
-                SyncDiscrepancy.objects.record(
-                    stream,
-                    link=RecordLink.objects.get(stream=stream, external_key=f"{partition}:{offset}"),
-                    kind=DiscrepancyKind.SEMANTIC,
-                    code=f"retry_{offset}",
-                    source_hash=f"source-{offset}",
+                failure_state(
+                    RecordLink.objects.get(stream=stream, external_key=f"{partition}:{offset}").record_failure(
+                        kind=SyncFailureKind.SEMANTIC, code=f"retry_{offset}", source_hash=f"source-{offset}"
+                    ),
+                    retry_at=timezone.now(),
                 )
     run = cycle.start(
         Rescan,
@@ -277,14 +278,23 @@ def test_rescan_rotates_bounded_identity_reads_before_waiting(cycle):
     assert runner.execute(step_row(run).pk)
     assert cycle.rescanned == [("east", ("east:0",)), ("west", ("west:0",))]
     assert step_row(run).waiting_kind == "time"
-    assert system_queryset(SyncDiscrepancy).unresolved().count() == 2
+    assert (
+        sum(
+            len(row.sync_failures(open_only=True))
+            for row in SyncStream.objects.current_for_bridge(cycle.bridge, "records").with_actor(cycle.bridge.owner)
+        )
+        == 2
+    )
     wake(run)
 
     run_until(run)
 
     assert run.status == "succeeded"
     assert [keys for _, keys in cycle.rescanned] == [("east:0",), ("west:0",), ("east:1",), ("west:1",)]
-    assert not system_queryset(SyncDiscrepancy).unresolved().exists()
+    assert not any(
+        row.sync_failures(open_only=True)
+        for row in SyncStream.objects.current_for_bridge(cycle.bridge, "records").with_actor(cycle.bridge.owner)
+    )
     assert run.output["counts"] == {"streams": 2}
 
 
@@ -295,12 +305,11 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
     if fallback:
         cycle.transport.identity_reads = False
         with system_context(reason="test rescan baseline fallback"):
-            SyncDiscrepancy.objects.record(
-                stream,
-                link=RecordLink.objects.get(stream=stream, external_key=":0"),
-                kind=DiscrepancyKind.SEMANTIC,
-                code="retry_baseline",
-                source_hash="source-0",
+            failure_state(
+                RecordLink.objects.get(stream=stream, external_key=":0").record_failure(
+                    kind=SyncFailureKind.SEMANTIC, code="retry_baseline", source_hash="source-0"
+                ),
+                retry_at=timezone.now(),
             )
     else:
         SyncStream.objects.request_resync(stream)
@@ -309,10 +318,11 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
     assert runner.execute(step_row(run).pk)
     replacement = SyncStream.objects.current_for_bridge(cycle.bridge, "records").get()
     assert replacement.generation == 2 and replacement.phase == StreamPhase.BASELINE
-    assert replacement.cursor == {}
+    assert replacement.cursor == ({} if fallback else {"offset": 1})
     assert runner.execute(step_row(run).pk)
     replacement.refresh_from_db()
-    assert replacement.cursor == {"offset": 1} and replacement.phase == StreamPhase.BASELINE
+    assert replacement.cursor == {"offset": 1 if fallback else 2}
+    assert replacement.phase == (StreamPhase.BASELINE if fallback else StreamPhase.DELTA)
 
     run_until(run)
 
@@ -324,7 +334,7 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
 def test_rescan_waits_for_conflicts_without_applying_them(cycle):
     stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
     advance_stream(stream, cycle.adapter)
-    discrepancy = conflict(cycle, stream, 0)
+    failure = conflict(cycle, stream, 0)
     cycle.applied.clear()
     run = cycle.start(Rescan, {"streams": [{"key": "records"}]})
 
@@ -332,8 +342,8 @@ def test_rescan_waits_for_conflicts_without_applying_them(cycle):
 
     assert run.status == "waiting" and step_row(run).waiting_kind == "time"
     assert cycle.rescanned == [] and cycle.applied == []
-    discrepancy.refresh_from_db()
-    assert discrepancy.is_open
+    failure = failure_state(failure)
+    assert failure.is_open
 
 
 def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
@@ -345,15 +355,15 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     row = step_row(run)
     decision = system_queryset(Decision).get(pk=row.decision_id)
     assert decision.records.with_actor(cycle.bridge.owner).count() == 2 and row.waiting_kind == "decision"
-    decide(decision, actor=cycle.bridge.owner, chosen=[str(record.sqid) for record in conflicts])
+    decide(decision, actor=cycle.bridge.owner, chosen=[record.link.public_id for record in conflicts])
     run_until(run)
     assert run.status == "failed"
-    assert system_queryset(SyncDiscrepancy).unresolved().count() == 2
-    for discrepancy in conflicts:
-        SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=ConflictKeep.REMOTE)
+    assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 2
+    for failure in conflicts:
+        failure.resolve_conflict(keep=ConflictKeep.REMOTE)
     StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
     run_until(run)
-    assert run.status == "succeeded" and run.output["discrepancy_ids"] == []
+    assert run.status == "succeeded" and run.output["failure_ids"] == []
     assert system_queryset(Decision).count() == 1
 
 
@@ -367,7 +377,7 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
     run_until(run)
     assert run.status == "failed" and system_queryset(Decision).count() == 1
-    assert system_queryset(SyncDiscrepancy).unresolved().count() == 1
+    assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 1
 
 
 @pytest.mark.parametrize("step", [StreamStage, Rescan])
@@ -426,8 +436,21 @@ def test_sync_steps_stop_stalled_pages_and_repeated_baseline_resets(cycle, step,
 def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
     """Opaque cursors can remain fixed while their replica observations advance."""
     cycle.transport.pages = [
-        StreamPage((RecordChange("record", {}, "first"),), {}, exhausted=False),
-        StreamPage((RecordChange("record", {}, "second", local_hash="first"),), {}, exhausted=False),
+        StreamPage((RecordChange("record", {}, "first", mapped_payload={"value": "first"}),), {}, exhausted=False),
+        StreamPage(
+            (
+                RecordChange(
+                    "record",
+                    {},
+                    "second",
+                    local_hash="first",
+                    mapped_payload={"value": "second"},
+                    projection={"value": "first"},
+                ),
+            ),
+            {},
+            exhausted=False,
+        ),
         StreamPage((), {}),
     ]
     if step is Rescan:
@@ -439,7 +462,7 @@ def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
 
     assert run.status == "succeeded"
     assert cycle.applied == ["record", "record"]
-    assert list(system_queryset(RecordRevision).order_by("number").values_list("source_hash", flat=True)) == [
+    assert list(applied_history().order_by("history_date").values_list("source_hash", flat=True)) == [
         "first",
         "second",
     ]

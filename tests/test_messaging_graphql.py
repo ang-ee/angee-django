@@ -27,7 +27,6 @@ from angee.graphql.deletion import DeletePreview
 from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing.models import Channel
-from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
 from tests.conftest import (
@@ -190,8 +189,12 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     # team and intake's configuration; the authored delete root previews the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
-        "display_name", "team", "intake_queue", "intake_trigger",
-        "intake_field_map", "intake_requester_domains",
+        "display_name",
+        "team",
+        "intake_queue",
+        "intake_trigger",
+        "intake_field_map",
+        "intake_requester_domains",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "delete_channel"
@@ -490,13 +493,7 @@ def test_message_sender_and_participant_expose_resolved_party(composed_tables: N
             display_name="Ada Envelope",
             created_by_id=admin.pk,
         )
-        messaging_models.PartyHandle.objects.link(
-            party,
-            handle,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=admin.pk,
-        )
+        party.with_actor(admin).confirm(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
         messaging_models.Participant.objects.create(
@@ -558,13 +555,7 @@ def test_inbox_sender_redacts_party_without_party_read(composed_tables: None) ->
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        messaging_models.PartyHandle.objects.link(
-            party,
-            handle,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
+        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(message, "reader", reader)
@@ -767,13 +758,7 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
             display_name="Ada Envelope",
             created_by_id=owner.pk,
         )
-        messaging_models.PartyHandle.objects.link(
-            party,
-            handle,
-            source=LinkSource.MANUAL,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
+        party.with_actor(owner).confirm(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
     _grant(doc, "reader", reader)
@@ -871,7 +856,9 @@ def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables:
     _thread, message = _seed_thread_and_message(admin)
     with system_context(reason="test.messaging.parts.groups"):
         other = messaging_models.Message.objects.create(
-            thread=message.thread, preview="Other", created_by_id=admin.pk,
+            thread=message.thread,
+            preview="Other",
+            created_by_id=admin.pk,
         )
         for target, role in ((message, "body"), (message, "quoted"), (other, "body")):
             messaging_models.Part.objects.create(message=target, role=role, created_by_id=admin.pk)
@@ -882,9 +869,14 @@ def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables:
         }
     """
     with CaptureQueriesContext(connection) as queries:
-        data = _data(execute_schema(
-            _schema(), document, {"where": {"message": {"_eq": message.sqid}}}, request=_request(admin),
-        ))
+        data = _data(
+            execute_schema(
+                _schema(),
+                document,
+                {"where": {"message": {"_eq": message.sqid}}},
+                request=_request(admin),
+            )
+        )
     assert {row["key"]["role"]: row["aggregate"]["count"] for row in data["parts_groups"]} == {"BODY": 1, "QUOTED": 1}
     assert data["totalCount"] == 2
     table = messaging_models.Part._meta.db_table
@@ -2180,8 +2172,11 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
         expected = {}
         for index in range(25):
             message = messaging_models.Message.objects.create(
-                thread=attachment.thread, direction="internal", message_type="comment",
-                created_by=admin, sender=sender,
+                thread=attachment.thread,
+                direction="internal",
+                message_type="comment",
+                created_by=admin,
+                sender=sender,
             )
             tracked = index % 2 == 0
             if tracked:
@@ -2199,9 +2194,14 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
     counts = []
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
-            payload = _data(execute_schema(
-                schema, query, {"id": ticket.sqid, "limit": size}, request=_request(admin),
-            ))["record_thread"]
+            payload = _data(
+                execute_schema(
+                    schema,
+                    query,
+                    {"id": ticket.sqid, "limit": size},
+                    request=_request(admin),
+                )
+            )["record_thread"]
         assert len(payload["messages"]) == size
         for message in payload["messages"]:
             assert message["can_edit"] == message["can_delete"] == expected[message["id"]]
@@ -2628,28 +2628,34 @@ def test_suggested_recipients_withhold_restricted_fields_from_a_non_manager(comp
 
     poster = User.objects.create_user(username="msg-suggest-plain-poster")
     assignee = User.objects.create_user(
-        username="msg-suggest-plain-assignee", email="assignee@example.com", first_name="Avery",
+        username="msg-suggest-plain-assignee",
+        email="assignee@example.com",
+        first_name="Avery",
     )
     former = User.objects.create_user(username="msg-suggest-plain-former", is_active=False)
     with actor_context(poster):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 910", assigned_user=assignee)
         ticket.message_post("Hello.", recipient_user_ids=(former.pk,))
 
-    suggestions = _data(execute_schema(
-        _schema(),
-        """query($model: String!, $id: ID!) {
+    suggestions = _data(
+        execute_schema(
+            _schema(),
+            """query($model: String!, $id: ID!) {
           record_thread(input: {model_label: $model, record_id: $id}) {
             suggested_recipients { source user { display_name username email is_active } }
           }
         }""",
-        {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-        request=_request(poster),
-    ))["record_thread"]["suggested_recipients"]
+            {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
+            request=_request(poster),
+        )
+    )["record_thread"]["suggested_recipients"]
 
-    assert suggestions == [{
-        "source": "assigned_user",
-        "user": {"display_name": "Avery", "username": None, "email": None, "is_active": None},
-    }]
+    assert suggestions == [
+        {
+            "source": "assigned_user",
+            "user": {"display_name": "Avery", "username": None, "email": None, "is_active": None},
+        }
+    ]
 
 
 def test_record_chatter_reports_author_delivery_errors(composed_tables: None) -> None:

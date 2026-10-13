@@ -1,0 +1,14 @@
+# Persist each built-in matcher once at resource bootstrap. Sources use the
+# same key through lookup only; users remain person principals.
+- xref: normalized_twin
+  key: parties.normalized_twin
+- xref: email_domain
+  key: parties.email_domain
+- xref: display_name
+  key: parties.display_name
+- xref: signature_phone
+  key: parties.signature_phone
+- xref: source_sender
+  key: parties.source_sender
+- xref: same_as
+  key: parties.same_as

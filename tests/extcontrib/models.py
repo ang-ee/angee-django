@@ -1,9 +1,13 @@
-"""Example owners of roster authority and record-derived decision access."""
+"""Example owners of roster authority, record-derived decision access and donor aspects."""
+
+from typing import cast
 
 from django.db import models
 
-from angee.base.evidence import DerivedFromRelation
+from angee.base.mixins import Aspect, SourceKind, StatementRecords, StatementsMixin
 from angee.base.models import AngeeDataModel, role_anchor
+from angee.base.querysets import StatementQuerySet
+from angee.base.refs import RetainedGenericRelation
 
 Role = role_anchor("extcontrib/role", name="Role")
 
@@ -13,9 +17,58 @@ class Record(AngeeDataModel):
 
     sqid_prefix = "xrc_"
     name = models.CharField(max_length=100)
-    decision_records = DerivedFromRelation("decisions.DecisionRecord", related_query_name="extcontrib_record")
+    decision_records = RetainedGenericRelation("decisions.DecisionRecord", related_query_name="extcontrib_record")
 
     class Meta(AngeeDataModel.Meta):
         abstract = False
         db_table = "test_extcontrib_record"
         rebac_resource_type = "extcontrib/record"
+
+
+class ClaimedStatementQuerySet(StatementQuerySet):
+    """The subject source's own statement queryset, which donors must not displace."""
+
+
+class ClaimedSource(StatementsMixin, AngeeDataModel):
+    """The subject source: it declares the statement table's options and its own aspect."""
+
+    sqid_prefix = "xcl_"
+    name = models.CharField(max_length=100)
+    statements = StatementRecords(
+        aspects={"identity": Aspect(fields=("name",))},
+        sqid_prefix="xcs_",
+        historical_queryset=ClaimedStatementQuerySet,
+    )
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = True
+
+
+class ClaimedBilling(models.Model):
+    """A consumer donor contributing a tax aspect to the claimed record, as arp does for parties.
+
+    Composed by hand below in the composer's base order (donors before the
+    source); a declared ``extends`` would make the composer discover it.
+    """
+
+    vat = models.CharField(max_length=32, blank=True, default="")
+    statements = StatementRecords(
+        aspects={
+            "tax": Aspect(
+                fields=("vat",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD)),
+            ),
+        },
+    )
+
+    class Meta:
+        abstract = True
+
+
+class Claimed(ClaimedBilling, ClaimedSource):
+    """A statement subject composed from a source and a consumer donor."""
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        db_table = "test_extcontrib_claimed"
+        rebac_resource_type = "extcontrib/claimed"

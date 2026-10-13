@@ -11,31 +11,31 @@ import {
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
-import { PartyHandleRedirectDocument } from "./documents";
+import { PartyStatementRedirectDocument } from "./documents";
 import { usePartiesT } from "./i18n";
 
 /** Open a retained handle association at its owning Party identity surface. */
-export function PartyHandleRedirect(): React.ReactElement {
+export function PartyStatementRedirect(): React.ReactElement {
   const t = usePartiesT();
   const id = useRouteParam("id") ?? "";
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const query = useAuthoredQuery(
-    PartyHandleRedirectDocument,
+    PartyStatementRedirectDocument,
     { id },
-    { enabled: Boolean(id), models: ["parties.PartyHandle"] },
+    { enabled: Boolean(id), models: ["parties.PartyStatement"] },
   );
-  const association = query.data?.party_handles_by_pk;
+  const association = query.data?.party_statements_by_pk;
 
   React.useEffect(() => {
-    if (!association?.party?.id) return;
+    if (!association?.subject?.id) return;
     void navigate({
-      to: routeHref("parties.records.record", { id: association.party.id }),
+      to: routeHref("parties.records.record", { id: association.subject.id }),
       replace: true,
       state: true,
       search: (current: Record<string, unknown>) => ({
         ...recordTargetSearch(current, { tab: "identity" }),
-        partyHandle: association.id,
+        partyStatement: association.id,
       }),
     });
   }, [association, navigate, routeHref]);

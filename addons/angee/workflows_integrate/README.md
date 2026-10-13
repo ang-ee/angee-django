@@ -33,10 +33,10 @@ nothing would retry. A two-way stream syncs through integrate's own runner.
 
 Coverage uses two steps with the same explicit partition set. `integrate_rescan`
 performs bounded rescan/baseline recovery per partition and waits on a deadline
-while discrepancies remain. `integrate_conflicts` asks one decision per conflict;
-its continuation checks current discrepancy truth. Unresolved discrepancies fail
+while failures remain. `integrate_conflicts` asks one decision per conflict;
+its continuation checks current failure truth. Unresolved failures fail
 the step; after a direct domain resolution, operator retry consumes the retained
-answers without asking again. Resolving a conflict belongs to the discrepancy owner; a
+answers without asking again. Resolving a conflict belongs to the failure owner; a
 review answer only asks to recheck it. Put conflict review before the rescan wait
 or on a parallel graph branch so an unresolved conflict can reach review.
 

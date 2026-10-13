@@ -7,7 +7,6 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-import reversion
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -15,6 +14,7 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.changesets import changeset, current_changeset
 from angee.base.fields import ModelLabelField
 from angee.base.identity import SqidPublicIdentity, public_id_of
 from angee.base.jsonschema import relation_positions
@@ -219,7 +219,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         )
 
     def load_xref[M: AngeeModel](
-        self, handle: str, *, model: type[M], actor: Any = None, allow_non_dev: bool = False,
+        self,
+        handle: str,
+        *,
+        model: type[M],
+        actor: Any = None,
+        allow_non_dev: bool = False,
     ) -> M:
         """Import one declared ``addon.name.xref`` through its model's resource.
 
@@ -250,7 +255,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     )
                 self._check_load_tiers((group.entry.tier,), allow_non_dev=allow_non_dev)
                 selected = ResourceGroup(
-                    group.entry, group.model_label, group.dataset.subset(rows=[index]), [group.source_rows[index]],
+                    group.entry,
+                    group.model_label,
+                    group.dataset.subset(rows=[index]),
+                    [group.source_rows[index]],
                 )
                 with transaction.atomic():
                     resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
@@ -260,7 +268,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     if resolution is not None and resolution.instance is not None:
                         actor = resolution.instance.require_access("write", actor)
                     self._import_groups(
-                        (group.entry,), (selected,), (), dry_run=False, addon_aliases=aliases, actor=actor,
+                        (group.entry,),
+                        (selected,),
+                        (),
+                        dry_run=False,
+                        addon_aliases=aliases,
+                        actor=actor,
                     )
                     with system_context(reason="resources.load_xref resolve imported target"):
                         instance = resolve_xref(handle, self.model, aliases)
@@ -298,7 +311,10 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             (
                 group,
                 build_resource(
-                    group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases,
+                    group.model,
+                    group.entry,
+                    ledger_model=self.model,
+                    addon_aliases=addon_aliases,
                 ),
             )
             for group in row_groups
@@ -310,7 +326,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
-            with system_context(reason=reason), transaction.atomic(), reversion.create_revision():
+            with (
+                system_context(reason=reason),
+                changeset(fresh=True, activity="seed"),
+                transaction.atomic(),
+            ):
+                current_changeset(record=True)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups

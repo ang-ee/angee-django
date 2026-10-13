@@ -24,7 +24,7 @@ from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import BridgeSyncError, CursorInvalid, StreamDefinition, advance_stream, open_stream
-from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
 from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
 from angee.messaging_integrate_imap import backend as imap_backend
@@ -2021,7 +2021,9 @@ def test_channel_sync_preserves_overlong_display_name_and_content_id(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("excess", [0, 1])
 def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch, excess: int,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    excess: int,
 ) -> None:
     """Column-sized headers stay intact; larger display text and CIDs land safely."""
 
@@ -2047,22 +2049,30 @@ def test_channel_sync_bounds_display_names_and_discards_oversized_content_id(
     part = Part._base_manager.get(message__external_id="bounded-headers@x", type="text/html")
     assert part.cid == ("" if excess else cid)
     assert part.fragment.text == "<p>Retained body.</p>"
-    assert not SyncDiscrepancy._base_manager.exists()
+    with system_context(reason="test imap inspect retained failures"):
+        assert not any(
+            row for stream_row in SyncStream.objects.all() for row in stream_row.sync_failures(open_only=False)
+        )
 
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A poison sender leaves one field-specific discrepancy and advances the page."""
 
     del composed_tables
     value = "x" * Handle._meta.get_field("value").max_length + "@example.com"
-    account = FakeImapAccount({"INBOX": _folder(
-        _eml(message_id="<first@x>", subject="First"),
-        _eml(message_id="<poison@x>", subject="Poison", sender=f"Bad <{value}>"),
-        _eml(message_id="<last@x>", subject="Last"),
-    )})
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(
+                _eml(message_id="<first@x>", subject="First"),
+                _eml(message_id="<poison@x>", subject="Poison", sender=f"Bad <{value}>"),
+                _eml(message_id="<last@x>", subject="Last"),
+            )
+        }
+    )
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(batch_size=3)
 
@@ -2072,16 +2082,23 @@ def test_channel_sync_quarantines_oversized_handle_and_lands_remaining_page(
     assert set(Message._base_manager.values_list("external_id", flat=True)) == {"first@x", "last@x"}
     assert not Thread._base_manager.filter(title__text="Poison").exists()
     assert not Handle._base_manager.filter(value=value).exists()
-    discrepancy = SyncDiscrepancy._base_manager.get()
+    with system_context(reason="test imap inspect retained failures"):
+        discrepancy = next(
+            row for stream_row in SyncStream.objects.all() for row in stream_row.sync_failures(open_only=False)
+        )
     assert discrepancy.code == "invalid_record"
     assert discrepancy.details == {
-        "stream": "messages", "partition": "INBOX", "external_key": "poison@x",
-        "fields": ["value"], "message": "Record validation failed for fields: value.",
+        "stream": "messages",
+        "partition": "INBOX",
+        "external_key": "poison@x",
+        "fields": ["value"],
+        "message": "Record validation failed for fields: value.",
     }
     assert discrepancy.is_open
     assert discrepancy.retry_at is not None
     assert SyncStream.objects.current_for_bridge(channel, "messages").get().cursor == {
-        "uidvalidity": 100, "last_uid": 3,
+        "uidvalidity": 100,
+        "last_uid": 3,
     }
     channel.refresh_from_db()
     assert channel.sync_stage == channel.SyncStage.COMPLETED
@@ -2373,11 +2390,17 @@ def test_failed_run_never_persists_the_cursor(
     assert channel.sync_error == channel.last_error == "messages (INBOX): Integration operation failed."
     assert channel.sync_progress["stage"] == Channel.SyncStage.FAILED
     assert channel.sync_progress["details"] == {
-        "stream": "messages", "partition": "INBOX", "stage": "pull",
-        "failures": [{
-            "stream": "messages", "partition": "INBOX", "stage": "pull",
-            "message": "Integration operation failed.",
-        }],
+        "stream": "messages",
+        "partition": "INBOX",
+        "stage": "pull",
+        "failures": [
+            {
+                "stream": "messages",
+                "partition": "INBOX",
+                "stage": "pull",
+                "message": "Integration operation failed.",
+            }
+        ],
     }
 
 

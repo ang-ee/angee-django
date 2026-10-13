@@ -1,4 +1,4 @@
-"""Typed human reviews that delegate identity and duplicate writes to parties."""
+"""Typed human reviews that delegate identity and same_as writes to parties."""
 
 from dataclasses import replace
 from typing import Any
@@ -25,7 +25,7 @@ class ProposedHandle(BaseModel):
     """An existing association whose confirmation is being reviewed."""
 
     model_config = ConfigDict(extra="forbid")
-    party_handle_id: str = ""
+    statement_id: str = ""
     evidence: str = ""
 
 
@@ -93,20 +93,29 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         records = [identity.party]
         alternatives = []
         if proposed.name and proposed.name != identity.current["name"]:
-            alternatives.append({"key": "name", "label": "Use the proposed name", "outcome": "applied",
-                "actions": {party_id: {"fields": {"display_name": {}}}}})
+            alternatives.append(
+                {
+                    "key": "name",
+                    "label": "Use the proposed name",
+                    "outcome": "applied",
+                    "actions": {party_id: {"fields": {"display_name": {}}}},
+                }
+            )
         if any(getattr(proposed.address, name) for name in apps.get_model("parties", "Address").objects.components):
             alternatives.append({"key": "address", "label": "Add the proposed address", "outcome": "applied"})
-        if proposed.handle.party_handle_id:
-            link = ctx.load(apps.get_model("parties", "PartyHandle"), proposed.handle.party_handle_id)
-            records.append(link)
-            alternatives.append({"key": "handle", "label": "Confirm the proposed handle", "outcome": "applied",
-                "actions": {public_id_of(link): {"fields": {"is_confirmed": {}}}}})
-        alternatives.extend([
-            {"key": "keep", "label": "Keep what is on the record", "outcome": "unchanged"},
-            {"key": "reject", "label": "Reject the proposal", "outcome": "rejected"},
-            {"key": "escalate", "label": "Escalate the review", "outcome": "escalated"},
-        ])
+        if proposed.handle.statement_id:
+            statement = identity.party.statements.readable(ctx.actor).from_public_id(proposed.handle.statement_id)
+            if statement is None:
+                raise ValidationError("The proposed handle assertion is not readable on this Party.")
+            records.append(statement.handle)
+            alternatives.append({"key": "handle", "label": "Confirm the proposed handle", "outcome": "applied"})
+        alternatives.extend(
+            [
+                {"key": "keep", "label": "Keep what is on the record", "outcome": "unchanged"},
+                {"key": "reject", "label": "Reject the proposal", "outcome": "rejected"},
+                {"key": "escalate", "label": "Escalate the review", "outcome": "escalated"},
+            ]
+        )
         return ctx.ask(
             DecisionRequest(
                 kind="review-party-identity",
@@ -128,7 +137,7 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
                             + tuple(
                                 DecisionRecordReference(model=model, id=row[key])
                                 for row in identity.current["handles"]
-                                for model, key in (("parties.PartyHandle", "id"), ("parties.Handle", "handle_id"))
+                                for model, key in (("parties.Handle", "handle_id"),)
                             ),
                         ),
                         DecisionFact(
@@ -159,9 +168,11 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         outcome, ctx.identity_results = party.apply_identity(
             expected_facts_hash=ctx.state["facts_hash"],
             proposed=IdentityProposal.model_validate(ctx.state["proposed"]).model_dump(),
-            choices={"name_action": "replace" if "name" in changes else "keep",
-                     "address_action": "add" if "address" in changes else "keep",
-                     "handle_action": "confirm" if "handle" in changes else "keep"},
+            choices={
+                "name_action": "replace" if "name" in changes else "keep",
+                "address_action": "add" if "address" in changes else "keep",
+                "handle_action": "confirm" if "handle" in changes else "keep",
+            },
         )
         if outcome == "conflict":
             raise ValidationError("The party identity changed during review; reload and review its current facts.")
@@ -169,17 +180,15 @@ class IdentityReview(DecisionStep[IdentityInput, IdentityOutput, IdentityReviewC
         if "address" in changes:
             for address in addresses.exclude(pk__in=existing_addresses):
                 ctx.record(address, operation="created")
-        if "handle" in changes:
-            ctx.record(ctx.load(apps.get_model("parties", "PartyHandle"),
-                                ctx.state["proposed"]["handle"]["party_handle_id"]), operation="changed")
         return outcome
 
     def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Settlement:
-        return ctx.done({"party_id": ctx.input.party_id, "context": ctx.input.context,
-                         **ctx.identity_results}, outcome=outcome)
+        return ctx.done(
+            {"party_id": ctx.input.party_id, "context": ctx.input.context, **ctx.identity_results}, outcome=outcome
+        )
 
 
-class DuplicatePair(BaseModel):
+class SameAsPair(BaseModel):
     """Immutable identities and scan evidence for one mapped review."""
 
     model_config = ConfigDict(extra="forbid")
@@ -192,7 +201,7 @@ class DuplicatePair(BaseModel):
 
 
 class DedupeInput(BaseModel):
-    """A reviewer for every candidate in a bounded duplicate scan."""
+    """A reviewer for every candidate in a bounded same_as scan."""
 
     model_config = ConfigDict(extra="forbid")
     assignee: str = Field(min_length=1)
@@ -205,24 +214,24 @@ class DedupeConfig(BaseModel):
     limit: int = Field(default=50, ge=1, le=100)
 
 
-class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
+class DedupeScan(Step[DedupeInput, list[SameAsPair], DedupeConfig]):
     """Read deterministic actor-visible candidates; map owns fan-out and collection."""
 
     key = "parties_dedupe_scan"
-    label = "Find duplicate parties"
+    label = "Find same identity statements"
 
     def run(self, ctx: Any) -> Settlement:
-        """Use the parties owner for shared handles, duplicate suppression and vetoes."""
+        """Read pending same_as statements through the parties owner."""
         candidates = (
             apps.get_model("parties", "Party")
             .objects.with_actor(ctx.actor)
-            .duplicate_candidates(
+            .same_as_pairs(
                 limit=ctx.config.limit,
             )
         )
         return ctx.done(
             [
-                DuplicatePair(
+                SameAsPair(
                     left=public_id_of(pair.left),
                     right=public_id_of(pair.right),
                     left_name=pair.left.display_name,
@@ -238,24 +247,24 @@ class DedupeScan(Step[DedupeInput, list[DuplicatePair], DedupeConfig]):
         )
 
 
-class DuplicateReviewInput(DedupeInput):
+class SameAsReviewInput(DedupeInput):
     """One scan candidate with its reviewer, supplied by the map binding."""
 
-    pair: DuplicatePair
+    pair: SameAsPair
 
 
-class DuplicateOutput(BaseModel):
+class SameAsOutput(BaseModel):
     """The parties-owned merge or separation result, or the reviewer's skip."""
 
     model_config = ConfigDict(extra="forbid")
     result: str
 
 
-class DedupeReview(DecisionStep[DuplicateReviewInput, DuplicateOutput, None]):
+class DedupeReview(DecisionStep[SameAsReviewInput, SameAsOutput, None]):
     """One independent decision for each mapped pair."""
 
     key = "parties_dedupe_review"
-    label = "Review duplicate parties"
+    label = "Review same identity statements"
     outcomes = {
         "merge_left": "Merged into the left party",
         "merge_right": "Merged into the right party",
@@ -299,13 +308,13 @@ class DedupeReview(DecisionStep[DuplicateReviewInput, DuplicateOutput, None]):
 
     def continue_with(self, ctx: Any, decision: Any, outcome: str) -> Settlement:
         if outcome == "skipped":
-            return ctx.done(DuplicateOutput(result="skipped"), outcome="skipped")
+            return ctx.done(SameAsOutput(result="skipped"), outcome="skipped")
         pair = ctx.input.pair
-        result = apps.get_model("parties", "Party").objects.apply_duplicate_pair(
+        result = apps.get_model("parties", "Party").objects.apply_same_as_pair(
             left_id=pair.left,
             right_id=pair.right,
             survivor="right" if outcome == "merge_right" else "left",
             action="keep_separate" if outcome == "kept_separate" else "merge",
             actor=ctx.actor,
         )
-        return ctx.done(DuplicateOutput(result=result), outcome=outcome)
+        return ctx.done(SameAsOutput(result=result), outcome=outcome)

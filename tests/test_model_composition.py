@@ -6,7 +6,6 @@ import sys
 from types import ModuleType
 
 import pytest
-import reversion
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -15,7 +14,7 @@ from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
-from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
+from angee.base.mixins import HistoryMixin, SqidMixin
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
 from tests.tables import model_tables
@@ -421,9 +420,10 @@ def test_native_history_excludes_generated_fields_from_final_model(modules):
 
     assert generated.HistoricalTracked is history
     assert not history._meta.abstract
-    assert {
-        field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)
-    } == {"doubled", "positive"}
+    assert {field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)} == {
+        "doubled",
+        "positive",
+    }
     assert isinstance(Tracked._meta.get_field("positive"), BooleanGeneratedField)
     historical_fields = {field.name for field in history._meta.local_fields}
     assert {"id", "value"} <= historical_fields
@@ -458,10 +458,10 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
     history = Tracked.history.model
     assert history._meta.app_label == config.label
     assert history._meta.db_table == f"{config.label}_historicaltracked"
-    assert not hasattr(generated, "HistoricalChild")
-    assert generated.Child.history.model is history
+    assert generated.Child.history.model is generated.HistoricalChild
+    assert generated.Child.history.model is not history
     assert "sqid" not in {field.name for field in history._meta.local_fields}
-    with model_tables((Tracked, history)):
+    with model_tables((Tracked, generated.Child, history, generated.HistoricalChild)):
         record = Tracked.objects.create(title="first")
         record.title = "second"
         record.save()
@@ -515,6 +515,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         state = ModelState.from_model(model)
         if state.name == "HistoricalChild":
             state.fields.pop("history_user")
+            state.fields.pop("changeset")
         target.add_model(state)
     changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
     operations = changes[config.label][0].operations
@@ -534,31 +535,6 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
     for operation in operations:
         operation.state_forwards(config.label, rendered)
     rendered.apps.get_model(config.label, "HistoricalChild")
-
-
-@isolate_apps()
-def test_native_reversion_registration_uses_final_model_fields(modules):
-    create, emit = modules
-    config, module = create("native_revisions")
-    source(
-        module,
-        "Document",
-        config.label,
-        bases=(RevisionMixin, models.Model),
-        runtime=True,
-        revisioned_fields=("body",),
-        body=models.TextField(),
-    )
-    source(module, "Child", config.label, runtime=True, extends=f"{config.label}.Document")
-    generated = emit(ModelComposition.discover((config,)))[config.label]
-    try:
-        assert reversion.is_registered(generated.Document)
-        assert not reversion.is_registered(generated.Child)
-        from reversion.revisions import _get_options
-
-        assert _get_options(generated.Document).fields == ("body",)
-    finally:
-        reversion.unregister(generated.Document)
 
 
 @isolate_apps()

@@ -226,7 +226,6 @@ function resource(): DataResourceMetadata {
       create: "insert_notes_one",
       update: "update_notes_by_pk",
       delete: "delete_notes_by_pk",
-      revisions: "note_revisions",
       changes: "note_changed",
     },
     typeNames: {},

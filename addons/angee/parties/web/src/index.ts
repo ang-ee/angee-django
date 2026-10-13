@@ -39,11 +39,11 @@ const parties = defineBaseAddon({
     ),
     ...resourcePageRoutes("parties.handles", "/parties/handles", lazyRouteComponent(() => import("./HandlesPage"), "HandlesPage"), "parties.Handle"),
     ...resourcePageRoutes(
-      "parties.handle-links",
-      "/parties/handle-links",
+      "parties.statements",
+      "/parties/statements",
       lazyRouteComponent(() => import("./ReviewPage"), "ReviewPage"),
-      "parties.PartyHandle",
-      { detailComponent: lazyRouteComponent(() => import("./PartyHandleRedirect"), "PartyHandleRedirect") },
+      "parties.PartyStatement",
+      { detailComponent: lazyRouteComponent(() => import("./PartyStatementRedirect"), "PartyStatementRedirect") },
     ),
     {
       name: "parties.review",

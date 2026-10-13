@@ -647,8 +647,11 @@ shared UI copy through an addon bundle.
 - **Contribute a saved-record tab from the data view** as a `<model>#sections`
   child holding a direct `<Tab>` declaration. Canonical parent sections are
   inherited by concrete child forms; contribute once at the owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
-  which evaluates the loaded record; fields omitted by a child projection are
-  read from the canonical resource. Inside the panel, use
+  which evaluates the loaded record and the form's data resource; fields omitted
+  by a child projection are read from the canonical resource. A tab for every
+  record kind is a `form#sections` child gated on the resource fact it reads,
+  as the provenance [History tab](../../addons/angee/provenance/web/src/index.tsx)
+  is on `resource.history`. Inside the panel, use
   `useRecordChromeContext()` and scope a related collection with a base filter
   on a `presentation="embedded"` list, which brings compact chrome and local
   state. The model's Hasura resource owns filter/order/group/facet capabilities;

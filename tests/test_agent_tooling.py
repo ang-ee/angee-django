@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import reversion
 from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -78,7 +77,6 @@ from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 User = get_user_model()
 
 
-@reversion.register(fields=("label",))
 class AgentToolWriteProbe(AuditMixin, models.Model):
     """A neutral audit row proving which user an in-process write attributes."""
 

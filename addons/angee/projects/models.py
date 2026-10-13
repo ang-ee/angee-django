@@ -38,7 +38,6 @@ from angee.base.mixins import (
     OptimisticLockMixin,
     OwnerMixin,
     OwnerQuerySet,
-    RevisionMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
@@ -421,14 +420,12 @@ class Project(
     OptimisticLockMixin,
     ThreadedModelMixin,
     HistoryMixin,
-    RevisionMixin,
     AngeeDataModel,
 ):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
     runtime = True
     sqid_prefix = "prj_"
-    revisioned_fields = ("title", "body")
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     class ProjectStatus(models.TextChoices):

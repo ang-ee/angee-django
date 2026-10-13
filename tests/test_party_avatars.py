@@ -18,10 +18,9 @@ from angee.base.identity import public_id_of
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging import session as messaging_session
 from angee.messaging.session import LiveChannelSession
-from angee.messaging.testing.models import Handle, Party, PartyHandle, Person
+from angee.messaging.testing.models import Handle, Party, Person
 from angee.parties import signals as parties_signals
 from angee.parties.backends import AvatarReport, ParsedPhoto
-from angee.parties.mixins import LinkSource
 from tests.conftest import File, SchemaAddon, execute_schema, result_data
 from tests.test_storage import (  # noqa: F401 -- the image drive avatars land on
     EVERYONE_VIEWS,
@@ -179,8 +178,8 @@ def test_a_party_shows_its_own_avatar_else_its_strongest_readable_handles() -> N
         party = Party._base_manager.create(display_name="Ada Lovelace", created_by=owner)
         weaker = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=owner.pk)
         stronger = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
-        PartyHandle.objects.link(party, weaker, confidence=0.6, source=LinkSource.IMPORT, created_by_id=owner.pk)
-        PartyHandle.objects.link(party, stronger, source=LinkSource.IMPORT, is_confirmed=True, created_by_id=owner.pk)
+        Party.objects.assert_handle(party, weaker, asserted_by=owner, confidence=0.6)
+        party.with_actor(owner).confirm(aspect="handle", handle=stronger, values={})
     weaker_avatar, stronger_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES), _avatar(PNG_BYTES + b"\x00")
     Handle.objects.set_avatar(weaker, weaker_avatar)
     Handle.objects.set_avatar(stronger, stronger_avatar)
@@ -219,9 +218,9 @@ def test_the_display_avatar_never_reaches_the_address_book() -> None:
 
     owner = _user("avatar-projection-owner")
     with system_context(reason="test avatar projection"):
-        person = Person._base_manager.create(display_name="Ada", source_uid="ada", created_by=owner)
+        person = Person._base_manager.create(display_name="Ada", created_by=owner)
         handle = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
-        PartyHandle.objects.link(person, handle, source=LinkSource.IMPORT, created_by_id=owner.pk)
+        Party.objects.assert_handle(person, handle, asserted_by=owner)
     Handle.objects.set_avatar(handle, _avatar(PNG_BYTES))
 
     with system_context(reason="test avatar projection read"):
@@ -255,7 +254,7 @@ def test_the_people_list_shows_avatars_with_nested_fields_in_a_bounded_number_of
                 handle = Handle.objects.upsert(
                     platform="whatsapp", value=f"+1858342{index:04d}", created_by_id=owner.pk
                 )
-                PartyHandle.objects.link(person, handle, source=LinkSource.IMPORT, created_by_id=owner.pk)
+                Party.objects.assert_handle(person, handle, asserted_by=owner)
                 handle_avatar = _avatar(PNG_BYTES + bytes([index]))
                 Handle.objects.set_avatar(handle, handle_avatar)
                 shown[public_id_of(person)] = public_id_of(own or handle_avatar)
@@ -311,3 +310,25 @@ def test_a_live_sessions_reports_land_one_by_one_and_stop_between_chunks(monkeyp
     with system_context(reason="test session avatar stop"):
         # The first chunk landed before the stop check; the second never ran.
         assert Handle._base_manager.get(external_id=_JID).avatar_id is None
+
+
+def test_a_handle_merge_gives_the_kept_handle_the_alias_avatar_only_when_it_has_none() -> None:
+    """The kept handle takes the merged alias's avatar when it shows none, and keeps its own otherwise."""
+
+    owner = _user("avatar-handle-merge-owner")
+    with system_context(reason="test handle merge avatar"):
+        alias = Handle.objects.upsert(platform="whatsapp", value="113352894324899@lid", created_by_id=owner.pk)
+        phone = Handle.objects.upsert(platform="whatsapp", value=_PHONE, created_by_id=owner.pk)
+    alias_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES)
+    Handle.objects.set_avatar(alias, alias_avatar)
+    with system_context(reason="test handle merge avatar fill"):
+        kept = Handle.objects.merge(alias, into=phone)
+    assert kept.pk == phone.pk and kept.avatar_id == alias_avatar.pk
+
+    with system_context(reason="test handle merge avatar keep"):
+        second_alias = Handle.objects.upsert(platform="whatsapp", value="113352894324898@lid", created_by_id=owner.pk)
+    Handle.objects.set_avatar(second_alias, own_avatar)
+    with system_context(reason="test handle merge avatar keep merge"):
+        kept = Handle.objects.merge(second_alias, into=phone)
+    assert kept.avatar_id == alias_avatar.pk
+    assert not Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).exists()

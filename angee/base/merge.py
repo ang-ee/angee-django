@@ -10,15 +10,14 @@ much as Django's ``on_delete`` decides what a delete does to such rows:
   blocks, and a ``DO_NOTHING`` key (history), which keeps pointing at the record;
 - a polymorphic edge (:class:`~angee.base.refs.RecordRefMixin`) follows its
   model's ``merge_policy``, which blocks unless the edge declares another;
-- any other generic foreign key has no declared policy and blocks, except a
-  reversion snapshot, which is history and keeps pointing at the record.
+- any other generic foreign key has no declared policy and blocks.
 
 A row that names a record in a form no reference reads (a resource ledger's
 public id), or work that retiring the record would cancel (an unfinished workflow
 run), is its addon's to refuse, through ``ANGEE_MERGE_GUARDS``.
 
 A move re-keys the pointing column. Where the survivor already holds an equal
-row under the reference's identity (an edge's ``merge_identity``, an
+row under the reference's identity (the pointing model's ``merge_identity``, an
 auto-created many-to-many link's pair), the merged record's copy is dropped; any
 other unique collision refuses the merge, including one under a rule no field set
 describes (an expression constraint). The merged record's own many-to-many
@@ -27,15 +26,17 @@ rows are its data, not references: they leave with it unless
 relationships naming a merged record (a share, a membership) refuse the merge:
 retiring the record would drop them, and no merge moves them yet.
 
-Moves, and the identity copies they drop, run as named system work once
-:meth:`MergeableMixin.merge` has authorized the actor: under an actor REBAC only
-deletes and recreates an edge, which would cost a row its identity. Retiring a
-merged record is the actor's own delete.
+Every merge shares one system fold, :func:`fold_records`: its refusals, the
+moves (and the identity copies they drop) as named system work, and the merge
+changeset. :meth:`MergeableMixin.merge` calls it once it has authorized the
+actor, whose own delete retires each merged record; under an actor REBAC only
+deletes and recreates an edge, which would cost a row its identity. A model's own
+system verb that folds a duplicate has no actor to authorize and calls it directly.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self
 
@@ -53,18 +54,24 @@ from rebac.actors import model_can_resolve_subject, to_subject_ref
 from rebac.errors import NoActorResolvedError
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
-from reversion.models import Version
 
 from angee.base.actors import instance_actor
+from angee.base.changesets import changeset, current_changeset
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import AppendOnlyModel, AuditMixin, auto_now_stamps
+from angee.base.mixins import (
+    AppendOnlyModel,
+    AuditMixin,
+    MergeContractMixin,
+    auto_now_stamps,
+    unique_field_sets,
+)
+from angee.base.querysets import model_history
 from angee.base.refs import (
     MergePolicy,
     RecordRefMixin,
     concrete_child_models,
     generic_pointer_model,
-    unique_field_sets,
 )
 from angee.base.scoping import lock_if_supported, read_scoped_queryset
 
@@ -128,15 +135,30 @@ class Reference:
 
         return self.model._base_manager.filter(**self.lookup(record))
 
+    def retains(self, record: models.Model) -> bool:
+        """Include earlier pointer versions when deciding whether evidence survives."""
+
+        if self.rows(record).using(record._state.db).exists():
+            return True
+        return (
+            model_history(self.model) is not None
+            and self.model.history.using(record._state.db).filter(**self.lookup(record)).exists()
+        )
+
     def move(self, rows: models.QuerySet[Any], *, survivor: models.Model) -> None:
         """Re-point ``rows`` to ``survivor``, dropping copies of identity rows it already holds.
 
         A collision on any other unique set refuses the merge: rows that merely
         share a slot, such as a rank, are different facts.
+        A pointing model may own ``merge_contract(reference, rows, survivor=)``
+        to retain identity collisions; dispatch precedes ordinary deletion.
         """
 
         if not self.holds(survivor):
             raise ValidationError(f"The record that is kept cannot hold {self.label}.")
+        if issubclass(self.model, MergeContractMixin) and self.model.merge_contract is not None:
+            self.model.merge_contract(self, rows, survivor=survivor)
+            return
         target = self.lookup(survivor)
         held = self.model._base_manager.filter(**target)
         identity = _merge_identity(self.model)
@@ -241,10 +263,14 @@ class EdgeReference(Reference):
         """Return a condition on ``target`` rows: an edge row names the target's type and key."""
 
         object_id = self.model._meta.get_field(self.pointer.fk_field)
-        return Exists(self.model._base_manager.filter(**{
-            self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
-            self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
-        }))
+        return Exists(
+            self.model._base_manager.filter(
+                **{
+                    self.pointer.ct_field: ContentType.objects.get_for_model(generic_pointer_model(target)),
+                    self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
+                }
+            )
+        )
 
 
 def references(model: type[models.Model]) -> Iterator[Reference]:
@@ -292,21 +318,23 @@ def references(model: type[models.Model]) -> Iterator[Reference]:
             yield EdgeReference(edge, edge.merge_policy, declared)
         for pointer in edge._meta.private_fields:
             if isinstance(pointer, GenericForeignKey) and pointer is not declared:
-                # A pointer no edge declares has no policy: a revision snapshot is
-                # history, and any other one refuses rather than dangling.
-                policy = MergePolicy.KEEP if issubclass(edge, Version) else MergePolicy.BLOCK
-                yield EdgeReference(edge, policy, pointer)
+                # A pointer no edge declares has no policy and refuses the merge.
+                yield EdgeReference(edge, MergePolicy.BLOCK, pointer)
 
 
 class MergeableMixin(models.Model):
     """Merge records of this model into a survivor through one template.
 
-    :meth:`merge` locks the survivor and the merged records, authorizes the
-    actor, checks :meth:`validate_merge`, lets :meth:`merge_fields` carry values
-    over, re-points references (:meth:`merge_references`) as named system work
-    and retires each merged record (:meth:`retire_merged`). A model adapts the
+    :meth:`merge` locks the survivor and the merged records and authorizes the
+    actor, then folds them (:func:`fold_records`): the fold refuses a record a
+    :meth:`merge_blockers` condition, a stored relationship or a merge guard
+    holds, :meth:`validate_merge` adds the model's own refusals,
+    :meth:`merge_fields` carries values over, references move as named system
+    work and :meth:`retire_merged` retires each merged record. A model adapts the
     merge by overriding those hooks and calling ``super()``.
     """
+
+    retains_merged: ClassVar[bool] = False
 
     SURVIVOR_PERMISSION: ClassVar[str] = "write"
     """The permission a merge needs on the record that is kept."""
@@ -324,17 +352,14 @@ class MergeableMixin(models.Model):
         """Return each condition on a merged record that refuses its merge, with its message.
 
         A verb and a batched projection share these: a row matching any of them
-        cannot be merged. The default refuses while a ``BLOCK`` reference points
-        at the record. Overrides add the model's own conditions to ``super()``'s.
+        cannot be merged. The default (:func:`reference_blockers`) refuses while a
+        ``BLOCK`` reference points at the record. Overrides add the model's own
+        conditions to ``super()``'s.
         """
 
-        return tuple(
-            (Q(reference.pointing(cls)), f"{reference.label} still refer to it.")
-            for reference in references(cls)
-            if reference.policy == MergePolicy.BLOCK
-        )
+        return reference_blockers(cls)
 
-    def merge(self, *, records: Sequence[str]) -> Self:
+    def merge(self, *, records: Sequence[str], **options: Any) -> Self:
         """Merge the records named by public id into this one and return it.
 
         A record the actor cannot read reads as gone. The whole merge commits or
@@ -367,59 +392,38 @@ class MergeableMixin(models.Model):
                 raise PermissionDenied("You are not allowed to change the record that is kept.")
             if not all(record.has_access(self.MERGED_PERMISSION) for record in merged):
                 raise PermissionDenied("You are not allowed to remove every record being merged.")
-            survivor.validate_merge(merged)
-            survivor.merge_fields(merged)
-            with system_context(reason=MERGE_REASON):
-                for record in merged:
-                    survivor.merge_references(record)
-            for record in merged:
-                survivor.retire_merged(record)
+
+            def carry() -> None:
+                survivor.validate_merge(merged)
+                survivor.merge_fields(merged, **options)
+
+            fold_records(
+                survivor,
+                merged,
+                carry=carry,
+                retire=survivor.retire_merged,
+                blockers=model.merge_blockers(),
+                retained=self.retains_merged,
+            )
         self.refresh_from_db()
         return self
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
-        """Refuse a merged record that a :meth:`merge_blockers` condition, a stored relationship or a guard holds.
+        """Refuse merging ``merged`` into this record for the model's own reasons; the default adds none.
 
-        ``ANGEE_MERGE_GUARDS`` callables take one merged record and return a
-        refusal message, or ``None``: an addon whose rows point at records in a
-        form no reference can read (a resource ledger's public id) refuses there.
-        Overrides add rules about the pair, such as a recorded "keep separate".
+        :func:`fold_records` has already refused a merged record that a
+        :meth:`merge_blockers` condition, a stored relationship or a merge guard
+        holds. Overrides add rules about the pair, such as a recorded "keep separate".
         """
-
-        model = type(self)
-        guards = resolve_hooks("ANGEE_MERGE_GUARDS")
-        with system_context(reason=MERGE_REASON):
-            for condition, message in model.merge_blockers():
-                refused = model._base_manager.filter(pk__in=[record.pk for record in merged]).filter(condition)
-                if refused.exists():
-                    raise ValidationError(message)
-            for record in merged:
-                if _named_in_relationships(record):
-                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
-                for guard in guards:
-                    if refusal := guard(record):
-                        raise ValidationError(refusal)
-
-    def merge_fields(self, merged: Sequence[Self]) -> None:
-        """Carry values over from the merged records; the default keeps this record's own."""
 
         del merged
 
-    def merge_references(self, merged: Self) -> None:
-        """Re-point what refers to ``merged`` to this record, by each reference's policy.
+    def merge_fields(self, merged: Sequence[Self], **options: Any) -> None:
+        """Carry values over from the merged records; the default keeps this record's own."""
 
-        A reference from this record itself to ``merged`` refuses the merge:
-        moving it would point the record at itself.
-        """
-
-        for reference in references(type(merged)):
-            if reference.policy != MergePolicy.MOVE:
-                continue
-            rows = reference.rows(merged)
-            if isinstance(self, reference.model) and rows.filter(pk=self.pk).exists():
-                raise ValidationError(f"{self} refers to {merged} through {reference.label}; change that first.")
-            if rows.exists():
-                reference.move(rows, survivor=self)
+        del merged
+        if options:
+            raise ValidationError(f"Unsupported merge options: {', '.join(sorted(options))}.")
 
     def retire_merged(self, merged: Self) -> None:
         """Remove ``merged`` through the model's delete lock, as the actor; the default deletes it."""
@@ -433,7 +437,84 @@ class MergeableMixin(models.Model):
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
 
 
-def _named_in_relationships(record: models.Model) -> bool:
+def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
+    """Return a refusal condition on ``model`` rows per ``BLOCK`` reference, with its message.
+
+    A row a ``BLOCK`` reference points at cannot be merged: the refusal every
+    merge shares (:func:`fold_records`) and the default of
+    :meth:`MergeableMixin.merge_blockers`.
+    """
+
+    return tuple(
+        (Q(reference.pointing(model)), f"{reference.label} still refer to it.")
+        for reference in references(model)
+        if reference.policy == MergePolicy.BLOCK
+    )
+
+
+def fold_records(
+    survivor: models.Model,
+    merged: Sequence[models.Model],
+    *,
+    carry: Callable[[], object],
+    retire: Callable[[Any], object],
+    blockers: Sequence[tuple[Q, str]] | None = None,
+    retained: bool = False,
+) -> None:
+    """Fold ``merged`` into ``survivor``, a record of their model, in one merge changeset it is the origin of.
+
+    The system work every record merge shares; it needs no actor. The caller has
+    locked the records, in the transaction this runs in, and authorized an
+    actor's merge. In order, the fold:
+
+    - refuses before anything moves while a merged record matches a ``blockers``
+      condition (by default :func:`reference_blockers`), stored relationships
+      name it (unless it is ``retained`` as a redirect: retiring it would drop
+      them) or an ``ANGEE_MERGE_GUARDS`` callable refuses it. A guard takes the
+      record and returns a refusal message, or ``None``: an addon whose rows
+      point at records in a form no reference reads (a resource ledger's public
+      id) refuses there;
+    - runs ``carry``: the caller's own refusals, then the values it carries over;
+    - re-points every ``MOVE`` reference to ``survivor`` as named system work;
+      a reference from ``survivor`` itself to a merged record refuses, since
+      moving it would point the record at itself;
+    - lets ``retire`` remove each merged record, in the caller's own context;
+    - records the model as touched on the caller's changeset row.
+    """
+
+    model = type(survivor)
+    with changeset(fresh=True, activity="merge", origin=survivor):
+        with system_context(reason=MERGE_REASON):
+            rows = model._base_manager.filter(pk__in=[record.pk for record in merged])
+            for condition, message in reference_blockers(model) if blockers is None else blockers:
+                if rows.filter(condition).exists():
+                    raise ValidationError(message)
+            guards = resolve_hooks("ANGEE_MERGE_GUARDS")
+            for record in merged:
+                if not retained and named_in_relationships(record):
+                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
+                for guard in guards:
+                    if refusal := guard(record):
+                        raise ValidationError(refusal)
+        carry()
+        moving = [reference for reference in references(model) if reference.policy == MergePolicy.MOVE]
+        with system_context(reason=MERGE_REASON):
+            for record in merged:
+                for reference in moving:
+                    pointing = reference.rows(record)
+                    if isinstance(survivor, reference.model) and pointing.filter(pk=survivor.pk).exists():
+                        raise ValidationError(
+                            f"{survivor} refers to {record} through {reference.label}; change that first."
+                        )
+                    if pointing.exists():
+                        reference.move(pointing, survivor=survivor)
+        for record in merged:
+            retire(record)
+        if (context := current_changeset(required=True, record=True)) is not None:
+            context.touched.append(model._meta.label_lower)
+
+
+def named_in_relationships(record: models.Model) -> bool:
     """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
 
     The delete takes the record's multi-table parents and children with it, and
@@ -443,12 +524,12 @@ def _named_in_relationships(record: models.Model) -> bool:
     """
 
     model = type(record)
-    rows = active_relationship_model().objects
+    rows = active_relationship_model().objects.using(record._state.db)
     for owner in (model, *model._meta.get_parent_list(), *_descendants(model)):
         typed, subject = bool(model_resource_type(owner)), model_can_resolve_subject(owner)
         if not (typed or subject):
             continue
-        row = owner._base_manager.filter(pk=record.pk).first()
+        row = owner._base_manager.db_manager(record._state.db).filter(pk=record.pk).first()
         if row is None:
             continue
         refs = [to_object_ref(row)] if typed else []
@@ -485,19 +566,19 @@ def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:
 
 
 def _collapse(kept: models.Model, duplicate: models.Model) -> bool:
-    """Let an edge fold a differing duplicate into the row a merge keeps; plain link rows cannot."""
+    """Let the pointing model fold a differing duplicate into the row a merge keeps; plain link rows cannot."""
 
-    return isinstance(kept, RecordRefMixin) and kept.merge_collapse(duplicate)
+    return isinstance(kept, MergeContractMixin) and kept.merge_collapse(duplicate)
 
 
 def _merge_identity(model: type[models.Model]) -> frozenset[tuple[str, ...]]:
     """Return the unique field sets whose equal rows of ``model`` state one fact.
 
-    An edge declares its own (``merge_identity``); an auto-created many-to-many
-    link is its pair. Any other model declares none.
+    A pointing model declares its own (``MergeContractMixin.merge_identity``); an
+    auto-created many-to-many link is its pair. Any other model declares none.
     """
 
-    if issubclass(model, RecordRefMixin):
+    if issubclass(model, MergeContractMixin):
         return frozenset(model.merge_identity)
     if model._meta.auto_created:
         return frozenset(tuple(fields) for fields in model._meta.unique_together)

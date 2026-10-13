@@ -66,7 +66,6 @@ class SpaceMembershipType(AngeeNode):
     group: SpaceGroupType | None = actor_scoped_to_one("group")
     role: auto
     confidence: auto
-    source: auto
     is_confirmed: auto
     is_dismissed: auto
     notification_policy: auto
@@ -203,7 +202,6 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
         "group",
         "party",
         "role",
-        "source",
         "is_confirmed",
         "is_dismissed",
         "created_at",
@@ -211,7 +209,7 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
     ],
     sortable=["group", "party", "role", "confidence", "created_at", "updated_at"],
     aggregatable=["id", "confidence"],
-    groupable=["group", "party", "role", "source"],
+    groupable=["group", "party", "role"],
     insertable=["group", "party", "role"],
     updatable=["role"],
     field_id_decode={

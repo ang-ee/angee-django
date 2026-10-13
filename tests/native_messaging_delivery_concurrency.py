@@ -1,6 +1,7 @@
 """PostgreSQL delivery interleavings on the actual composed model graph."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import timedelta
 from threading import Event
 
@@ -31,8 +32,12 @@ class DeliveryConcurrency(DeliveryFixtures):
         with system_context(reason="uncertain concurrency fixture"):
             row.deliver()
             claimed = Message.objects.claim_delivery(row.pk, token=row.external_id)
-            Message.objects.record_delivery(row.pk, token=row.external_id, claim=claimed.delivery_claim,
-                                            error=DeliveryUncertain("Acknowledgement lost."))
+            Message.objects.record_delivery(
+                row.pk,
+                token=row.external_id,
+                claim=claimed.delivery_claim,
+                error=DeliveryUncertain("Acknowledgement lost."),
+            )
             row.refresh_from_db()
         ready, finish = Event(), Event()
 
@@ -43,12 +48,14 @@ class DeliveryConcurrency(DeliveryFixtures):
                 ready.set()
                 self.assertTrue(finish.wait(10))
                 return Message.objects.record_delivery(
-                    row.pk, token=row.external_id, claim=active.delivery_claim,
+                    row.pk,
+                    token=row.external_id,
+                    claim=active.delivery_claim,
                     outcome=DeliveryOutcome(accepted=True, provider_id="recovered"),
                 )
 
         with ThreadPoolExecutor(max_workers=1) as pool:
-            worker = pool.submit(independent_connection, reconcile)
+            worker = pool.submit(copy_context().run, independent_connection, reconcile)
             try:
                 self.assertTrue(ready.wait(10))
                 for verb in (row.acknowledge_delivery, row.retry_delivery):
@@ -68,9 +75,14 @@ class DeliveryConcurrency(DeliveryFixtures):
         with ThreadPoolExecutor(max_workers=1) as pool:
             with transaction.atomic(), system_context(reason="effect claim race"):
                 Message.objects.select_for_update().get(pk=row.pk)
-                contender = pool.submit(independent_connection, lambda: Message.objects.claim_delivery(
-                    row.pk, token=row.external_id,
-                ))
+                contender = pool.submit(
+                    copy_context().run,
+                    independent_connection,
+                    lambda: Message.objects.claim_delivery(
+                        row.pk,
+                        token=row.external_id,
+                    ),
+                )
                 winner = Message.objects.claim_delivery(row.pk, token=row.external_id)
                 self.assertIsNotNone(winner.delivery_claim)
             self.assertIsNone(contender.result(timeout=10))
@@ -82,12 +94,19 @@ class DeliveryConcurrency(DeliveryFixtures):
     def test_sweep_skips_a_claimed_row_and_enqueues_each_due_message_once(self):
         first = self.outbound(scheduled_at=timezone.now() - timedelta(seconds=1))
         with system_context(reason="due race fixture"):
-            second = Message.objects.create(channel_id=self.feed.pk, direction="outbound", status="draft",
-                                            external_id="second", scheduled_at=first.scheduled_at)
+            second = Message.objects.create(
+                channel_id=self.feed.pk,
+                direction="outbound",
+                status="draft",
+                external_id="second",
+                scheduled_at=first.scheduled_at,
+            )
         with ThreadPoolExecutor(max_workers=1) as pool:
             with transaction.atomic(), system_context(reason="sweep claim race"):
                 Message.objects.select_for_update().get(pk=first.pk)
-                contender = pool.submit(independent_connection, Message.objects.release_held_messages)
+                contender = pool.submit(
+                    copy_context().run, independent_connection, Message.objects.release_held_messages
+                )
                 self.assertEqual(contender.result(timeout=10), 1)
                 self.assertEqual(self.broker.call_count, 1)
                 self.assertEqual(Message.objects.release_held_messages(), 1)
@@ -107,7 +126,7 @@ class DeliveryConcurrency(DeliveryFixtures):
         with ThreadPoolExecutor(max_workers=1) as pool:
             with bridge_advisory_lock(self.feed) as acquired:
                 self.assertTrue(acquired)
-                contender = pool.submit(independent_connection, lambda: self.run_delivery(row))
+                contender = pool.submit(copy_context().run, independent_connection, lambda: self.run_delivery(row))
                 self.assertEqual(contender.result(timeout=10)["status"], "retry")
                 self.backend.deliver.assert_not_called()
         with system_context(reason="contention settlement check"):
@@ -120,8 +139,9 @@ class DeliveryConcurrency(DeliveryFixtures):
         for discarding in (False, True):
             with self.subTest(discarding=discarding):
                 with system_context(reason="held race fixture"):
-                    row = Message.objects.create(channel_id=self.feed.pk, direction="outbound", status="draft",
-                                                 external_id=f"race-{discarding}")
+                    row = Message.objects.create(
+                        channel_id=self.feed.pk, direction="outbound", status="draft", external_id=f"race-{discarding}"
+                    )
                 selection = self.selection(row)
                 winner = Message.objects.discard_held_drafts if discarding else Message.objects.send_held_drafts
                 loser = Message.objects.send_held_drafts if discarding else Message.objects.discard_held_drafts
@@ -134,7 +154,7 @@ class DeliveryConcurrency(DeliveryFixtures):
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     with transaction.atomic(), system_context(reason="held action race"):
                         Message.objects.select_for_update().get(pk=row.pk)
-                        contender = pool.submit(independent_connection, compete)
+                        contender = pool.submit(copy_context().run, independent_connection, compete)
                         with actor_context(self.operator):
                             self.assertTrue(winner(selection, actor=self.operator)[0].ok)
                     self.assertFalse(contender.result(timeout=10)[0].ok)

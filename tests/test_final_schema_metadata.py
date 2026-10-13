@@ -49,7 +49,6 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
           resource(id: ID!): ResourceNode
           resource_groups: [String!]!
           resource_groups_count: Int!
-          resource_revisions(id: ID!): [String!]!
           resource_query: ResourceQuery
         }
         type Mutation {
@@ -67,7 +66,6 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
             aggregate_name="resources_aggregate",
             group_name="resource_groups",
             group_count_name="resource_groups_count",
-            revisions_name="resource_revisions",
             create_name="create_resource",
             update_name="update_resource",
             save_name="save_resource",
@@ -89,7 +87,6 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
         detail_name="resource",
         group_name="resource_groups",
         group_count_name="resource_groups_count",
-        revisions_name="resource_revisions",
         create_name="create_resource",
         delete_preview_name="preview_resource_delete",
         changes_name="resource_changes",
@@ -103,7 +100,6 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
         "list",
         "detail",
         "groups",
-        "revisions",
         "create",
         "deletePreview",
         "changes",

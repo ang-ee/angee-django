@@ -58,9 +58,7 @@ def _default_installed_apps(tmp_path: Path, roots: tuple[str, ...]) -> tuple[str
     return tuple(defaults["INSTALLED_APPS"])
 
 
-def test_public_origin_joins_csrf_trusted_origins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ANGEE_PUBLIC_ORIGIN (set by ingress-fronted stacks) is a CSRF trusted origin."""
 
     monkeypatch.setenv("ANGEE_PUBLIC_ORIGIN", "https://demo.example.com")
@@ -246,7 +244,6 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.compose.apps.ComposeConfig",
         "django.contrib.contenttypes.apps.ContentTypesConfig",
         "rebac.apps.RebacConfig",
-        "reversion.apps.ReversionConfig",
         "simple_history",
         BASE_APP,
         # Core apps are an always-on prefix rather than addon dependencies.
@@ -259,6 +256,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
+        "angee.provenance",
         "angee.integrate.apps.IntegrateConfig",
         "angee.integrate_vcs.apps.IntegrateVcsConfig",
         "angee.mcp.apps.MCPConfig",
@@ -442,7 +440,10 @@ def test_autoconfig_environment_precedence_is_shared_by_declared_and_derived_set
     [(None, None, 60), (30, None, 30), (30, "15", 15)],
 )
 def test_web_statement_timeout_is_declared_with_project_and_environment_overrides(
-    monkeypatch: pytest.MonkeyPatch, project: int | None, environment: str | None, expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+    project: int | None,
+    environment: str | None,
+    expected: int,
 ) -> None:
     """The composer declares the web statement bound; a project or deployment changes it."""
 
@@ -1076,7 +1077,6 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
         "angee.compose",
         "django.contrib.contenttypes",
         "rebac",
-        "reversion",
         "simple_history",
         "angee.base",
         "django_celery_beat",
@@ -1777,7 +1777,10 @@ def test_bare_settings_use_addon_owned_defaults(settings):
     assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10
     assert settings.ANGEE_WORKFLOW_RETENTION_DAYS == 90
     assert {
-        "prepare_pages", "recognize_page", "process_evidence", "infer_evidence",
+        "prepare_pages",
+        "recognize_page",
+        "process_evidence",
+        "infer_evidence",
     } <= steps.keys()
     assert {"none", "retention_notes", "step_text"} <= settings.ANGEE_EXTRACTION_PROFILE_CLASSES.keys()
     assert not hasattr(settings, "ANGEE_EXTRACTION_BACKEND_CLASSES")

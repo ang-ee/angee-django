@@ -1,6 +1,6 @@
 [addon]
 name = "angee.workflows_parties"
-description = "Party identity review and mapped duplicate-pair reviews"
+description = "Party identity review and mapped same_as pair reviews"
 keywords = ["workflows", "parties", "reviews", "dedupe"]
 category = "Workflows"
 depends_on = ["angee.workflows", "angee.decisions", "angee.parties"]

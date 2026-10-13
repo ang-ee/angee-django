@@ -25,6 +25,7 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 
+from angee.base.mixins import SourceKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
@@ -221,9 +222,17 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     settings and ``self.bridge.credential`` authenticates — and ``self.http`` is the
     shared SSRF-pinned client. Incremental state lives on each ``SyncStream``.
     """
+
     registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
     delivery_visibility_delay: ClassVar[timedelta] = timedelta()
     """Minimum age of a possibly accepted claim before reconciliation; feeds extend it."""
+    source_kind: ClassVar[SourceKind | None] = None
+    """How a channel on this protocol is classified when it asserts statements.
+
+    A takeout or export backend whose channel asserts facts as an identified
+    integration declares ``SourceKind.IMPORT``. A transport that only lands
+    messages keeps ``None``: its channel asserts nothing and is refused as a source.
+    """
 
     @classmethod
     def reconciles_delivery(cls) -> bool:

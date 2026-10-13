@@ -1,6 +1,7 @@
 """Cross-addon contracts exercised through the emitted model graph."""
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextvars import copy_context
 from dataclasses import replace
 from threading import Barrier, Event
 from unittest import skipUnless
@@ -36,19 +37,26 @@ class ReplyJoins(DeliveryFixtures):
         self.assertFalse(comment.reply_state())
         reply = comment.reply_to_comment(body="Answer", actor=self.agent, creation_key="answer")
         with system_context(reason="reply evidence states"):
-            for status, trashed, expected in (("draft", False, True), ("queued", False, True),
-                                             ("sent", False, True), ("failed", False, False),
-                                             ("draft", True, False)):
+            for status, trashed, expected in (
+                ("draft", False, True),
+                ("queued", False, True),
+                ("sent", False, True),
+                ("failed", False, False),
+                ("draft", True, False),
+            ):
                 Message.objects.filter(pk=reply.pk).update(status=status, is_trashed=trashed)
                 self.assertEqual(comment.reply_state(), expected)
 
     def test_native_and_channel_authored_replies_are_answer_evidence(self):
         comment = self.comment()
         with system_context(reason="native reply evidence"):
-            native = replace(self.post("native", parent="comment"), message=replace(
-                self.post("native", parent="comment").message,
-                sender=ParsedHandle(platform="youtube", value="publisher"),
-            ))
+            native = replace(
+                self.post("native", parent="comment"),
+                message=replace(
+                    self.post("native", parent="comment").message,
+                    sender=ParsedHandle(platform="youtube", value="publisher"),
+                ),
+            )
             land_posts(self.feed, [native], owner_id=self.operator.pk)
             self.assertTrue(comment.reply_state())
             with self.assertRaisesMessage(CommentAnswered, "already answered"):
@@ -78,10 +86,17 @@ class ReplyJoins(DeliveryFixtures):
     def test_discovery_applies_identity_and_empty_discovery_preserves_it(self):
         with system_context(reason="feed identity discovery"):
             adapter = FeedBackend(self.feed)
-            adapter.apply_discovery(ConnectionDiscovery(data={
-                "external_id": "discovered", "display_name": "Discovered feed",
-                "handle": ParsedHandle(platform="youtube", value="discovered-publisher", external_id="publisher-id"),
-            }))
+            adapter.apply_discovery(
+                ConnectionDiscovery(
+                    data={
+                        "external_id": "discovered",
+                        "display_name": "Discovered feed",
+                        "handle": ParsedHandle(
+                            platform="youtube", value="discovered-publisher", external_id="publisher-id"
+                        ),
+                    }
+                )
+            )
             self.feed.refresh_from_db()
             self.assertEqual((self.feed.external_id, self.feed.display_name), ("discovered", "Discovered feed"))
             self.assertEqual(self.feed.handle.external_id, "publisher-id")
@@ -145,7 +160,7 @@ class ReplyJoins(DeliveryFixtures):
             with bridge_advisory_lock(self.feed) as acquired, ThreadPoolExecutor(max_workers=1) as pool:
                 self.assertTrue(acquired)
                 with self.assertRaises(IntegrationError) as refusal:
-                    pool.submit(inbound).result(timeout=10)
+                    pool.submit(copy_context().run, inbound).result(timeout=10)
                 self.assertTrue(refusal.exception.transient)
                 land.assert_not_called()
             self.assertTrue(inbound())
@@ -181,10 +196,18 @@ class MemoryJoins(DeliveryFixtures):
             vault = apps.get_model("knowledge", "Vault").objects.create_for(self.operator, name="Memory")
             record = apps.get_model("projects", "Task").objects.create(title="Contact context")
             page = binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Contact", actor=self.operator,
+                record,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="Contact",
+                actor=self.operator,
             )
             again = binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Changed", actor=self.operator,
+                record,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="Changed",
+                actor=self.operator,
             )
             self.assertEqual(page.pk, again.pk)
             related = page_model.objects.create_in(vault, title="Related reference")
@@ -202,7 +225,11 @@ class MemoryJoins(DeliveryFixtures):
             vault = apps.get_model("knowledge", "Vault").objects.create_for(self.operator, name="Removed memory")
             record = apps.get_model("projects", "Task").objects.create(title="Removed contact")
             page = binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Removed", actor=self.operator,
+                record,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="Removed",
+                actor=self.operator,
             )
             page.trash()
             trashed_at = page.trashed_at
@@ -237,16 +264,27 @@ class MemoryJoins(DeliveryFixtures):
             first = records.objects.create(title="First memory owner")
             second = records.objects.create(title="Second memory owner")
             page = bindings.objects.ensure_page(
-                first, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Shared", actor=self.operator,
+                first,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="Shared",
+                actor=self.operator,
             )
             bindings.objects.upsert(target=second, page=page, role=RecordBindingManager.MEMORY_ROLE)
             first.delete()
             page.refresh_from_db()
             self.assertFalse(page.is_trashed)
             self.assertEqual(bindings.objects.for_record(second, role=RecordBindingManager.MEMORY_ROLE).count(), 1)
-            self.assertEqual(bindings.objects.ensure_page(
-                second, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Unused", actor=self.operator,
-            ).pk, page.pk)
+            self.assertEqual(
+                bindings.objects.ensure_page(
+                    second,
+                    role=RecordBindingManager.MEMORY_ROLE,
+                    vault=vault,
+                    title="Unused",
+                    actor=self.operator,
+                ).pk,
+                page.pk,
+            )
             second.delete()
             page.refresh_from_db()
             self.assertTrue(page.is_trashed)
@@ -260,7 +298,9 @@ class MemoryJoins(DeliveryFixtures):
         with system_context(reason="test late memory target"):
             # An unthreaded target: no messaging teardown locks its row before the DELETE.
             record = handle_model.objects.upsert(
-                platform="youtube", value="late-memory", created_by_id=self.operator.pk,
+                platform="youtube",
+                value="late-memory",
+                created_by_id=self.operator.pk,
             )
 
         def bind_before_delete(sender, instance, **kwargs):
@@ -284,20 +324,42 @@ class MemoryJoins(DeliveryFixtures):
             vault = apps.get_model("knowledge", "Vault").objects.create_for(self.operator, name="Bound memory")
             record = apps.get_model("projects", "Task").objects.create(title="Bound contact")
             first = binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="First", actor=self.operator,
+                record,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="First",
+                actor=self.operator,
             )
             second = apps.get_model("knowledge", "Page").objects.create_in(vault, title="Second")
             binding.objects.upsert(target=record, page=second, role=RecordBindingManager.MEMORY_ROLE)
-            self.assertEqual(binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Unused", actor=self.operator,
-            ).pk, first.pk)
+            self.assertEqual(
+                binding.objects.ensure_page(
+                    record,
+                    role=RecordBindingManager.MEMORY_ROLE,
+                    vault=vault,
+                    title="Unused",
+                    actor=self.operator,
+                ).pk,
+                first.pk,
+            )
             first.trash()
-            self.assertEqual(binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Unused", actor=self.operator,
-            ).pk, second.pk)
+            self.assertEqual(
+                binding.objects.ensure_page(
+                    record,
+                    role=RecordBindingManager.MEMORY_ROLE,
+                    vault=vault,
+                    title="Unused",
+                    actor=self.operator,
+                ).pk,
+                second.pk,
+            )
         with self.assertRaises(PermissionDenied):
             binding.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Hidden", actor=self.agent,
+                record,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="Hidden",
+                actor=self.agent,
             )
         with system_context(reason="hidden memory not duplicated"):
             self.assertEqual(binding.objects.for_record(record).count(), 2)
@@ -313,7 +375,11 @@ class PostgreSQLJoins(DeliveryFixtures):
             vault = apps.get_model("knowledge", "Vault").objects.create_for(self.operator, name="Trashing memory")
             record = handles.objects.upsert(platform="youtube", value="concurrent-trash")
             page = bindings.objects.ensure_page(
-                record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Memory", actor=self.operator,
+                record,
+                role=RecordBindingManager.MEMORY_ROLE,
+                vault=vault,
+                title="Memory",
+                actor=self.operator,
             )
         locked, deleting, release = Event(), Event(), Event()
 
@@ -338,9 +404,9 @@ class PostgreSQLJoins(DeliveryFixtures):
                 close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            removing_page = pool.submit(trash)
+            removing_page = pool.submit(copy_context().run, trash)
             self.assertTrue(locked.wait(timeout=10))
-            removing_record = pool.submit(delete)
+            removing_record = pool.submit(copy_context().run, delete)
             self.assertTrue(deleting.wait(timeout=10))
             try:
                 with self.assertRaises(TimeoutError):
@@ -366,13 +432,20 @@ class PostgreSQLJoins(DeliveryFixtures):
             try:
                 barrier.wait(timeout=10)
                 return bindings.objects.ensure_page(
-                    record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Memory", actor=self.operator,
+                    record,
+                    role=RecordBindingManager.MEMORY_ROLE,
+                    vault=vault,
+                    title="Memory",
+                    actor=self.operator,
                 ).pk
             finally:
                 close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            first, second = [future.result(timeout=15) for future in (pool.submit(ensure), pool.submit(ensure))]
+            first, second = [
+                future.result(timeout=15)
+                for future in (pool.submit(copy_context().run, ensure), pool.submit(copy_context().run, ensure))
+            ]
         self.assertEqual(first, second)
         with system_context(reason="memory race result"):
             self.assertEqual(bindings.objects.for_record(record, role=RecordBindingManager.MEMORY_ROLE).count(), 1)
@@ -405,16 +478,20 @@ class PostgreSQLJoins(DeliveryFixtures):
             close_old_connections()
             try:
                 return bindings.objects.ensure_page(
-                    record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Raced", actor=self.operator,
+                    record,
+                    role=RecordBindingManager.MEMORY_ROLE,
+                    vault=vault,
+                    title="Raced",
+                    actor=self.operator,
                 )
             finally:
                 close_old_connections()
 
         with patch.object(type(page_model.objects), "create_in", pause_creation):
             with ThreadPoolExecutor(max_workers=2) as pool:
-                creating = pool.submit(ensure)
+                creating = pool.submit(copy_context().run, ensure)
                 self.assertTrue(locked.wait(timeout=10))
-                deletion = pool.submit(delete)
+                deletion = pool.submit(copy_context().run, delete)
                 self.assertTrue(deleting.wait(timeout=10))
                 try:
                     with self.assertRaises(TimeoutError):
@@ -462,9 +539,9 @@ class PostgreSQLJoins(DeliveryFixtures):
 
         with patch.object(type(bindings.objects), "teardown_for_record", pause_teardown):
             with ThreadPoolExecutor(max_workers=2) as pool:
-                deletion = pool.submit(delete)
+                deletion = pool.submit(copy_context().run, delete)
                 self.assertTrue(deleted.wait(timeout=10))
-                writing = pool.submit(bind)
+                writing = pool.submit(copy_context().run, bind)
                 try:
                     with self.assertRaises(TimeoutError):
                         writing.result(timeout=0.5)
@@ -476,7 +553,11 @@ class PostgreSQLJoins(DeliveryFixtures):
         with actor_context(self.operator):
             with self.assertRaises(handle.DoesNotExist):
                 bindings.objects.ensure_page(
-                    record, role=RecordBindingManager.MEMORY_ROLE, vault=vault, title="Refused", actor=self.operator,
+                    record,
+                    role=RecordBindingManager.MEMORY_ROLE,
+                    vault=vault,
+                    title="Refused",
+                    actor=self.operator,
                 )
             self.assertFalse(bindings.objects.for_record(record).exists())
             self.assertEqual(apps.get_model("knowledge", "Page").objects.filter(vault=vault).count(), 1)

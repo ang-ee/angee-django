@@ -2,7 +2,7 @@
 
 Adapters emit :class:`ParsedConnection` values and never write parties rows.
 This owner upserts the account handle, materializes a Person behind its
-PartyHandle (scored, never confirmed), records the account owner's acquaintance edge, and maps
+normal PartyStatement (an export is a source, never confirmed), records the account owner's acquaintance edge, and maps
 an optional employer onto parties' existing ``employee`` Relationship shape.
 
 Organization names in social exports are free text, not stable organization
@@ -22,8 +22,10 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import system_context
+from rebac.actors import to_subject_ref
 
-from angee.parties.mixins import LinkSource
+from angee.base.evidence import EvidenceReference
+from angee.base.mixins import SourceKind, StatementSourceMixin
 
 
 class ConnectionHandle(Protocol):
@@ -55,8 +57,8 @@ class ConnectionHandle(Protocol):
 class ParsedConnection:
     """One social account's connection to a person, neutral of export format.
 
-    ``handle.metadata`` carries adapter evidence about the account handle;
-    ``provenance`` names the connection record source independently.
+    ``handle.metadata`` carries adapter evidence about the account handle.
+    The batch's identified integration supplies the asserting principal.
     """
 
     handle: ConnectionHandle
@@ -64,18 +66,22 @@ class ParsedConnection:
     organization: str = ""
     title: str = ""
     connected_at: date | datetime | None = None
-    provenance: str = ""
 
 
-def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, created_by_id: Any) -> list[Any]:
+def ingest_connections(
+    parsed_connections: Iterable[tuple[ParsedConnection, Any]], *, created_by_id: Any, asserted_by: Any
+) -> list[Any]:
     """Idempotently land parsed connections and return their Person rows.
 
     The batch entry point: the source user, its anchor Party, and each required
     ``RelationshipKind`` resolve once for the whole run — a friends export is
-    thousands of records and must not repeat loop-invariant lookups. Each
-    record still lands in its own transaction, so one bad record fails alone.
+    thousands of records and must not repeat loop-invariant lookups.
+    Each item pairs the parsed value with its observed RecordLink. Records land
+    in separate transactions, so one bad record fails alone.
     """
 
+    if StatementSourceMixin.kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
+        raise ValidationError("Connection exports require an identified IMPORT integration.")
     party_model = apps.get_model("parties", "Party")
     kind_model = apps.get_model("parties", "RelationshipKind")
     user_model = apps.get_model(settings.AUTH_USER_MODEL)
@@ -86,79 +92,81 @@ def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, create
         return [
             _ingest_one_connection(
                 parsed,
+                link=link,
                 owner_party=owner_party,
                 kind_model=kind_model,
                 kinds=kinds,
                 created_by_id=created_by_id,
+                asserted_by=asserted_by,
             )
-            for parsed in parsed_connections
+            for parsed, link in parsed_connections
         ]
 
 
 def ingest_connection(
     parsed: ParsedConnection,
     *,
+    link: Any,
     created_by_id: Any,
+    asserted_by: Any,
 ) -> Any:
     """Idempotently land one parsed connection and return its Person."""
 
-    return ingest_connections([parsed], created_by_id=created_by_id)[0]
+    return ingest_connections([(parsed, link)], created_by_id=created_by_id, asserted_by=asserted_by)[0]
 
 
 def _ingest_one_connection(
     parsed: ParsedConnection,
     *,
+    link: Any,
     owner_party: Any,
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
+    asserted_by: Any,
 ) -> Any:
     """Land one parsed connection and return its Person.
 
     The source account's user is the relationship anchor. The imported person
-    becomes its ``acquaintance`` from ``connected_at`` onward. The handle link
-    carries generic ``import`` provenance plus the adapter's precise label in
-    metadata, and is never confirmed: an export is a source, not the person's
-    decision. It decides the handle's owner (confidence 1.0) only when the
-    handle names an account by a real identifier (:func:`_identified`); a name
-    alone lands at 0.4, for review. Optional email and employment facts compose
-    the same Handle/PartyHandle/Relationship owners.
+    becomes its ``acquaintance`` from ``connected_at`` onward; normal handle
+    assertions name the supplied IMPORT integration and are never preferred: an
+    export is a source, not the person's decision. It decides the handle's owner
+    (confidence 1.0) only when the handle names an account by a real identifier
+    (:func:`_identified`); a name alone lands at 0.4, for review. Optional email
+    and employment facts compose the same Handle/PartyStatement/Relationship owners.
     """
 
     handle_model = apps.get_model("parties", "Handle")
     person_model = apps.get_model("parties", "Person")
-    party_handle_model = apps.get_model("parties", "PartyHandle")
+    parties = apps.get_model("parties", "Party").objects
     relationship_model = apps.get_model("parties", "Relationship")
-    provenance = str(parsed.provenance or "social_takeout")
-    link_metadata = {"provenance": provenance}
-
+    if to_subject_ref(link.stream.integration) != to_subject_ref(asserted_by):
+        raise ValidationError("The connection link must belong to its asserting integration.")
     with transaction.atomic():
         handle = handle_model.objects.upsert(
             platform=parsed.handle.platform,
             value=parsed.handle.value,
             external_id=parsed.handle.external_id,
             display_name=parsed.handle.display_name,
-            metadata={
-                **(parsed.handle.metadata or {}),
-                "connection_import": link_metadata,
-            },
+            metadata=parsed.handle.metadata,
             created_by_id=created_by_id,
         )
         person = _connection_person(
             handle,
             display_name=parsed.handle.display_name or parsed.handle.value,
-            provenance=provenance,
+            asserted_by=asserted_by,
             person_model=person_model,
-            party_handle_model=party_handle_model,
             created_by_id=created_by_id,
         )
-        party_handle_model.objects.link(
+        parent = apps.get_model("parties", "Party")._base_manager.get(pk=person.pk)
+        apps.get_model("integrate", "RecordLink").objects.bind_target(link, parent)
+        parties.assert_handle(
             person,
             handle,
             confidence=1.0 if _identified(parsed.handle, handle_model) else 0.4,
-            source=LinkSource.IMPORT,
-            metadata=link_metadata,
-            created_by_id=created_by_id,
+            asserted_by=asserted_by,
+            link=link,
+            evidence=[handle],
         )
         if parsed.email:
             email = handle_model.objects.upsert(
@@ -167,34 +175,46 @@ def _ingest_one_connection(
                 display_name=person.display_name,
                 created_by_id=created_by_id,
             )
-            party_handle_model.objects.link(
+            parties.assert_handle(
                 person,
                 email,
                 confidence=1.0,
-                source=LinkSource.IMPORT,
-                metadata=link_metadata,
-                created_by_id=created_by_id,
+                asserted_by=asserted_by,
+                link=link,
+                evidence=[handle],
             )
         _land_acquaintance(
             owner_party,
             person,
             connected_at=parsed.connected_at,
-            provenance=provenance,
             relationship_model=relationship_model,
             kind_model=kind_model,
             kinds=kinds,
             created_by_id=created_by_id,
+            asserted_by=asserted_by,
+            link=link,
+            evidence=handle,
         )
         _land_employment(
             person,
             organization=parsed.organization,
             title=parsed.title,
-            provenance=provenance,
             relationship_model=relationship_model,
             kind_model=kind_model,
             kinds=kinds,
             created_by_id=created_by_id,
+            asserted_by=asserted_by,
+            link=link,
+            evidence=handle,
         )
+        parent.statements.set(
+            aspect="identity",
+            values={"display_name": parsed.handle.display_name or parsed.handle.value},
+            asserted_by=asserted_by,
+            link=link,
+            evidence=[EvidenceReference.of(handle)],
+        )
+        person.refresh_from_db()
         return person
 
 
@@ -215,34 +235,29 @@ def _connection_person(
     handle: Any,
     *,
     display_name: str,
-    provenance: str,
+    asserted_by: Any,
     person_model: Any,
-    party_handle_model: Any,
     created_by_id: Any,
 ) -> Any:
-    """Return the handle's Person, filling a blank display name only.
+    """Return the handle's Person; identity statements own subsequent names.
 
     The handle's owner when it has one; otherwise the party an earlier run of the
-    same import linked it to, since a link awaiting review, or one the person
+    same import linked it to, since a claim awaiting review, or one the person
     dismissed, owns nothing; a re-import therefore never mints a second person.
     An existing name is never overwritten: it may be user-curated, and export
     text must not clobber curation on every re-run.
     """
 
     party_id = handle.party_id or (
-        party_handle_model._base_manager.filter(
-            handle=handle, source=LinkSource.IMPORT, metadata__provenance=provenance
-        )
+        apps.get_model("parties", "PartyStatement")
+        ._base_manager.filter(handle=handle, aspect="handle", asserted_by=str(to_subject_ref(asserted_by)))
         .order_by("pk")
-        .values_list("party_id", flat=True)
+        .values_list("subject_id", flat=True)
         .first()
     )
     if party_id is not None:
         person = person_model._base_manager.filter(pk=party_id).first()
         if person is not None:
-            if display_name and not person.display_name:
-                person.display_name = display_name
-                person.save(update_fields=["display_name", "updated_at"])
             return person
     return person_model.objects.create(
         display_name=display_name or person_model.PLACEHOLDER_NAME,
@@ -267,39 +282,38 @@ def _land_acquaintance(
     person: Any,
     *,
     connected_at: date | datetime | None,
-    provenance: str,
     relationship_model: Any,
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
+    asserted_by: Any,
+    link: Any,
+    evidence: Any,
 ) -> None:
     """Record the source account's idempotent connection to ``person``."""
 
     if owner_party.pk == person.pk:
         return
     kind = _relationship_kind(kind_model, "acquaintance", kinds)
-    edge, created = relationship_model.objects.get_or_create(
+    edge, _ = relationship_model.objects.get_or_create(
         party=owner_party,
         other_party=person,
         kind=kind,
-        defaults={
-            "source": LinkSource.IMPORT,
+        defaults={"created_by_id": created_by_id},
+    )
+    edge.statements.set(
+        aspect="relationship",
+        asserted_by=asserted_by,
+        link=link,
+        evidence=[EvidenceReference.of(evidence)],
+        values={
+            "other_name": "",
+            "title": "",
             "started_at": _connection_date(connected_at),
-            "notes": provenance,
-            "created_by_id": created_by_id,
+            "ended_at": None,
+            "notes": "",
         },
     )
-    if created or edge.source != LinkSource.IMPORT:
-        return
-    values = {
-        "started_at": edge.started_at or _connection_date(connected_at),
-        "notes": edge.notes or provenance,
-    }
-    dirty = [name for name, value in values.items() if getattr(edge, name) != value]
-    if dirty:
-        for name in dirty:
-            setattr(edge, name, values[name])
-        edge.save(update_fields=[*dirty, "updated_at"])
 
 
 def _land_employment(
@@ -307,11 +321,13 @@ def _land_employment(
     *,
     organization: str,
     title: str,
-    provenance: str,
     relationship_model: Any,
     kind_model: Any,
     kinds: dict[str, Any],
     created_by_id: Any,
+    asserted_by: Any,
+    link: Any,
+    evidence: Any,
 ) -> None:
     """Land the existing free-text employee relationship shape when present."""
 
@@ -319,26 +335,26 @@ def _land_employment(
     if not organization:
         return
     kind = _relationship_kind(kind_model, "employee", kinds)
-    edge, created = relationship_model.objects.get_or_create(
+    edge, _ = relationship_model.objects.get_or_create(
         party=person,
         other_party=None,
         other_name=organization,
         kind=kind,
-        source=LinkSource.IMPORT,
-        defaults={
+        defaults={"created_by_id": created_by_id},
+    )
+    edge.statements.set(
+        aspect="relationship",
+        asserted_by=asserted_by,
+        link=link,
+        evidence=[EvidenceReference.of(evidence)],
+        values={
+            "other_name": organization,
             "title": str(title or ""),
-            "notes": provenance,
-            "created_by_id": created_by_id,
+            "notes": "",
+            "started_at": None,
+            "ended_at": None,
         },
     )
-    if created:
-        return
-    values = {"title": str(title or ""), "notes": edge.notes or provenance}
-    dirty = [name for name, value in values.items() if getattr(edge, name) != value]
-    if dirty:
-        for name in dirty:
-            setattr(edge, name, values[name])
-        edge.save(update_fields=[*dirty, "updated_at"])
 
 
 def _connection_date(value: date | datetime | None) -> date | None:

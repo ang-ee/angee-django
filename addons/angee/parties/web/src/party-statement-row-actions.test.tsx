@@ -17,15 +17,15 @@ vi.mock("./i18n", () => ({
 }));
 
 import {
-  usePartyHandleRowActions,
-  type PartyHandleActionRow,
-} from "./party-handle-row-actions";
+  usePartyStatementRowActions,
+  type PartyStatementActionRow,
+} from "./party-statement-row-actions";
 
 describe("party handle row actions", () => {
   test("shares ungated authored decisions while detail visibility hides decided verbs", () => {
-    const review = renderHook(() => usePartyHandleRowActions("all"));
-    const detail = renderHook(() => usePartyHandleRowActions("remaining"));
-    const decided: PartyHandleActionRow = {
+    const review = renderHook(() => usePartyStatementRowActions("all"));
+    const detail = renderHook(() => usePartyStatementRowActions("remaining"));
+    const decided: PartyStatementActionRow = {
       id: "claim-1",
       is_confirmed: true,
       is_dismissed: false,
@@ -39,7 +39,7 @@ describe("party handle row actions", () => {
     const [confirmAction, dismissAction] = review.result.current;
     const [detailConfirm, detailDismiss] = detail.result.current;
     if (confirmAction?.kind !== "authored" || dismissAction?.kind !== "authored") {
-      throw new Error("Expected authored party-handle actions.");
+      throw new Error("Expected authored party-statement actions.");
     }
     expect(confirmAction.confirm).toBeUndefined();
     expect(dismissAction.confirm).toBeUndefined();

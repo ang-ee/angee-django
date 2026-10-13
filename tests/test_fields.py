@@ -591,19 +591,34 @@ def test_sqid_field_deconstruct_preserves_public_id_contract() -> None:
 @pytest.mark.parametrize(
     ("module", "model_name", "prefix"),
     [
-        *(('angee.parties.models', name, prefix) for name, prefix in (
-            ('Party', 'pty_'), ('Handle', 'hdl_'), ('PartyHandle', 'phl_'),
-            ('Address', 'adr_'), ('Folder', 'fol_'),
-        )),
-        *(('angee.messaging.models', name, prefix) for name, prefix in (
-            ('Thread', 'thr_'), ('Message', 'msg_'), ('Fragment', 'frg_'),
-            ('Part', 'prt_'), ('MessageEdge', 'mge_'), ('Participant', 'ptp_'),
-            ('Reaction', 'rxn_'), ('MessageStar', 'msr_'),
-        )),
+        *(
+            ("angee.parties.models", name, prefix)
+            for name, prefix in (
+                ("Party", "pty_"),
+                ("Handle", "hdl_"),
+                ("Address", "adr_"),
+                ("Folder", "fol_"),
+            )
+        ),
+        *(
+            ("angee.messaging.models", name, prefix)
+            for name, prefix in (
+                ("Thread", "thr_"),
+                ("Message", "msg_"),
+                ("Fragment", "frg_"),
+                ("Part", "prt_"),
+                ("MessageEdge", "mge_"),
+                ("Participant", "ptp_"),
+                ("Reaction", "rxn_"),
+                ("MessageStar", "msr_"),
+            )
+        ),
     ],
 )
 def test_declared_sqid_prefix_keeps_explicit_field_deconstruction(
-    module: str, model_name: str, prefix: str,
+    module: str,
+    model_name: str,
+    prefix: str,
 ) -> None:
     """The removed redeclarations leave Django's field state unchanged."""
 
@@ -686,9 +701,7 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),)
 
     with model_tables((RankedItem,)):
         first = RankedItem.objects.create(lane="a")
@@ -754,9 +767,7 @@ def test_fractional_rank_full_clean_allows_the_pending_none() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_pending_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_pending_lane_rank"),)
 
     with model_tables((RankedPending,)):
         instance = RankedPending(lane="a")
@@ -870,9 +881,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),)
 
     with model_tables((RankedRebalance,)):
         RankedRebalance.objects.create(lane="a", rank=0.25)
@@ -884,9 +893,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
         changed = field.rebalance(context={"lane": "a"})
 
         assert changed == 3
-        ranks = list(
-            RankedRebalance.objects.filter(lane="a").order_by("rank").values_list("rank", flat=True)
-        )
+        ranks = list(RankedRebalance.objects.filter(lane="a").order_by("rank").values_list("rank", flat=True))
         step = FractionalRankField.STEP
         assert ranks == [step, step * 2, step * 3]
         untouched.refresh_from_db()
@@ -900,9 +907,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
         for occupied in (step / 2, step, step * 2):
             RankedRebalance.objects.create(lane="c", rank=occupied)
         assert field.rebalance(context={"lane": "c"}) == 3
-        crowded = list(
-            RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True)
-        )
+        crowded = list(RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True))
         assert crowded == [step, step * 2, step * 3]
 
 
@@ -919,9 +924,7 @@ def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("lane", "rank"), name="ranked_guard_lane_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("lane", "rank"), name="ranked_guard_lane_rank"),)
 
     field = RankedContextGuard._meta.get_field("rank")
     for bad_context in ({"lane__icontains": "a"}, {"missing": 1}, {"rank": 1.0}):
@@ -951,9 +954,7 @@ def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
             """Django model options for the test model."""
 
             app_label = "auth"
-            constraints = (
-                models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),
-            )
+            constraints = (models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),)
 
     with model_tables((RankOwner, RankedRelationContext)):
         field = RankedRelationContext._meta.get_field("rank")

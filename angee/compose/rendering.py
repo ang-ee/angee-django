@@ -10,7 +10,6 @@ from __future__ import annotations
 from django.db import models
 from rebac.mixins import REBAC_META_OPTIONS
 
-from angee.base.mixins import RevisionMixin
 from angee.base.tiers import ResourceTier
 from angee.compose.model_composition import ModelComposition
 
@@ -42,7 +41,11 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
                 )
                 base_names.append(parent_alias)
         meta_name = f"_{name}Meta"
-        meta_lines = ["        abstract = False", f"        app_label = {label!r}"]
+        meta_lines = [
+            "        abstract = False",
+            f"        app_label = {label!r}",
+            '        base_manager_name = "_angee_base"',
+        ]
         constraints = [alias for donor, alias in zip(donors, donor_aliases, strict=True) if donor._meta.constraints]
         if constraints:
             meta_lines.append(
@@ -55,6 +58,18 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             if value is not None:
                 meta_lines.append(f"        {option} = {value!r}")
         body_lines: list[str] = []
+        if parent is None and not any(
+            manager.name == "_angee_base" for base in (*donors, source) for manager in base._meta.managers
+        ):
+            imports.add("from angee.base.models import AngeeUnscopedManager")
+            body_lines.extend(["    _angee_base = AngeeUnscopedManager()", ""])
+            default_manager = source._meta.default_manager
+            if default_manager is None:
+                imports.add("from django.db import models")
+                body_lines.extend(["    objects = models.Manager()", ""])
+            meta_lines.append(
+                f"        default_manager_name = {default_manager.name if default_manager is not None else 'objects'!r}"
+            )
         body_lines.extend(
             [
                 f"    angee_contributed_field_origins = {composition.contributed_field_origins(source)!r}",
@@ -84,21 +99,6 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             f"    class Meta({meta_name}):",
             *meta_lines,
         ]
-        # Registration is the dependency's native API on the completed Django
-        # class. A concrete parent's tracking does not opt its child into tracking.
-        if any(issubclass(base, RevisionMixin) for base in (*donors, source)):
-            imports.add("import reversion")
-            lines.extend(
-                [
-                    "",
-                    f"if {name}.revisioned_fields:",
-                    f"    for parent_model in {name}._meta.parents:",
-                    "        if not reversion.is_registered(parent_model):",
-                    "            reversion.register(parent_model, fields=())",
-                    f"    reversion.register({name}, fields=(*{name}.revisioned_fields,",
-                    f"        *(field.name for field in {name}._meta.parents.values())))",
-                ]
-            )
         bodies.append("\n".join(lines))
     return "\n".join(
         [

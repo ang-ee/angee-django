@@ -12,6 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.changesets import changeset
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import PairingState, SessionLoggedOut
 from angee.integrate.locks import bridge_advisory_lock
@@ -32,9 +33,17 @@ def run_bridge_session_job(
     on_shutdown: Callable[[], None] | None = None,
     on_stalled_shutdown: Callable[[], NoReturn] | None = None,
 ) -> dict[str, Any]:
-    """Run one bridge's live session for the life of its vendor connection."""
+    """Run one bridge's live session for the life of its vendor connection.
 
-    with system_context(reason="integrate.run_bridge_session"):
+    The run is one logical pull: its boundary attributes every landed item of a
+    session, whether the session runs inside the task or in a spawned child
+    process, which has no other entrypoint boundary.
+    """
+
+    with (
+        system_context(reason="integrate.run_bridge_session"),
+        changeset(fresh=True, activity="pull", change_reason="integrate.run_bridge_session"),
+    ):
         try:
             app_label, model_name = str(model_label).split(".", 1)
         except ValueError:

@@ -116,12 +116,6 @@ export function useDeleteWithPreview(
   };
 }
 
-export function useRevisionOperation(
-  resource: DataResourceMetadata | null,
-): ResourceOperation {
-  return useResourceOperation(resource, "revisions", "revisions");
-}
-
 export function useSaveOperation(
   resource: DataResourceMetadata | null,
 ): ResourceOperation {

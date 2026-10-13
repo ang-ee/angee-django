@@ -26,7 +26,7 @@ import {
   MergeParties,
   PARTY_MERGE_INVALIDATES,
   PartyMergeComparison,
-  VetoMerge,
+  DismissSameAs,
   type MergePartyRecord,
   type MergePersonRecord,
 } from "./documents";
@@ -125,11 +125,9 @@ function relationshipIds(record: MergePartyRecord): readonly string[] {
 
 function originLabel(
   record: MergePartyRecord,
-  person: MergePersonRecord | null | undefined,
   t: ReturnType<typeof usePartiesT>,
 ): string {
   const platforms = [...new Set(record.handles.map((handle) => handle.platform))].join(", ");
-  if (person?.folder?.name) return t("merge.origin.folder", { name: person.folder.name });
   if (platforms) return t("merge.origin.handles", { platforms });
   return t("merge.origin.manual");
 }
@@ -196,7 +194,7 @@ export function MergePage(): React.ReactElement {
   const [merge, mergeState] = useAuthoredMutation(MergeParties, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
-  const [veto, vetoState] = useAuthoredMutation(VetoMerge, {
+  const [dismiss, dismissState] = useAuthoredMutation(DismissSameAs, {
     invalidateModels: PARTY_MERGE_INVALIDATES,
   });
   const [survivor, setSurvivor] = React.useState<MergeSide>("left");
@@ -240,7 +238,7 @@ export function MergePage(): React.ReactElement {
   const relationshipTotal = left && right
     ? new Set([...relationshipIds(left), ...relationshipIds(right)]).size
     : 0;
-  const busy = mergeState.fetching || vetoState.fetching;
+  const busy = mergeState.fetching || dismissState.fetching;
 
   const goBack = React.useCallback(() => {
     window.history.back();
@@ -274,9 +272,9 @@ export function MergePage(): React.ReactElement {
 
   const keepSeparate = React.useCallback(async () => {
     if (!left || !right) return;
-    const result = await veto({ aId: left.id, bId: right.id });
-    if (result?.veto_merge) goBack();
-  }, [goBack, left, right, veto]);
+    const result = await dismiss({ aId: left.id, bId: right.id });
+    if (result?.dismiss_same_as) goBack();
+  }, [goBack, left, right, dismiss]);
 
   if (comparison.isFetching && !left && !right) {
     return (
@@ -332,13 +330,13 @@ export function MergePage(): React.ReactElement {
             <SurvivorOption
               side="left"
               record={left}
-              origin={originLabel(left, leftPerson, t)}
+              origin={originLabel(left, t)}
               survivorLabel={t("merge.survivor")}
             />
             <SurvivorOption
               side="right"
               record={right}
-              origin={originLabel(right, rightPerson, t)}
+              origin={originLabel(right, t)}
               survivorLabel={t("merge.survivor")}
             />
           </RadioGroup>
@@ -451,8 +449,8 @@ export function MergePage(): React.ReactElement {
             description={
               mergeState.error
                 ? t("merge.mutationError")
-                : vetoState.error
-                  ? t("merge.vetoError")
+                : dismissState.error
+                  ? t("merge.dismissError")
                   : null
             }
           />
@@ -462,11 +460,11 @@ export function MergePage(): React.ReactElement {
         <Button
           variant="danger"
           disabled={busy}
-          loading={vetoState.fetching}
-          loadingText={t("merge.vetoing")}
+          loading={dismissState.fetching}
+          loadingText={t("merge.dismissing")}
           onClick={() => void keepSeparate()}
         >
-          {t("merge.veto")}
+          {t("merge.dismiss")}
         </Button>
         <span className="flex items-center gap-2">
           <Button disabled={busy} onClick={goBack}>{t("merge.cancel")}</Button>

@@ -452,8 +452,8 @@ class DeliveryContracts(DeliveryFixtures):
             stream = apps.get_model("integrate", "SyncStream").objects.get(integration_id=self.feed.pk, key="history")
             self.assertEqual(stream.cursor, {"page": 2})
             self.assertTrue(stream.has_completed_baseline())
-            failures = apps.get_model("integrate", "SyncDiscrepancy").objects.filter(stream=stream)
-            self.assertEqual(list(failures.values_list("code", flat=True)), ["missing_external_id"])
+            failures = stream.sync_failures(open_only=False)
+            self.assertEqual([row.code for row in failures], ["missing_external_id"])
             self.assertEqual(Message.objects.with_external_ids(["first", "second"]).count(), 2)
 
     def test_provider_record_refusals_are_quarantined_separately_with_the_page_cursor(self):
@@ -473,8 +473,8 @@ class DeliveryContracts(DeliveryFixtures):
             self.assertEqual(self.feed.sync(), 1)
             stream = apps.get_model("integrate", "SyncStream").objects.get(integration_id=self.feed.pk)
             self.assertEqual(stream.cursor, {"page": 1})
-            failures = apps.get_model("integrate", "SyncDiscrepancy").objects.filter(stream=stream)
-            self.assertEqual(failures.count(), 2)
+            failures = stream.sync_failures(open_only=False)
+            self.assertEqual(len(failures), 2)
             self.assertEqual({row.details["external_key"] for row in failures}, {"bad-first", "bad-second"})
             self.assertEqual({row.code for row in failures}, {"invalid_record"})
             self.assertTrue(Message.objects.with_external_ids(["landed"]).exists())

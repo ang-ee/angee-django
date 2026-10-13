@@ -63,6 +63,7 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import changeset
 from angee.base.identity import instances_from_public_ids
 from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -745,7 +746,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             .values_list("pk", "external_id")
         )
         return self.name_untitled(
-            {pk: wanted[external_id] for pk, external_id in untitled}, created_by_id=created_by_id,
+            {pk: wanted[external_id] for pk, external_id in untitled},
+            created_by_id=created_by_id,
         )
 
     def referenced_thread(self, *, platform: str, in_reply_to: str, references: tuple[str, ...]) -> Any:
@@ -1207,8 +1209,12 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
     def _person_account(self, party_id: Any) -> Any | None:
         """Return the human account for a party, if this is an account follow."""
 
-        user_id = (apps.get_model("parties", "Person")._base_manager.filter(pk=party_id)
-                   .values_list("user_id", flat=True).first())
+        user_id = (
+            apps.get_model("parties", "Person")
+            ._base_manager.filter(pk=party_id)
+            .values_list("user_id", flat=True)
+            .first()
+        )
         if user_id is None:
             return None
         user = get_user_model()._base_manager.get(pk=user_id)
@@ -1220,10 +1226,14 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         attachment = _record_attachment(record, role=role)
         if attachment is None:
             return 0
-        people = list(apps.get_model("parties", "Person")._base_manager.filter(
-            pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
-            user__kind="person",
-        ).select_related("user"))
+        people = list(
+            apps.get_model("parties", "Person")
+            ._base_manager.filter(
+                pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
+                user__kind="person",
+            )
+            .select_related("user")
+        )
         allowed = record.thread_reader_ids(person.user for person in people)
         with system_context(reason="messaging.follower.read_revoked"):
             removed, _ = self.model._base_manager.filter(
@@ -1261,7 +1271,9 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
             )
         with system_context(reason="messaging.follower.access_revoked"):
             attachments = attachment_model._base_manager.filter(selection).values_list(
-                "pk", "content_type_id", "object_id",
+                "pk",
+                "content_type_id",
+                "object_id",
             )
             return self._end_unreadable_attachments(attachments)
 
@@ -1277,9 +1289,14 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         if party_id is not None:
             follows = follows.filter(party_id=party_id)
         follow_rows = list(follows.values_list("pk", "attachment_id", "party_id"))
-        people = apps.get_model("parties", "Person")._base_manager.filter(
-            pk__in={party for _, _, party in follow_rows}, user__kind="person",
-        ).select_related("user")
+        people = (
+            apps.get_model("parties", "Person")
+            ._base_manager.filter(
+                pk__in={party for _, _, party in follow_rows},
+                user__kind="person",
+            )
+            .select_related("user")
+        )
         accounts = {person.pk: person.user for person in people}
         types = ContentType.objects.in_bulk({content_type_id for content_type_id, _ in edges.values()})
         grouped: dict[tuple[Any, Any], set[Any]] = {}
@@ -1297,14 +1314,19 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
                 continue
             subject = to_subject_ref(accounts[follower_party_id])
             predicate = backend().queryset_filter(
-                model=model, subject=subject, action=model.thread_read_access,
+                model=model,
+                subject=subject,
+                action=model.thread_read_access,
                 using=self.db,
             )
             readable = (
                 model._base_manager.using(self.db).filter(predicate, pk__in=record_ids)
-                if predicate is not None else
-                model._default_manager.using(self.db).with_actor(subject)
-                .with_action(model.thread_read_access).filter(pk__in=record_ids).scoped()
+                if predicate is not None
+                else model._default_manager.using(self.db)
+                .with_actor(subject)
+                .with_action(model.thread_read_access)
+                .filter(pk__in=record_ids)
+                .scoped()
             )
             allowed[(content_type_id, follower_party_id)] = set(readable.order_by().values_list("pk", flat=True))
         revoked = []
@@ -1322,10 +1344,15 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         attachment = _record_attachment(record, role=role)
         if attachment is None:
             return []
-        people = (apps.get_model("parties", "Person")._base_manager.filter(
-            pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
-            user__kind="person",
-        ).select_related("user").order_by("pk")[:limit])
+        people = (
+            apps.get_model("parties", "Person")
+            ._base_manager.filter(
+                pk__in=self.model._base_manager.filter(attachment=attachment).values("party_id"),
+                user__kind="person",
+            )
+            .select_related("user")
+            .order_by("pk")[:limit]
+        )
         return [to_subject_ref(person.user) for person in people]
 
     def for_record(self, record: Any, *, role: str = "chatter") -> Any:
@@ -1907,8 +1934,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             deliveries.setdefault(account.pk, (policy_type.INBOX, None))
 
         eligible = {
-            key: account for key, account in accounts.items()
-            if created_by_id is None or str(key) != str(created_by_id)
+            key: account for key, account in accounts.items() if created_by_id is None or str(key) != str(created_by_id)
         }
         reader_ids = record.thread_reader_ids(eligible.values()) if record is not None else set(eligible)
         existing = {row.user_id: row for row in self.model._base_manager.filter(message=message)}
@@ -3357,9 +3383,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if not body:
             raise ValueError("Message body is required.")
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().annotate(
-                _has_tracking_values=self.model.has_tracking_values_expression(),
-            ).get(pk=message.pk)
+            message = (
+                type(message)
+                ._base_manager.select_for_update()
+                .annotate(
+                    _has_tracking_values=self.model.has_tracking_values_expression(),
+                )
+                .get(pk=message.pk)
+            )
             edit_error = message.content_edit_error()
             if edit_error is not None:
                 raise ValueError(edit_error)
@@ -3415,9 +3446,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         """Delete ``message`` from ``thread`` and repair thread denormalisations."""
 
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().annotate(
-                _has_tracking_values=self.model.has_tracking_values_expression(),
-            ).get(pk=message.pk)
+            message = (
+                type(message)
+                ._base_manager.select_for_update()
+                .annotate(
+                    _has_tracking_values=self.model.has_tracking_values_expression(),
+                )
+                .get(pk=message.pk)
+            )
             if message.thread_id != thread.pk:
                 raise ValueError("Message does not belong to this thread.")
             delete_error = message.delete_error()
@@ -3471,9 +3507,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         """Lock, re-authorize and trash or restore one comment, then recount its thread."""
 
         with transaction.atomic():
-            message = type(message)._base_manager.select_for_update().annotate(
-                _has_tracking_values=self.model.has_tracking_values_expression(),
-            ).get(pk=message.pk)
+            message = (
+                type(message)
+                ._base_manager.select_for_update()
+                .annotate(
+                    _has_tracking_values=self.model.has_tracking_values_expression(),
+                )
+                .get(pk=message.pk)
+            )
             if message.thread_id != thread.pk:
                 raise ValueError("Message does not belong to this record thread.")
             if trash and (error := message.trash_error()):
@@ -3635,14 +3676,17 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
             def suggest_parties() -> None:
                 try:
-                    party_handles = apps.get_model("parties", "PartyHandle").objects
+                    parties = apps.get_model("parties", "Party").objects
                 except Exception:
                     logger.exception("Could not initialize messaging party suggestions")
                     return
                 for handle in handles:
                     try:
-                        with system_context(reason="messaging.ingest.suggest_party"):
-                            party_handles.suggest_for(handle)
+                        with (
+                            changeset(fresh=True, activity="system", change_reason="messaging.ingest.suggest_party"),
+                            system_context(reason="messaging.ingest.suggest_party"),
+                        ):
+                            parties.suggest_for(handle)
                     except Exception:
                         logger.exception(
                             "Could not suggest a party for messaging handle %s",
@@ -4052,7 +4096,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         )
         for index, child in enumerate(parsed.children):
             self._build_parts(
-                message, child, parent=part, position=index, created_by_id=created_by_id, nameless=nameless,
+                message,
+                child,
+                parent=part,
+                position=index,
+                created_by_id=created_by_id,
+                nameless=nameless,
             )
 
     def _ingest_file(self, parsed: ParsedPart, created_by_id: Any, *, filename: str) -> Any:
@@ -4243,10 +4292,15 @@ class PartQuerySet(AngeeQuerySet[Any]):
         tree = self.model.objects.using(self.db)
         tree = (
             tree.system_context(reason="messaging attached-file tree for an elevated queryset")
-            if bypass else tree.with_actor(actor)
+            if bypass
+            else tree.with_actor(actor)
         ).select_related("fragment", "file", "file__mime_type")
-        candidates = self.attachments().select_related("file", "message").prefetch_related(
-            models.Prefetch("message__parts", queryset=tree),
+        candidates = (
+            self.attachments()
+            .select_related("file", "message")
+            .prefetch_related(
+                models.Prefetch("message__parts", queryset=tree),
+            )
         )
         owner = self.model.objects.db_manager(self.db)
         selected: list[Any] = []
@@ -4254,14 +4308,27 @@ class PartQuerySet(AngeeQuerySet[Any]):
         for part in candidates:
             lineage = (part, *owner.ancestors_for_message(part.message, part.pk))
             types = [row.type.split(";", 1)[0].strip().lower() for row in lineage]
-            if any(row.role == self.model.PartRole.SIGNATURE for row in lineage) or any(mime in {
-                "application/pgp-signature", "application/pkcs7-signature", "application/x-pkcs7-signature",
-            } for mime in types):
+            if any(row.role == self.model.PartRole.SIGNATURE for row in lineage) or any(
+                mime
+                in {
+                    "application/pgp-signature",
+                    "application/pkcs7-signature",
+                    "application/x-pkcs7-signature",
+                }
+                for mime in types
+            ):
                 reason = "signature"
-            elif any(mime in {
-                "multipart/report", "message/delivery-status", "message/global-delivery-status",
-                "message/disposition-notification", "message/global-disposition-notification",
-            } for mime in types):
+            elif any(
+                mime
+                in {
+                    "multipart/report",
+                    "message/delivery-status",
+                    "message/global-delivery-status",
+                    "message/disposition-notification",
+                    "message/global-disposition-notification",
+                }
+                for mime in types
+            ):
                 reason = "delivery_report"
             elif any(self._inline_decoration(row) for row in lineage):
                 reason = "inline"
@@ -4342,7 +4409,8 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
 
         if "name" in fields:
             fields["name"] = truncate_filename(
-                strip_null_bytes(fields["name"] or ""), self.model._meta.get_field("name").max_length,
+                strip_null_bytes(fields["name"] or ""),
+                self.model._meta.get_field("name").max_length,
             )
         if "type" in fields:
             fields["type"] = strip_null_bytes(fields["type"] or "")[: self.model._meta.get_field("type").max_length]

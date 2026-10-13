@@ -1,7 +1,6 @@
 """Vault copies preserve content, attribution, replay receipts and bounded work."""
 
 import pytest
-import reversion
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -21,13 +20,16 @@ from tests.test_knowledge import _grant
 def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clone_template, owned):
     fixture = clone_template
     with system_context(reason="test.template.binding"):
-        binding = RecordBinding(page=fixture.note, content_type=ContentType.objects.get_for_model(Vault),
-                                object_id=fixture.source.pk)
+        binding = RecordBinding(
+            page=fixture.note, content_type=ContentType.objects.get_for_model(Vault), object_id=fixture.source.pk
+        )
         binding.save()
         RecordBinding(
-            vault=fixture.source, content_type=ContentType.objects.get_for_model(Vault), object_id=fixture.source.pk,
+            vault=fixture.source,
+            content_type=ContentType.objects.get_for_model(Vault),
+            object_id=fixture.source.pk,
         ).save()
-    with actor_context(fixture.actor), reversion.create_revision():
+    with actor_context(fixture.actor):
         clone = Vault.objects.create_from(fixture.source, name="Copy", owned=owned)
     assert clone.owner_id == (fixture.actor.pk if owned else None)
     assert clone.pk != fixture.source.pk
@@ -46,11 +48,9 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
             assert page.sqid != original.sqid
             assert (page.kind, page.icon) == (original.kind, original.icon)
             assert page.created_by_id == page.updated_by_id == fixture.actor.pk
-            assert page.history.count() == 1
+            assert page.history.count() == 1 + int(page.parent_id is not None)
             assert page.created_at is not None and page.updated_at is not None
-            assert page.parent_id == (
-                copies[source_by_id[original.parent_id].title].pk if original.parent_id else None
-            )
+            assert page.parent_id == (copies[source_by_id[original.parent_id].title].pk if original.parent_id else None)
         originals = {body.pk: body for body in MarkdownPage.objects.filter(vault=fixture.source)}
         bodies = list(MarkdownPage.objects.filter(vault=clone))
         assert len(bodies) == 2
@@ -58,10 +58,11 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
             original = originals[source_pages[body.title].pk]
             assert body.pk != original.pk
             assert (body.body, body.body_hash, body.word_count) == (
-                original.body, original.body_hash, original.word_count,
+                original.body,
+                original.body_hash,
+                original.word_count,
             )
             assert body.created_by_id == body.updated_by_id == fixture.actor.pk
-            assert body.revisions.count() == 1
         links = {link.target_text: link for link in Link.objects.filter(source_page=copies["Guide"])}
         assert links.keys() == {"Outline", "Guide", "Missing"}
         assert links["Outline"].target_page_id == copies["Outline"].pk
@@ -76,7 +77,8 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
         relationships = active_relationship_model().objects
         assert not relationships.filter(resource_type="knowledge/vault", resource_id=str(clone.pk)).exists()
         assert not relationships.filter(
-            resource_type="knowledge/page", resource_id__in=[str(page.pk) for page in copies.values()],
+            resource_type="knowledge/page",
+            resource_id__in=[str(page.pk) for page in copies.values()],
         ).exists()
         MarkdownPage.objects.write_body(copies["Guide"], "Changed copy")
         fixture.note.refresh_from_db()
@@ -132,7 +134,9 @@ def test_deleting_owner_retains_the_vault_and_clears_ownership(clone_template):
 @pytest.mark.parametrize("owned", [True, False])
 @pytest.mark.parametrize("unavailable", ["unshared", "deleted"])
 def test_exact_replay_survives_unreadable_or_deleted_template_and_changed_ownership(
-    clone_template, owned, unavailable,
+    clone_template,
+    owned,
+    unavailable,
 ):
     fixture = clone_template
     with actor_context(fixture.actor):
@@ -148,7 +152,9 @@ def test_exact_replay_survives_unreadable_or_deleted_template_and_changed_owners
             fixture.source.delete()
         else:
             active_relationship_model().objects.filter(
-                resource_type="knowledge/vault", resource_id=str(fixture.source.pk), relation="viewer",
+                resource_type="knowledge/vault",
+                resource_id=str(fixture.source.pk),
+                relation="viewer",
             ).delete()
         before = Vault.objects.count(), Page.objects.count(), MarkdownPage.objects.count()
     with actor_context(fixture.actor):
@@ -272,10 +278,10 @@ def test_empty_creation_key_fails_before_a_clone_is_written(clone_template):
 
 
 def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables, record_property):
-    """Cloning issues one child insert per markdown page and no other per-page statement.
+    """Cloning issues one child insert and its native history capture per markdown page.
 
     Django's ``bulk_create`` refuses multi-table children, so each markdown body is its
-    own INSERT; everything else may only cross a few native batch boundaries.
+    own INSERT, snapshot read and history INSERT; remaining work stays batched.
     """
 
     author, actor = create_user("budget-author"), create_user("budget-actor")
@@ -291,16 +297,16 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
                 MarkdownPage.objects.write_body(page, f"[[Page 0]] [[Page {index}]] [[Missing]]")
                 pages.append(page)
         _grant(source, "viewer", actor)
-        with actor_context(actor), CaptureQueriesContext(connection) as captured, reversion.create_revision():
+        with actor_context(actor), CaptureQueriesContext(connection) as captured:
             clone = Vault.objects.create_from(source, name=f"Copy {size}")
         child_inserts = sum(query["sql"].startswith(child_insert) for query in captured.captured_queries)
         assert child_inserts == size
-        counts.append(len(captured) - child_inserts)
+        counts.append(len(captured) - 3 * child_inserts)
         record_property(f"clone_queries_{size}", len(captured))
         with system_context(reason="test.clone.budget.contents"):
             assert Page.objects.filter(vault=clone).count() == size
             assert MarkdownPage.objects.filter(vault=clone).count() == size
-            assert Page.history.filter(vault_id=clone.pk).count() == size
+            assert Page.history.filter(vault_id=clone.pk).count() == 2 * size - 1
     assert counts[1] - counts[0] <= 6, counts
 
 
@@ -315,16 +321,21 @@ def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_
             pages = []
             for index in range(30):
                 parent = pages[-1 if depth == 30 else 0] if pages else None
-                pages.append(Page.objects.create_in(
-                    source, title=f"Folder {index}", parent=parent, kind=Page.PageKind.FOLDER,
-                ))
+                pages.append(
+                    Page.objects.create_in(
+                        source,
+                        title=f"Folder {index}",
+                        parent=parent,
+                        kind=Page.PageKind.FOLDER,
+                    )
+                )
         with actor_context(actor), CaptureQueriesContext(connection) as captured:
             clone = Vault.objects.create_from(source, name=f"Copied depth {depth}")
         counts.append(len(captured))
         record_property(f"clone_queries_depth_{depth}", len(captured))
         with system_context(reason="test.clone.depth.contents"):
             copies = {page.title: page for page in Page.objects.filter(vault=clone)}
-            history = {row.id: row for row in Page.history.filter(vault_id=clone.pk)}
+            history = {row.id: row for row in Page.history.filter(vault_id=clone.pk).latest_of_each()}
             assert len(copies) == len(history) == 30
             for original in pages:
                 copied = copies[original.title]

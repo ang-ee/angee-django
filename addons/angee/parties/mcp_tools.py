@@ -18,7 +18,6 @@ _CIRCLE_MEMBERSHIP = (
     "sqid",
     ("circle", ("sqid", "name")),
     "confidence",
-    "source",
 )
 _RELATIONSHIP = (
     "sqid",
@@ -30,12 +29,13 @@ _RELATIONSHIP = (
     "ended_at",
     "notes",
 )
-_IDENTITY_DECISION = (
+_HANDLE_STATEMENT = (
     "sqid",
-    ("party", _PARTY_SUMMARY),
+    ("subject", _PARTY_SUMMARY),
     ("handle", ("sqid", "platform", "value")),
     "confidence",
-    "source",
+    "source_kind",
+    "asserted_by",
     "is_confirmed",
     "is_dismissed",
 )
@@ -72,35 +72,33 @@ def register(server: FastMCP) -> None:
                 "memberships, and typed relationships.",
             ),
             GraphQLTool(
-                operation="party_handles",
+                operation="party_statements",
                 name="list_review_queue",
-                fields=_IDENTITY_DECISION,
+                fields=_HANDLE_STATEMENT,
                 limit_arg="limit",
                 fixed={
                     "where": {
-                        "confidence": {"_lt": 0.5},
-                        "is_confirmed": {"_eq": False},
-                        "is_dismissed": {"_eq": False},
+                        "to_review": {"_eq": True},
                     }
                 },
-                description="List low-confidence undecided party-handle identity claims for human "
-                "review. Claim ids are phl_ sqids used by the confirm/dismiss tools.",
+                description="List low-confidence undecided handle statements for human "
+                "review. Statement ids are pst_ sqids used by the confirm/dismiss tools.",
             ),
             GraphQLTool(
-                operation="confirm_party_handle",
-                name="confirm_party_handle",
-                fields=_IDENTITY_DECISION,
+                operation="confirm_party_statement",
+                name="confirm_party_statement",
+                fields=_HANDLE_STATEMENT,
                 id_arg="id",
-                description="Confirm one review claim by phl_ sqid when the handle truly belongs to "
+                description="Confirm one review statement by pst_ sqid when the handle truly belongs to "
                 "the proposed party; confirmation becomes the strongest identity signal.",
             ),
             GraphQLTool(
-                operation="dismiss_party_handle",
-                name="dismiss_party_handle",
-                fields=_IDENTITY_DECISION,
+                operation="dismiss_party_statement",
+                name="dismiss_party_statement",
+                fields=_HANDLE_STATEMENT,
                 id_arg="id",
-                description="Dismiss one review claim by phl_ sqid when the proposed identity is wrong; "
-                "the durable anti-link prevents the same claim being suggested again.",
+                description="Dismiss one review statement by pst_ sqid when the proposed identity is wrong; "
+                "the durable anti-link prevents the same statement being suggested again.",
             ),
             GraphQLTool(
                 operation="merge_parties",

@@ -17,6 +17,7 @@ from angee.base.impl import ImplClassField
 from angee.base.merge import MergeableMixin
 from angee.base.models import AngeeModel
 from angee.base.permissions import effective_rebac_definition
+from angee.base.querysets import record_history
 from angee.base.refs import concrete_child_models, generic_pointer_model, record_edges_by_target
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
@@ -292,6 +293,7 @@ def finalize_data_resources(
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
             record_edges=_record_edges(item.model, edges_by_target),
             mergeable=item.model is not None and issubclass(item.model, MergeableMixin),
+            history=item.model is not None and record_history(item.model) is not None,
         )
         for item in finalized
     )
@@ -594,7 +596,9 @@ def _finalize_data_resource(
         row_model=row_model,
         filter_operators=filter_operators,
         non_null_filter_fields=final_input_policy_fields(
-            graphql_schema, type_names.filter, accepted=non_null_filter_fields,
+            graphql_schema,
+            type_names.filter,
+            accepted=non_null_filter_fields,
         ),
         model=model,
         identity_policies=identity_policies,
@@ -641,7 +645,9 @@ def _finalize_data_resource(
 
 
 def _mutation_arguments(
-    schema: GraphQLSchema, root: str | None, declared: tuple[str, ...],
+    schema: GraphQLSchema,
+    root: str | None,
+    declared: tuple[str, ...],
 ) -> tuple[data_contract.DataMutationArgument, ...]:
     """Intersect the owner's declared names with the final root's wire arguments."""
 
@@ -650,7 +656,8 @@ def _mutation_arguments(
         return ()
     return tuple(
         data_contract.DataMutationArgument(name=name, type=str(argument.type))
-        for name, argument in mutation.fields[root].args.items() if name in declared
+        for name, argument in mutation.fields[root].args.items()
+        if name in declared
     )
 
 
@@ -667,9 +674,7 @@ def _concrete_kinds(
     if model is None:
         return ()
     return tuple(
-        resources_by_model[child].model_label
-        for child in concrete_child_models(model)
-        if child in resources_by_model
+        resources_by_model[child].model_label for child in concrete_child_models(model) if child in resources_by_model
     )
 
 
@@ -1070,9 +1075,7 @@ def _relation_label_axes(
             # label for the first relation in the path. Advertising it as a
             # label axis makes clients select the object as a bare leaf.
             continue
-        prefixes = tuple(
-            axis for axis in relation_axes if path.startswith(f"{axis}__")
-        )
+        prefixes = tuple(axis for axis in relation_axes if path.startswith(f"{axis}__"))
         if not prefixes:
             relation = path.rsplit("__", 1)[0]
             raise ImproperlyConfigured(

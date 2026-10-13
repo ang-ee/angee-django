@@ -7,7 +7,7 @@ import datetime
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
@@ -24,10 +24,13 @@ def canonical_json(value: Any) -> str:
     )
 
 
-def canonical_json_sha256(value: Any) -> str:
-    """Return the lowercase SHA-256 digest of :func:`canonical_json`."""
+def canonical_json_sha256(value: Any = None, *, chunks: Iterable[str] | None = None) -> str:
+    """Hash a canonical value or a streamed canonical document with one digest."""
 
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256()
+    for chunk in chunks if chunks is not None else (canonical_json(value),):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def strip_null_bytes(value: Any) -> Any:

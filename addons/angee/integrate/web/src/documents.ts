@@ -68,11 +68,15 @@ export const RotateWebhookSecret = graphql(`
 
 /** Route search keeps identity only; its label comes from the retained stream. */
 export const IntegrationSyncStream = graphql(`
-  query IntegrationSyncStream($id: String!) {
+  query IntegrationSyncStream($id: String!, $includeFailures: Boolean!) {
     sync_streams_by_pk(id: $id) {
       id
       key
       partition
+      failures @include(if: $includeFailures) {
+        id stream_id link_id slot kind code status is_open attempts retry_at created_at
+      }
     }
   }
 `);
+

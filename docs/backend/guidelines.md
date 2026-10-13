@@ -705,11 +705,15 @@ data through REBAC, never a queryset bypass.
     it finds the merged records through the actor's read scope, even inside an
     outer system context, and needs `write` on the survivor and `delete` on each
     merged record.
-  - Only then does it move references under `system_context(reason="merge")`,
-    including deleting a merged record's copy of an identity row the survivor
-    already holds. Under an actor, REBAC only deletes and recreates an edge,
-    which would cost attachments their identity and dependants.
+  - Only then does it call the system fold, [`fold_records`](../../angee/base/merge.py),
+    which moves references under `system_context(reason="merge")`, including
+    deleting a merged record's copy of an identity row the survivor already
+    holds. Under an actor, REBAC only deletes and recreates an edge, which would
+    cost attachments their identity and dependants.
   - Retiring a merged record stays the actor's own delete.
+  - A model's own system verb folding a duplicate (no actor to authorize) calls
+    `fold_records` directly with its own carry-over and retirement, as
+    [`Handle.objects.merge`](../../addons/angee/parties/managers.py) does.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
@@ -902,10 +906,10 @@ and current contracts before applying a historical example to a new deployment.
   [`ModelHistory`](../../angee/base/mixins.py) gives native history construction a
   detached snapshot and records deletion inside the delete transaction before
   the source row disappears; it never unredacts the caller's instance.
-- **Review local-only rows before upgrading pull-only record sync.** The
-  [record-sync driver](../../addons/angee/integrate/README.md) may create them
-  remotely as soon as the first baseline completes. Remove rows that must remain
-  local from the synchronized scope before enabling two-way sync.
+- **Review enrolled local rows before enabling two-way record sync.** The
+  [record-sync driver](../../addons/angee/integrate/README.md) may publish targeted
+  links after the first baseline. Directory membership belongs to RecordLink;
+  creating a Party never enrolls it in a remote address book.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
   row. Base autoconfig enables the native
@@ -1001,6 +1005,21 @@ and current contracts before applying a historical example to a new deployment.
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
   for `**/runtime_migrations` because formatting also changes the pinned digest.
+- **A guard waits for a pending predecessor; a fold chain preflights before it
+  drops.** `applies` is evaluated against the state at the start of each composer
+  round, so the state an earlier declaration of the same build produces is not a
+  partial history: return `False` for it (integrate's
+  [`record_link_failure_status`](../../addons/angee/integrate/runtime_migrations/record_link_failure_status.py)
+  waits for the history table) and raise only for a shape no declaration produces.
+  Folds that can refuse rows collect every blocker before writing and name each
+  row; one first-round preflight declaration evaluates the folds' predicates on the
+  pre-upgrade state so the operator sees the complete list before provenance's
+  reversion drop or any store retirement runs (the
+  [parties chain](../../addons/angee/parties/README.md#upgrading-from-partyhandle-carriers)).
+  Migration bodies read historical models only and carry authoring-time identity
+  facts (sqid prefixes, principal id attributes) rather than importing live owners.
+  The reversion drop loses every revision by ruling: back up first, then
+  `remove_stale_contenttypes` afterwards.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
@@ -1009,6 +1028,12 @@ and current contracts before applying a historical example to a new deployment.
   nothing, and neither does a table holding only rows its own resource files
   seeded once the addon names the model under `retired_models` in its
   `addon.toml` `[resources]`.
+- **Record-sync hash bases retire through the declared cutover.**
+  [`retire_record_sync_hash_bases`](../../addons/angee/integrate/runtime_migrations/retire_record_sync_hash_bases.py)
+  removes the superseded live and historical hash columns after the applied-history
+  transition; `RecordLink.applied_base` is the comparison owner. Reverse restores
+  empty columns, not the retired hash values. Keep this declaration in the upgrade
+  chain so the composer's drop guard never encounters an undeclared data loss.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its
@@ -1084,7 +1109,7 @@ and current contracts before applying a historical example to a new deployment.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.
-- **`ScoredLinkMixin` is the scored-suggestion shape, not a permission owner.**
+- **`MembershipDecisionMixin` owns plain roster decisions, not provenance.**
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
@@ -1181,8 +1206,14 @@ and current contracts before applying a historical example to a new deployment.
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
   not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
-  `retained_set_null` FK policy to materialize the collector selection and schedule
-  Django's native `UpdateQuery.update_batch` path for actor deletion.
+  `retained_set_null` FK policy to schedule nulling inside Django's delete
+  transaction under `system_context(reason="delete.retain")`. Removing that
+  retained edge is part of the authorized target deletion, for tracked and
+  untracked referencing rows alike; tracked rows retain changeset history.
+  Native `SET_NULL` has no collector-origin hook at `QuerySet.update()` and
+  still follows the queryset's ordinary authorization. References needing this
+  system policy must declare `retained_set_null` until an upstream collector
+  hook can carry that origin without elevating ordinary FK edits.
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
   `ModelLabelField` from [`angee.base.fields`](../../angee/base/fields.py), so
   instance saves and queryset writes share their storage rules.
@@ -1211,7 +1242,7 @@ and current contracts before applying a historical example to a new deployment.
   Other relation columns name rows by `<addon>.<xref>` (a list or
   comma-separated string for many-to-many). Content types are never ledger rows,
   so a foreign key or many-to-many to `contenttypes.ContentType` takes Django
-  model labels instead (`applies_to: [parties.PartyHandle, parties.Person]`),
+  model labels instead (`applies_to: [parties.Handle, parties.Person]`),
   resolved by [`ModelLabelField.get_model`](../../angee/base/fields.py); an
   unknown label fails its row. Row hashes cover the seed's labels, never
   content-type ids, so a seed hashes the same in every database.
@@ -1496,31 +1527,44 @@ and current contracts before applying a historical example to a new deployment.
 protocol. Backends declare independently ordered stream partitions; domain
 managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
-replicas retain a remote and local comparison base on each link.
-Replica hashes come from adapters; event feeds deduplicate through domain
+replicas pin their own applied link history row as the comparison base.
+Adapters provide comparable JSON-native local and remote mapped projections;
+the driver normalizes both sides through the canonical JSON serializer before
+upstream `DeepDiff` compares them with that base. `canonical_json_sha256` is the sole
+source-hash owner; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.
+
+RecordLink is a pointing row with `merge_policy = MOVE`. Merging its target
+moves every link to the survivor; both remote cards receive the survivor's
+projection through their existing write-back policies and remote preconditions.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
   one transaction. Semantic, field-validation and record-level database data
-  failures use savepoints and the existing discrepancy owner so later records
+  failures use savepoints and the link/stream inbound state owner so later records
   continue. Domain write owners truncate source display text to model-field limits;
   identifiers stay lossless or are refused, never silently truncated.
   Infrastructure failures roll back the page. Conditional remote writes happen
   outside database transactions and are
   reflected only after their response; no cross-system atomicity is implied.
-- **Compare both sides with their last applied bases.** Unchanged pairs do
+- **Compare both mapped sides with their pinned applied base.** Unchanged pairs do
   nothing, remote-only changes apply, and local-only changes may write back with
-  the expected remote version. Both changed, including a remote tombstone against
-  a local edit, is an unresolved conflict: never silently choose a winner. The
-  adapter locks and revalidates its local projection before applying. An origin
+  the expected remote version. Divergent changes on both sides, including a remote
+  tombstone against a local edit, are unresolved conflicts: never silently choose a winner. The
+  adapter locks and revalidates its local projection before applying. Identical
+  edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
-  on its next pull.
+  on its next pull. Separate JSON Patch `test` operations check each retained reflection
+  precondition; they do not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload, mapping version and dependency digest in `ApplyResult`; the driver
-  alone promotes the primary link. Mapping or dependency changes count as remote
-  changes. Intermediate adapter promotion is refused and rolled back. Explicit
+  alone promotes the primary link and pins the history row written for that
+  application. Observation saves the source on the link without changing that
+  protected pointer. History is the observation log; inbound state retains
+  simultaneous and closed failures, and refused writes retain link outbox state.
+  Unlinked event failures belong to the stream's `inbound` state. Mapping or
+  dependency changes count as remote changes. Intermediate adapter promotion is refused and rolled back. Explicit
   `target=None` withdraws a binding; omission preserves it.
 - **Prepare the entire page before singleton application.** The optional
   `prepare_page` hook acquires compound identities and targets in canonical order
@@ -1530,10 +1574,20 @@ validated at the driver boundary.
   transaction as the corresponding link status. Absence hooks run only for actual
   status transitions, never repeated observations of an already-unavailable row.
 - **A cursor belongs to an epoch.** An invalid/expired cursor or explicit resync
-  request creates the next baseline generation. Retain links and revision
+  request creates the next baseline generation. A direction or snapshot change
+  also opens a new generation with the requested declaration; baseline completion belongs
+  only to that generation. Retain links and native link
   history; reverify links through their generation marker. A stale peer beyond
   tombstone retention requires a baseline. Complete inventory sweeps count
   absences before confirming tombstones and preserve existing quarantine.
+- **Read-once requires a snapshot source and closure.** A declared snapshot with
+  no reconciliation interval closes after its baseline. A closed stream retains
+  evidence but does no transport work and ignores cursor expiry; an explicit
+  resync creates a new generation.
+  Recurring event feeds without reconciliation remain open. Declare the source
+  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/streams.py),
+  mirrored on `SyncStream.snapshot`; backend-private `config` does not own cadence.
+  Do not interpret a missing interval alone as read-once.
 - **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
   iterator page per pulse, reading and applying enumerated keys before absence.
   The driver retains its checkpoint in `SyncStream.reconcile_state`; adapters
@@ -1546,18 +1600,23 @@ validated at the driver boundary.
   `parent` is a root link in the same stream. Enumerate aggregate keys only:
   children cannot independently become absent, and child retries read and
   reapply the parent's key. The aggregate adapter owns successful child evidence
-  and discrepancy resolution; a successful parent alone does not resolve them.
+  and inbound resolution; a successful parent alone does not resolve them.
 - **Quarantine is not a work queue.** Stream-cycle rescan re-reads due replica
   identities through `BridgeImpl.read_keys` when `supports_identity_reads` is
   declared, including tombstones for missing remote keys. It composes the same
   transactional apply path while preserving the cursor. Only adapters without
   this operation fall back to a baseline, with that fallback recorded in
-  discrepancy details. Event feeds skip rescan. Semantic failures back off
+  inbound details. Event feeds skip rescan. Semantic failures back off
   between attempts; conflicts await explicit resolution and never auto-retry.
   The shared driver owns budgets, repeated-page detection and partition
   concurrency.
   Workflow execution and durable scheduling stay with their existing
   owners; integrate must not import workflows.
+- **Retire conversion inputs only after proving history parity.** Integrate's
+  manifest orders its history fold before its store retirement declaration.
+  The retirement verifies all converted observations and failures before native
+  `DeleteModel` operations; reverse rebuilds from ordered link history and retained stream state, with legacy IDs and native-only
+  distinctions lost as documented in the migration.
 
 ### Integrations and workers
 
@@ -1809,12 +1868,82 @@ bridge advisory lock as polling and delivery settlement.
 system checks; compose them instead of a local column, comparison, or guard.
 Their docstrings own the exact behavior.
 
+[`StatementRecords`](../../angee/base/mixins.py) composes simple-history's field
+copying into typed statement models. Their [manager](../../angee/base/managers.py)
+owns locked assertion writes and survivorship; the canonical subject owns source
+eligibility and application. Like history tables, statements have no independent
+REBAC resource or ORM read policy. Read them through their subject: the
+subject-bound `instance.statements` accessor once the subject row is in hand, or
+`StatementQuerySet.readable(actor)` for a cross-record surface such as Review,
+which scopes rows to the subjects the actor may read. A statement read never
+widens what the subject reader may see: related rows (the member, the asserting
+principal) resolve through their own read gates at the serving seam, no group or
+filter axis reads a related row's columns, and serving surfaces own gated-field
+redaction. Writes use the asserting source's native REBAC write scope on the
+subject. Merge collisions remain retained as superseded rows outside the current
+per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
+rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
+class's `tie_break()`, the stance's update time (bookkeeping — `applied`,
+supersession, a merge move — keeps it), primary key — shared by survivorship,
+cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
+`Survivorship` strategies only reorder its components and `trust_ordering` is the
+SQL display order of the same stances.
+Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
+classifies eligible sources; `set()` refuses missing or unknown classifications.
+Statements retain the assertion-time classification across source edits and
+deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`
+(and `model_name=` when `<Subject>Statement` is already a domain model; a money
+column copied without its currency column becomes a plain decimal on the statement);
+core defaults to `None`, and the named model composes `StatementLinkMixin`: its
+`authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
+places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both
+kinds, for normal-rank statements only. `SyncStream.objects.set_authoritative`
+flips it and re-derives the linked subjects. Composer extensions do not reach
+generated models.
+
+Ordinary person saves on aspect-backed fields assert normal statements, including
+separate MTI child tables; parent declarations keep their shared-pk owner.
+Consumers contribute domain aspects through the descriptor's abstract donors: the
+subject source's own declaration finalizes the one statement table (bases, prefix,
+queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
+ordering. Preferred person decisions precede normal source ordering; a winning
+preferred no-value clears the aspect's operational values so a dismissal sticks.
+Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
+the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
+
+The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
+revert and deterministic lossless export. Closing a boundary writes one bookkeeping
+row; `document()` computes and records the hash through the one hash owner, so a
+request never re-reads its history. Revert uses native history ordering and
+diffs, refuses later touches, retains withdrawn/superseded statements, and reuses
+trash for created subjects. Without trash, retained references block removal.
+Restoring database state does not undo HTTP effects; record sync detects the
+corrected local projection under its existing write-back policy. Archive callers
+use an explicit system boundary; serving exports retain subject authorization and
+gated-field redaction. No archive sink or history-pruning policy is introduced.
+
+Every captured write runs inside a [changeset boundary](../../angee/base/changesets.py);
+strict mode refuses one without it. Entrypoints own boundaries, one per unit of
+work, and nothing else opens a `fresh` one except a deliberately separate logical
+write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
+stack's own sync or async path; WebSocket connections through
+`ChangesetScopeMiddleware`, composed in [`angee.asgi`](../../angee/asgi.py); Celery
+tasks through [`angee.jobs.celery.Task`](../../angee/jobs/celery.py); management
+commands through [`angee.compose.manage.main()`](../../angee/compose/manage.py),
+which every rendered `manage.py` calls (`serve`, `runserver` and `test` are
+excluded because their requests, connections, tasks and tests own boundaries;
+interactive shells keep the command boundary); a bridge live-session run through
+[`run_bridge_session_job`](../../addons/angee/integrate/session_runner.py). A
+boundary stores one changeset row per writing thread and actor under its shared
+facts, so `copy_context().run` in a worker pool and a per-event actor loop
+attribute exactly. A response status of 400 or more, a GraphQL result with
+`errors` (marked by [`AngeeGraphQLView`](../../addons/angee/graphql/views.py)) or an
+exception closes the rows as failed. Tests inherit a boundary from the root
+`conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
+
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.
-  Where `revision` is taken (django-reversion's reverse query name on the user
-  model), the model renames the counter through `REVISION_FIELD` and its
-  GraphQL type still exposes it as `revision`.
 - **Creation keys:** `CreationKeyMixin` stores a scoped client creation key and
   content fingerprint. Replays go through `CreationKeyQuerySet.for_creation_key`;
   `angee.E023` requires the declared uniqueness constraint.

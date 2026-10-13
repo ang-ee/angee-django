@@ -13,8 +13,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 from angee.base.identity import public_id_of
-from angee.messaging.testing.models import Channel, Handle, Message, PartyHandle, Person
-from angee.parties.mixins import LinkSource
+from angee.messaging.testing.models import Channel, Handle, Message, Party, Person
 from tests.conftest import File, execute_schema, make_integration, result_data
 from tests.test_nexus import _schema
 from tests.test_storage import PNG_BYTES, drive, image_drive  # noqa: F401 -- the image drive avatars land on
@@ -28,14 +27,12 @@ SENDER = "id display_name value party_link_confirmed avatar { id } party { id di
 PAGES = {
     "messages": f"{{ messages {{ id sender {{ {SENDER} }} }} }}",
     "inbox_navigator": f"{{ inbox_navigator {{ rows {{ id handle {{ {SENDER} }} party {{ id display_name }} }} }} }}",
-    "duplicate_party_candidates": (
-        "{ duplicate_party_candidates { left { id display_avatar { id } } right { id display_avatar { id } } } }"
-    ),
+    "same_as_pairs": "{ same_as_pairs { left { id display_avatar { id } } right { id display_avatar { id } } } }",
 }
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def test_message_lists_the_inbox_navigator_and_duplicate_pairs_batch_their_avatars() -> None:
+def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars() -> None:
     owner = get_user_model().objects.create_user(username="sender-avatar-owner")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     schema = _schema()
@@ -53,18 +50,14 @@ def test_message_lists_the_inbox_navigator_and_duplicate_pairs_batch_their_avata
                 sender = Handle.objects.upsert(
                     platform="whatsapp", value=f"+1858342{index:04d}", created_by_id=owner.pk
                 )
-                PartyHandle.objects.link(
-                    person, sender, source=LinkSource.IMPORT, is_confirmed=True, created_by_id=owner.pk
-                )
+                Party.objects.assert_handle(person, sender, asserted_by=owner)
                 picture = File.objects.ingest_image(PNG_BYTES + bytes([100 + index]))
                 Handle.objects.set_avatar(sender, picture)
                 shown[public_id_of(person)] = public_id_of(own or picture)
                 twin = Person._base_manager.create(display_name=f"Twin {index}", created_by=owner)
                 for party, value in ((person, f"+1858342{index:04d}"), (twin, f"+1 858 342 {index:04d}")):
                     phone = Handle.objects.upsert(platform="phone", value=value, created_by_id=owner.pk)
-                    PartyHandle.objects.link(
-                        party, phone, source=LinkSource.IMPORT, is_confirmed=True, created_by_id=owner.pk
-                    )
+                    Party.objects.assert_handle(party, phone, asserted_by=owner)
                 Message._base_manager.create(
                     channel=channel,
                     created_by=owner,
@@ -73,6 +66,8 @@ def test_message_lists_the_inbox_navigator_and_duplicate_pairs_batch_their_avata
                     direction="inbound",
                     sent_at=T0 + timedelta(minutes=index),
                 )
+            # Twins share a normalized phone: the matching rule states the same_as pair.
+            Party.objects.reconcile_same_as()
 
     def read(query: str) -> tuple[int, Any]:
         execute_schema(schema, query, request=request)  # warm the schema and permission caches
@@ -90,7 +85,7 @@ def test_message_lists_the_inbox_navigator_and_duplicate_pairs_batch_their_avata
     assert {row["sender"]["party"]["id"]: row["sender"]["party"]["display_avatar"]["id"] for row in messages} == shown
     navigator = four["inbox_navigator"][1]["inbox_navigator"]["rows"]
     assert {row["handle"]["party"]["id"]: row["handle"]["party"]["display_avatar"]["id"] for row in navigator} == shown
-    pairs = four["duplicate_party_candidates"][1]["duplicate_party_candidates"]
+    pairs = four["same_as_pairs"][1]["same_as_pairs"]
     assert {
         side["id"]: side["display_avatar"]["id"]
         for pair in pairs

@@ -8,7 +8,6 @@ export {
   type RecordPeekOpenOptions,
   type RecordPeekReference,
 } from "./record-peek";
-export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";
 export {
   ChatterProvider,
   CHATTER_TAB_SEARCH_KEY,

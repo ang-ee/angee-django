@@ -1,49 +1,43 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { Avatar, EmptyState, ErrorBanner, Glyph, ListView, LoadingPanel, NavLink, Page, PageBody, PageHeader, RailPanel, Tag, avatarInitials, type ListColumn, type StringIdRow, useRouteHref, useResourceRecordHrefLookup } from "@angee/ui";
-import { DuplicatePartyCandidates, PartyReviewCounts } from "./documents";
+import { SameAsPairs, PartyReviewCounts } from "./documents";
 import { usePartiesT } from "./i18n";
-import { usePartyHandleRowActions } from "./party-handle-row-actions";
+import { usePartyStatementRowActions } from "./party-statement-row-actions";
 
 type SuggestionRow = StringIdRow & {
-  source?: string;
-  evidence_refs?: Array<{ model: string; id: string }>;
+  source_kind?: string;
+  evidence?: Array<{ model: string; id: string }>;
   evidence_truncated?: boolean;
 };
 
 /**
  * Human identity review, split between uncertain party↔handle claims and
- * deterministic duplicate candidates that share a normalized handle.
+ * deterministic same_as statements that share a normalized handle.
  */
 export function ReviewPage(): React.ReactElement {
   const t = usePartiesT();
   const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();
   const counts = useAuthoredQuery(PartyReviewCounts, undefined, {
-    models: ["parties.PartyHandle"],
+    models: ["parties.PartyStatement"],
   });
-  const duplicates = useAuthoredQuery(DuplicatePartyCandidates, { limit: 50 }, {
-    models: ["parties.Party", "parties.Handle", "parties.MergeVeto"],
+  const sameAs = useAuthoredQuery(SameAsPairs, { limit: 50 }, {
+    models: ["parties.Party", "parties.Handle", "parties.PartySameAsPairStatement"],
   });
-  const rowActions = usePartyHandleRowActions<SuggestionRow>("all");
+  const rowActions = usePartyStatementRowActions<SuggestionRow>("all");
 
   const columns = React.useMemo<readonly ListColumn<SuggestionRow>[]>(
     () => [
       { field: "handle.value", header: t("review.handle") },
       { field: "handle.platform", header: t("review.platform") },
-      { field: "party.display_name", header: t("review.party") },
+      { field: "subject.display_name", header: t("review.party") },
       { field: "confidence" },
+      { field: "source_kind", header: t("identity.claim") },
       {
-        field: "source",
-        header: t("identity.claim"),
-        render: (row) => row.source === "EMAIL_MATCH"
-          ? t("identity.senderClaim")
-          : String(row.source ?? ""),
-      },
-      {
-        field: "evidence_refs",
+        field: "evidence",
         header: t("identity.evidence"),
-        render: (row) => <span className="flex flex-wrap gap-2">{row.evidence_refs?.map((ref, index) => {
+        render: (row) => <span className="flex flex-wrap gap-2">{row.evidence?.map((ref, index) => {
           const href = recordHref(ref.model, ref.id);
           return href ? <NavLink key={`${ref.model}:${ref.id}`} href={href} variant="inline">
             {t("identity.evidenceSource", { number: index + 1 })}
@@ -53,8 +47,8 @@ export function ReviewPage(): React.ReactElement {
     ],
     [recordHref, t],
   );
-  const handleCount = counts.data?.party_handles_aggregate.aggregate?.count ?? 0;
-  const duplicateCandidates = duplicates.data?.duplicate_party_candidates ?? [];
+  const handleCount = counts.data?.party_statements_aggregate.aggregate?.count ?? 0;
+  const sameAsCandidates = sameAs.data?.same_as_pairs ?? [];
 
   return (
     <Page>
@@ -65,58 +59,56 @@ export function ReviewPage(): React.ReactElement {
       <PageBody>
         <div className="grid gap-5">
           <RailPanel
-            title={t("review.handleLinks")}
+            title={t("review.statements")}
             count={handleCount}
             fetching={counts.isFetching}
           >
             {counts.error ? <ErrorBanner description={t("review.error")} /> : null}
             <p className="mb-3 text-13 text-fg-muted">{t("identity.authenticationScope")}</p>
             <ListView<SuggestionRow>
-              resource="parties.PartyHandle"
+              resource="parties.PartyStatement"
               fields={[
                 "id",
                 "handle.value",
                 "handle.platform",
-                "party.display_name",
+                "subject.display_name",
                 "confidence",
-                "source",
-                "evidence_refs.model",
-                "evidence_refs.id",
+                "source_kind",
+                "evidence.model",
+                "evidence.id",
                 "evidence_truncated",
               ]}
               baseFilter={{
-                is_confirmed: { exact: false },
-                is_dismissed: { exact: false },
-                confidence: { lt: 0.5 },
+                to_review: { exact: true },
               }}
               columns={columns}
               rowActions={rowActions}
               emptyContent={{
                 icon: "user-check",
-                title: t("review.handleLinks.empty.title"),
-                description: t("review.handleLinks.empty.description"),
+                title: t("review.statements.empty.title"),
+                description: t("review.statements.empty.description"),
               }}
             />
           </RailPanel>
 
           <RailPanel
-            title={t("review.possibleDuplicates")}
-            count={duplicateCandidates.length}
-            fetching={duplicates.isFetching && duplicateCandidates.length > 0}
+            title={t("review.sameAs")}
+            count={sameAsCandidates.length}
+            fetching={sameAs.isFetching && sameAsCandidates.length > 0}
           >
-            {duplicates.isFetching && duplicateCandidates.length === 0 ? (
+            {sameAs.isFetching && sameAsCandidates.length === 0 ? (
               <LoadingPanel density="inline" />
-            ) : duplicates.error ? (
+            ) : sameAs.error ? (
               <ErrorBanner description={t("review.error")} />
-            ) : duplicateCandidates.length === 0 ? (
+            ) : sameAsCandidates.length === 0 ? (
               <EmptyState
                 icon="users"
-                title={t("review.possibleDuplicates.empty.title")}
-                description={t("review.possibleDuplicates.empty.description")}
+                title={t("review.sameAs.empty.title")}
+                description={t("review.sameAs.empty.description")}
               />
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {duplicateCandidates.map((candidate) => (
+                {sameAsCandidates.map((candidate) => (
                   <NavLink
                     key={`${candidate.left.id}:${candidate.right.id}`}
                     variant="block-card"
@@ -132,13 +124,13 @@ export function ReviewPage(): React.ReactElement {
                         <PartySummary party={candidate.right} align="right" />
                       </span>
                       <span className="flex flex-wrap items-center gap-2">
-                        <Tag tone="warning">{t("review.possibleDuplicates.sharedHandle")}</Tag>
+                        <Tag tone="warning">{t("review.sameAs.sharedHandle")}</Tag>
                         <span className="truncate font-mono text-xs text-fg-muted">
                           {candidate.normalized_value}
                         </span>
                       </span>
                       <span className="text-xs font-medium text-link">
-                        {t("review.possibleDuplicates.compare")}
+                        {t("review.sameAs.compare")}
                       </span>
                     </span>
                   </NavLink>
