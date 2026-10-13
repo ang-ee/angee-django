@@ -23,8 +23,18 @@ from unittest import TestSuite
 
 import environ
 
-COMPOSED_TEST_TIMEOUT = 120
-"""Bound composition and native test groups, allowing headroom over measured 15–29s runs."""
+COMPOSED_TEST_TIMEOUT = 1200
+"""Stop a composed-host subprocess that hangs; this is a hang bound, not a time budget.
+
+Every caller that starts ``composed_host.py`` passes this one value. The rule: stay
+above the slowest real CI run times the run-to-run spread of CI runners, and well
+under a CI shard's own 40-minute limit, so a hang ends with the test named instead
+of the job ending with no verdict. Measured on 2026-10-14: the slowest is the
+workflows posts group on PostgreSQL, 187 s on an idle workstation; on CI it took
+467 s in one run and over 600 s in two others, where the bound was then 600 s and
+stopped it. A SQLite CI shard runs project setup in up to 269 s. One shard's time
+varied up to 1.8 times between runs; over 600 s times 1.8 is over 1,080 s.
+"""
 
 
 def run_composed_tests(
