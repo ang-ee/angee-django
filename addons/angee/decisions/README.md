@@ -16,7 +16,7 @@ assignees, only active administrators may answer. Admission requires at least
 one participant and standing read access to concerns and context references for
 the asking actor, requester and assignees. It creates no grants. Concern links
 use canonical model identities. An owning addon may declare
-`DerivedFromRelation("decisions.DecisionRecord", related_query_name=...)` on the
+`RetainedGenericRelation("decisions.DecisionRecord", related_query_name=...)` on the
 canonical concerned model and contribute typed `owner_eligible` and `read` arms
 through that query path. Deleting the source preserves these retained links.
 

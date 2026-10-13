@@ -1555,6 +1555,26 @@ def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Cha
     assert not applied_history().exists()
 
 
+def test_opening_an_existing_partition_applies_its_changed_declaration(stream_bridge: Channel) -> None:
+    """Without a supplied definition the adapter declares again: no caller can skip the reconciliation."""
+
+    class DeclaringAdapter(MemoryAdapter):
+        authoritative = False
+
+        def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+            return (StreamDefinition("records", authoritative=self.authoritative),)
+
+    adapter = DeclaringAdapter()
+    adapter.integration = stream_bridge
+    assert open_stream(stream_bridge, "records", "", adapter).authoritative is False
+
+    adapter.authoritative = True
+    stream = open_stream(stream_bridge, "records", "", adapter)
+
+    assert stream.authoritative is True and stream.generation == 1
+    assert SyncStream.objects.count() == 1
+
+
 @pytest.mark.parametrize("cursor", [[], 0, ""])
 def test_seed_rejects_falsy_non_object_cursors(stream_bridge: Channel, cursor: Any) -> None:
     class InvalidSeedAdapter(MemoryAdapter):

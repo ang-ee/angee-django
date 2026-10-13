@@ -1083,45 +1083,42 @@ def open_stream(
     definition: StreamDefinition | None = None,
     deadline: float | None = None,
 ) -> Any:
-    """Open a partition, seeding legacy progress only on its first epoch.
+    """Open a partition against its current declaration, seeding legacy progress only on its first epoch.
 
-    A caller that already discovered declarations supplies its matching definition
-    to avoid repeating transport discovery and validate the retained policy.
-    Without a definition, an existing partition is reused without rediscovery.
+    Opening reconciles: the stream takes what its declaration says now (direction,
+    snapshot, authority) through ``SyncStream.objects.current``, so a changed
+    declaration reaches an existing stream on every path. A caller that already
+    discovered declarations supplies its matching definition to avoid repeating
+    transport discovery; without one the adapter declares again. A drain opens its
+    partition once; a caller resuming a partition it opened resolves the current
+    epoch through ``SyncStream.objects.current_for_bridge``.
     """
 
     manager = _manager("SyncStream")
     with system_context(reason="integrate.stream.open"):
-        stream = None
         if definition is None:
-            stream = manager.current_for_bridge(bridge, key).filter(partition=partition).first()
-            if stream is None:
-                definitions = [
-                    item
-                    for item in adapter.streams(deadline=deadline)
-                    if (item.key, item.partition) == (key, partition)
-                ]
-                if len(definitions) != 1:
-                    raise AdapterContractError("A backend must declare the requested stream partition exactly once.")
-                definition = definitions[0]
-        if definition is not None:
-            if (definition.key, definition.partition) != (key, partition):
-                raise AdapterContractError("The supplied stream declaration must match the requested partition.")
-            stream = manager.current(
-                bridge,
-                key,
-                partition,
-                kind=definition.kind,
-                direction=definition.direction,
-                snapshot=definition.snapshot,
-                authoritative=definition.authoritative,
-                cursor=_validated_cursor(definition.cursor),
-                reconcile_interval=definition.reconcile_interval,
-                absence_threshold=definition.absence_threshold,
-                tombstone_retention=definition.tombstone_retention,
-                config=definition.config,
-            )
-        assert stream is not None
+            definitions = [
+                item for item in adapter.streams(deadline=deadline) if (item.key, item.partition) == (key, partition)
+            ]
+            if len(definitions) != 1:
+                raise AdapterContractError("A backend must declare the requested stream partition exactly once.")
+            definition = definitions[0]
+        elif (definition.key, definition.partition) != (key, partition):
+            raise AdapterContractError("The supplied stream declaration must match the requested partition.")
+        stream = manager.current(
+            bridge,
+            key,
+            partition,
+            kind=definition.kind,
+            direction=definition.direction,
+            snapshot=definition.snapshot,
+            authoritative=definition.authoritative,
+            cursor=_validated_cursor(definition.cursor),
+            reconcile_interval=definition.reconcile_interval,
+            absence_threshold=definition.absence_threshold,
+            tombstone_retention=definition.tombstone_retention,
+            config=definition.config,
+        )
         if stream.generation == 1 and not stream.cursor and bridge.cursor:
             with transaction.atomic():
                 locked_bridge = bridge.lock_capability()
