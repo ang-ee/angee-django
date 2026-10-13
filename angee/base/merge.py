@@ -62,7 +62,6 @@ from angee.base.impl import resolve_hooks
 from angee.base.mixins import (
     AppendOnlyModel,
     AuditMixin,
-    HierarchyMixin,
     MergeContractMixin,
     TrashMixin,
     auto_now_stamps,
@@ -188,14 +187,9 @@ class Reference:
                 )
         try:
             with transaction.atomic(using=using):
-                if issubclass(self.model, HierarchyMixin) and self.name == "parent":
-                    # The hierarchy owner validates cycles and maintains every
-                    # descendant path; a bulk FK update would bypass it.
-                    for row in rows.order_by("pk"):
-                        row.parent = survivor
-                        row.save(using=using, update_fields=("parent",))
-                else:
-                    rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
+                # A hierarchy's ``parent`` is re-pointed by its model's ``merge_contract``
+                # above (the path and cycle owner), never by this bulk update.
+                rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
         except IntegrityError as error:
             # A rule the field sets above cannot express (an expression constraint)
             # still refuses the merge instead of failing it.
@@ -348,27 +342,44 @@ class MergeableMixin(models.Model):
     """
 
     retains_merged: ClassVar[bool] = False
-    """Keep the duplicate's identity even when no other row requires retention."""
+    """Keep every merged record as a redirect, even one no other row names."""
     merge_moves_references: ClassVar[bool] = True
-    """Conversation containers retain their members on the original thread."""
+    """Whether a fold re-points ``MOVE`` references.
+
+    ``False`` keeps them on the retired record, which readers resolve through
+    :meth:`canonical`.
+    """
 
     merged_into = models.ForeignKey(
         "self", null=True, blank=True, editable=False, on_delete=models.PROTECT, related_name="merged_from",
     )
 
     def canonical(self) -> Self:
-        """Resolve the operational survivor; corrupt redirect cycles fail closed."""
+        """Resolve the operational survivor; corrupt redirect cycles fail closed.
 
-        actor, bypass = self.effective_actor(strict=True)
-        rows = type(self)._base_manager if bypass else read_scoped_queryset(type(self), actor)
+        A redirect is identity, not content: it resolves outside any actor scope,
+        and the caller gates what it then reads from the survivor.
+        """
+
+        rows = type(self)._base_manager.using(self._state.db)
         seen = set()
         record = self
         while record.merged_into_id is not None:
             if record.pk in seen:
                 raise ValidationError("A merge redirect contains a cycle.")
             seen.add(record.pk)
-            record = rows.using(self._state.db).get(pk=record.merged_into_id)
+            record = rows.get(pk=record.merged_into_id)
         return record
+
+    def retains(self, merged: Self) -> bool:
+        """Whether retiring ``merged`` keeps it as a redirect rather than deleting it.
+
+        The model's policy (:attr:`retains_merged`), a trash owner (removal is a
+        redirect it can restore) or the record's own evidence
+        (:meth:`~angee.base.models.AngeeModel.retained`) each retain it.
+        """
+
+        return self.retains_merged or isinstance(merged, TrashMixin) or merged.retained()
 
     SURVIVOR_PERMISSION: ClassVar[str] = "write"
     """The permission a merge needs on the record that is kept."""
@@ -440,7 +451,7 @@ class MergeableMixin(models.Model):
                 carry=carry,
                 retire=survivor.retire_merged,
                 blockers=model.merge_blockers(using=using),
-                retained=self.retains_merged or isinstance(survivor, TrashMixin),
+                retained=all(survivor.retains(record) for record in merged),
                 move_references=self.merge_moves_references,
             )
         self.refresh_from_db(using=using)
@@ -481,7 +492,7 @@ class MergeableMixin(models.Model):
             fold_records(
                 survivor, duplicates, carry=carry, retire=survivor.retire_merged,
                 blockers=model.merge_blockers(using=using),
-                retained=self.retains_merged or isinstance(survivor, TrashMixin),
+                retained=all(survivor.retains(record) for record in duplicates),
                 move_references=self.merge_moves_references, join=True,
             )
         self.refresh_from_db(using=using)
@@ -504,9 +515,9 @@ class MergeableMixin(models.Model):
             raise ValidationError(f"Unsupported merge options: {', '.join(sorted(options))}.")
 
     def retire_merged(self, merged: Self) -> None:
-        """Retain referenced evidence as a redirect; otherwise delete through its lock."""
+        """Retain a redirect where :meth:`retains` says so; otherwise delete through its lock."""
 
-        if self.retains_merged or isinstance(merged, TrashMixin) or merged.retained():
+        if self.retains(merged):
             merged.merged_into = self
             merged.save(using=merged._state.db, update_fields=("merged_into",))
             if isinstance(merged, TrashMixin):

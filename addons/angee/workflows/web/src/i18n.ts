@@ -8,7 +8,6 @@ export const enWorkflowsMessages = {
   ...enCatalogueMessages,
   "timeline.unavailable": "Timeline unavailable.",
   "runs.title": "Runs",
-  "timeline.title": "Runs",
   "timeline.groupBy": "Group by",
   "timeline.byRecord": "By record",
   "timeline.byQuestion": "By question",

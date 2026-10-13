@@ -352,6 +352,19 @@ class RecordRefMixin(MergeContractMixin, models.Model):
             raise cls._undeclared_target(declared) from error
 
     @classmethod
+    def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
+        """Return the roles of this edge that records of ``target`` carry, beyond the edge itself.
+
+        An edge whose rows play more than one role (a thread attached as a record's
+        chatter or as a related conversation) names each role a target type admits.
+        The target's resource lists them as ``<edge label>:<role>`` beside the edge
+        label, so a surface gates on the role it serves. The default declares none.
+        """
+
+        del target
+        return ()
+
+    @classmethod
     def declares_target(cls, model: type[models.Model]) -> bool:
         """Whether this edge's schema declares ``model``'s canonical type a target.
 

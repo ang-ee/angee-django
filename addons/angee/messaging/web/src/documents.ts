@@ -16,6 +16,8 @@ export const DiscardHeldDraftsDocument = graphql(`
 export const CHANNEL_MODEL = "messaging.Channel";
 /** The edge a record carries its chatter and source conversations through. */
 export const THREAD_ATTACHMENT_MODEL = "messaging.ThreadAttachment";
+/** The `recordEdges` entry of a type that keeps chatter: the edge's chatter role, which only threaded models carry. */
+export const THREAD_CHATTER_EDGE = `${THREAD_ATTACHMENT_MODEL}:chatter`;
 
 // The models a record thread reads: the live-refresh keys for the thread/history
 // queries and the invalidation set every chatter mutation republishes. One owner,

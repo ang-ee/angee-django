@@ -3691,7 +3691,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     after_landing=after_landing,
                 )
                 if message.message_type == "email":
-                    transaction.on_commit(partial(observe_email_identity, message.pk, using=self.db), using=self.db)
+                    # Robust: identity evidence never fails a committed envelope or the rest of the batch.
+                    transaction.on_commit(
+                        partial(observe_email_identity, message.pk, using=self.db), using=self.db, robust=True,
+                    )
                 ingested.append(message)
                 for handle in handles:
                     if handle.party_id is None:

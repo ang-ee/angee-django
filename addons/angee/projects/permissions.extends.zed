@@ -41,7 +41,7 @@ definition messaging/thread {
     relation record_project: projects/project // rebac:field={"path":"attachments__projects_project","filters":{"attachments__role":"chatter"}}
     relation record_task: projects/task // rebac:field={"path":"attachments__projects_task","filters":{"attachments__role":"chatter"}}
 
-    permission read_direct = project->read + record_project->read + record_task->read
+    permission read_granted = project->read + record_project->read + record_task->read
     permission write = project->write
 }
 

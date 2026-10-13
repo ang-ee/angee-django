@@ -86,8 +86,6 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
   /** A direction/channel affordance (e.g. a "Email · Inbound" tag) for interleaved
    *  transport messages, rendered in the header row. */
   channel?: ReactNode;
-  /** A tracking-values table slot (a field-change `dl`/table for audit messages). */
-  tracking?: ReactNode;
   /** An attachments slot (download chips / thumbnails). */
   attachments?: ReactNode;
   /** A reactions slot — compose `ReactionBar`. */
@@ -100,7 +98,7 @@ export interface MessageRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "ti
 
 /** One feed message: a leading avatar column and a content column carrying the author,
  *  an optional channel/direction affordance, a `RelativeTime`, the body, and the
- *  tracking / attachments / reactions / actions slots. The row is a `group`, so a
+ *  attachments / reactions / actions slots. The row is a `group`, so a
  *  `MessageActions` slot reveals on hover/focus. Pure presentation — every slot is
  *  composed by the consumer. */
 export function MessageRow({
@@ -109,7 +107,6 @@ export function MessageRow({
   timestamp,
   meta,
   channel,
-  tracking,
   attachments,
   reactions,
   actions,
@@ -132,7 +129,6 @@ export function MessageRow({
           </div>
         ) : null}
         {children ? <div className="mt-0.5 whitespace-pre-wrap text-13 leading-relaxed text-fg">{children}</div> : null}
-        {tracking ? <div className="mt-2">{tracking}</div> : null}
         {attachments ? <div className="mt-2 space-y-1">{attachments}</div> : null}
         {reactions ? <div className="mt-2">{reactions}</div> : null}
         {actions}

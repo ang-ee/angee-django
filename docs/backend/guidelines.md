@@ -710,10 +710,18 @@ data through REBAC, never a queryset bypass.
     deleting a merged record's copy of an identity row the survivor already
     holds. Under an actor, REBAC only deletes and recreates an edge, which would
     cost attachments their identity and dependants.
-  - Retiring a merged record stays the actor's own delete.
+  - Retiring a merged record (`retire_merged`) keeps it as a redirect
+    (`merged_into`, plus trash on a trash owner) where `MergeableMixin.retains`
+    says so: the model retains every merged record, it composes `TrashMixin`, or
+    live or historical references name it. Only an unretained record is the
+    actor's own delete. Readers resolve a redirect through `canonical()`; a
+    `merged_from` row stays visible as such.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
-    `fold_records` directly with its own carry-over and retirement, as
-    [`Handle.objects.merge`](../../addons/angee/parties/managers.py) does.
+    the system entry [`MergeableMixin.fold`](../../angee/base/merge.py), which
+    joins the open changeset and runs the same hooks under a system boundary, as
+    a `merge_contract` redirecting chatter threads and
+    [`Handle.objects.merge`](../../addons/angee/parties/managers.py), the bridge
+    compatibility entry, do.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

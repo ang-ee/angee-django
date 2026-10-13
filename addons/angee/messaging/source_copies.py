@@ -146,10 +146,18 @@ class SourceCopyQuerySet(models.QuerySet):
         )
 
     def representatives(self) -> Self:
+        """Every readable row without identity evidence, plus one representative per component.
+
+        The recursive walk is correlated per row, so only rows that are an endpoint
+        of an applied pair pay for it; the rest pass on one anti-join.
+        """
+
         visible = self.scoped()
+        pairs = self.identity_pairs()
+        paired = pairs.filter(models.Q(left_id=models.OuterRef("pk")) | models.Q(right_id=models.OuterRef("pk")))
         return visible.alias(_source_representative=SourceRepresentative(
-            models.F("pk"), pairs=self.identity_pairs(), visible=visible,
-        )).filter(pk=models.F("_source_representative"))
+            models.F("pk"), pairs=pairs, visible=visible,
+        )).filter(~models.Exists(paired) | models.Q(pk=models.F("_source_representative")))
 
     def source_copies(self, record: models.Model) -> Self:
         """Only copies readable to this caller, including the supplied occurrence."""
@@ -173,8 +181,14 @@ def observe_email_identity(message_id: Any, *, using: str = "default") -> None:
     """
 
     message_model = apps.get_model("messaging", "Message")
+    rule_model = apps.get_model("provenance", "Rule")
     with system_context(reason="messaging.source_identity.rule"):
-        source = apps.get_model("provenance", "Rule").objects.db_manager(using).for_key("messaging.source_identity")
+        try:
+            source = rule_model.objects.db_manager(using).for_key("messaging.source_identity")
+        except rule_model.DoesNotExist:
+            # The envelope has landed; identity waits for the install resources
+            # (the rule row and its grants), whose load backfills every copy.
+            return
     actor = to_subject_ref(source)
     with actor_context(actor), changeset(
         fresh=True, activity="system", change_reason="messaging.source_identity", origin=source,

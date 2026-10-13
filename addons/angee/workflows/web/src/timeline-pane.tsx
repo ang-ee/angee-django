@@ -23,7 +23,7 @@ export function useRecordTimelinePane({ record, side }: RecordTimelineProps & { 
   const pane = useMemo(() => <RecordTimeline record={record} />, [record]);
   const query = useRecordTimelineAttentionQuery(record, !passive);
   const count = query.data?.record_timeline.open_decision_count ?? 0;
-  const right = useMemo(() => !passive && side === "right" ? { tabs: [{ id: "workflows.runs", label: t("timeline.title"), count, children: pane }] } : null, [passive, side, pane, count, t]);
+  const right = useMemo(() => !passive && side === "right" ? { tabs: [{ id: "workflows.runs", label: t("runs.title"), count, children: pane }] } : null, [passive, side, pane, count, t]);
   const left = useMemo(() => !passive && side === "left" ? <ScrollArea className="h-full" viewportClassName="overflow-x-hidden p-4">{pane}</ScrollArea> : null, [passive, side, pane]);
   useChatterContent(right);
   usePrimaryPane(left);

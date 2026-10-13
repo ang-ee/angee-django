@@ -80,7 +80,7 @@ export function RecordTimelineView({ data, openCount, set = false }: {
       else group.set(decision.id, { entries: [entry], decision });
     }
     return <div className="grid min-w-0 gap-4">
-      <header className="grid gap-2"><h2 className={textRoleVariants({ role: "title" })}>{t("timeline.title")} <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
+      <header className="grid gap-2"><h2 className={textRoleVariants({ role: "title" })}>{t("runs.title")} <CountBadge tone={count ? "warning" : "neutral"} value={count} /></h2>
         <p className="text-13 text-fg-muted">{t("timeline.records", { count: data.length })} · {t("timeline.decisions", { count })} · {t("timeline.heldRuns", { count: runs.filter((run) => held(run).length).length })}</p>
         <SegmentedControl<"record" | "question"> aria-label={t("timeline.groupBy")} value={grouping} onValueChange={setGrouping}
           options={[{ value: "record", label: t("timeline.byRecord") }, { value: "question", label: t("timeline.byQuestion") }]} />

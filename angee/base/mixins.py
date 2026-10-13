@@ -786,6 +786,15 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
 
         return cast(Self, self.filter(**{TRASH_FLAG_FIELD: False}))
 
+    def canonical(self) -> Self:
+        """Operational rows are outside the trash; the merge scope composes on top.
+
+        The chain ends at the base queryset every model composes, so a trashable
+        mergeable model's ``canonical()`` reads the same on every model.
+        """
+
+        return cast(Self, super().canonical().untrashed())  # type: ignore[misc]
+
     def trash_targets(self) -> Self:
         """Return the rows the shared trash verbs may address.
 
@@ -2992,6 +3001,10 @@ class HierarchyMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
+        if args:
+            # Django still accepts save()'s arguments positionally; name them once here.
+            kwargs.update(zip(("force_insert", "force_update", "using", "update_fields"), args, strict=False))
+            args = ()
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         kwargs["using"] = using
         with transaction.atomic(using=using):

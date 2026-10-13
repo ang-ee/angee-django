@@ -322,9 +322,13 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
     schema = addon_schema(storage_schema.schemas, "public")
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["storage.Drive"].record_edges == ("projects.ProjectBinding", "storage.FileAttachment")
+    # A file retains source conversations but keeps no chatter: the edge, not its chatter role.
     assert resources["storage.File"].record_edges == ("messaging.ThreadAttachment", "tags.TagAssignment")
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["storage.File"]["recordEdges"] == ["messaging.ThreadAttachment", "tags.TagAssignment"]
+    assert resources["projects.Task"].record_edges[:3] == (
+        "knowledge.RecordBinding", "messaging.ThreadAttachment", "messaging.ThreadAttachment:chatter",
+    )
 
 
 def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:

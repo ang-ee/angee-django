@@ -20,6 +20,7 @@ import {
   useRouteParam,
   useRouteHref,
   useRuntimeUserPreferences,
+  useTrashPrompt,
 } from "@angee/ui";
 import type { DashboardTarget } from "@angee/ui/dashboard/headless";
 import { visibleDashboardSnapshot } from "@angee/ui/dashboard/surface";
@@ -57,6 +58,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const t = useDashboardsT();
+  const askTrash = useTrashPrompt();
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
   const [pending, setPending] = React.useState(false);
@@ -118,6 +120,8 @@ function StoredDashboardPage({ target, registry, store }: {
 
   const trash = async () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
+    // The one trash confirmation; the dashboard's own verb carries the revision lock.
+    if (!(await askTrash(state.name))) return;
     setPending(true);
     setError(null);
     try {
