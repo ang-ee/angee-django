@@ -17,7 +17,8 @@ import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.management.sql import emit_post_migrate_signal
-from django.db import connection, migrations
+from django.db import connection, migrations, models
+from django.db.migrations.state import ModelState
 from django.utils import timezone
 from rebac import SubjectRef, app_settings, system_context
 from rebac.actors import to_subject_ref
@@ -974,3 +975,6 @@ def test_chain_is_complete_and_idle_after_the_fold_from_main() -> None:
         final = module.Migration("0001_x", module.__name__.split(".")[1]).mutate_state(final)
     # retire_reversion's guard stays true by design: its one run is bounded by materialization, not state.
     assert [module.__name__ for module in rounds if module.applies(final.clone())] == [retire_reversion.__name__]
+    # While a consumer still installs reversion its tables stay: the guard waits for the app to leave.
+    final.add_model(ModelState("reversion", "Revision", [("id", models.BigAutoField(primary_key=True))]))
+    assert not retire_reversion.applies(final.clone())
