@@ -6,15 +6,19 @@ import pyexpat
 from collections.abc import Sequence
 
 from django.apps import AppConfig, apps
+from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import DEFAULT_DB_ALIAS, router
 from django.db import models as django_models
 from django.utils.module_loading import import_string
+from rebac import app_settings
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
 from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
+from simple_history.models import registered_models
 
+from angee.base.changesets import changeset_model_label
 from angee.base.impl import (
     _hook_paths,
     _resolve_hook_path,
@@ -24,6 +28,31 @@ from angee.base.impl import (
 )
 from angee.base.mixins import CreationKeyMixin, HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
 from angee.base.permissions import effective_rebac_definition, effective_rebac_schema
+
+
+def check_changeset_middleware(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Require strict HTTP attribution to follow REBAC's actor resolution."""
+
+    del app_configs, kwargs
+    if not app_settings.REBAC_STRICT_MODE or not changeset_model_label():
+        return []
+    if not registered_models:
+        return []
+    middleware = settings.MIDDLEWARE
+    actor = "rebac.middleware.ActorMiddleware"
+    boundary = "angee.base.middleware.ChangesetMiddleware"
+    if middleware.count(boundary) == 1 and actor in middleware and middleware.index(actor) < middleware.index(boundary):
+        return []
+    return [
+        checks.Error(
+            "Strict changeset attribution requires one ChangesetMiddleware after REBAC's ActorMiddleware.",
+            hint=f"Add '{boundary}' after '{actor}' in MIDDLEWARE.",
+            id="angee.E038",
+        )
+    ]
 
 
 def check_expat_version(
@@ -80,9 +109,7 @@ def check_ownership(
 
     del kwargs
     models = (
-        apps.get_models()
-        if app_configs is None
-        else (model for config in app_configs for model in config.get_models())
+        apps.get_models() if app_configs is None else (model for config in app_configs for model in config.get_models())
     )
     errors: list[checks.CheckMessage] = []
     for model in models:
@@ -107,13 +134,16 @@ def check_ownership(
                     )
                 )
         definition = effective_rebac_definition(model)
-        if owner_model is model and (definition is None or (
-            not any(permission.name == model.owner_transfer_permission for permission in definition.permissions)
-            or not any(
-                relation.name == "owner" and relation.backing == FieldBinding(path="owner")
-                for relation in definition.relations
+        if owner_model is model and (
+            definition is None
+            or (
+                not any(permission.name == model.owner_transfer_permission for permission in definition.permissions)
+                or not any(
+                    relation.name == "owner" and relation.backing == FieldBinding(path="owner")
+                    for relation in definition.relations
+                )
             )
-        )):
+        ):
             errors.append(
                 checks.Error(
                     f"{model._meta.label} must declare an owner relation backed by owner "
@@ -127,17 +157,20 @@ def check_ownership(
         expected_gates: tuple[PermRef | PermArrow, ...] = (PermRef(transfer),)
         expected_expression = transfer
         if owner_model is not model:
-            parent_path = "__".join(
-                path.join_field.name for path in model._meta.get_path_to_parent(owner_model)
-            )
+            parent_path = "__".join(path.join_field.name for path in model._meta.get_path_to_parent(owner_model))
             parent_type = model_resource_type(owner_model)
-            parent_gates = tuple(
-                PermArrow(relation.name, transfer)
-                for relation in definition.relations if (
-                    relation.backing == FieldBinding(path=parent_path)
-                    and relation.allowed_subjects == (AllowedSubject(type=parent_type or ""),)
+            parent_gates = (
+                tuple(
+                    PermArrow(relation.name, transfer)
+                    for relation in definition.relations
+                    if (
+                        relation.backing == FieldBinding(path=parent_path)
+                        and relation.allowed_subjects == (AllowedSubject(type=parent_type or ""),)
+                    )
                 )
-            ) if definition is not None else ()
+                if definition is not None
+                else ()
+            )
             expected_gates = parent_gates
             expected_expression = " or ".join(f"{gate.via}->{gate.target}" for gate in parent_gates) or (
                 f"<relation to {parent_type} backed by {parent_path}>->{transfer}"
@@ -167,17 +200,14 @@ def check_creation_key_constraints(
 
     del kwargs
     models = (
-        apps.get_models()
-        if app_configs is None
-        else (model for config in app_configs for model in config.get_models())
+        apps.get_models() if app_configs is None else (model for config in app_configs for model in config.get_models())
     )
     errors: list[checks.CheckMessage] = []
     for model in models:
         if not issubclass(model, CreationKeyMixin):
             continue
         if not any(
-            constraint == model.creation_key_constraint(name=constraint.name)
-            for constraint in model._meta.constraints
+            constraint == model.creation_key_constraint(name=constraint.name) for constraint in model._meta.constraints
         ):
             errors.append(
                 checks.Error(

@@ -1,0 +1,19 @@
+rows:
+  - resource: provenance/role:parties_statement_source
+    relation: member
+    subject: angee.parties.normalized_twin
+  - resource: provenance/role:parties_statement_source
+    relation: member
+    subject: angee.parties.email_domain
+  - resource: provenance/role:parties_statement_source
+    relation: member
+    subject: angee.parties.display_name
+  - resource: provenance/role:parties_statement_source
+    relation: member
+    subject: angee.parties.signature_phone
+  - resource: provenance/role:parties_statement_source
+    relation: member
+    subject: angee.parties.source_sender
+  - resource: provenance/role:parties_statement_source
+    relation: member
+    subject: angee.parties.same_as

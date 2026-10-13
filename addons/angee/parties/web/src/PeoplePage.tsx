@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { Action, Alert, Column, Facet, Form, List, ListView, LoadingPanel, PrimaryPanePublisher, ResourceList, SectionEyebrow, TreeView, errorMessage, containerContents, useContainer, useAuthoredResourceMutation, useLatestRef, useRouteHref, useRouteSearch, useToast, updateRouteSearch, type ActionDescriptor, type DndPayload, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { Action, Alert, Column, Form, List, ListView, LoadingPanel, PrimaryPanePublisher, ResourceList, SectionEyebrow, TreeView, errorMessage, containerContents, useContainer, useAuthoredResourceMutation, useLatestRef, useRouteHref, useRouteSearch, useToast, updateRouteSearch, type ActionDescriptor, type DndPayload, type ListColumn, type RecordPanelContext, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { PersonCirclesList } from "./CircleMembershipList";
 import {
@@ -110,7 +110,7 @@ function peopleForm(
 /**
  * People (the person-kind contacts): a circle/smart-view workbench around the
  * shared create/edit/list/detail surface. The primary pane owns scope selection
- * and circle drops; the list keeps its generated folder facet and generic record
+ * and circle drops; the list keeps its generated facets and generic record
  * behavior. Detail tabs carry identity, circle, relationship, and address
  * collections.
  */
@@ -290,10 +290,8 @@ export function PeoplePage(): React.ReactElement {
         draggableRow={personDragPayload}
       >
         <List resource={MODEL}>
-          <Facet field="folder" label={t("person.folder")} />
           <Column field="display_name" />
           <Column field="circle_names" header={t("people.circles.heading")} />
-          <Column field="folder.name" header={t("person.folder")} />
           <Column field="given_name" />
           <Column field="family_name" />
           <Column field="created_at" />

@@ -72,7 +72,6 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         "save": None,
         "delete": None,
         "deletePreview": None,
-        "revisions": None,
         "changes": None,
     }
     assert wire["fields"][1]["requiredOnCreate"] is True

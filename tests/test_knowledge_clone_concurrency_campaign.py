@@ -54,4 +54,4 @@ def test_two_same_key_clones_after_validation_commit_one_complete_copy(clone_tem
     with system_context(reason="test.clone.race.result"):
         assert Vault.objects.filter(client_creation_key="race").count() == 1
         assert Page.objects.filter(vault_id=identities[0]).count() == 4
-        assert MarkdownPage.objects.filter(page__vault_id=identities[0]).count() == 2
+        assert MarkdownPage.objects.filter(vault_id=identities[0]).count() == 2

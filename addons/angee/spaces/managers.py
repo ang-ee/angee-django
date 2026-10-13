@@ -12,7 +12,6 @@ from angee.base.fields import enum_member_for
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.scoping import bind_actor
-from angee.parties.mixins import LinkSource
 
 
 class GroupQuerySet(HierarchyQuerySet, AngeeQuerySet):
@@ -70,21 +69,16 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
             raise ValidationError({"role": ["Select a valid membership role."]})
 
         with transaction.atomic():
-            memberships = (
-                self.get_queryset()
-                .lock_if_supported()
-                .filter(group=group, party=party)
-            )
+            memberships = self.get_queryset().lock_if_supported().filter(group=group, party=party)
             membership = memberships.first()
             if membership is not None:
                 if not membership.has_access("write"):
                     raise PermissionDenied("write access to this membership is required")
-                update_fields = ["confidence", "source", "is_confirmed", "is_dismissed", "updated_at"]
+                update_fields = ["confidence", "is_confirmed", "is_dismissed", "updated_at"]
                 if membership.role != role_member:
                     membership.role = role_member
                     update_fields.append("role")
                 membership.confidence = 1.0
-                membership.source = LinkSource.MANUAL
                 membership.is_confirmed = True
                 membership.is_dismissed = False
                 membership.save(update_fields=update_fields)
@@ -96,7 +90,6 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
                 party=party,
                 role=role_member,
                 confidence=1.0,
-                source=LinkSource.MANUAL,
                 is_confirmed=True,
                 is_dismissed=False,
             )

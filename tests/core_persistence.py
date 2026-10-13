@@ -75,6 +75,7 @@ class OwnedRow(OwnerMixin, HistoryMixin, AngeeModel):
     class Meta:
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/owned_row"
+        base_manager_name = "_angee_base"
 
 
 class CreationRow(CreationKeyMixin, AuditMixin):

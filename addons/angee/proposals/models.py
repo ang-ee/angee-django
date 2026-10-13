@@ -67,9 +67,12 @@ class ClarificationWidenBlocked(DomainError, ValidationError):
     def __init__(self) -> None:
         ValidationError.__init__(
             self,
-            {"visibility": ValidationError(
-                "A message by this question's hidden asker cannot be shared.", code=self.code,
-            )},
+            {
+                "visibility": ValidationError(
+                    "A message by this question's hidden asker cannot be shared.",
+                    code=self.code,
+                )
+            },
         )
 
 
@@ -212,8 +215,13 @@ class RoundQuerySet(AngeeQuerySet):
         targets = models.Q(project=project) | models.Q(proposals__track=project)
         if project.converted_from_id is not None:
             targets |= models.Q(task_id=project.converted_from_id)
-        return self.filter(targets, status__in=(RoundStatus.COLLECTING, RoundStatus.OPENED)).distinct().order_by(
-            "-created_at", "-pk",
+        return (
+            self.filter(targets, status__in=(RoundStatus.COLLECTING, RoundStatus.OPENED))
+            .distinct()
+            .order_by(
+                "-created_at",
+                "-pk",
+            )
         )
 
 
@@ -255,7 +263,11 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
             round = rows.first()
             if round is None:
                 round = self.model(
-                    **{target_field: target}, facilitator=facilitator, team=team, **values, **setup_values,
+                    **{target_field: target},
+                    facilitator=facilitator,
+                    team=team,
+                    **values,
+                    **setup_values,
                 )
                 round.sudo(reason="proposals.round.provision").save()
             elif not round.with_actor(actor).has_access("write"):
@@ -609,8 +621,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if subject_reaches_user(subject, self.requester_user_id()):
             raise RecordAccessSubjectRefused()
 
-    def admit(self, user: models.Model, party: models.Model | None = None, track: bool = False,
-              follow: bool = False) -> Any:
+    def admit(
+        self, user: models.Model, party: models.Model | None = None, track: bool = False, follow: bool = False
+    ) -> Any:
         """Create the unique shell and optionally its owning track, idempotently."""
         if not self.has_access("write"):
             raise PermissionDenied("Round write access is required.")
@@ -1570,7 +1583,7 @@ class ProposalManager(AngeeManager):
             return None
         handle: Any = message.sender
         if handle.party_id is None:
-            apps.get_model("parties", "PartyHandle").objects.suggest_for(handle)
+            apps.get_model("parties", "Party").objects.suggest_for(handle)
             # Matching may assign the party through another Handle instance.
             handle.refresh_from_db(fields=["party"])
         return handle.party
@@ -2208,8 +2221,13 @@ class ProjectProposalAccess(models.Model):
         team = values.pop("team", None)
         requester = values.pop("requester_party", None)
         apps.get_model("proposals", "Round").objects.provision(
-            self, template, facilitator, responders, team,
-            requester_party=requester, configuration=values,
+            self,
+            template,
+            facilitator,
+            responders,
+            team,
+            requester_party=requester,
+            configuration=values,
         )
 
     @classmethod
@@ -2217,8 +2235,13 @@ class ProjectProposalAccess(models.Model):
         """A proposal-enabled project also requires a configured readable round."""
 
         round_model = apps.get_model("proposals", "Round")
-        rounds = round_model.objects.with_actor(actor).scoped().filter(
-            round_model.setup_complete_condition(actor), project_id=models.OuterRef("pk"),
+        rounds = (
+            round_model.objects.with_actor(actor)
+            .scoped()
+            .filter(
+                round_model.setup_complete_condition(actor),
+                project_id=models.OuterRef("pk"),
+            )
         )
         return super().setup_complete_condition(actor) & models.Q(models.Exists(rounds))
 
@@ -2227,7 +2250,9 @@ class ProjectProposalAccess(models.Model):
         """Count readable unanswered questions on this project."""
 
         return apps.get_model("projects", "Task").question_count_expression(
-            actor, scope=models.Q(project_id=models.OuterRef("pk")), passed_on=passed_on,
+            actor,
+            scope=models.Q(project_id=models.OuterRef("pk")),
+            passed_on=passed_on,
         )
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
@@ -2288,11 +2313,13 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         """Name the clarification audience from the task's proposal facts."""
 
         if self.clarification_round_id is not None:
-            return ("Round readers and question participants" if self.visibility == "inherited"
-                    else "Question participants")
+            return (
+                "Round readers and question participants" if self.visibility == "inherited" else "Question participants"
+            )
         if self.shared_with_responders:
             return "Responders and task participants"
         return super().visibility_audience_label()
+
     clarification_round = models.ForeignKey(
         "proposals.Round",
         null=True,
@@ -2426,13 +2453,30 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         """Keep question publication rules on the task verb's shared predicate seam."""
         blockers = super().visibility_blockers(value)
         if value == "restricted":
-            return (*blockers, (models.Q(
-                clarification_round__isnull=False, visibility="inherited", clarification_passed_at__isnull=False,
-            ), PublishedQuestion))
+            return (
+                *blockers,
+                (
+                    models.Q(
+                        clarification_round__isnull=False,
+                        visibility="inherited",
+                        clarification_passed_at__isnull=False,
+                    ),
+                    PublishedQuestion,
+                ),
+            )
         if value == "inherited":
-            return (*blockers, (models.Q(Exact(
-                cls.clarification_widen_blocker_expression(), models.Value("hidden_asker_message"),
-            )), ClarificationWidenBlocked))
+            return (
+                *blockers,
+                (
+                    models.Q(
+                        Exact(
+                            cls.clarification_widen_blocker_expression(),
+                            models.Value("hidden_asker_message"),
+                        )
+                    ),
+                    ClarificationWidenBlocked,
+                ),
+            )
         return blockers
 
     def _message_post(self, body: str, **kwargs: Any) -> models.Model:
@@ -2561,9 +2605,16 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         waiting = cls.clarification_waiting_users(actor)
         if not passed_on:
             waiting = waiting.filter(pk=actor_user_id(actor))
-        questions = cls.objects.with_actor(actor).scoped().filter(
-            scope, status="open", clarification_round__isnull=False,
-        ).filter(models.Exists(waiting))
+        questions = (
+            cls.objects.with_actor(actor)
+            .scoped()
+            .filter(
+                scope,
+                status="open",
+                clarification_round__isnull=False,
+            )
+            .filter(models.Exists(waiting))
+        )
         if passed_on:
             managed = apps.get_model("proposals", "Round").objects.with_actor(actor).with_action("manage").scoped()
             questions = questions.filter(
@@ -2577,7 +2628,8 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         """Include this question or the questions filed under this source task."""
 
         return cls.question_count_expression(
-            actor, scope=models.Q(parent_id=models.OuterRef("pk")) | models.Q(pk=models.OuterRef("pk")),
+            actor,
+            scope=models.Q(parent_id=models.OuterRef("pk")) | models.Q(pk=models.OuterRef("pk")),
             passed_on=passed_on,
         )
 
@@ -2701,9 +2753,11 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
         manage = self.has_access("manage") if manage is None else manage
         if not narrow:
             return []
-        choices = ANSWER_VISIBILITY_ORDER if manage else ANSWER_VISIBILITY_ORDER[
-            ANSWER_VISIBILITY_ORDER.index(self.visibility):
-        ]
+        choices = (
+            ANSWER_VISIBILITY_ORDER
+            if manage
+            else ANSWER_VISIBILITY_ORDER[ANSWER_VISIBILITY_ORDER.index(self.visibility) :]
+        )
         return [str(value) for value in choices]
 
     def set_visibility(self, value: str, expected_revision: int | None = None) -> Self:

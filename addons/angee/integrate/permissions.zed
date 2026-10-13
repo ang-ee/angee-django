@@ -86,30 +86,13 @@ definition integrate/sync_stream {
     relation integration: integrate/integration // rebac:field=integration
 
     permission create = integration->write
-    permission read = integration->read
+    // The asserting principal may inspect evidence from its own feed.
+    permission read = integration + integration->read
     permission write = integration->write
     permission delete = integration->delete
 }
 
 definition integrate/record_link {
-    relation stream: integrate/sync_stream // rebac:field=stream
-
-    permission create = stream->write
-    permission read = stream->read
-    permission write = stream->write
-    permission delete = stream->delete
-}
-
-definition integrate/record_revision {
-    relation link: integrate/record_link // rebac:field=link
-
-    permission create = link->write
-    permission read = link->read
-    permission write = link->write
-    permission delete = link->delete
-}
-
-definition integrate/sync_discrepancy {
     relation stream: integrate/sync_stream // rebac:field=stream
 
     permission create = stream->write

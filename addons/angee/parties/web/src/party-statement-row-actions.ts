@@ -7,35 +7,35 @@ import {
 } from "@angee/ui";
 
 import {
-  ConfirmPartyHandle,
-  DismissPartyHandle,
-  PARTY_HANDLE_DECISION_INVALIDATES,
+  ConfirmPartyStatement,
+  DismissPartyStatement,
+  PARTY_STATEMENT_DECISION_INVALIDATES,
 } from "./documents";
 import { usePartiesT } from "./i18n";
 
-export interface PartyHandleActionRow extends StringIdRow {
+export interface PartyStatementActionRow extends StringIdRow {
   is_confirmed?: boolean;
   is_dismissed?: boolean;
 }
 
-export type PartyHandleActionVisibility = "all" | "remaining";
+export type PartyStatementActionVisibility = "all" | "remaining";
 
 /** The two identity-decision verbs shared by detail and review lists. */
-export function usePartyHandleRowActions<TRow extends PartyHandleActionRow>(
-  visibility: PartyHandleActionVisibility,
+export function usePartyStatementRowActions<TRow extends PartyStatementActionRow>(
+  visibility: PartyStatementActionVisibility,
 ): readonly RowActionDeclaration<TRow>[] {
   const t = usePartiesT();
   return React.useMemo(
     () => [
-      defineRowAction<TRow, typeof ConfirmPartyHandle>({
+      defineRowAction<TRow, typeof ConfirmPartyStatement>({
         kind: "authored",
-        id: "confirm-party-handle",
+        id: "confirm-party-statement",
         label: t("identity.confirm"),
         icon: "check",
         variant: "ghost",
-        document: ConfirmPartyHandle,
+        document: ConfirmPartyStatement,
         variables: rowIdVariables,
-        invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES,
+        invalidateModels: PARTY_STATEMENT_DECISION_INVALIDATES,
         toast: {
           title: () => t("identity.confirmError"),
           description: () => t("identity.confirmError"),
@@ -43,15 +43,15 @@ export function usePartyHandleRowActions<TRow extends PartyHandleActionRow>(
         visible: (row) => visibility === "all" || !row.is_confirmed,
         pendingPolicy: "active-row",
       }),
-      defineRowAction<TRow, typeof DismissPartyHandle>({
+      defineRowAction<TRow, typeof DismissPartyStatement>({
         kind: "authored",
-        id: "dismiss-party-handle",
+        id: "dismiss-party-statement",
         label: t("identity.dismiss"),
         icon: "x",
         variant: "ghost",
-        document: DismissPartyHandle,
+        document: DismissPartyStatement,
         variables: rowIdVariables,
-        invalidateModels: PARTY_HANDLE_DECISION_INVALIDATES,
+        invalidateModels: PARTY_STATEMENT_DECISION_INVALIDATES,
         toast: {
           title: () => t("identity.dismissError"),
           description: () => t("identity.dismissError"),

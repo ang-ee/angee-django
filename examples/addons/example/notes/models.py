@@ -14,18 +14,16 @@ from angee.base.mixins import (
     AuditMixin,
     HistoryMixin,
     OwnerMixin,
-    RevisionMixin,
 )
 from angee.base.models import AngeeDataModel
 from angee.messaging.models import ThreadedModelMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin, RevisionMixin):
+class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, HistoryMixin):
     """A short note used to exercise backend composition.
 
-    Metadata changes are audited through ``history``; the ``body`` field is
-    versioned through ``revisions`` so edits can be rolled back.
+    Metadata and body changes are recorded through native ``history``.
     """
 
     runtime = True
@@ -38,7 +36,6 @@ class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, Angee
             ObjectRef("angee/role", "admin"),
         ),)
 
-    revisioned_fields = ("body",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     sqid_prefix = "nte_"

@@ -32,8 +32,8 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
-from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
-from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
+from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
 from angee.messaging.testing.models import Channel
 from tests import (
@@ -55,6 +55,7 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
+from tests.stream_adapters import failure_state
 from tests.test_agents import InferenceProvider
 
 User = get_user_model()
@@ -135,7 +136,8 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     with CaptureQueriesContext(connection) as many:
         rows = _data(_execute(schema, query, user=admin))
     assert {row["display_name"] for row in rows["sync_streams"]} == {
-        "contacts (book)", *(f"contacts-{index}" for index in range(4)),
+        "contacts (book)",
+        *(f"contacts-{index}" for index in range(4)),
     }
     assert {row["display_name"] for row in rows["record_links"]} == {f"person:{index}" for index in range(1, 6)}
     assert len(many) <= len(one) + 1
@@ -180,7 +182,6 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
     [
         ("sync_streams", "integration", "KEY"),
         ("record_links", "stream__integration", "STATUS"),
-        ("sync_discrepancies", "stream__integration", "STATUS"),
     ],
 )
 def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
@@ -199,7 +200,7 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
         for item in (bridge, other):
             stream = SyncStream.objects.current(item, "contacts", kind=StreamKind.RECORD_REPLICA)
             link = RecordLink.objects.observe(stream, "person:1")
-            SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+            link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
     schema = _schema()
     query = (
         """
@@ -225,9 +226,16 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     unknown = _execute(
         schema, query, {"bridge": public_id_for(Integration, bridge.pk + other.pk + 1_000_000)}, user=outsider
     )
-    assert _data(hidden) == _data(unknown) == {
-        "rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0,
-    }
+    assert (
+        _data(hidden)
+        == _data(unknown)
+        == {
+            "rows": [],
+            "total": {"aggregate": {"count": 0}},
+            "groups": [],
+            "group_count": 0,
+        }
+    )
 
 
 def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:
@@ -241,16 +249,16 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
         for index in range(3):
             RecordLink.objects.observe(stream, f"person:{index}")
         for index in range(3):
-            discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code=f"invalid-{index}")
+            failure = stream.record_failure(kind=SyncFailureKind.SEMANTIC, code=f"invalid-{index}")
             if index == 1:
-                SyncDiscrepancy.objects.retry(discrepancy)
+                failure.retry()
             elif index == 2:
-                SyncDiscrepancy.objects.resolve(discrepancy)
+                failure.resolve()
     schema = _schema()
     query = """
         query Counts($bridge: String!) {
           sync_streams(where: {integration: {_eq: $bridge}}, limit: 20, order_by: [{partition: asc}]) {
-            open_discrepancy_count link_count
+            open_failure_count link_count
           }
         }
     """
@@ -258,13 +266,13 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
     _data(_execute(schema, query, variables, user=owner))
     with CaptureQueriesContext(connection) as one:
         initial = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
-    assert initial == [{"open_discrepancy_count": 2, "link_count": 3}]
+    assert initial == [{"open_failure_count": 2, "link_count": 3}]
     with system_context(reason="test extra zero-count streams"):
         for index in range(5):
             SyncStream.objects.current(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
     with TestCase().assertNumQueries(len(one)):
         many = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
-    assert many == [*initial, *[{"open_discrepancy_count": 0, "link_count": 0}] * 5]
+    assert many == [*initial, *[{"open_failure_count": 0, "link_count": 0}] * 5]
 
 
 def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tables: None) -> None:
@@ -305,8 +313,8 @@ def test_record_link_target_uses_shared_public_reference(composed_tables: None) 
 @pytest.mark.parametrize(
     ("mutation", "model", "verb"),
     [
-        ("resolveSyncDiscrepancy", SyncDiscrepancy, "resolve"),
-        ("retrySyncDiscrepancy", SyncDiscrepancy, "retry"),
+        ("resolveSyncFailure", SyncFailure, "resolve"),
+        ("retrySyncFailure", SyncFailure, "retry"),
         ("resyncSyncStream", SyncStream, "request_resync"),
     ],
 )
@@ -326,33 +334,45 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
     with system_context(reason="test sync action fixtures"):
         owner = bridge.owner
         stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-        discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="invalid")
-    target = stream if model is SyncStream else discrepancy
-    original = getattr(type(model.objects), verb)
-    calls: list[int] = []
+        failure = stream.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
+    target = stream if model is SyncStream else failure
+    method_owner = type(model.objects) if model is SyncStream else SyncFailure
+    original = getattr(method_owner, verb)
+    calls: list[int | str] = []
 
-    def tracked(manager: Any, row: Any, **kwargs: Any) -> Any:
+    def tracked(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        row = args[0] if model is SyncStream else instance
         calls.append(row.pk)
-        return original(manager, row, **kwargs)
+        return original(instance, *args, **kwargs)
 
-    monkeypatch.setattr(type(model.objects), verb, tracked)
+    monkeypatch.setattr(method_owner, verb, tracked)
+    identifier = _public_id(target) if model is SyncStream else target.id
     schema = _schema()
-    query = "mutation Action($id: ID!) { ACTION(id: $id) { ok message } }".replace("ACTION", mutation)
+    if model is SyncStream:
+        query = "mutation Action($id: ID!) { ACTION(id: $id) { ok message } }"
+        arguments = {"id": identifier}
+    else:
+        query = "mutation Action($stream: ID!, $slot: Int) { ACTION(stream: $stream, slot: $slot) { ok message } }"
+        arguments = {"stream": target.stream_id, "slot": target.slot}
+    query = query.replace("ACTION", mutation)
     for denied in (owner, outsider, AnonymousUser()):
-        result = _execute(schema, query, {"id": _public_id(target)}, user=denied)
+        result = _execute(schema, query, arguments, user=denied)
         assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
     assert calls == []
     before = timezone.now()
-    assert _data(_execute(schema, query, {"id": _public_id(target)}, user=admin))[mutation]["ok"]
+    assert _data(_execute(schema, query, arguments, user=admin))[mutation]["ok"]
     assert calls == [target.pk]
     with system_context(reason="test sync action outcome"):
-        target.refresh_from_db()
+        if model is SyncStream:
+            target.refresh_from_db()
+        else:
+            target = failure_state(target)
         if verb == "request_resync":
             assert target.resync_required and target.generation == 1
         elif verb == "retry":
-            assert target.status == DiscrepancyStatus.RETRY and target.retry_at >= before
+            assert target.status == SyncFailureStatus.RETRY and target.retry_at >= before
         else:
-            assert target.status == DiscrepancyStatus.RESOLVED and target.resolved_at >= before
+            assert target.status == SyncFailureStatus.RESOLVED and target.resolved_at >= before
 
 
 def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() -> None:
@@ -361,9 +381,12 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
     schema = _schema()
     resources = {item.model_label: item for item in schema.angee_resources}
     for label, root, axes in (
-        ("SyncStream", "sync_streams", {"key", "partition", "kind", "direction", "phase", "resync_required"}),
+        (
+            "SyncStream",
+            "sync_streams",
+            {"key", "partition", "kind", "direction", "snapshot", "authoritative", "phase", "state", "resync_required"},
+        ),
         ("RecordLink", "record_links", {"status", "origin"}),
-        ("SyncDiscrepancy", "sync_discrepancies", {"kind", "code", "status"}),
     ):
         metadata = resources[f"integrate.{label}"]
         assert metadata.roots.list_name == root
@@ -372,12 +395,15 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
         assert metadata.roots.create_name is metadata.roots.update_name is metadata.roots.delete_name is None
         assert set(metadata.query.axes) == axes
     sdl = schema.as_str()
-    assert "resolveSyncDiscrepancy(id: ID!, keep: ConflictKeep = null): ActionResult!" in sdl
+    assert (
+        "resolveSyncFailure(stream: ID!, link: ID = null, slot: Int = null, keep: ConflictKeep = null): ActionResult!"
+        in sdl
+    )
     assert "sync_run_id:" not in sdl
-    assert "enum DiscrepancyKind {" in sdl
+    assert "enum SyncFailureKind {" in sdl
     assert "enum StreamKind {" in sdl
-    for action in ("retrySyncDiscrepancy", "resyncSyncStream"):
-        assert f"{action}(id: ID!): ActionResult!" in sdl
+    assert "retrySyncFailure(stream: ID!, link: ID = null, slot: Int = null): ActionResult!" in sdl
+    assert "resyncSyncStream(id: ID!): ActionResult!" in sdl
 
 
 def test_integration_capabilities_are_native_creatable_children(
@@ -975,7 +1001,10 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
 
 def test_connection_admissions_project_ownership_without_loading_credentials(composed_tables: None) -> None:
     bridge = make_integration(
-        "connect-admissions", kind=CredentialKind.OAUTH, backend_class="stub", model=VcsBridge,
+        "connect-admissions",
+        kind=CredentialKind.OAUTH,
+        backend_class="stub",
+        model=VcsBridge,
     )
     admin = _platform_admin("connect-admissions-admin")
     with system_context(reason="test.integrate.connect_admissions"):
@@ -987,10 +1016,14 @@ def test_connection_admissions_project_ownership_without_loading_credentials(com
     """
     variables = {"id": _public_id(bridge)}
     assert _data(_execute(_schema(), query, variables, user=bridge.owner))["vcs_bridges_by_pk"] == {
-        "can_connect": True, "can_resume": False, "can_retry_discovery": False,
+        "can_connect": True,
+        "can_resume": False,
+        "can_retry_discovery": False,
     }
     assert _data(_execute(_schema(), query, variables, user=admin))["vcs_bridges_by_pk"] == {
-        "can_connect": False, "can_resume": False, "can_retry_discovery": False,
+        "can_connect": False,
+        "can_resume": False,
+        "can_retry_discovery": False,
     }
     with system_context(reason="test.integrate.resume_admissions"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=bridge.credential, lifecycle="paused")
@@ -1777,26 +1810,6 @@ def _sdl_block(sdl: str, header: str) -> str:
     return sdl[start:end]
 
 
-def test_discrepancy_open_filter_tracks_bulk_status_changes(composed_tables: None) -> None:
-    """The same stored expression serves reads, filters and bulk status updates."""
-    bridge = make_integration("open-discrepancy-filter", model=Channel)
-    with system_context(reason="test discrepancy boolean filter"):
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
-        first = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="first")
-        second = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="second")
-        SyncDiscrepancy.objects.filter(pk=second.pk).update(status=DiscrepancyStatus.RESOLVED)
-        owner = bridge.owner
-    query = """query {
-      sync_discrepancies(where: {is_open: {_eq: true}}) { id is_open }
-      sync_discrepancies_aggregate(where: {is_open: {_eq: true}}) { aggregate { count } }
-    }"""
-    result = _data(_execute(_schema(), query, user=owner))
-    assert result == {
-        "sync_discrepancies": [{"id": _public_id(first), "is_open": True}],
-        "sync_discrepancies_aggregate": {"aggregate": {"count": 1}},
-    }
-
-
 @pytest.mark.parametrize("keep", ["remote", "local"])
 def test_conflict_action_forwards_explicit_choice_to_owner(
     composed_tables: None,
@@ -1808,29 +1821,42 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     with system_context(reason="test explicit conflict action"):
         stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "one")
-        discrepancy = SyncDiscrepancy.objects.record(
-            stream, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed"
-        )
-    calls: list[tuple[int, str]] = []
+        failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed")
+    calls: list[tuple[str, str]] = []
 
-    def resolve(manager: Any, row: Any, *, keep: str) -> Any:
+    def resolve(row: Any, *, keep: str) -> Any:
         calls.append((row.pk, keep))
         return row
 
-    monkeypatch.setattr(type(SyncDiscrepancy.objects), "resolve_conflict", resolve)
-    query = """mutation Resolve($id: ID!, $keep: ConflictKeep) {
-      resolveSyncDiscrepancy(id: $id, keep: $keep) { ok }
+    monkeypatch.setattr(SyncFailure, "resolve_conflict", resolve)
+    query = """mutation Resolve($stream: ID!, $link: ID, $slot: Int, $keep: ConflictKeep) {
+      resolveSyncFailure(stream: $stream, link: $link, slot: $slot, keep: $keep) { ok }
     }"""
-    result = _data(_execute(_schema(), query, {"id": _public_id(discrepancy), "keep": keep.upper()}, user=admin))
-    assert result["resolveSyncDiscrepancy"]["ok"]
-    assert calls == [(discrepancy.pk, keep)]
-    invalid = _execute(_schema(), query, {"id": _public_id(discrepancy), "keep": "TYPO"}, user=admin)
+    result = _data(
+        _execute(
+            _schema(),
+            query,
+            {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot, "keep": keep.upper()},
+            user=admin,
+        )
+    )
+    assert result["resolveSyncFailure"]["ok"]
+    assert calls == [(failure.pk, keep)]
+    invalid = _execute(
+        _schema(),
+        query,
+        {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot, "keep": "TYPO"},
+        user=admin,
+    )
     assert invalid.errors and "ConflictKeep" in invalid.errors[0].message
     assert len(calls) == 1
-    missing = _data(_execute(_schema(), query, {"id": _public_id(discrepancy)}, user=admin))
-    assert not missing["resolveSyncDiscrepancy"]["ok"]
+    missing = _data(
+        _execute(
+            _schema(), query, {"stream": failure.stream_id, "link": failure.link_id, "slot": failure.slot}, user=admin
+        )
+    )
+    assert not missing["resolveSyncFailure"]["ok"]
     assert len(calls) == 1
-
 
 
 def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(composed_tables: None) -> None:
@@ -1838,15 +1864,22 @@ def test_owner_credential_patch_refuses_foreign_credentials_as_not_found(compose
     foreign = make_integration("credential-patch-foreign").credential
     with system_context(reason="test own replacement credential"):
         own = Credential.objects.create_local_credential(
-            integration.owner, kind="static_token", name="Replacement", material={"api_key": "fake"},
+            integration.owner,
+            kind="static_token",
+            name="Replacement",
+            material={"api_key": "fake"},
         )
     schema = _schema()
 
     def patch(credential: Any) -> Any:
-        return _execute(schema, f'''mutation {{
+        return _execute(
+            schema,
+            f'''mutation {{
           update_integrations_by_pk(pk_columns: {{id: "{_public_id(integration)}"}},
             _set: {{credential: "{_public_id(credential)}"}}) {{ id }}
-        }}''', user=integration.owner)
+        }}''',
+            user=integration.owner,
+        )
 
     denied = patch(foreign)
     assert denied.errors and "not found" in denied.errors[0].message.lower()
@@ -1863,9 +1896,15 @@ def test_parent_typed_integration_uses_the_concrete_selector_for_admissions(comp
     bridge = make_integration("parent-admission", model=VcsBridge, backend_class="stub")
     with system_context(reason="test parent admission needs consent"):
         VcsBridge.objects.filter(pk=bridge.pk).update(credential=None, lifecycle="disconnected")
-    result = _data(_execute(_schema(), f'''query {{
+    result = _data(
+        _execute(
+            _schema(),
+            f'''query {{
       integrations_by_pk(id: "{_public_id(bridge)}") {{ can_connect can_resume can_retry_discovery }}
-    }}''', user=bridge.owner))["integrations_by_pk"]
+    }}''',
+            user=bridge.owner,
+        )
+    )["integrations_by_pk"]
     assert result == {"can_connect": True, "can_resume": False, "can_retry_discovery": False}
 
 
@@ -1881,8 +1920,11 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
     assert len(rows) == 1 and rows[0]["can_resume"] == (actor_kind == "admin")
     for index in range(1, 6):
         make_integration(
-            f"batched-admission-{index}", model=VcsBridge, backend_class="stub",
-            owner=first.owner, lifecycle="paused",
+            f"batched-admission-{index}",
+            model=VcsBridge,
+            backend_class="stub",
+            owner=first.owner,
+            lifecycle="paused",
         )
     with CaptureQueriesContext(connection) as many_queries:
         rows = _data(_execute(schema, query, user=actor))["integrations"]
@@ -1891,23 +1933,33 @@ def test_connection_admission_query_count_does_not_grow_with_rows(composed_table
 
 
 def test_connect_completion_returns_account_switch_as_a_typed_result(
-    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     integration = make_integration("account-switch-result")
     monkeypatch.setattr(
-        integrate_schema.flow, "remembered_oauth_client", lambda *args: integration.credential.oauth_client,
+        integrate_schema.flow,
+        "remembered_oauth_client",
+        lambda *args: integration.credential.oauth_client,
     )
 
     def refuse(*args: Any, **kwargs: Any) -> None:
         raise integrate_schema.OAuthFlowError("account_switch_refused", 409)
 
     monkeypatch.setattr(integrate_schema._connect, "complete_account_connect", refuse)
-    result = _data(_execute(_schema(), '''mutation {
+    result = _data(
+        _execute(
+            _schema(),
+            """mutation {
       connect_account_complete(code: "code", state: "state", redirect_uri: "https://app.example/callback") {
         error error_code account { id }
       }
-    }''', user=integration.owner))["connect_account_complete"]
+    }""",
+            user=integration.owner,
+        )
+    )["connect_account_complete"]
     assert result == {
         "error": "Detach this credential from its integrations before changing the external account.",
-        "error_code": "account_switch_refused", "account": None,
+        "error_code": "account_switch_refused",
+        "account": None,
     }

@@ -92,6 +92,11 @@ through imports in the root conftest before database setup. The framework-generi
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
+A test that reaches a statement source needs the install-tier `provenance.Rule`
+principals parties declares: list
+[`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
+`pytest_plugins` and request its `statement_sources` fixture (the framework's own
+hosts load them after every REBAC sync).
 Verify adopting modules individually as well as in the full suite so collection
 order cannot hide missing models.
 

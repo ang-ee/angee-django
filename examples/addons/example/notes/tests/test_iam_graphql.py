@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
-import reversion
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -322,60 +321,6 @@ class IAMGraphQLTests(TransactionTestCase):
         self.assertNotIn("user", fields)
         self.assertNotIn("email", fields)
         self.assertNotIn("isStaff", fields)
-
-    def test_note_revisions_are_actor_scoped(self) -> None:
-        with system_context(reason="test-setup"):
-            with reversion.create_revision():
-                self.welcome.body = "First reviewed body"
-                self.welcome.save()
-                reversion.set_comment("first body")
-            with reversion.create_revision():
-                self.welcome.body = "Second reviewed body"
-                self.welcome.save()
-                reversion.set_comment("second body")
-
-        alice = Client()
-        self.login(alice, "alice")
-        welcome_id = next(node["id"] for node in self.notes(alice)["results"] if node["title"] == "Welcome to Angee")
-        visible = self.post(
-            alice,
-            """
-            query NoteRevisions($id: ID!) {
-              note_revisions(id: $id) {
-                id
-                created_at
-                comment
-                body
-              }
-            }
-            """,
-            {"id": welcome_id},
-        )
-
-        revisions = visible["data"]["note_revisions"]
-        self.assertEqual(
-            [revision["body"] for revision in revisions],
-            ["Second reviewed body", "First reviewed body"],
-        )
-        self.assertEqual(
-            [revision["comment"] for revision in revisions],
-            ["second body", "first body"],
-        )
-        self.assertTrue(all(revision["id"] for revision in revisions))
-        self.assertTrue(all(revision["created_at"] for revision in revisions))
-
-        bob = Client()
-        self.login(bob, "bob")
-        scoped_out = self.post(
-            bob,
-            """
-            query NoteRevisions($id: ID!) {
-              note_revisions(id: $id) { id }
-            }
-            """,
-            {"id": welcome_id},
-        )
-        self.assertEqual(scoped_out["data"]["note_revisions"], [])
 
     def test_notes_paginate_in_declared_order(self) -> None:
         alice = Client()

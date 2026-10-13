@@ -10,7 +10,7 @@ itself.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -23,18 +23,18 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
-from rebac import PermissionDenied, current_actor, generic_target, system_context
+from rebac import PermissionDenied, actor_context, current_actor, generic_target, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, instance_actor
+from angee.base.changesets import changeset
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, RowLockMixin, clean_trash_reason
 from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.scoping import system_queryset
 from angee.base.stages import Stage as StagePrimitive
 from angee.base.stages import StagedModelMixin
-from angee.parties.mixins import LinkSource
 from angee.resources.mixins import ResourceLoadMixin
 from angee.spaces.managers import GroupManager
 from angee.work.merge import run_task_merge_contributors
@@ -124,7 +124,6 @@ class QueueManager(GroupManager):
                 party_id=person.pk,
                 role=membership_model.MembershipRole.OWNER,
                 confidence=1.0,
-                source=LinkSource.MANUAL,
                 is_confirmed=True,
                 is_dismissed=False,
                 created_by_id=user.pk,
@@ -136,7 +135,6 @@ class QueueManager(GroupManager):
         desired = {
             "role": membership_model.MembershipRole.OWNER,
             "confidence": 1.0,
-            "source": LinkSource.MANUAL,
             "is_confirmed": True,
             "is_dismissed": False,
         }
@@ -492,9 +490,11 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
             mappings = milestones._base_manager.filter(active_stage_id=self.pk)
             if (not self.rule_owned or self.conceals) and mappings.exists():
                 raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned and non-concealing."})
-            if mappings.filter(project__converted_from__queue__isnull=False).exclude(
-                project__converted_from__queue_id=self.queue_id
-            ).exists():
+            if (
+                mappings.filter(project__converted_from__queue__isnull=False)
+                .exclude(project__converted_from__queue_id=self.queue_id)
+                .exists()
+            ):
                 raise ValidationError({"queue": "A mapped stage must remain in its source task's queue."})
         if self.conceals:
             project_model = apps.get_model("projects", "Project")
@@ -795,7 +795,9 @@ class ProjectWork(models.Model):
             party = apps.get_model("parties", "Party").objects.for_user(user)
         membership_model = apps.get_model("spaces", "Membership")
         membership = membership_model.objects.add_confirmed(
-            group=self.team, party=party, role=membership_model.MembershipRole.MODERATOR,
+            group=self.team,
+            party=party,
+            role=membership_model.MembershipRole.MODERATOR,
         )
         with system_context(reason="work.project.manager.follow"):
             self.message_subscribe(user=user)
@@ -1259,20 +1261,26 @@ class TaskWork(StagedModelMixin):
                 (queued & Q(stage__conceals=True), {"stage": "Restore a removed task instead of reopening it."}),
                 reserved,
                 # Reopening returns closed work; open work never moves through it.
-                (queued & ~Q(stage__category__in=("completed", "canceled", "duplicate")),
-                 {"stage": "Only a closed task can be reopened."}),
+                (
+                    queued & ~Q(stage__category__in=("completed", "canceled", "duplicate")),
+                    {"stage": "Only a closed task can be reopened."},
+                ),
             ),
             "accept": (reserved, (~triage, {"stage": "Only a task in triage can be accepted."})),
             "start": (
                 (triage, {"stage": "Accept a task in triage before starting it."}),
-                (Q(stage__category__in=("completed", "canceled", "duplicate")),
-                 {"stage": "Reopen a closed task before starting it."}),
+                (
+                    Q(stage__category__in=("completed", "canceled", "duplicate")),
+                    {"stage": "Reopen a closed task before starting it."},
+                ),
                 missing("started"),
                 reserved,
             ),
             "return_to_triage": (
-                (Q(queue__isnull=True) | Q(queue__triage_enabled=False),
-                 {"queue": "Returning to triage requires a triage-enabled queue."}),
+                (
+                    Q(queue__isnull=True) | Q(queue__triage_enabled=False),
+                    {"queue": "Returning to triage requires a triage-enabled queue."},
+                ),
                 missing("triage"),
                 reserved,
             ),
@@ -1313,11 +1321,12 @@ class TaskWork(StagedModelMixin):
         Stage.validate_transition(previous, target)
         if self.stage_id != target.pk:
             self.stage = target
-            self._change_reason = reason or None
-            try:
+            actor = instance_actor(self)
+            with (
+                actor_context(actor) if actor is not None else nullcontext(),
+                changeset(fresh=True, change_reason=reason, origin=self),
+            ):
                 self.save(update_fields=("stage", "updated_at"))
-            finally:
-                del self._change_reason
         return self
 
     @transaction.atomic
@@ -1408,9 +1417,14 @@ class TaskWork(StagedModelMixin):
             return None
         return cast(
             "Stage | None",
-            self.stage_model()._base_manager.filter(
-                pk=earlier, queue_id=self.queue_id, conceals=False, rule_owned=False,
-            ).first(),
+            self.stage_model()
+            ._base_manager.filter(
+                pk=earlier,
+                queue_id=self.queue_id,
+                conceals=False,
+                rule_owned=False,
+            )
+            .first(),
         )
 
     @transaction.atomic

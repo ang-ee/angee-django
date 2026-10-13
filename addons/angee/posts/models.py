@@ -36,7 +36,7 @@ from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AuditMixin, update_fields_with_auto_now
 from angee.base.models import AngeeDataModel
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
@@ -187,6 +187,29 @@ class FeedFollow(AuditMixin, AngeeDataModel):
     ended_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     objects = FeedFollowManager()
+
+    merge_identity = (("feed", "handle"),)
+    """A handle follows a feed once: a merge folds a moved duplicate follow into the kept one."""
+
+    def merge_collapse(self, duplicate: Any) -> bool:
+        """Keep one follow covering both: the earliest start, and open while either is.
+
+        Two handles merged into one that both followed a feed held two dated
+        intervals of the same subscription; the kept row spans them.
+        """
+
+        starts = [value for value in (self.started_at, duplicate.started_at) if value is not None]
+        started_at = min(starts) if starts else None
+        ended_at = (
+            None if self.ended_at is None or duplicate.ended_at is None else max(self.ended_at, duplicate.ended_at)
+        )
+        dirty = {
+            name for name, value in (("started_at", started_at), ("ended_at", ended_at)) if getattr(self, name) != value
+        }
+        self.started_at, self.ended_at = started_at, ended_at
+        if dirty:
+            self.save(update_fields=update_fields_with_auto_now(self, dirty))
+        return True
 
     class Meta:
         """Django model options for the feed-follow source model."""

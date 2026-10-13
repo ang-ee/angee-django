@@ -66,7 +66,9 @@ def test_record_link_rename_preserves_both_target_columns() -> None:
         assert row.target_object_id == str(target_type.pk)
         assert ContentType.objects.get(pk=row.target_object_id) == target_type
         assert set(upgraded.models["integrate", "recordlink"].fields) == {
-            "id", "target_content_type", "target_object_id"
+            "id",
+            "target_content_type",
+            "target_object_id",
         }
         assert not record_link_target_names.applies(upgraded)
     finally:
@@ -91,8 +93,11 @@ def _integration_state(*, feed_on_channel: bool) -> ProjectState:
             (
                 "integration_ptr",
                 models.OneToOneField(
-                    "integrate.Integration", on_delete=models.CASCADE,
-                    parent_link=True, primary_key=True, auto_created=True,
+                    "integrate.Integration",
+                    on_delete=models.CASCADE,
+                    parent_link=True,
+                    primary_key=True,
+                    auto_created=True,
                 ),
             ),
         ],
@@ -107,8 +112,11 @@ def _integration_state(*, feed_on_channel: bool) -> ProjectState:
             (
                 "channel_ptr" if feed_on_channel else "integration_ptr",
                 models.OneToOneField(
-                    feed_parent, on_delete=models.CASCADE,
-                    parent_link=True, primary_key=True, auto_created=True,
+                    feed_parent,
+                    on_delete=models.CASCADE,
+                    parent_link=True,
+                    primary_key=True,
+                    auto_created=True,
                 ),
             ),
         ],
@@ -122,8 +130,11 @@ def _integration_state(*, feed_on_channel: bool) -> ProjectState:
             (
                 "integration_ptr",
                 models.OneToOneField(
-                    "integrate.Integration", on_delete=models.CASCADE,
-                    parent_link=True, primary_key=True, auto_created=True,
+                    "integrate.Integration",
+                    on_delete=models.CASCADE,
+                    parent_link=True,
+                    primary_key=True,
+                    auto_created=True,
                 ),
             ),
         ],
@@ -170,9 +181,7 @@ def _exercise_concrete_type_backfill(feed_on_channel: bool) -> None:
             f"INSERT INTO {quote(directory._meta.db_table)} ({quote('integration_ptr_id')}) VALUES (%s)",
             [directory_id],
         )
-        upgraded = integration_concrete_type.Migration("0003_integration_concrete_type", "integrate").apply(
-            old, editor
-        )
+        upgraded = integration_concrete_type.Migration("0003_integration_concrete_type", "integrate").apply(old, editor)
 
     new_integration = upgraded.apps.get_model("integrate", "Integration")
     try:
@@ -257,9 +266,7 @@ BRIDGE_CASES = (
 
 @pytest.mark.parametrize("addon,source,model_name", BRIDGE_CASES)
 @pytest.mark.django_db(transaction=True)
-def test_bridge_status_migration_preserves_failure_and_other_stages(
-    addon: str, source: str, model_name: str
-) -> None:
+def test_bridge_status_migration_preserves_failure_and_other_stages(addon: str, source: str, model_name: str) -> None:
     migration_module = import_module(f"angee.{addon}.runtime_migrations.{source}")
     old = _state(
         ModelState(
@@ -294,7 +301,9 @@ def test_bridge_status_migration_preserves_failure_and_other_stages(
     new_model = upgraded.apps.get_model(addon, model_name)
     try:
         assert dict(new_model._base_manager.values_list("pk", "sync_stage")) == {
-            failed_id: "failed", queued_id: "queued", idle_id: "idle"
+            failed_id: "failed",
+            queued_id: "queued",
+            idle_id: "idle",
         }
         stage_field = upgraded.models[addon, model_name.lower()].fields["sync_stage"]
         assert isinstance(stage_field, StateField)
@@ -313,7 +322,8 @@ def test_empty_bridge_status_migration_and_unrecognized_value_rejection() -> Non
     module = import_module("angee.messaging.runtime_migrations.channel_sync_status")
     old = _state(
         ModelState(
-            "messaging", "Channel",
+            "messaging",
+            "Channel",
             [
                 ("id", models.AutoField(primary_key=True)),
                 ("sync_stage", models.CharField(max_length=32, default="idle")),
@@ -348,3 +358,119 @@ def test_posts_declares_the_sync_status_migration_before_the_channel_parent_move
     manifest = tomllib.loads((Path(import_module("angee.posts").__file__).parent / "addon.toml").read_text())
     names = [entry["name"] for entry in manifest["migrations"]]
     assert names.index("feed_sync_status") < names.index("feed_channel_parent")
+
+
+# --- Statement-era chain guards and the failure vocabulary rename ---------------------------------
+
+
+def _legacy_link_states() -> tuple[ProjectState, ProjectState]:
+    """RecordLink before and after record_link_history_state, with the retired ``discrepant`` status."""
+    from angee.integrate.runtime_migrations import record_link_history_state
+
+    status = StateField(
+        choices=[("current", "Current"), ("observed", "Observed"), ("discrepant", "Discrepant")],
+        default="observed",
+        max_length=11,
+    )
+    before = _state(
+        _content_type_state(),
+        ModelState(
+            "integrate",
+            "SyncStream",
+            [("id", models.AutoField(primary_key=True))],
+            options={"db_table": "test_migration_sync_stream"},
+        ),
+        ModelState(
+            "integrate",
+            "RecordLink",
+            [
+                ("id", models.AutoField(primary_key=True)),
+                ("stream", models.ForeignKey("integrate.SyncStream", on_delete=models.CASCADE)),
+                ("external_key", models.CharField(max_length=512)),
+                ("status", status.clone()),
+            ],
+            options={"db_table": "test_migration_record_link_status"},
+        ),
+    )
+    after = before.clone()
+    after.add_model(
+        ModelState(
+            "integrate",
+            "HistoricalRecordLink",
+            [
+                ("history_id", models.AutoField(primary_key=True)),
+                ("id", models.IntegerField()),
+                ("status", status.clone()),
+            ],
+            options={"db_table": "test_migration_historical_record_link_status"},
+        )
+    )
+    del record_link_history_state
+    return before, after
+
+
+def test_failure_status_guard_waits_for_the_pending_history_table() -> None:
+    from angee.integrate.runtime_migrations import record_link_failure_status
+
+    before, after = _legacy_link_states()
+    assert not record_link_failure_status.applies(before)
+    assert record_link_failure_status.applies(after)
+    assert not record_link_failure_status.applies(ProjectState.from_apps(apps))
+    orphan = _state(after.models["integrate", "historicalrecordlink"].clone())
+    with pytest.raises(ValueError, match="history table without its link"):
+        record_link_failure_status.applies(orphan)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failure_status_rename_runs_as_sql_on_both_tables_and_reverses() -> None:
+    """The historical StateField admits neither value across the change; the rename must not read through it."""
+    from angee.integrate.runtime_migrations import record_link_failure_status
+
+    _, state = _legacy_link_states()
+    link = state.apps.get_model("integrate", "RecordLink")
+    history = state.apps.get_model("integrate", "HistoricalRecordLink")
+    stream = state.apps.get_model("integrate", "SyncStream")
+    migration = record_link_failure_status.Migration("0002_record_link_failure_status", "integrate")
+    with connection.schema_editor() as editor:
+        for model in (stream, link, history):
+            editor.create_model(model)
+        row = stream._base_manager.create()
+        link._base_manager.create(stream=row, external_key="a", status="discrepant")
+        link._base_manager.create(stream=row, external_key="b", status="current")
+        history._base_manager.create(id=1, status="discrepant")
+        upgraded = migration.apply(state, editor)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT external_key, status FROM test_migration_record_link_status ORDER BY external_key")
+            assert cursor.fetchall() == [("a", "failed"), ("b", "current")]
+            cursor.execute("SELECT status FROM test_migration_historical_record_link_status")
+            assert cursor.fetchall() == [("failed",)]
+        assert "failed" in dict(upgraded.models["integrate", "recordlink"].fields["status"].choices)
+        with connection.schema_editor() as editor:
+            migration.unapply(upgraded, editor)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT status FROM test_migration_record_link_status WHERE external_key = 'a'")
+            assert cursor.fetchall() == [("discrepant",)]
+    finally:
+        with connection.schema_editor() as editor:
+            for model in (history, link, stream):
+                editor.delete_model(model)
+
+
+def test_hash_base_retirement_waits_for_the_store_retirement() -> None:
+    from angee.integrate.runtime_migrations import retire_record_sync_hash_bases
+
+    hashes = [
+        ("remote_base_hash", models.CharField(max_length=64)),
+        ("local_base_hash", models.CharField(max_length=64)),
+        ("applied_base", models.IntegerField(null=True)),
+    ]
+    state = _state(
+        ModelState("integrate", "RecordLink", [("id", models.AutoField(primary_key=True)), *hashes]),
+        ModelState("integrate", "HistoricalRecordLink", [("history_id", models.AutoField(primary_key=True)), *hashes]),
+        ModelState("integrate", "RecordRevision", [("id", models.AutoField(primary_key=True))]),
+    )
+    assert not retire_record_sync_hash_bases.applies(state)
+    state.remove_model("integrate", "recordrevision")
+    assert retire_record_sync_hash_bases.applies(state)
+    assert not retire_record_sync_hash_bases.applies(ProjectState.from_apps(apps))

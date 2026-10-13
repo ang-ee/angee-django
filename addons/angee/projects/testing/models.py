@@ -62,6 +62,7 @@ class Task(TaskWork, TaskProposalAccess, AbstractTask):
 
     class Meta(AbstractTask.Meta, TaskProposalAccess.Meta):
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "projects"
         constraints = (*AbstractTask.Meta.constraints, *TaskProposalAccess.Meta.constraints)
         db_table = "test_projects_task"
@@ -88,6 +89,7 @@ class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
 
     class Meta(AbstractProject.Meta):
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "projects"
         db_table = "test_projects_project"
         rebac_resource_type = "projects/project"

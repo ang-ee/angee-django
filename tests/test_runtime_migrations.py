@@ -1508,3 +1508,61 @@ def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, c
             else:
                 del constraints[index]
             assert not source.applies(evolved), (key, index, change)
+
+
+def test_participant_thread_identity_applies_until_its_constraint_exists() -> None:
+    """The declaration owns the thread-participation constraint and collapses repeats before adding it."""
+
+    from django.db.migrations.state import ProjectState
+
+    from angee.messaging.runtime_migrations import participant_thread_identity as declaration
+
+    state = ProjectState.from_apps(apps)
+    assert not declaration.applies(state)
+    model = state.models["messaging", "participant"]
+    model.options["constraints"] = [
+        constraint for constraint in model.options.get("constraints", ()) if constraint.name != declaration.CONSTRAINT
+    ]
+    assert declaration.applies(state)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_participant_thread_identity_collapses_only_the_repeats_its_constraint_covers(composed_tables: None) -> None:
+    """Repeated thread participations keep their oldest row; thread-less rows are outside the constraint and stay."""
+
+    from django.db import connection
+    from rebac import system_context
+
+    from angee.messaging.runtime_migrations import participant_thread_identity as declaration
+    from angee.messaging.testing.models import Handle, Participant, Thread
+    from tests.conftest import create_user
+
+    del composed_tables
+    constraint = next(c for c in Participant._meta.constraints if c.name == declaration.CONSTRAINT)
+    with system_context(reason="test participant thread identity"):
+        owner = create_user("participant-identity-owner")
+        thread = Thread.objects.create(owner=owner)
+        handle, other = (
+            Handle._base_manager.create(platform="email", value=value, created_by=owner)
+            for value in ("ada@example.test", "bob@example.test")
+        )
+        with connection.schema_editor() as editor:
+            editor.remove_constraint(Participant, constraint)
+        try:
+            rows = [
+                Participant._base_manager.create(thread=thread, handle=handle, role="to", created_by=owner),
+                Participant._base_manager.create(thread=thread, handle=handle, role="to", created_by=owner),
+                Participant._base_manager.create(thread=thread, handle=handle, role="cc", created_by=owner),
+                Participant._base_manager.create(thread=thread, handle=other, role="to", created_by=owner),
+                Participant._base_manager.create(thread=None, handle=handle, role="to", created_by=owner),
+                Participant._base_manager.create(thread=None, handle=handle, role="to", created_by=owner),
+            ]
+            with connection.schema_editor() as editor:
+                declaration.collapse_repeated_facts(apps, editor)
+            survivors = set(Participant._base_manager.filter(handle__in=(handle, other)).values_list("pk", flat=True))
+        finally:
+            Participant._base_manager.filter(pk=rows[1].pk).delete()
+            with connection.schema_editor() as editor:
+                editor.add_constraint(Participant, constraint)
+
+    assert survivors == {rows[0].pk, rows[2].pk, rows[3].pk, rows[4].pk, rows[5].pk}

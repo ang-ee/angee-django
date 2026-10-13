@@ -9,7 +9,7 @@ import {
   type ActionFormContext,
 } from "@angee/ui";
 
-import { PARTY_HANDLE_DECISION_INVALIDATES } from "./documents";
+import { PARTY_STATEMENT_DECISION_INVALIDATES } from "./documents";
 import { usePartiesT } from "./i18n";
 
 function contactArgs(
@@ -40,7 +40,7 @@ export function usePartyContactActions(): React.ReactElement {
     "propose_manual_contact",
     {
       idArgument: "party_id",
-      invalidateModels: [...PARTY_HANDLE_DECISION_INVALIDATES],
+      invalidateModels: [...PARTY_STATEMENT_DECISION_INVALIDATES],
     },
   );
   const emailArgs = React.useMemo(

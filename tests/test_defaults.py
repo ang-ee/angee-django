@@ -15,7 +15,6 @@ CORE_APP_NAMES = [
     "angee.compose",
     "django.contrib.contenttypes",
     "rebac",
-    "reversion",
     "simple_history",
     "angee.base",
     "django_celery_beat",

@@ -12,6 +12,10 @@ from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
+# Django's composed-host runner owns this campaign. Its pytest entrypoint is
+# tests/test_composed_query_budgets.py; the bare source host has no HTTP runtime.
+__test__ = False
+
 
 class TaskLabelQueryBudgetTests(TransactionTestCase):
     """Public and console task labels share the model title without deferred reads."""

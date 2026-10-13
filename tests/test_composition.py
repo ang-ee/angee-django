@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-import reversion
 from django.apps import apps
 from django.db import models
 from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
@@ -19,7 +18,6 @@ from angee.base.identity import (
     public_id_of,
     public_subject_ref,
 )
-from angee.base.mixins import RevisionMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeModel,
@@ -48,20 +46,6 @@ class PlainPublicIdThing(models.Model):
         """Django model options for the test model."""
 
         app_label = "tests"
-
-
-class RevisionThing(RevisionMixin, models.Model):
-    """Concrete test model tracked through django-reversion."""
-
-    revisioned_fields = ("body",)
-
-    title = models.CharField(max_length=32)
-    body = models.TextField()
-
-    class Meta:
-        """Django model options for the test model."""
-
-        app_label = "auth"
 
 
 def test_every_angee_model_carries_the_rebac_mixin() -> None:
@@ -170,34 +154,3 @@ def test_public_id_helpers_support_angee_and_plain_django_models() -> None:
         with pytest.raises(MissingActorError):
             PublicIdThing.from_public_id(angee_instance.public_id)
         assert instance_from_public_id(PlainPublicIdThing, "0") is None
-
-
-@pytest.mark.django_db(transaction=True)
-def test_revision_mixin_restores_declared_fields_from_versions() -> None:
-    """Revision helpers expose newest-first versions and restore fields."""
-
-    with model_tables((RevisionThing,)):
-        reversion.register(RevisionThing, fields=RevisionThing.revisioned_fields)
-
-        try:
-            instance = RevisionThing.objects.create(title="Draft", body="v0")
-            with reversion.create_revision():
-                instance.body = "v1"
-                instance.save()
-            with reversion.create_revision():
-                instance.title = "Final"
-                instance.body = "v2"
-                instance.save()
-
-            assert instance.revisions.count() == 2
-            assert instance.revisions.first().field_dict["body"] == "v2"
-            instance.title = "Unsaved stale title"
-            instance.revert_to(instance.revisions.last())
-            instance.refresh_from_db()
-
-            assert instance.title == "Final"
-            assert instance.body == "v1"
-            assert instance.revisions.count() == 3
-            assert instance.revisions.first().revision.comment.startswith("Reverted to revision ")
-        finally:
-            reversion.unregister(RevisionThing)

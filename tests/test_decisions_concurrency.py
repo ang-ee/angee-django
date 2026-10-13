@@ -1,6 +1,7 @@
 """PostgreSQL first-answer concurrency through independent connections."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from queue import Queue
 from time import monotonic, sleep
 
@@ -35,7 +36,9 @@ def submit(pool, call):
         finally:
             connections.close_all()
 
-    future = pool.submit(invoke)
+    # The worker runs in a copy of the caller's context: the test's attribution boundary
+    # and actor reach its captured writes the way the framework pool carries them.
+    future = pool.submit(copy_context().run, invoke)
     return future, started.get(timeout=10)
 
 

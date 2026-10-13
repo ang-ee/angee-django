@@ -194,9 +194,10 @@ modules.
 
 Tracking and batch behavior stay with their owners. `HistoryMixin` uses a native
 simple-history descriptor adapted for generated module labels and virtual fields;
-a concrete parent's tracking alone does not opt its MTI child into another
-history table. Revision sources use django-reversion registration on completed
-concrete classes. Resource participants inherit the resources-owned
+every concrete descendant of a tracked source has its own history table,
+including MTI children. Each emitted concrete Meta names the tracked
+`_angee_base` manager; retained models supply its guarded queryset. Resource
+participants inherit the resources-owned
 [`ResourceLoadMixin`](../addons/angee/resources/mixins.py) and delegate through
 `super()`. The renderer has no generic decorator/attribute language or resource
 hook aggregator.
@@ -248,6 +249,23 @@ For new transitions, add a new declaration. Preserve old import paths needed by
 released history when code moves. See the [backend migration
 rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
 database or changing historical source compatibility.
+
+For a conversion followed by retirement, declare the fold first and guard the
+retirement against its completed schema. Integrate's manifest orders
+`fold_record_sync_history` before `retire_record_sync_stores`; the composer
+attaches retirement to the fold's concrete leaf, so its parity check runs before
+either native `DeleteModel`. Keep data verification in the copied migration body,
+since schema guards alone cannot prove that the conversion preserved every row.
+
+Guards are evaluated in rounds against the state each round starts from, and a
+declaration planned in a later round depends on every other app's leaf planned so
+far. A guard therefore returns `False` for the state an earlier declaration of the
+same build still has to produce (a pending predecessor is not a partial history),
+and a chain whose folds can refuse rows puts one preflight declaration in the first
+round and makes every destructive declaration wait for a schema only a later round
+produces: the parties chain (`preflight_party_folds` before provenance's
+`retire_reversion`, integrate's store retirements and its own retirements) is the
+reference.
 
 A destructive retirement owned by an addon that has left the composition can
 declare `uninstalled_only = true`. The migration owner reads these declarations

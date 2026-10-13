@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
@@ -69,7 +69,7 @@ from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, P
 from angee.integrate.oauth.registrations import OAuthRegistrationExtension
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
-from angee.integrate.states import ConflictKeep
+from angee.integrate.states import ConflictKeep, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +81,12 @@ Credential = apps.get_model("integrate", "Credential")
 WebhookSubscription = apps.get_model("integrate", "WebhookSubscription")
 SyncStream = apps.get_model("integrate", "SyncStream")
 RecordLink = apps.get_model("integrate", "RecordLink")
-RecordRevision = apps.get_model("integrate", "RecordRevision")
-SyncDiscrepancy = apps.get_model("integrate", "SyncDiscrepancy")
 User = get_user_model()
+_OPEN_FAILURE_LINKS = Prefetch(
+    "links",
+    queryset=RecordLink.objects.with_open_failures(),
+    to_attr="open_failure_links",
+)
 
 
 @strawberry.type
@@ -736,7 +739,8 @@ def apply_integration_patch_fields(
     provided: set[str] = set()
     if data.credential is not strawberry.UNSET:
         credential = (
-            None if data.credential is None
+            None
+            if data.credential is None
             else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
         )
         target.attach_credential(credential)
@@ -890,9 +894,7 @@ class ConnectionMutation:
         user = _session_user(info)
         try:
             integration = _concrete_integration_target(info, user, resource, id)
-            oauth_client = integration.connect_oauth_client(
-                capfirst(str(integration._meta.verbose_name))
-            )
+            oauth_client = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
             return connect_integration_target(
                 info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
@@ -1209,20 +1211,35 @@ class IntegrationConnectionMixin:
 
         return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
 
-    @strawberry_django.field(only=[
-        "owner_id", "lifecycle", "credential_id", "discovery_retry_at", "discovery_generation",
-        "discovery_completed_at",
-    ], extensions=[PermissionsExtension(("resume",), model=Integration)], prefetch_related=[_connection_credential])
+    @strawberry_django.field(
+        only=[
+            "owner_id",
+            "lifecycle",
+            "credential_id",
+            "discovery_retry_at",
+            "discovery_generation",
+            "discovery_completed_at",
+        ],
+        extensions=[PermissionsExtension(("resume",), model=Integration)],
+        prefetch_related=[_connection_credential],
+    )
     def can_resume(self) -> bool:
         """Project the model's admission to resume its current grant."""
 
         return bool(cast(Any, self).can_resume())
 
-    @strawberry_django.field(only=[
-        "owner_id", "lifecycle", "credential_id", "discovery_retry_at", "discovery_generation",
-        "discovery_completed_at",
-    ], extensions=[PermissionsExtension(("retry_discovery",), model=Integration)],
-        prefetch_related=[_connection_credential])
+    @strawberry_django.field(
+        only=[
+            "owner_id",
+            "lifecycle",
+            "credential_id",
+            "discovery_retry_at",
+            "discovery_generation",
+            "discovery_completed_at",
+        ],
+        extensions=[PermissionsExtension(("retry_discovery",), model=Integration)],
+        prefetch_related=[_connection_credential],
+    )
     def can_retry_discovery(self) -> bool:
         """Project the model's admission to retry settled discovery."""
 
@@ -1271,8 +1288,7 @@ class IntegrationOAuthMixin:
     @strawberry_django.field(
         only=["vendor_id", "concrete_type_id"],
         annotate={
-            name: partial(_oauth_projection, name)
-            for name in ("_connection_vendor_slug", "_connection_impl_key")
+            name: partial(_oauth_projection, name) for name in ("_connection_vendor_slug", "_connection_impl_key")
         },
     )
     def is_oauth_connectable(self) -> bool:
@@ -1459,6 +1475,25 @@ _VENDOR_RESOURCE = hasura_model_resource(
 )
 
 
+strawberry.enum(cast(Any, SyncFailureKind))
+strawberry.enum(cast(Any, SyncFailureStatus))
+
+
+@strawberry.experimental.pydantic.type(model=SyncFailure, all_fields=True)
+class SyncFailureType:
+    """A failure inherits its stream/link's read and write permissions."""
+
+    details: JSON
+
+    @strawberry.field
+    def slot(self) -> int | None:
+        return cast(SyncFailure, cast(Any, self)._original_model).slot
+
+    @strawberry.field
+    def is_open(self) -> bool:
+        return cast(SyncFailure, cast(Any, self)._original_model).is_open
+
+
 @strawberry_django.type(SyncStream)
 class SyncStreamType(AngeeNode):
     """Read-only inspection of a bridge partition's retained epoch."""
@@ -1469,8 +1504,11 @@ class SyncStreamType(AngeeNode):
     partition: auto
     kind: auto
     direction: auto
+    snapshot: auto
+    authoritative: auto
     generation: auto
     phase: auto
+    state: auto
     cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.integrationSyncCursor"})
     cursor_expires_at: auto
     resync_required: auto
@@ -1481,20 +1519,25 @@ class SyncStreamType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(
-        annotate=Count(
-            "discrepancies",
-            filter=Q(discrepancies__is_open=True),
-            distinct=True,
-        )
+        only=["inbound"],
+        prefetch_related=[_OPEN_FAILURE_LINKS],
     )
-    def open_discrepancy_count(self) -> int:
-        """Count unresolved quarantine, including requested retries, in the row query."""
+    def open_failure_count(self) -> int:
+        """Count retained inbound/outbox failures using the batched related rows."""
+        return len(cast(Any, self).sync_failures(open_only=True))
 
-        return cast(int, cast(Any, self).open_discrepancy_count)
+    @strawberry_django.field(
+        only=["inbound"],
+        prefetch_related=[_OPEN_FAILURE_LINKS],
+    )
+    def failures(self, open_only: bool = True) -> list[SyncFailureType]:
+        return [
+            cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).sync_failures(open_only=open_only)
+        ]
 
     @strawberry_django.field(annotate=Count("links", distinct=True))
     def link_count(self) -> int:
-        """Count replica identities without multiplying the discrepancy join."""
+        """Count replica identities without multiplying the failure join."""
 
         return cast(int, cast(Any, self).link_count)
 
@@ -1508,8 +1551,11 @@ class RecordLinkType(AngeeNode):
     external_key: auto
     status: auto
     remote_version: auto
-    remote_base_hash: auto
-    local_base_hash: auto
+    source_hash: auto
+    applied_at: auto
+    pinned: auto
+    outbox_state: auto
+    outbox_retry_at: auto
     origin: auto
     last_seen_at: auto
     last_verified_generation: auto
@@ -1518,6 +1564,10 @@ class RecordLinkType(AngeeNode):
     tombstoned_at: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
+    def failures(self, open_only: bool = True) -> list[SyncFailureType]:
+        return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]
 
     @strawberry_django.field(only=["target_content_type_id", "target_object_id"])
     def model_label(self) -> str:
@@ -1532,41 +1582,6 @@ class RecordLinkType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
-@strawberry_django.type(RecordRevision)
-class RecordRevisionType(AngeeNode):
-    """Read-only immutable observed and applied revision."""
-
-    link: RecordLinkType
-    number: auto
-    source_payload: JSON
-    source_hash: auto
-    mapping_version: auto
-    mapped_payload: JSON
-    dependency_digest: auto
-    applied_at: auto
-    created_at: auto
-
-
-@strawberry_django.type(SyncDiscrepancy)
-class SyncDiscrepancyType(AngeeNode):
-    """Read-only record quarantine; operator transitions use manager-backed actions."""
-
-    stream: SyncStreamType
-    link: RecordLinkType | None
-    kind: auto
-    code: auto
-    source_hash: auto
-    mapping_version: auto
-    details: JSON
-    status: auto
-    is_open: auto
-    attempts: auto
-    retry_at: auto
-    resolved_at: auto
-    created_at: auto
-    updated_at: auto
-
-
 _SYNC_STREAM_RESOURCE = hasura_model_resource(
     SyncStreamType,
     model=SyncStream,
@@ -1578,7 +1593,10 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "partition",
         "kind",
         "direction",
+        "snapshot",
+        "authoritative",
         "phase",
+        "state",
         "generation",
         "resync_required",
         "last_advanced_at",
@@ -1589,13 +1607,26 @@ _SYNC_STREAM_RESOURCE = hasura_model_resource(
         "partition",
         "kind",
         "direction",
+        "snapshot",
+        "authoritative",
         "phase",
+        "state",
         "generation",
         "last_advanced_at",
         "last_reconciled_at",
     ],
     aggregatable=["id"],
-    groupable=["key", "partition", "kind", "direction", "phase", "resync_required"],
+    groupable=[
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "snapshot",
+        "authoritative",
+        "phase",
+        "state",
+        "resync_required",
+    ],
     insert=False,
     update=False,
     delete=False,
@@ -1623,74 +1654,78 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
     delete=False,
     field_id_decode={"stream": public_pk_decoder(SyncStream)},
 )
-_RECORD_REVISION_RESOURCE = hasura_model_resource(
-    RecordRevisionType,
-    model=RecordRevision,
-    name="record_revisions",
-    filterable=["id", "link", "number", "source_hash", "mapping_version"],
-    sortable=["number", "applied_at"],
-    aggregatable=["id"],
-    insert=False,
-    update=False,
-    delete=False,
-    field_id_decode={"link": public_pk_decoder(RecordLink)},
-)
-_SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
-    SyncDiscrepancyType,
-    model=SyncDiscrepancy,
-    name="sync_discrepancies",
-    filterable=[
-        "id",
-        "stream",
-        "stream__integration",
-        "link",
-        "kind",
-        "code",
-        "status",
-        "is_open",
-        "retry_at",
-        "created_at",
-    ],
-    sortable=["kind", "status", "retry_at", "created_at"],
-    aggregatable=["id"],
-    groupable=["kind", "code", "status"],
-    insert=False,
-    update=False,
-    delete=False,
-    field_id_decode={"stream": public_pk_decoder(SyncStream), "link": public_pk_decoder(RecordLink)},
-)
-
-
 strawberry.enum(cast(Any, ConflictKeep))
+
+
+def _authorized_failure(
+    info: strawberry.Info,
+    stream: PublicID,
+    link: PublicID | None,
+    slot: int | None,
+) -> SyncFailure:
+    """Authorize typed owners; the model interprets the selected retained slot."""
+    owner = authorized_action_target(info, SyncStream, stream, "write")
+    if link is not None:
+        epoch = owner
+        owner = authorized_action_target(info, RecordLink, link, "write")
+        if owner.stream_id != epoch.pk:
+            raise ValidationError("The failure link does not belong to the selected stream.")
+    for failure in owner.failures():
+        if failure.slot == slot:
+            return failure
+    raise ValidationError("The retained sync failure no longer exists.")
 
 
 @strawberry.type
 class SyncRecordActionMutation:
     """Admin-gated operational transitions on the bridge-owned record protocol."""
 
-    @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not resolve the discrepancy.")
-    def resolve_sync_discrepancy(
-        self, info: strawberry.Info, id: PublicID, keep: ConflictKeep | None = None
+    @strawberry.mutation(name="resolveSyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not resolve the failure.")
+    def resolve_sync_failure(
+        self,
+        info: strawberry.Info,
+        stream: PublicID,
+        link: PublicID | None = None,
+        slot: int | None = None,
+        keep: ConflictKeep | None = None,
     ) -> ActionResult:
-        """Dispatch resolution through the discrepancy manager after row authorization."""
+        """Dispatch resolution through retained state after owner authorization."""
 
-        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
-        manager = SyncDiscrepancy.objects
+        failure = _authorized_failure(info, stream, link, slot)
         if keep is None:
-            manager.resolve(discrepancy)
+            failure.resolve()
         else:
-            manager.resolve_conflict(discrepancy, keep=keep)
-        return ActionResult(ok=True, message=_("Discrepancy resolved."))
+            failure.resolve_conflict(keep=keep)
+        return ActionResult(ok=True, message=_("Failure resolved."))
 
-    @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
-    @action_guard("Could not retry the discrepancy.")
-    def retry_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Make quarantine due now through its retained-history owner."""
+    @strawberry.mutation(name="retrySyncFailure", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not retry the failure.")
+    def retry_sync_failure(
+        self,
+        info: strawberry.Info,
+        stream: PublicID,
+        link: PublicID | None = None,
+        slot: int | None = None,
+    ) -> ActionResult:
+        """Make quarantine due now through its retained-state owner."""
 
-        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
-        SyncDiscrepancy.objects.retry(discrepancy)
-        return ActionResult(ok=True, message=_("Discrepancy retry requested."))
+        _authorized_failure(info, stream, link, slot).retry()
+        return ActionResult(ok=True, message=_("Failure retry requested."))
+
+    @strawberry.mutation(name="pinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not pin the record link.")
+    def pin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Withhold automatic sync through the authorized link owner."""
+        authorized_action_target(info, RecordLink, id, "write").pin()
+        return ActionResult(ok=True, message=_("Record link pinned."))
+
+    @strawberry.mutation(name="unpinRecordLink", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not unpin the record link.")
+    def unpin_record_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Resume automatic sync through the authorized link owner."""
+        authorized_action_target(info, RecordLink, id, "write").unpin()
+        return ActionResult(ok=True, message=_("Record link unpinned."))
 
     @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
     @action_guard("Could not request a stream resync.")
@@ -1706,7 +1741,12 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
     """Compose native patch authorization with model-owned credential attachment."""
 
     def update(
-        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None,
+        self,
+        info: strawberry.Info,
+        pk: str,
+        data: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
     ) -> Any:
         fields = dict(data)
         credential_id = fields.pop("credential", strawberry.UNSET)
@@ -1719,8 +1759,14 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
                 target.lock_capability()
             instance = super().update(info, pk, fields, expected_revision=expected_revision)
             if credential_id is not strawberry.UNSET:
-                credential = None if credential_id is None else require_instance_for_id(
-                    Credential, credential_id, queryset=write_queryset(Credential),
+                credential = (
+                    None
+                    if credential_id is None
+                    else require_instance_for_id(
+                        Credential,
+                        credential_id,
+                        queryset=write_queryset(Credential),
+                    )
                 )
                 instance.attach_credential(credential)
             return instance
@@ -1949,12 +1995,9 @@ class WebhookActionMutation:
 _CONSOLE_TYPES: list[object] = [
     SyncStreamType,
     RecordLinkType,
-    RecordRevisionType,
-    SyncDiscrepancyType,
+    SyncFailureType,
     *_SYNC_STREAM_RESOURCE.types,
     *_RECORD_LINK_RESOURCE.types,
-    *_RECORD_REVISION_RESOURCE.types,
-    *_SYNC_DISCREPANCY_RESOURCE.types,
     OAuthClientType,
     CredentialOAuthClientType,
     ExternalAccountType,
@@ -2013,8 +2056,6 @@ schemas = {
             _WEBHOOK_SUBSCRIPTION_RESOURCE.query,
             _SYNC_STREAM_RESOURCE.query,
             _RECORD_LINK_RESOURCE.query,
-            _RECORD_REVISION_RESOURCE.query,
-            _SYNC_DISCREPANCY_RESOURCE.query,
         ],
         "mutation": [
             _OAUTH_CLIENT_RESOURCE.mutation,

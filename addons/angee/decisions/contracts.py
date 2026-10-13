@@ -85,16 +85,23 @@ class RecordActions(BaseModel):
         return target
 
     def resolve(
-        self, record: models.Model, *, context: dict[str, Any], values: dict[str, JsonValue] | None = None,
+        self,
+        record: models.Model,
+        *,
+        context: dict[str, Any],
+        values: dict[str, JsonValue] | None = None,
     ) -> dict[str, Any]:
         """Validate the action owner and decode writes through its model fields."""
         model = self.target_model(record)
         if not isinstance(record, model):
             raise ValueError("Concern the concrete record named by the action model.")
-        resources = [item.native_resource
-                     for parts in schema_parts_for(apps.get_app_config(model._meta.app_label)).values()
-                     for surface in parts.mutation for item in data_resource_contributions(surface)
-                     if item.model is model and item.native_resource is not None]
+        resources = [
+            item.native_resource
+            for parts in schema_parts_for(apps.get_app_config(model._meta.app_label)).values()
+            for surface in parts.mutation
+            for item in data_resource_contributions(surface)
+            if item.model is model and item.native_resource is not None
+        ]
         resolved = {}
         for name, operation in self.fields.items():
             try:
@@ -103,17 +110,29 @@ class RecordActions(BaseModel):
                 raise ValueError(f"Unknown field: {name}.") from error
             if not operation.model_fields_set:
                 continue
-            if (resources or field.many_to_many) and not any(name in resource.updatable_fields for resource in resources):
+            if (resources or field.many_to_many) and not any(
+                name in resource.updatable_fields for resource in resources
+            ):
                 raise ValueError(f"The record owner does not expose writes to {name}.")
             if field.one_to_many:
                 raise ValueError(f"Set a scalar field or call its owner's method: {name}.")
-            if (field.auto_created or not (field.concrete or field.many_to_many) or field.name != name
-                    or field.primary_key or not field.editable or isinstance(field, StateField)):
+            if (
+                field.auto_created
+                or not (field.concrete or field.many_to_many)
+                or field.name != name
+                or field.primary_key
+                or not field.editable
+                or isinstance(field, StateField)
+            ):
                 raise ValueError(f"Use an editable model field name: {field.name}.")
             definition = effective_rebac_definition(model)
             permission = f"write__{name}"
-            if ("actor" in context and definition and permission in field_gated_actions(definition, "write")
-                    and not record.with_actor(context["actor"]).has_access(permission)):
+            if (
+                "actor" in context
+                and definition
+                and permission in field_gated_actions(definition, "write")
+                and not record.with_actor(context["actor"]).has_access(permission)
+            ):
                 raise ValueError(f"The actor cannot write {name}.")
             if isinstance(operation, ChooseValue) and values is None:
                 continue
@@ -134,8 +153,10 @@ class RecordActions(BaseModel):
                     if not callable(getattr(field.related_model.objects, "with_actor", None)):
                         raise ValueError(f"The related record for {name} does not support actor scoping.")
                     queryset = field.related_model.objects.with_actor(context.get("actor", current_actor()))
-                    related = tuple(instance_from_public_id(field.related_model, identity, queryset=queryset)
-                                    for identity in identities)
+                    related = tuple(
+                        instance_from_public_id(field.related_model, identity, queryset=queryset)
+                        for identity in identities
+                    )
                     if any(instance is None for instance in related):
                         raise ValueError(f"The related record for {name} is absent or unreadable.")
                     context.get("related_records", []).extend(related)
@@ -155,9 +176,15 @@ class RecordActions(BaseModel):
             if not callable(bound):
                 raise ValueError(f"Unknown decision method: {call}.")
             parameters = tuple(signature(bound).parameters.values())
-            if any(parameter.default is Parameter.empty and parameter.kind not in {
-                Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD,
-            } for parameter in parameters):
+            if any(
+                parameter.default is Parameter.empty
+                and parameter.kind
+                not in {
+                    Parameter.VAR_POSITIONAL,
+                    Parameter.VAR_KEYWORD,
+                }
+                for parameter in parameters
+            ):
                 raise ValueError(f"Decision method {call} takes required arguments.")
             try:
                 signature(bound).bind(**self.record.arguments)
@@ -189,8 +216,7 @@ class DecisionProposal(BaseModel):
         if info.context is None:
             return self
         records = {
-            public_id_for(generic_pointer_model(type(record)), record.pk): record
-            for record in info.context["records"]
+            public_id_for(generic_pointer_model(type(record)), record.pk): record for record in info.context["records"]
         }
         for alternative in self.alternatives:
             for identity, actions in alternative.actions.items():
@@ -200,7 +226,10 @@ class DecisionProposal(BaseModel):
         return self
 
     def choose(
-        self, chosen: Sequence[str], *, values: dict[str, dict[str, JsonValue]] | None = None,
+        self,
+        chosen: Sequence[str],
+        *,
+        values: dict[str, dict[str, JsonValue]] | None = None,
         record_models: Mapping[str, type[models.Model]] | None = None,
     ) -> tuple[Alternative, ...]:
         """Validate a verdict and return alternatives in authored order."""
@@ -220,8 +249,13 @@ class DecisionProposal(BaseModel):
                     if (identity, name) in written:
                         raise ValueError(f"Choose only one value for {name.replace('_', ' ')}.")
                     written.add((identity, name))
-        required = {(identity, name) for alternative in selected for identity, actions in alternative.actions.items()
-                    for name, operation in actions.fields.items() if isinstance(operation, ChooseValue)}
+        required = {
+            (identity, name)
+            for alternative in selected
+            for identity, actions in alternative.actions.items()
+            for name, operation in actions.fields.items()
+            if isinstance(operation, ChooseValue)
+        }
         supplied = {(identity, name) for identity, fields in (values or {}).items() for name in fields}
         if required - supplied:
             raise ValueError("Supply a value for every chosen choose field.")

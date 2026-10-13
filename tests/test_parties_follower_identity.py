@@ -34,7 +34,7 @@ from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
 from angee.graphql.data import hasura_model_resource
-from angee.messaging.testing.models import Folder, Handle, Organization, Party, Person, Thread, ThreadFollower
+from angee.messaging.testing.models import Handle, Organization, Party, Person, Thread, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import execute_schema, result_data
@@ -47,8 +47,6 @@ PARTY_PRIVATE: dict[str, Any] = {
     "notes": "Private notes",
     "first_met_note": "Private introduction",
     "handle_count": 7,
-    "raw_vcard": "BEGIN:VCARD\nNOTE:Private carrier\nEND:VCARD",
-    "extensions": {"X-PRIVATE": "Private extension"},
 }
 PERSON_PRIVATE: dict[str, Any] = {
     **PARTY_PRIVATE,
@@ -223,10 +221,13 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         result = set(query)
                     counts.append(len(captured))
                     assert len(captured) == expected_queries, captured.captured_queries
-                    assert sum(
-                        query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
-                        for query in captured.captured_queries
-                    ) == 1
+                    assert (
+                        sum(
+                            query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
+                            for query in captured.captured_queries
+                        )
+                        == 1
+                    )
                     assert result == (set(ids) if action == "read" and model != Tie else set())
                 assert counts[0] == counts[1]
         for model in (Party, Person):
@@ -287,7 +288,7 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
         assert data["parties"][0]["updated_by_label"] == f.owner.username
 
 
-def test_hidden_folder_and_introducer_are_null_without_losing_people_or_parties(
+def test_hidden_introducer_is_null_without_losing_people_or_parties(
     followers: SimpleNamespace,
     identity_graphql: Any,
 ) -> None:
@@ -295,21 +296,17 @@ def test_hidden_folder_and_introducer_are_null_without_losing_people_or_parties(
 
     f = followers
     with system_context(reason="tests.follower_identity.relations"):
-        hidden_folder = Folder.objects.create(name="Hidden", created_by=f.owner)
-        visible_folder = Folder.objects.create(name="Visible", created_by=f.owner)
-        for person, folder, introducer in (
-            (f.person, hidden_folder, f.unfollowed),
-            (f.accountless, visible_folder, f.party),
+        for person, introducer in (
+            (f.person, f.unfollowed),
+            (f.accountless, f.party),
         ):
-            person.folder = folder
             person.introduced_by = introducer
-            person.save(update_fields=["folder", "introduced_by"])
-        _grant(visible_folder, f.reader)
+            person.save(update_fields=["introduced_by"])
     data = result_data(
         execute_schema(
             identity_graphql,
             """{
-      people { id folder { id name } introduced_by { id } }
+      people { id introduced_by { id } }
       parties { id introduced_by { id } }
     }""",
             user=f.reader,
@@ -317,10 +314,9 @@ def test_hidden_folder_and_introducer_are_null_without_losing_people_or_parties(
     )
     people = {row["id"]: row for row in data["people"]}
     assert people == {
-        f.person.sqid: {"id": f.person.sqid, "folder": None, "introduced_by": None},
+        f.person.sqid: {"id": f.person.sqid, "introduced_by": None},
         f.accountless.sqid: {
             "id": f.accountless.sqid,
-            "folder": {"id": visible_folder.sqid, "name": "Visible"},
             "introduced_by": {"id": f.party.sqid},
         },
     }

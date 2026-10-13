@@ -123,8 +123,10 @@ test("retained evidence links readable records and marks redacted records", asyn
     { id: "wre_hidden", record_model: null, record_id: null },
   ]} onRequest={(request) => requests.push(request)} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Records" }));
-  expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
-  expect(await screen.findByText("Record unavailable")).toBeTruthy();
+  // The run's subject is the same note: its header reference carries the same name, so read the pane.
+  const records = await screen.findByRole("tabpanel", { name: "Records" });
+  expect((await within(records).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
+  expect(await within(records).findByText("Record unavailable")).toBeTruthy();
   expect(requests.find(({ query }) => query.includes("steprecord("))?.variables.where)
     .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
 });

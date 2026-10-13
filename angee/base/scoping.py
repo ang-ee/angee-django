@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
+from itertools import batched
 from typing import Any, TypeVar, cast
 
-from django.db import models
+from django.core.exceptions import EmptyResultSet
+from django.db import connections, models
 from rebac.resources import model_resource_type
+from rebac.watch import KEY_CHUNK
+from rebac.watch import by_key as native_by_key
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
+
+
+def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:
+    """Bound native key batches by this query's remaining database parameters."""
+
+    limit = connections[queryset.db].features.max_query_params
+    if limit is None:
+        return KEY_CHUNK
+    try:
+        _, params = queryset.query.get_compiler(using=queryset.db).as_sql()
+    except EmptyResultSet:
+        params = ()
+    size = min(KEY_CHUNK, (limit - len(params)) // width)
+    if size < 1:
+        raise ValueError("The query leaves no database parameters for its keys.")
+    return size
+
+
+def by_key(queryset: _QuerySetT, keys: Sequence[Any]) -> Iterator[_QuerySetT]:
+    """Compose REBAC key filtering with the database's native parameter budget."""
+
+    if not keys:
+        yield from native_by_key(queryset, keys)
+    for chunk in batched(keys, query_batch_size(queryset)):
+        yield from native_by_key(queryset, chunk)
 
 
 def lock_if_supported(

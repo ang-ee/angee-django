@@ -13,7 +13,6 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
-import reversion
 import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
@@ -80,11 +79,23 @@ from tests import (
 from tests.extcontrib.models import Role
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
-pytest_plugins = ("angee.testing.fixtures", "angee.workflows.testing.fixtures")
-
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.
 os.environ.pop("SENTRY_DSN", None)
+
+
+@pytest.fixture
+def composed_tables(composed_tables: None) -> None:
+    """The source host's composed tables also carry the declared statement principals.
+
+    Extends the ``angee.testing`` plugin fixture of the same name: after its REBAC
+    sync, the install-tier principals and grants that admission reads are loaded
+    (``angee.parties.testing.fixtures.load_statement_sources``), exactly as the
+    composed host does.
+    """
+
+    del composed_tables
+    load_statement_sources()
 
 
 @pytest.fixture
@@ -170,14 +181,20 @@ class Vault(RecordChangedOptIn, VaultSpace, VaultProjects, AbstractVault):
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """The test source delegates its global role from workflow writers."""
-        return (TriggerGrantTarget(
-            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
-        ),)
+        return (
+            TriggerGrantTarget(
+                ObjectRef("knowledge/role", "vault_viewer"),
+                "member",
+                "write",
+                to_object_ref(trigger.workflow),
+            ),
+        )
 
     class Meta(AbstractVault.Meta):
         """Django model options for the canonical test vault."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_vault"
         rebac_resource_type = "knowledge/vault"
@@ -189,34 +206,33 @@ class Page(RecordChangedOptIn, AbstractPage):
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """Page read follows the vault permission boundary in this fixture."""
-        return (TriggerGrantTarget(
-            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
-        ),)
+        return (
+            TriggerGrantTarget(
+                ObjectRef("knowledge/role", "vault_viewer"),
+                "member",
+                "write",
+                to_object_ref(trigger.workflow),
+            ),
+        )
 
     class Meta(AbstractPage.Meta):
         """Django model options for the canonical test page."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_page"
         rebac_resource_type = "knowledge/page"
 
 
-reversion.register(Page, fields=())
-
-
-@reversion.register(fields=("body", "page_ptr"))
 class MarkdownPage(AbstractMarkdownPage, Page):
-    """Concrete knowledge markdown child used by source-addon tests.
-
-    Registered with django-reversion the way the composer registers the
-    completed runtime model.
-    """
+    """Concrete knowledge markdown child used by source-addon tests."""
 
     class Meta(AbstractMarkdownPage.Meta):
         """Django model options for the canonical test markdown page."""
 
         abstract = False
+        base_manager_name = "_angee_base"
         app_label = "knowledge"
         db_table = "test_knowledge_markdown_page"
         rebac_resource_type = "knowledge/markdown_page"
@@ -593,6 +609,7 @@ class ExtcontribRole(Role):
 # Every installed backing needs its concrete model before native database setup.
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
+from angee.parties.testing.fixtures import load_statement_sources  # noqa: E402
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401

@@ -25,7 +25,10 @@ class InstallProbe(Step[None, None, None]):
 
 @pytest.mark.parametrize("publish", [True, False, None])
 def test_resource_row_installs_one_document_and_reuses_its_hash(
-    composed_tables: None, tmp_path: Any, register_step, publish: bool | None,
+    composed_tables: None,
+    tmp_path: Any,
+    register_step,
+    publish: bool | None,
 ) -> None:
     """Native imports retain ledger identity and support draft-only installation."""
 
@@ -52,7 +55,7 @@ def test_resource_row_installs_one_document_and_reuses_its_hash(
     with system_context(reason="read replayed workflow resource"):
         workflow.refresh_from_db()
         assert workflow.published_id == version_id
-        assert Resource.objects.count() == 1
+        assert Resource.objects.filter(source_addon=owner.name).count() == 1
 
 
 @pytest.mark.parametrize("subject_model", ["knowledge.Vault", "knowledge.vault", "knowledge.VAULT"])
@@ -60,14 +63,20 @@ def test_install_canonicalizes_subject_model_identity(execution, subject_model):
     """The installation owner stores Django's canonical model identity once."""
     actor, _ = execution
     workflow = Workflow.objects.install_definition(
-        key="canonical_subject", name="Canonical subject", subject_model=subject_model,
-        draft={"nodes": {"entry": {"step": "echo"}}}, actor=actor,
+        key="canonical_subject",
+        name="Canonical subject",
+        subject_model=subject_model,
+        draft={"nodes": {"entry": {"step": "echo"}}},
+        actor=actor,
     )
     assert workflow.subject_model == "knowledge.Vault"
     assert system_queryset(Workflow).get(pk=workflow.pk).subject_model == "knowledge.Vault"
     reinstalled = Workflow.objects.install_definition(
-        key=workflow.key, name=workflow.name, subject_model="knowledge.Vault",
-        draft=workflow.draft, actor=actor,
+        key=workflow.key,
+        name=workflow.name,
+        subject_model="knowledge.Vault",
+        draft=workflow.draft,
+        actor=actor,
     )
     assert reinstalled.subject_model == "knowledge.Vault" and reinstalled.published_id == workflow.published_id
 
@@ -78,8 +87,11 @@ def test_install_rejects_unknown_subject_model_with_issue(execution, subject_mod
     actor, _ = execution
     with pytest.raises(DefinitionInvalid) as caught:
         Workflow.objects.install_definition(
-            key="unknown_subject", name="Unknown subject", subject_model=subject_model,
-            draft={"nodes": {"entry": {"step": "echo"}}}, actor=actor,
+            key="unknown_subject",
+            name="Unknown subject",
+            subject_model=subject_model,
+            draft={"nodes": {"entry": {"step": "echo"}}},
+            actor=actor,
         )
     assert len(caught.value.issues) == 1
     issue = caught.value.issues[0]
@@ -93,12 +105,16 @@ def test_published_version_requires_a_number(execution):
     """The database rejects unnumbered versions, including direct insertions."""
     actor, _ = execution
     workflow = Workflow.objects.install_definition(
-        key="numbered_version", name="Numbered version",
-        draft={"nodes": {"entry": {"step": "echo"}}}, actor=actor,
+        key="numbered_version",
+        name="Numbered version",
+        draft={"nodes": {"entry": {"step": "echo"}}},
+        actor=actor,
     )
     with pytest.raises(IntegrityError), transaction.atomic():
         system_queryset(WorkflowVersion).create(
-            workflow=workflow, number=None, document=workflow.published.document,
+            workflow=workflow,
+            number=None,
+            document=workflow.published.document,
             content_hash=workflow.published.content_hash,
         )
     assert workflow.versions.with_actor(actor).count() == 1

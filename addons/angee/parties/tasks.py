@@ -18,7 +18,7 @@ from angee.jobs.locks import LockKey, task_lock
 def refresh_handle_suggestions(timestamp: int | None = None) -> int:
     """Reconcile parties-owned suggestions with current handle and signature evidence.
 
-    :meth:`~angee.parties.managers.PartyHandleManager.reconcile_suggestions` owns
+    :meth:`~angee.parties.managers.PartyManager.reconcile_suggestions` owns
     the evidence providers and their contract, so a rule change heals every
     deployment on the next run. Like the phone renormalization, each run first
     repairs handle owners stored under an older resolution rule.
@@ -38,9 +38,11 @@ def refresh_handle_suggestions(timestamp: int | None = None) -> int:
 def _refresh_handle_suggestions() -> int:
     """Run the owner repair and suggester passes under the already-held task lock."""
 
-    party_handles = apps.get_model("parties", "PartyHandle").objects
+    parties = apps.get_model("parties", "Party").objects
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
+        parties.resolve_handle_statements()
         handles = apps.get_model("parties", "Handle").objects
-        changed = int(handles.renormalize_phone_values()) + int(party_handles.resolve_stale_owners())
-        changed += int(party_handles.reconcile_suggestions())
+        changed = int(handles.renormalize_phone_values()) + int(handles.resolve_stale_owners())
+        changed += int(parties.reconcile_suggestions())
+        changed += int(parties.reconcile_same_as())
     return changed

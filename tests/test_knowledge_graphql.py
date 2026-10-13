@@ -550,13 +550,12 @@ def test_knowledge_delete_preview_requires_delete_permission(
     assert type(target).objects.as_user(owner).filter(pk=target.pk).exists()
 
 
-def test_schema_exposes_revisions_and_subscriptions(composed_tables: None) -> None:
-    """The SDL carries the revision query and console change subscriptions."""
+def test_schema_exposes_subscriptions(composed_tables: None) -> None:
+    """The SDL carries console change subscriptions."""
 
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
-    assert "markdownPage_revisions(" in public_sdl
     assert "pageChanged" not in public_sdl
     assert "pageChanged" in console_sdl
     assert "markdownPageChanged" in console_sdl
