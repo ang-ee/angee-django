@@ -444,6 +444,8 @@ export const enUiMessages: Record<string, string> = {
   "auth.hero.composable.headline": "One surface for real product work.",
   "auth.hero.composable.body":
     "Compose Django, React, permissions, data views, and agent workflows into a deterministic product surface that stays clear as it grows.",
+  "revisions.unavailable": "Revisions unavailable",
+  "revisions.retired": "Revisions are retired. A record's changes are in its History tab.",
   "timeline.emptySnapshot": "No snapshot.",
   "chatter.label": "Chatter",
   "chatter.tabRecords": "Records",
