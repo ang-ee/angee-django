@@ -3,7 +3,8 @@
 A stack adopting the upgrade proves its own declarations against this chain without
 copying it. :func:`pre_upgrade_state` is the state a database before the upgrade holds,
 which the adopter extends with its own pre-upgrade shapes; :func:`upgrade_rounds` plans
-the rounds through the composer's own loop (core ``angee.testing.migrations``); and
+the chain's rounds (:data:`UPGRADE_CHAIN` plus the adopter's own declarations) through
+the composer's own loop (core ``angee.testing.migrations``); and
 :class:`UpgradeHost` holds the pre-upgrade parties shapes on the host database so
 declaration bodies run against seeded rows, each applied when its round comes.
 Nothing here imports a host's test models, so a composed host can load it beside its own.
@@ -29,18 +30,28 @@ from angee.testing.migrations import replay_rounds
 CARD_COLUMNS = ("folder", "source_uid", "source_etag", "raw_vcard", "extensions")
 """The CardDAV enrollment columns the upgrade retires from parties and their history."""
 
-UPGRADE_ADDONS = ("angee.provenance", "angee.integrate", "angee.spaces", "angee.parties")
-"""The addons whose declarations make up the upgrade chain."""
-
-PRE_UPGRADE_APPLIED = (
-    "angee.integrate:record_link_target_names",
-    "angee.integrate:integration_concrete_type",
-    "angee.spaces:drop_stored_roster",
-    "angee.spaces:owner_column",
-    "angee.spaces:shared_reader_cleanup",
-    "angee.parties:directory_sync_status",
+UPGRADE_CHAIN = (
+    "angee.provenance:changeset_schema",
+    "angee.provenance:statement_principal_schema",
+    "angee.provenance:retire_reversion",
+    "angee.integrate:record_link_history_state",
+    "angee.integrate:record_sync_state",
+    "angee.integrate:fold_record_sync_history",
+    "angee.integrate:retire_record_sync_stores",
+    "angee.integrate:retire_record_sync_hash_bases",
+    "angee.integrate:record_link_failure_status",
+    "angee.integrate:sync_stream_authoritative",
+    "angee.spaces:membership_decisions",
+    "angee.parties:preflight_party_folds",
+    "angee.parties:party_statement_schema",
+    "angee.parties:party_aspect_schema",
+    "angee.parties:fold_party_handle_statements",
+    "angee.parties:fold_party_aspects",
+    "angee.parties:circle_member_decisions",
+    "angee.parties:retire_party_handle",
+    "angee.parties:retire_party_carriers",
 )
-"""The upgrade addons' declarations a database before the upgrade has already applied."""
+"""The declarations this upgrade introduced, in each addon's manifest order."""
 
 
 def _card_fields(*, constrained: bool) -> dict[str, models.Field]:
@@ -286,24 +297,17 @@ def pre_upgrade_state() -> ProjectState:
     return state
 
 
-def upgrade_rounds(
-    state: ProjectState | None = None, *, addons: Iterable[str] = (), applied: Iterable[str] = ()
-) -> dict[ModuleType, int]:
-    """The round each declaration lands in from ``state`` (default: :func:`pre_upgrade_state`).
+def upgrade_rounds(state: ProjectState | None = None, *, origins: Iterable[str] = ()) -> dict[ModuleType, int]:
+    """The round each declaration of the chain lands in from ``state`` (default: :func:`pre_upgrade_state`).
 
-    Plans through core test support's ``replay_rounds`` (the composer's own round loop)
-    over the upgrade's installed addons plus
-    ``addons`` (an adopting addon's own, by app name), keyed by each declaration's source
-    module. :data:`PRE_UPGRADE_APPLIED` and ``applied`` (the adopter's own origins its
-    pre-upgrade database already applied) are left out, and so is a declaration that
-    never becomes applicable.
+    Replays :data:`UPGRADE_CHAIN` plus ``origins`` (an adopting addon's own declarations,
+    ``"<addon>:<name>"``) through core test support's ``replay_rounds``, the composer's
+    own round loop, keyed by each declaration's source module; one that never becomes
+    applicable is absent. It models the chain's own ordering, not a stack that skips
+    releases (see ``RuntimeMigrations.schedule``).
     """
 
-    return replay_rounds(
-        pre_upgrade_state() if state is None else state,
-        addons=(*UPGRADE_ADDONS, *addons),
-        applied=(*PRE_UPGRADE_APPLIED, *applied),
-    )
+    return replay_rounds(pre_upgrade_state() if state is None else state, (*UPGRADE_CHAIN, *origins))
 
 
 class UpgradeHost:

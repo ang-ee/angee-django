@@ -45,7 +45,7 @@ from angee.parties.runtime_migrations import (
     retire_party_carriers,
     retire_party_handle,
 )
-from angee.parties.testing.upgrade import UpgradeHost, pre_upgrade_state, upgrade_rounds
+from angee.parties.testing.upgrade import UPGRADE_CHAIN, UpgradeHost, pre_upgrade_state, upgrade_rounds
 from angee.provenance.runtime_migrations import changeset_schema, retire_reversion, statement_principal_schema
 from angee.spaces.runtime_migrations import membership_decisions
 from tests.conftest import create_user, make_integration
@@ -915,28 +915,6 @@ def test_vcard_lines_ignore_order_and_revision_stamps() -> None:
 # --- Chain ordering: the composer's rounds over a database at main's schema ---------------------
 
 
-CHAIN = {
-    "angee.provenance": (changeset_schema, statement_principal_schema, retire_reversion),
-    "angee.integrate": (
-        record_link_history_state,
-        record_sync_state,
-        fold_record_sync_history,
-        retire_record_sync_stores,
-        retire_record_sync_hash_bases,
-        record_link_failure_status,
-    ),
-    "angee.spaces": (membership_decisions,),
-    "angee.parties": (
-        preflight_party_folds,
-        party_statement_schema,
-        party_aspect_schema,
-        fold_party_handle_statements,
-        fold_party_aspects,
-        circle_member_decisions,
-        retire_party_handle,
-        retire_party_carriers,
-    ),
-}
 DESTRUCTIVE = (
     retire_reversion,
     retire_record_sync_stores,
@@ -947,16 +925,22 @@ DESTRUCTIVE = (
 )
 
 
-def _manifest_order(addon: str) -> list[str]:
-    manifest = Path(apps.get_app_config(addon.rsplit(".", 1)[1]).path) / "addon.toml"
-    return [entry["name"] for entry in tomllib.loads(manifest.read_text())["migrations"]]
-
-
-def test_chain_declarations_are_in_manifest_order() -> None:
-    for addon, modules in CHAIN.items():
-        names = [module.__name__.rsplit(".", 1)[1] for module in modules]
-        order = _manifest_order(addon)
+def test_the_upgrade_chain_names_its_declarations_in_each_manifests_order() -> None:
+    chain: dict[str, list[str]] = {}
+    for origin in UPGRADE_CHAIN:
+        addon, name = origin.split(":")
+        chain.setdefault(addon, []).append(name)
+    for addon, names in chain.items():
+        manifest = Path(apps.get_app_config(addon.rsplit(".", 1)[1]).path) / "addon.toml"
+        order = [entry["name"] for entry in tomllib.loads(manifest.read_text())["migrations"]]
         assert [name for name in order if name in names] == names
+
+
+def test_replaying_an_origin_no_addon_declares_fails() -> None:
+    """A retired or misspelled chain origin fails loudly instead of quietly dropping out of the replay."""
+
+    with pytest.raises(RuntimeError, match="no addon declares runtime migration origins angee.parties:no_such_step"):
+        upgrade_rounds(origins=("angee.parties:no_such_step",))
 
 
 def test_chain_plans_the_preflight_before_every_destructive_declaration_from_main() -> None:
@@ -982,7 +966,9 @@ def test_chain_is_complete_and_idle_after_the_fold_from_main() -> None:
     """Every chain declaration becomes applicable once, and none applies to the migrated state."""
     state = pre_upgrade_state()
     rounds = upgrade_rounds(state)
-    assert {module for modules in CHAIN.values() for module in modules} <= set(rounds)
+    assert sorted(
+        f"{module.__name__.split('.runtime_migrations.')[0]}:{module.__name__.rsplit('.', 1)[1]}" for module in rounds
+    ) == sorted(UPGRADE_CHAIN)
     final = state
     for module in sorted(rounds, key=lambda module: (rounds[module], str(module))):
         final = module.Migration("0001_x", module.__name__.split(".")[1]).mutate_state(final)

@@ -86,17 +86,18 @@ class RuntimeMigrations:
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
 
-    def schedule(self, state: ProjectState, *, applied: Iterable[str] = ()) -> tuple[ScheduledMigration, ...]:
-        """Schedule the declarations from ``state`` as :meth:`plan` does, without a migration graph.
+    def schedule(self, state: ProjectState, *, only: Iterable[str]) -> tuple[ScheduledMigration, ...]:
+        """Schedule the ``only`` origins from ``state`` as :meth:`plan` does, without a migration graph.
 
-        Each declaration lands in the first round whose starting state its guard
-        accepts; never-applicable declarations are left out, and so are the ``applied``
-        origins, the ones a database at ``state`` has already materialized. An adopting
-        stack replays an upgrade from its pre-upgrade state this way, through this one
-        round loop.
+        Each named declaration lands in the first round whose starting state its guard
+        accepts; one that never becomes applicable is left out, and an origin no
+        addon declares fails. An adopting stack replays an upgrade's chain from its
+        pre-upgrade state this way, through this one round loop. The replay models that
+        chain's own ordering only: a stack that skips releases runs it interleaved with
+        later declarations of the same addons, which only that stack's :meth:`plan` shows.
         """
 
-        scheduled, _skipped, _state = self._schedule(state, {}, applied=frozenset(applied))
+        scheduled, _skipped, _state = self._schedule(state, {}, only=frozenset(only))
         return scheduled
 
     def plan(
@@ -201,14 +202,16 @@ class RuntimeMigrations:
         state: ProjectState,
         existing: Mapping[str, tuple[tuple[str, str], Migration, Path]],
         *,
-        applied: frozenset[str] = frozenset(),
+        only: frozenset[str] | None = None,
     ) -> tuple[tuple[ScheduledMigration, ...], tuple[tuple[AppConfig, Mapping[str, Any]], ...], ProjectState]:
         """Run the round loop: guards see the state their round starts from.
 
         Returns the applicable declarations in order with their round, the ones that
         never became applicable, and the state after the scheduled ones. A declaration
-        already materialized in ``existing`` is verified and left to that history; an
-        ``applied`` origin is left to it unverified (a replay holds no materialized file).
+        already materialized in ``existing`` is verified and left to that history; with
+        ``only``, every other declaration is left out. Source, digest, guard and state
+        errors raise here, before :meth:`plan` attaches the scheduled declarations to the
+        graph, so when several exist those come first.
         """
 
         declared_origins: set[str] = set()
@@ -220,7 +223,10 @@ class RuntimeMigrations:
                     raise RuntimeError(f"duplicate addon runtime migration origin {origin}")
                 declared_origins.add(origin)
                 self._validate_declaration(declaration, origin)
-                declarations.append((addon, declaration))
+                if only is None or origin in only:
+                    declarations.append((addon, declaration))
+        if only is not None and (undeclared := sorted(only - declared_origins)):
+            raise RuntimeError(f"no addon declares runtime migration origins {', '.join(undeclared)}")
 
         scheduled: list[ScheduledMigration] = []
         pending = declarations
@@ -231,8 +237,6 @@ class RuntimeMigrations:
             evaluation_state = state.clone()
             for addon, declaration in pending:
                 origin = f"{addon.name}:{declaration['name']}"
-                if origin in applied:
-                    continue
                 module = self._source_module(addon, declaration, origin)
                 migration_class = self._migration_class(module, origin)
                 if migration_class.replaces:

@@ -244,8 +244,8 @@ following `makemigrations` command to delete retained tables. The exact validati
 contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and its
 [history tests](../tests/test_runtime_migrations.py). A dependency on
 `(<app_label>, "__latest__")` is resolved to a concrete current leaf when copied.
-`RuntimeMigrations.schedule(state, applied=...)` runs the same round loop from a given
-state without a migration graph; core test support's
+`RuntimeMigrations.schedule(state, only=...)` runs the same round loop for the named
+origins from a given state without a migration graph; core test support's
 [`replay_rounds`](../angee/testing/migrations.py) wraps it, so a test replays an
 upgrade's rounds from its pre-upgrade state rather than re-implementing them.
 
