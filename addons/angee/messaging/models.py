@@ -58,6 +58,7 @@ from rebac.backends import backend
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
+from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
@@ -174,19 +175,29 @@ class ThreadAudienceMixin(models.Model):
         raise NotImplementedError
 
 
+class ChatterRecordRefused(DomainError, ValueError):
+    """A record label that names no model, or a model that keeps no chatter.
+
+    Also a ``ValueError``, so the chatter commands' in-band envelopes project it
+    beside their other input refusals; any other caller's schema projects its code.
+    """
+
+    code = "BAD_RECORD"
+
+
 def chatter_record(model_label: str, public_id: str) -> models.Model | None:
     """Return the record ``public_id`` names, read under the actor, when ``model_label`` keeps chatter.
 
-    An unknown label or a model without chatter raises ``ValueError``; a missing or
-    unreadable record is ``None``.
+    An unknown label or a model without chatter raises :class:`ChatterRecordRefused`;
+    a missing or unreadable record is ``None``.
     """
 
     try:
         model = apps.get_model(model_label)
     except (LookupError, ValueError) as error:
-        raise ValueError(f"Unknown model {model_label!r}.") from error
+        raise ChatterRecordRefused() from error
     if not issubclass(model, ThreadedModelMixin):
-        raise ValueError(f"{model._meta.label} does not inherit ThreadedModelMixin.")
+        raise ChatterRecordRefused()
     try:
         return instance_from_public_id(model, str(public_id), queryset=model._default_manager.all())
     except ImproperlyConfigured as error:
