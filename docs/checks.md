@@ -96,7 +96,13 @@ A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
 `pytest_plugins` and request its `statement_sources` fixture (the framework's own
-hosts load them after every REBAC sync).
+hosts load them after every REBAC sync). A stack adopting the sync-provenance
+upgrade proves its own runtime migrations against that chain with
+[`angee.parties.testing.upgrade`](../addons/angee/parties/testing/upgrade.py) instead
+of copying it: extend `pre_upgrade_state()` with its own pre-upgrade shapes, plan the
+rounds with `upgrade_rounds(state, addons=..., applied=...)` (the composer's own round
+loop, `RuntimeMigrations.schedule`), and run declaration bodies in round order against
+seeded rows on an `UpgradeHost`.
 Verify adopting modules individually as well as in the full suite so collection
 order cannot hide missing models.
 

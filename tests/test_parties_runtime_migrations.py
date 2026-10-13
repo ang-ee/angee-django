@@ -16,16 +16,13 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.conf import settings
-from django.contrib.contenttypes.models import ContentType
 from django.core.management.sql import emit_post_migrate_signal
-from django.db import connection, migrations, models
-from django.db.migrations.state import ModelState, ProjectState
+from django.db import connection, migrations
 from django.utils import timezone
 from rebac import SubjectRef, app_settings, system_context
 from rebac.actors import to_subject_ref
 
 from angee.base.changesets import changeset
-from angee.base.fields import StateField
 from angee.base.managers import StatementManager
 from angee.base.mixins import SourceKind
 from angee.integrate.runtime_migrations import (
@@ -48,11 +45,11 @@ from angee.parties.runtime_migrations import (
     retire_party_carriers,
     retire_party_handle,
 )
+from angee.parties.testing.upgrade import UpgradeHost, pre_upgrade_state, upgrade_rounds
 from angee.provenance.runtime_migrations import changeset_schema, retire_reversion, statement_principal_schema
 from angee.spaces.runtime_migrations import membership_decisions
 from tests.conftest import create_user, make_integration
 
-CARD_COLUMNS = ("folder", "source_uid", "source_etag", "raw_vcard", "extensions")
 VCARD = "\r\n".join(
     (
         "BEGIN:VCARD",
@@ -79,188 +76,10 @@ VCARD_REORDERED = "\r\n".join(
 )
 
 
-def _card_fields(*, constrained: bool) -> dict[str, models.Field]:
-    return {
-        "folder": models.ForeignKey(
-            "parties.Folder",
-            null=True,
-            blank=True,
-            related_name="+",
-            on_delete=models.SET_NULL if constrained else models.DO_NOTHING,
-            db_constraint=constrained,
-        ),
-        "source_uid": models.CharField(max_length=512, blank=True, default=""),
-        "source_etag": models.CharField(max_length=512, blank=True, default=""),
-        "raw_vcard": models.TextField(blank=True, default=""),
-        "extensions": models.JSONField(blank=True, default=dict),
-    }
-
-
-def _audit_fields() -> dict[str, models.Field]:
-    return {
-        "created_at": models.DateTimeField(default=timezone.now),
-        "updated_at": models.DateTimeField(default=timezone.now),
-        "created_by": models.ForeignKey(
-            settings.AUTH_USER_MODEL, null=True, blank=True, related_name="+", on_delete=models.SET_NULL
-        ),
-        "updated_by": models.ForeignKey(
-            settings.AUTH_USER_MODEL, null=True, blank=True, related_name="+", on_delete=models.SET_NULL
-        ),
-    }
-
-
-def legacy_state() -> ProjectState:
-    """The host's composed schema plus every retired legacy shape the chain reads."""
-    state = ProjectState.from_apps(apps)
-    party = state.models["parties", "party"]
-    party.fields.update(_card_fields(constrained=True))
-    party.options["constraints"] = [
-        *party.options.get("constraints", []),
-        models.UniqueConstraint(
-            fields=("folder", "source_uid"),
-            name="uq_party_folder_source_uid",
-            condition=models.Q(folder__isnull=False) & ~models.Q(source_uid=""),
-        ),
-    ]
-    for name in ("historicalparty", "historicalperson", "historicalorganization"):
-        historical = state.models["parties", name]
-        historical.fields.update(_card_fields(constrained=False))
-        historical.fields["handle_count"] = models.PositiveIntegerField(default=0)
-    relationship = state.models["parties", "relationship"]
-    relationship.fields["source"] = models.CharField(max_length=16, default="manual")
-    relationship.options["constraints"] = [
-        *relationship.options.get("constraints", []),
-        models.UniqueConstraint(
-            fields=("party", "other_name"),
-            name="uq_relationship_carddav_employment",
-            condition=models.Q(source="carddav"),
-        ),
-    ]
-    state.models["parties", "circlemember"].fields["source"] = models.CharField(max_length=16, default="manual")
-    state.add_model(
-        ModelState(
-            "parties",
-            "PartyHandle",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                *_audit_fields().items(),
-                ("party", models.ForeignKey("parties.Party", on_delete=models.CASCADE, related_name="+")),
-                ("handle", models.ForeignKey("parties.Handle", on_delete=models.CASCADE, related_name="+")),
-                ("confidence", models.FloatField(default=1.0)),
-                ("source", models.CharField(max_length=16, default="manual")),
-                ("is_confirmed", models.BooleanField(default=False)),
-                ("is_dismissed", models.BooleanField(default=False)),
-                ("metadata", models.JSONField(blank=True, default=dict)),
-            ],
-            options={"db_table": "test_parties_party_handle"},
-        )
-    )
-    state.add_model(
-        ModelState(
-            "parties",
-            "MergeVeto",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                *_audit_fields().items(),
-                ("party_a", models.ForeignKey("parties.Party", on_delete=models.CASCADE, related_name="+")),
-                ("party_b", models.ForeignKey("parties.Party", on_delete=models.CASCADE, related_name="+")),
-            ],
-            options={"db_table": "test_parties_merge_veto"},
-        )
-    )
-    return state
-
-
-class LegacyHost:
-    """Legacy schema on the host database, with the declared migrations replayed on it."""
-
-    def __init__(self) -> None:
-        self.state = legacy_state()
-        self.apps = self.state.apps
-        self.added: list[tuple[str, str]] = []
-        with connection.schema_editor() as editor:
-            for label in ("parties.PartyHandle", "parties.MergeVeto"):
-                editor.create_model(self.model(label))
-            for label, names in (
-                ("parties.Party", CARD_COLUMNS),
-                ("parties.HistoricalParty", (*CARD_COLUMNS, "handle_count")),
-                ("parties.HistoricalPerson", (*CARD_COLUMNS, "handle_count")),
-                ("parties.HistoricalOrganization", (*CARD_COLUMNS, "handle_count")),
-                ("parties.Relationship", ("source",)),
-                ("parties.CircleMember", ("source",)),
-            ):
-                model = self.model(label)
-                for name in names:
-                    editor.add_field(model, model._meta.get_field(name))
-                    self.added.append((model._meta.db_table, model._meta.get_field(name).column))
-            for label, name in (
-                ("parties.Party", "uq_party_folder_source_uid"),
-                ("parties.Relationship", "uq_relationship_carddav_employment"),
-            ):
-                # SQLite's table remake already materialized the state's constraints.
-                model = self.model(label)
-                with connection.cursor() as cursor:
-                    present = name in connection.introspection.get_constraints(cursor, model._meta.db_table)
-                if not present:
-                    editor.add_constraint(model, next(c for c in model._meta.constraints if c.name == name))
-
-    def close(self) -> None:
-        # Render the teardown models without the legacy constraints: SQLite remakes a
-        # table from the model when a column leaves, and the constraint names that column.
-        state = legacy_state()
-        constraints = {}
-        for label, name in (
-            ("parties.Party", "uq_party_folder_source_uid"),
-            ("parties.Relationship", "uq_relationship_carddav_employment"),
-        ):
-            options = state.models["parties", label.rsplit(".", 1)[1].lower()].options
-            constraints[label] = next(c for c in options["constraints"] if c.name == name)
-            options["constraints"] = [c for c in options["constraints"] if c.name != name]
-        current = state.apps
-        with connection.schema_editor() as editor:
-            tables = set(connection.introspection.table_names())
-            for label in ("parties.MergeVeto", "parties.PartyHandle"):
-                model = current.get_model(label)
-                if model._meta.db_table in tables:
-                    editor.delete_model(model)
-            for label, constraint in constraints.items():
-                model = current.get_model(label)
-                with connection.cursor() as cursor:
-                    present = constraint.name in connection.introspection.get_constraints(cursor, model._meta.db_table)
-                if present:
-                    editor.remove_constraint(model, constraint)
-            for table, column in self.added:
-                with connection.cursor() as cursor:
-                    columns = {row.name for row in connection.introspection.get_table_description(cursor, table)}
-                if column not in columns:
-                    continue
-                model = next(m for m in current.get_models() if m._meta.db_table == table)
-                editor.remove_field(model, next(f for f in model._meta.fields if f.column == column))
-
-    def model(self, label: str) -> Any:
-        return self.apps.get_model(label)
-
-    def rows(self, label: str) -> Any:
-        return self.model(label)._base_manager.order_by()
-
-    def create(self, model_label: str, /, **values: Any) -> Any:
-        return self.rows(model_label).create(**values)
-
-    def content_type(self, model: str) -> Any:
-        row, _ = self.rows("contenttypes.ContentType").get_or_create(app_label="parties", model=model)
-        return row
-
-    def apply(self, module: Any, app_label: str = "parties") -> None:
-        migration = module.Migration(f"0001_{module.__name__.rsplit('.', 1)[1]}", app_label)
-        with connection.schema_editor() as editor:
-            self.state = migration.apply(self.state, editor)
-        self.apps = self.state.apps
-
-
 @pytest.fixture
 def legacy(composed_tables: None) -> Any:
     del composed_tables
-    host = LegacyHost()
+    host = UpgradeHost()
     try:
         yield host
     finally:
@@ -268,7 +87,7 @@ def legacy(composed_tables: None) -> Any:
 
 
 @pytest.fixture
-def seeded(legacy: LegacyHost) -> dict[str, Any]:
+def seeded(legacy: UpgradeHost) -> dict[str, Any]:
     """Every row shape the review found on live databases, in its pre-fold state."""
     user_model = settings.AUTH_USER_MODEL
     person = legacy.create(
@@ -467,7 +286,7 @@ def seeded(legacy: LegacyHost) -> dict[str, Any]:
     )
 
 
-def _statements(legacy: LegacyHost, party: Any, **filters: Any) -> list[Any]:
+def _statements(legacy: UpgradeHost, party: Any, **filters: Any) -> list[Any]:
     return list(
         legacy.rows("parties.PartyStatement")
         .filter(subject_id=party.pk, superseded__isnull=True, **filters)
@@ -479,12 +298,12 @@ def _user(user: Any) -> str:
     return str(SubjectRef.of(app_settings.REBAC_USER_TYPE, str(user.pk)))
 
 
-def _rule(legacy: LegacyHost, key: str) -> str:
+def _rule(legacy: UpgradeHost, key: str) -> str:
     return f"provenance/rule:{legacy.rows('provenance.Rule').get(key=key).pk}"
 
 
 @pytest.mark.django_db(transaction=True)
-def test_preflight_names_every_blocking_row_before_anything_runs(legacy: LegacyHost, seeded: dict[str, Any]) -> None:
+def test_preflight_names_every_blocking_row_before_anything_runs(legacy: UpgradeHost, seeded: dict[str, Any]) -> None:
     """Blockers of both folds come back together; previously blocking producers are not among them."""
     person, organization, manual = seeded["person"], seeded["organization"], seeded["manual"]
     unknown = legacy.create(
@@ -532,7 +351,7 @@ def test_preflight_names_every_blocking_row_before_anything_runs(legacy: LegacyH
 
 @pytest.mark.django_db(transaction=True)
 def test_handle_fold_attributes_every_live_producer_and_carries_stamps(
-    legacy: LegacyHost, seeded: dict[str, Any]
+    legacy: UpgradeHost, seeded: dict[str, Any]
 ) -> None:
     carriers, person, service = seeded["carriers"], seeded["person"], seeded["service"]
     legacy.apply(fold_party_handle_statements)
@@ -607,7 +426,7 @@ def test_handle_fold_attributes_every_live_producer_and_carries_stamps(
 
 @pytest.mark.django_db(transaction=True)
 def test_aspect_fold_proves_against_the_applied_snapshot_and_credits_only_persons(
-    legacy: LegacyHost, seeded: dict[str, Any]
+    legacy: UpgradeHost, seeded: dict[str, Any]
 ) -> None:
     # A second keep-separate recorded by a service account: a standing decision by the fold's seed.
     legacy.create(
@@ -651,7 +470,7 @@ def test_aspect_fold_proves_against_the_applied_snapshot_and_credits_only_person
 
 @pytest.mark.django_db(transaction=True)
 def test_retirements_name_dangling_pointers_and_accept_a_reserialized_card(
-    legacy: LegacyHost, seeded: dict[str, Any], capsys
+    legacy: UpgradeHost, seeded: dict[str, Any], capsys
 ) -> None:
     legacy.apply(fold_party_handle_statements)
     legacy.apply(fold_party_aspects)
@@ -670,6 +489,7 @@ def test_retirements_name_dangling_pointers_and_accept_a_reserialized_card(
         origin_object_id="999999",
     )
     permissions = legacy.rows("auth.Permission")
+    carrier_table, veto_table = (legacy.model(label)._meta.db_table for label in UpgradeHost.TABLES)
     for ct, codename in ((carrier_ct, "add_partyhandle"), (veto_ct, "view_mergeveto")):
         permissions.create(content_type_id=ct.pk, codename=codename, name=codename)
 
@@ -683,7 +503,7 @@ def test_retirements_name_dangling_pointers_and_accept_a_reserialized_card(
     assert changesets.get(pk=moved.pk).origin_content_type_id == legacy.content_type("party").pk
     assert changesets.get(pk=stale.pk).origin_content_type_id == carrier_ct.pk
     assert not permissions.filter(codename="add_partyhandle").exists()
-    assert "test_parties_party_handle" not in connection.introspection.table_names()
+    assert carrier_table not in connection.introspection.table_names()
 
     legacy.apply(retire_party_carriers)
 
@@ -691,12 +511,12 @@ def test_retirements_name_dangling_pointers_and_accept_a_reserialized_card(
     with connection.cursor() as cursor:
         columns = {row.name for row in connection.introspection.get_table_description(cursor, "test_parties_party")}
     assert not columns & {"folder_id", "source_uid", "source_etag", "raw_vcard", "extensions"}
-    assert "test_parties_merge_veto" not in connection.introspection.table_names()
+    assert veto_table not in connection.introspection.table_names()
 
 
 @pytest.mark.django_db(transaction=True)
 def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
-    legacy: LegacyHost, seeded: dict[str, Any]
+    legacy: UpgradeHost, seeded: dict[str, Any]
 ) -> None:
     legacy.apply(fold_party_handle_statements)
     legacy.apply(fold_party_aspects)
@@ -716,7 +536,7 @@ def test_carrier_retirement_reports_a_card_no_link_retains_and_drops_the_column(
 
 
 def _consumer_statement(
-    legacy: LegacyHost, party: Any, aspect: str, *, history: bool = True, activity: str = "system", **values: Any
+    legacy: UpgradeHost, party: Any, aspect: str, *, history: bool = True, activity: str = "system", **values: Any
 ) -> Any:
     """A statement a consumer's own fold applied under its own principal and reason, with its history."""
 
@@ -752,7 +572,7 @@ def _consumer_statement(
 
 @pytest.mark.django_db(transaction=True)
 def test_a_sender_claim_written_before_the_reference_rename_folds_its_listed_references(
-    legacy: LegacyHost, seeded: dict[str, Any], capsys
+    legacy: UpgradeHost, seeded: dict[str, Any], capsys
 ) -> None:
     """Until 2026-10-10 a claim kept its references under ``evidence``; over a suggestion it also kept the keys."""
 
@@ -796,7 +616,7 @@ def test_a_sender_claim_written_before_the_reference_rename_folds_its_listed_ref
 
 @pytest.mark.django_db(transaction=True)
 def test_a_claim_a_person_decided_before_sources_were_kept_folds_as_the_persons_link(
-    legacy: LegacyHost, seeded: dict[str, Any], capsys
+    legacy: UpgradeHost, seeded: dict[str, Any], capsys
 ) -> None:
     """Until 2026-10-11 a confirmation rewrote the producer's source to manual and kept its claim metadata.
 
@@ -864,7 +684,7 @@ def test_a_claim_a_person_decided_before_sources_were_kept_folds_as_the_persons_
 
 @pytest.mark.django_db(transaction=True)
 def test_the_folds_keep_a_statement_another_fold_already_applied(
-    legacy: LegacyHost, seeded: dict[str, Any], capsys
+    legacy: UpgradeHost, seeded: dict[str, Any], capsys
 ) -> None:
     """A consumer's own fold ahead of the lane's keeps what it applied; the lane records its statements beside it."""
 
@@ -883,7 +703,7 @@ def test_the_folds_keep_a_statement_another_fold_already_applied(
     assert "1 x Party.identity: another fold's statement is applied; recorded beside it" in out
 
 
-def _replica_carrier(legacy: LegacyHost, seeded: dict[str, Any]) -> tuple[Any, Any]:
+def _replica_carrier(legacy: UpgradeHost, seeded: dict[str, Any]) -> tuple[Any, Any]:
     """A linked replica handle whose import carrier the fold leaves unasserted (no linkedin account channel)."""
 
     imported, person = seeded["imported"], seeded["person"]
@@ -911,7 +731,7 @@ def _replica_carrier(legacy: LegacyHost, seeded: dict[str, Any]) -> tuple[Any, A
 
 @pytest.mark.django_db(transaction=True)
 def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
-    legacy: LegacyHost, seeded: dict[str, Any], capsys
+    legacy: UpgradeHost, seeded: dict[str, Any], capsys
 ) -> None:
     """An import carrier the fold leaves unasserted may be a consumer fold's to assert, under its own reason."""
 
@@ -933,7 +753,7 @@ def test_the_handle_retirement_accepts_an_import_carrier_another_fold_asserts(
     [(False, "system", "missing folded source or history"), (True, "manual", "is not a fold's system work")],
 )
 def test_the_handle_retirement_refuses_another_writers_statement_a_fold_did_not_write(
-    legacy: LegacyHost, seeded: dict[str, Any], history: bool, activity: str, refusal: str
+    legacy: UpgradeHost, seeded: dict[str, Any], history: bool, activity: str, refusal: str
 ) -> None:
     """Another writer's statement passes only as a fold writes one: system work, with its native history."""
 
@@ -1048,10 +868,9 @@ def _created_after_the_preflight() -> frozenset[str]:
     round may run on either side of it, and the preflight reads the shape it finds.
     """
 
-    rounds = _rounds(_main_like_state())
-    labels = {module: addon.rsplit(".", 1)[1] for addon, modules in CHAIN.items() for module in modules}
+    rounds = upgrade_rounds()
     return frozenset(
-        f"{labels[module]}.{operation.name}".lower()
+        f"{apps.get_containing_app_config(module.__name__).label}.{operation.name}".lower()
         for module, number in rounds.items()
         if number > rounds[preflight_party_folds]
         for operation in module.Migration.operations
@@ -1060,7 +879,7 @@ def _created_after_the_preflight() -> frozenset[str]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_preflight_reads_only_the_pre_upgrade_shape(legacy: LegacyHost, seeded: dict[str, Any]) -> None:
+def test_preflight_reads_only_the_pre_upgrade_shape(legacy: UpgradeHost, seeded: dict[str, Any]) -> None:
     """The preflight never looks up a model a later round creates: none exists yet at main."""
 
     hidden = _created_after_the_preflight()
@@ -1094,155 +913,6 @@ def test_vcard_lines_ignore_order_and_revision_stamps() -> None:
 
 
 # --- Chain ordering: the composer's rounds over a database at main's schema ---------------------
-
-
-def _main_like_state() -> ProjectState:
-    """The affected tables as a database at ``main`` holds them, before any lane declaration."""
-    state = ProjectState()
-    state.add_model(ModelState.from_model(ContentType))
-    state.add_model(
-        ModelState(
-            "spaces",
-            "Membership",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("source", models.CharField(max_length=16, default="manual")),
-            ],
-        )
-    )
-    state.add_model(
-        ModelState(
-            "iam", "User", [("id", models.BigAutoField(primary_key=True)), ("kind", models.CharField(max_length=8))]
-        )
-    )
-    state.add_model(ModelState("integrate", "Integration", [("id", models.BigAutoField(primary_key=True))]))
-    state.add_model(
-        ModelState(
-            "integrate",
-            "SyncStream",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("integration", models.ForeignKey("integrate.Integration", on_delete=models.CASCADE)),
-                ("key", models.CharField(max_length=64)),
-                ("partition", models.CharField(max_length=512)),
-                ("generation", models.PositiveIntegerField(default=1)),
-            ],
-        )
-    )
-    link_fields: dict[str, models.Field] = {
-        "id": models.BigAutoField(primary_key=True),
-        "created_at": models.DateTimeField(),
-        "updated_at": models.DateTimeField(),
-        "created_by": models.ForeignKey("iam.User", null=True, on_delete=models.SET_NULL, related_name="+"),
-        "updated_by": models.ForeignKey("iam.User", null=True, on_delete=models.SET_NULL, related_name="+"),
-        "stream": models.ForeignKey("integrate.SyncStream", on_delete=models.CASCADE),
-        "parent": models.ForeignKey("integrate.RecordLink", null=True, on_delete=models.SET_NULL, related_name="+"),
-        "external_key": models.CharField(max_length=512),
-        "target_content_type": models.ForeignKey("contenttypes.ContentType", null=True, on_delete=models.PROTECT),
-        "target_object_id": models.CharField(max_length=255, null=True),
-        "status": StateField(
-            choices=[
-                ("current", "Current"),
-                ("observed", "Observed"),
-                ("unavailable", "Unavailable"),
-                ("discrepant", "Discrepant"),
-                ("withdrawn", "Withdrawn"),
-                ("tombstone", "Tombstone"),
-            ],
-            default="observed",
-            max_length=11,
-            db_index=True,
-        ),
-        "remote_version": models.CharField(max_length=512, blank=True),
-        "remote_base_hash": models.CharField(max_length=64, blank=True),
-        "local_base_hash": models.CharField(max_length=64, blank=True),
-        "origin": models.CharField(max_length=16, blank=True),
-        "last_seen_at": models.DateTimeField(null=True),
-        "last_verified_generation": models.PositiveIntegerField(default=0),
-        "absence_count": models.PositiveIntegerField(default=0),
-        "metadata": models.JSONField(default=dict),
-        "tombstoned_at": models.DateTimeField(null=True),
-    }
-    assert set(link_fields) == record_link_history_state.LEGACY_FIELDS
-    state.add_model(ModelState("integrate", "RecordLink", list(link_fields.items())))
-    state.add_model(
-        ModelState(
-            "integrate",
-            "RecordRevision",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("link", models.ForeignKey("integrate.RecordLink", on_delete=models.CASCADE)),
-                ("number", models.PositiveIntegerField()),
-            ],
-        )
-    )
-    state.add_model(ModelState("integrate", "SyncDiscrepancy", [("id", models.BigAutoField(primary_key=True))]))
-    state.add_model(ModelState("parties", "Folder", [("id", models.BigAutoField(primary_key=True))]))
-    state.add_model(
-        ModelState(
-            "parties",
-            "Party",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("display_name", models.TextField()),
-                ("handle_count", models.PositiveIntegerField(default=0)),
-                *_card_fields(constrained=True).items(),
-            ],
-            options={
-                "constraints": [
-                    models.UniqueConstraint(fields=("folder", "source_uid"), name="uq_party_folder_source_uid")
-                ]
-            },
-        )
-    )
-    state.add_model(ModelState("parties", "Handle", [("id", models.BigAutoField(primary_key=True))]))
-    state.add_model(
-        ModelState(
-            "parties",
-            "PartyHandle",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("party", models.ForeignKey("parties.Party", on_delete=models.CASCADE)),
-                ("handle", models.ForeignKey("parties.Handle", on_delete=models.CASCADE)),
-            ],
-        )
-    )
-    state.add_model(
-        ModelState(
-            "parties",
-            "CircleMember",
-            [("id", models.BigAutoField(primary_key=True)), ("source", models.CharField(max_length=16))],
-        )
-    )
-    state.add_model(
-        ModelState(
-            "parties",
-            "Relationship",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("party", models.ForeignKey("parties.Party", on_delete=models.CASCADE)),
-                ("other_name", models.TextField(blank=True)),
-                ("source", models.CharField(max_length=16)),
-            ],
-            options={
-                "constraints": [
-                    models.UniqueConstraint(fields=("party", "other_name"), name="uq_relationship_carddav_employment")
-                ]
-            },
-        )
-    )
-    state.add_model(
-        ModelState(
-            "parties",
-            "Address",
-            [
-                ("id", models.BigAutoField(primary_key=True)),
-                ("party", models.ForeignKey("parties.Party", on_delete=models.CASCADE)),
-            ],
-        )
-    )
-    state.add_model(ModelState("parties", "MergeVeto", [("id", models.BigAutoField(primary_key=True))]))
-    return state
 
 
 CHAIN = {
@@ -1282,24 +952,6 @@ def _manifest_order(addon: str) -> list[str]:
     return [entry["name"] for entry in tomllib.loads(manifest.read_text())["migrations"]]
 
 
-def _rounds(state: ProjectState) -> dict[Any, int]:
-    """Replay the composer's round algorithm: guards see the state the round starts from."""
-    pending = [(addon.rsplit(".", 1)[1], module) for addon, modules in CHAIN.items() for module in modules]
-    rounds: dict[Any, int] = {}
-    number = 0
-    while pending:
-        remaining, evaluation = [], state.clone()
-        for app_label, module in pending:
-            if not module.applies(evaluation.clone()):
-                remaining.append((app_label, module))
-                continue
-            state = module.Migration(f"{number:04d}_{module.__name__.rsplit('.', 1)[1]}", app_label).mutate_state(state)
-            rounds[module] = number
-        assert len(remaining) < len(pending), f"never applicable: {[m.__name__ for _, m in remaining]}"
-        pending, number = remaining, number + 1
-    return rounds
-
-
 def test_chain_declarations_are_in_manifest_order() -> None:
     for addon, modules in CHAIN.items():
         names = [module.__name__.rsplit(".", 1)[1] for module in modules]
@@ -1308,7 +960,7 @@ def test_chain_declarations_are_in_manifest_order() -> None:
 
 
 def test_chain_plans_the_preflight_before_every_destructive_declaration_from_main() -> None:
-    rounds = _rounds(_main_like_state())
+    rounds = upgrade_rounds()
     assert rounds[preflight_party_folds] == 0
     assert all(rounds[module] > rounds[preflight_party_folds] for module in DESTRUCTIVE)
     # spaces drops its roster labels only after the parties preflight round.
@@ -1327,10 +979,10 @@ def test_chain_plans_the_preflight_before_every_destructive_declaration_from_mai
 
 
 def test_chain_is_complete_and_idle_after_the_fold_from_main() -> None:
-    """Every declaration becomes applicable once, and none applies to the migrated state."""
-    state = _main_like_state()
-    rounds = _rounds(state)
-    assert set(rounds) == {module for modules in CHAIN.values() for module in modules}
+    """Every chain declaration becomes applicable once, and none applies to the migrated state."""
+    state = pre_upgrade_state()
+    rounds = upgrade_rounds(state)
+    assert {module for modules in CHAIN.values() for module in modules} <= set(rounds)
     final = state
     for module in sorted(rounds, key=lambda module: (rounds[module], str(module))):
         final = module.Migration("0001_x", module.__name__.split(".")[1]).mutate_state(final)

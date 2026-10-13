@@ -42,6 +42,21 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduledMigration:
+    """One addon declaration the round loop found applicable, with the round it lands in."""
+
+    round: int
+    origin: str
+    addon: AppConfig
+    declaration: Mapping[str, Any]
+    module: ModuleType
+    migration_class: type[Migration]
+    source_path: Path
+    source: str
+    source_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeMigrationPlan:
     """One applicable addon migration attached to a concrete runtime node."""
 
@@ -71,6 +86,19 @@ class RuntimeMigrations:
         self.runtime_dir = runtime_dir
         self.labels = frozenset(labels)
 
+    def schedule(self, state: ProjectState, *, applied: Iterable[str] = ()) -> tuple[ScheduledMigration, ...]:
+        """Schedule the declarations from ``state`` as :meth:`plan` does, without a migration graph.
+
+        Each declaration lands in the first round whose starting state its guard
+        accepts; never-applicable declarations are left out, and so are the ``applied``
+        origins, the ones a database at ``state`` has already materialized. An adopting
+        stack replays an upgrade from its pre-upgrade state this way, through this one
+        round loop.
+        """
+
+        scheduled, _skipped, _state = self._schedule(state, {}, applied=frozenset(applied))
+        return scheduled
+
     def plan(
         self,
         *,
@@ -85,12 +113,105 @@ class RuntimeMigrations:
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         existing = self._existing_migrations(loader)
-        state = loader.project_state()
+        scheduled, skipped, state = self._schedule(loader.project_state(), existing)
         plans: list[RuntimeMigrationPlan] = []
         next_numbers: dict[str, int] = {}
         leaves: dict[str, tuple[str, str] | None] = {}
-        declared_origins: set[str] = set()
+        for entry in scheduled:
+            origin, declaration, migration_class = entry.origin, entry.declaration, entry.migration_class
+            if declaration["app_label"] not in next_numbers:
+                next_numbers[declaration["app_label"]] = self._next_number(loader, declaration["app_label"])
+                leaves[declaration["app_label"]] = self._target_leaf(
+                    loader,
+                    declaration["app_label"],
+                    origin=origin,
+                )
+            number = next_numbers[declaration["app_label"]]
+            next_numbers[declaration["app_label"]] += 1
+            name = f"{number:04d}_{declaration['name']}"
+            node = (declaration["app_label"], name)
+            target_leaf = leaves[declaration["app_label"]]
+            dependencies, latest_dependencies = self._resolve_dependencies(
+                loader,
+                migration_class.dependencies,
+                current_app=declaration["app_label"],
+                origin=origin,
+            )
+            if entry.round:
+                deferred_dependencies = tuple(
+                    node
+                    for label, node in leaves.items()
+                    if label != declaration["app_label"] and node is not None and node not in dependencies
+                )
+                dependencies += deferred_dependencies
+            if target_leaf is not None and target_leaf not in dependencies:
+                dependencies += (target_leaf,)
+            output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
+            if output_path.exists():
+                raise RuntimeError(f"{origin}: output migration already exists at {output_path}")
+            plan = RuntimeMigrationPlan(
+                origin=origin,
+                app_label=declaration["app_label"],
+                name=name,
+                source_path=entry.source_path,
+                source=entry.source,
+                output_path=output_path,
+                source_sha256=entry.source_sha256,
+                dependencies=dependencies,
+                latest_dependencies=latest_dependencies,
+                migration_class=migration_class,
+            )
+            migration = migration_class(name, declaration["app_label"])
+            migration.dependencies = list(dependencies)
+            try:
+                loader.graph.add_node(node, migration)
+                for dependency in dependencies:
+                    loader.graph.add_dependency(migration, node, dependency)
+                for run_before in self._resolve_run_before(
+                    loader,
+                    migration.run_before,
+                    current_app=declaration["app_label"],
+                    origin=origin,
+                ):
+                    loader.graph.add_dependency(migration, run_before, node)
+                loader.graph.validate_consistency()
+                loader.graph.ensure_not_cyclic()
+            except Exception as error:
+                raise RuntimeError(f"{origin}: migration graph is invalid") from error
+            leaves[declaration["app_label"]] = node
+            plans.append(plan)
 
+        skipped_origins = []
+        for addon, declaration in skipped:
+            origin = f"{addon.name}:{declaration['name']}"
+            skipped_origins.append(origin)
+            if not defer_drop_check:
+                logger.warning(
+                    "%s (app label %s): runtime migration never became applicable; skipped",
+                    origin,
+                    declaration["app_label"],
+                )
+        if apps is not None and not defer_drop_check:
+            self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
+
+        return tuple(plans)
+
+    def _schedule(
+        self,
+        state: ProjectState,
+        existing: Mapping[str, tuple[tuple[str, str], Migration, Path]],
+        *,
+        applied: frozenset[str] = frozenset(),
+    ) -> tuple[tuple[ScheduledMigration, ...], tuple[tuple[AppConfig, Mapping[str, Any]], ...], ProjectState]:
+        """Run the round loop: guards see the state their round starts from.
+
+        Returns the applicable declarations in order with their round, the ones that
+        never became applicable, and the state after the scheduled ones. A declaration
+        already materialized in ``existing`` is verified and left to that history; an
+        ``applied`` origin is left to it unverified (a replay holds no materialized file).
+        """
+
+        declared_origins: set[str] = set()
         declarations: list[tuple[AppConfig, Mapping[str, Any]]] = []
         for addon, entries in self._migration_declarations():
             for declaration in entries:
@@ -101,6 +222,7 @@ class RuntimeMigrations:
                 self._validate_declaration(declaration, origin)
                 declarations.append((addon, declaration))
 
+        scheduled: list[ScheduledMigration] = []
         pending = declarations
         round_number = 0
         while pending:
@@ -109,6 +231,8 @@ class RuntimeMigrations:
             evaluation_state = state.clone()
             for addon, declaration in pending:
                 origin = f"{addon.name}:{declaration['name']}"
+                if origin in applied:
+                    continue
                 module = self._source_module(addon, declaration, origin)
                 migration_class = self._migration_class(module, origin)
                 if migration_class.replaces:
@@ -116,7 +240,6 @@ class RuntimeMigrations:
                 source_path = self._source_path(module, origin)
                 source_bytes = source_path.read_bytes()
                 source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-                source = source_bytes.decode("utf-8")
                 materialized = existing.get(origin)
                 if materialized is not None:
                     node, migration, _ = materialized
@@ -144,93 +267,30 @@ class RuntimeMigrations:
                 if not applicable:
                     remaining.append((addon, declaration))
                     continue
-
-                if declaration["app_label"] not in next_numbers:
-                    next_numbers[declaration["app_label"]] = self._next_number(loader, declaration["app_label"])
-                    leaves[declaration["app_label"]] = self._target_leaf(
-                        loader,
-                        declaration["app_label"],
-                        origin=origin,
-                    )
-                number = next_numbers[declaration["app_label"]]
-                next_numbers[declaration["app_label"]] += 1
-                name = f"{number:04d}_{declaration['name']}"
-                node = (declaration["app_label"], name)
-                target_leaf = leaves[declaration["app_label"]]
-                dependencies, latest_dependencies = self._resolve_dependencies(
-                    loader,
-                    migration_class.dependencies,
-                    current_app=declaration["app_label"],
-                    origin=origin,
-                )
-                if round_number:
-                    deferred_dependencies = tuple(
-                        node
-                        for label, node in leaves.items()
-                        if label != declaration["app_label"] and node is not None and node not in dependencies
-                    )
-                    dependencies += deferred_dependencies
-                if target_leaf is not None and target_leaf not in dependencies:
-                    dependencies += (target_leaf,)
-                output_path = self.runtime_dir / declaration["app_label"] / "migrations" / f"{name}.py"
-                if output_path.exists():
-                    raise RuntimeError(f"{origin}: output migration already exists at {output_path}")
-                plan = RuntimeMigrationPlan(
-                    origin=origin,
-                    app_label=declaration["app_label"],
-                    name=name,
-                    source_path=source_path,
-                    source=source,
-                    output_path=output_path,
-                    source_sha256=source_sha256,
-                    dependencies=dependencies,
-                    latest_dependencies=latest_dependencies,
-                    migration_class=migration_class,
-                )
-                migration = migration_class(name, declaration["app_label"])
-                migration.dependencies = list(dependencies)
                 try:
-                    loader.graph.add_node(node, migration)
-                    for dependency in dependencies:
-                        loader.graph.add_dependency(migration, node, dependency)
-                    for run_before in self._resolve_run_before(
-                        loader,
-                        migration.run_before,
-                        current_app=declaration["app_label"],
-                        origin=origin,
-                    ):
-                        loader.graph.add_dependency(migration, run_before, node)
-                    loader.graph.validate_consistency()
-                    loader.graph.ensure_not_cyclic()
-                except Exception as error:
-                    raise RuntimeError(f"{origin}: migration graph is invalid") from error
-                try:
-                    state = migration.mutate_state(state)
+                    state = migration_class(declaration["name"], declaration["app_label"]).mutate_state(state)
                 except Exception as error:
                     raise RuntimeError(f"{origin}: migration state transition is invalid") from error
-                leaves[declaration["app_label"]] = node
-                plans.append(plan)
+                scheduled.append(
+                    ScheduledMigration(
+                        round=round_number,
+                        origin=origin,
+                        addon=addon,
+                        declaration=declaration,
+                        module=module,
+                        migration_class=migration_class,
+                        source_path=source_path,
+                        source=source_bytes.decode("utf-8"),
+                        source_sha256=source_sha256,
+                    )
+                )
                 progressed = True
 
             pending = remaining
             if not progressed:
                 break
             round_number += 1
-
-        skipped_origins = []
-        for addon, declaration in pending:
-            origin = f"{addon.name}:{declaration['name']}"
-            skipped_origins.append(origin)
-            if not defer_drop_check:
-                logger.warning(
-                    "%s (app label %s): runtime migration never became applicable; skipped",
-                    origin,
-                    declaration["app_label"],
-                )
-        if apps is not None and not defer_drop_check:
-            self._check_autodetected_drops(loader, state, ProjectState.from_apps(apps), skipped_origins)
-
-        return tuple(plans)
+        return tuple(scheduled), tuple(pending), state
 
     def check(self) -> None:
         """Raise when an applicable addon migration has not been materialized."""
