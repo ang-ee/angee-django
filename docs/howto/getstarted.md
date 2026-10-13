@@ -348,6 +348,46 @@ documents what it converts, what it refuses and how long it holds its lock;
   checks, so it needs no manual step. A stack migrated by hand runs
   `manage.py migrate --skip-checks`, then `manage.py rebac --skip-checks sync`.
 
+### Upgrading to angee 0.3.0: sync provenance and native history
+
+This applies to stacks on angee 0.2.0, which every framework tag through v0.1.36
+carries: django-reversion revisions, party handle carriers, the CardDAV columns
+on parties and the record-sync revision and discrepancy stores become
+statements, record links and native history. angee 0.4.0 removes this section.
+[The parties README](../../addons/angee/parties/README.md#upgrading-from-partyhandle-carriers)
+owns the chain's rules, and each declaration's docstring says what it keeps and
+what it drops.
+
+- **Back up first.** The retirements are irreversible, and every
+  django-reversion revision is dropped by ruling (MarkdownPage bodies, Project
+  titles and bodies).
+- **Read the preflight.** `parties:preflight_party_folds` runs before any
+  destructive declaration and names every row the folds would refuse. Fix those
+  rows on the old release and migrate again; nothing has been dropped.
+- **Upgrade consumer addons in the same step.** An addon that imports a retired
+  name fails at import, and a web fragment that imports one fails its
+  typecheck. The table names each owner now.
+- **An addon with its own fold joins the chain.** It declares its change
+  reasons in `ANGEE_PARTIES_STATEMENT_FOLDS` no later than the release that
+  ships the fold, and proves its declarations with
+  [`angee.parties.testing.upgrade`](../../addons/angee/parties/testing/upgrade.py).
+- **Clean up.** Run `manage.py remove_stale_contenttypes` afterwards to remove
+  the `reversion.*` content types and their permissions.
+
+| Retired | Owner now |
+|---|---|
+| `angee.base.mixins.RevisionMixin`, `revisioned_fields`, `angee.graphql.revisions.revisions`, the `<resource>_revisions` roots | Native history on the model; [provenance](../../addons/angee/provenance/README.md#history-surface) serves `history(model, id)` and `revert_changeset` |
+| `@angee/ui` `RevisionsTab` (a retired notice until 0.4.0), `useResourceRevisions`; `@angee/refine` `useAngeeRevisions` and its request helpers | provenance's History tab at `form#sections`; `RecordHistoryTimeline`, `HistoryPane` and `useRecordHistory` from `@angee/provenance` |
+| `parties.PartyHandle`, `PartyHandle.objects.link`, `LinkSource`, `ScoredLinkMixin` | Handle statements on the party: `Party.objects.assert_handle`, read through `Party.statements`; a source is its asserting principal's `SourceKind` (`angee.base.mixins`) |
+| `confirm_party_handle`, `dismiss_party_handle` | `confirm_party_statement`, `dismiss_party_statement` |
+| `parties.MergeVeto`, `veto_merge`, `duplicate_party_candidates` | Same-as statements on the party pair: `dismiss_same_as`, `same_as_pairs` |
+| `Party.merge_into`, `PartyManager.merge` | `survivor.merge(records=[...])` from `MergeableMixin` (`angee.base.merge`); `merge_parties` in GraphQL |
+| `Party.folder`, `source_uid`, `source_etag`, `raw_vcard`, `extensions` | The party's `integrate.RecordLink`, which owns external identity and wire payloads |
+| `source` on `Relationship`, `CircleMember` and spaces `Membership` | Statements on relationships; plain accept and reject decisions on memberships |
+| `integrate.RecordRevision` | The record link's native history |
+| `integrate.SyncDiscrepancy`, `DiscrepancyKind`, `DiscrepancyStatus`, `LinkStatus.DISCREPANT`, `resolve_sync_discrepancy`, `retry_sync_discrepancy`, `open_discrepancy_count` | `SyncFailure` on the link's state (`angee.integrate.states`), `LinkStatus.FAILED`, `resolve_sync_failure`, `retry_sync_failure`, `open_failure_count` |
+| `angee.base.evidence.DerivedFromRelation` (an import until 0.4.0) | `angee.base.refs.RetainedGenericRelation` |
+
 ### Upgrading a stack rendered before the monorepo
 
 Stacks rendered while the framework lived in split repositories declare

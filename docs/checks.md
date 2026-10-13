@@ -189,6 +189,12 @@ when a separate suite exercises real provider integration; compose the existing
 of copying provider setup. These names share the same Vitest discovery and
 focused-file selection convention.
 
+Waiting queries (`findBy*`, `waitFor`) share one limit, set in the published
+[Vitest setup](../packages/app/config/vitest-setup.ts) to cover a runner's cold
+first render. Do not pass a per-test timeout for a slow render: split a wait that
+covers several reads into one wait per read, or raise the shared value with
+measurements.
+
 | Scope | Working directory | Command |
 |---|---|---|
 | Focused package test/typecheck/build | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter <package-name> run <script>` |
