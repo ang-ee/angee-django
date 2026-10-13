@@ -521,6 +521,29 @@ def test_mapping_evidence_change_reapplies_unchanged_source(
         assert getattr(revision, name) == expected
 
 
+@pytest.mark.parametrize(("remote_version", "snapshots"), [("v1", 1), ("v2", 2)])
+def test_unchanged_redelivery_snapshots_only_what_changed(
+    stream_bridge: Channel, remote_version: str, snapshots: int
+) -> None:
+    """Unchanged facts keep the base: the observation is the delivery's snapshot, and a
+    new remote version that observation marked OBSERVED is restored to CURRENT in a second."""
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    record = RecordChange("person:1", {"name": "Ada"}, "source", remote_version="v1", mapped_payload={"name": "Ada"})
+    adapter = MemoryAdapter(pages=[StreamPage((record,), {"page": 1})])
+    advance_stream(stream, adapter)
+    link = RecordLink.objects.get(stream=stream)
+    before = RecordLink.history.filter(id=link.pk).count()
+    adapter.pages = [
+        StreamPage((replace(record, remote_version=remote_version, projection={"name": "Ada"}),), {"page": 2})
+    ]
+    assert advance_stream(stream, adapter).count == 0
+    assert adapter.applied == ["person:1"]
+    assert RecordLink.history.filter(id=link.pk).count() == before + snapshots
+    link.refresh_from_db()
+    assert (link.status, link.remote_version) == (LinkStatus.CURRENT, remote_version)
+    assert applied_history().count() == 1
+
+
 def test_adapter_cannot_promote_before_the_driver(stream_bridge: Channel) -> None:
     stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
 
