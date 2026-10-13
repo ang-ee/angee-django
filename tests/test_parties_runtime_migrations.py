@@ -37,6 +37,7 @@ from angee.integrate.runtime_migrations import (
     retire_record_sync_stores,
 )
 from angee.messaging.testing.models import Directory, Party
+from angee.parties.managers import statement_fold_reasons
 from angee.parties.runtime_migrations import (
     circle_member_decisions,
     fold_party_aspects,
@@ -872,6 +873,12 @@ def test_the_handle_retirement_refuses_another_writers_statement_a_fold_did_not_
 
     with pytest.raises(ValueError, match=f"PartyHandle {carrier.pk}: .*{refusal}"):
         legacy.apply(retire_party_handle)
+
+
+def test_the_parties_fold_family_names_the_reasons_its_folds_record() -> None:
+    """The family declaration keeps literal reasons; the self-contained declarations keep their own copy."""
+
+    assert statement_fold_reasons() == (fold_party_handle_statements.REASON, fold_party_aspects.REASON)
 
 
 def consumer_fold_reasons() -> tuple[str, ...]:

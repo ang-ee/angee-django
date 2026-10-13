@@ -58,7 +58,6 @@ from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.parties.runtime_migrations import fold_party_aspects, fold_party_handle_statements
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 logger = logging.getLogger(__name__)
@@ -71,9 +70,14 @@ STATEMENT_FOLDS = "ANGEE_PARTIES_STATEMENT_FOLDS"
 
 
 def statement_fold_reasons() -> tuple[str, ...]:
-    """The parties upgrade's fold family: the change reasons its two folds write statements under."""
+    """The parties upgrade's fold family: the change reasons its two folds record their statements under.
 
-    return (fold_party_handle_statements.REASON, fold_party_aspects.REASON)
+    The fold declarations are self-contained migration history with their own copy of
+    these reasons, so this family names them literally and keeps them when those
+    declarations retire at an upgrade floor; a test pins that the two agree.
+    """
+
+    return ("fold.party_handle", "fold.party_aspects")
 
 
 _DISPLAY_OWN_AVATAR = "_display_own_avatar"
@@ -1015,13 +1019,21 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         A fold records retained facts without ranking them, so in a group two writers
         meet (the upgrade's folds and a consumer's own, which may land in a later
-        migrate), the applied statement is whichever came first. Each family declared
-        in ``ANGEE_PARTIES_STATEMENT_FOLDS`` with a fold changeset newer than the last
-        successful resolution has its shared groups resolved through the statement
-        owner (``resolve_shared``), under a system changeset this records even when
-        nothing changed: it is the high-water mark, so a later call with no new fold is
-        two queries per family, and a failure records no success and the next call
-        retries. Returns how many groups were resolved.
+        migrate), the applied statement is whichever came first. Every family declared
+        in ``ANGEE_PARTIES_STATEMENT_FOLDS`` with a fold changeset newer than the global
+        high-water mark (the last successful resolution's changeset) is re-ranked in
+        full: all of its shared groups are resolved through the statement owner
+        (``resolve_shared``), under a system changeset this records even when nothing
+        changed, which raises the mark. A later call with no newer fold is one query per
+        family; a failure records no success and the next call ranks again.
+
+        One global mark is safe because folds write only during a migrate, this runs
+        after the whole plan in the same process (``post_migrate``), and provision runs
+        one migrate at a time, so every fold changeset of a migrate is committed before
+        the mark is read. The contract it puts on a fold family: declare its hook no
+        later than the release that ships its fold. A family declared after its fold ran
+        has only changesets older than the mark and is never ranked.
+        Returns how many groups were resolved.
         """
 
         changesets = apps.get_model(settings.ANGEE_CHANGESET_MODEL)._base_manager.using(self.db)

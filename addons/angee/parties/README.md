@@ -102,8 +102,9 @@ retained evidence, discarded legacy data and reversal contracts; the rules are:
   not rank each other, so every migrate ranks the groups a family's statements share
   with another writer, once per fold changeset newer than the last successful
   ranking (`PartyManager.resolve_folded_statements`); a failure fails that migrate and
-  the next one ranks again. The retirement accepts such a fold's statement on an
-  import carrier this chain's fold left unasserted.
+  the next one ranks again. Declare the hook no later than the release that ships the
+  fold: a family declared after its fold ran is never ranked. The retirement accepts
+  such a fold's statement on an import carrier this chain's fold left unasserted.
 - **Lost by ruling:** every django-reversion revision (MarkdownPage body, Project
   title/body history) — back the database up first if that history matters. After
   the upgrade run `manage.py remove_stale_contenttypes` for the `reversion.*`,

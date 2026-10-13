@@ -366,7 +366,10 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                 found.add((subject_id, aspect, members))
             return found
 
-        shared = groups(rows.filter(changeset__in=changesets)) & groups(rows.exclude(changeset__in=changesets))
+        written = rows.filter(changeset__in=changesets)
+        # A shared group has rows of both kinds on one subject: other writers matter only there.
+        others = rows.exclude(changeset__in=changesets).filter(subject_id__in=written.values("subject_id"))
+        shared = groups(written) & groups(others)
         subjects = self.model.statement_subject_model._base_manager.using(self.db)
         with system_context(reason="statements.resolve_shared"):
             for subject_id, aspect, members in sorted(shared, key=repr):
