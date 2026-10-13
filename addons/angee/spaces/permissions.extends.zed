@@ -4,7 +4,7 @@
 definition messaging/thread {
     relation selected_group: spaces/group // rebac:field=groups
 
-    permission read_direct = selected_group->read
+    permission read_granted = selected_group->read
     permission write = selected_group->post
 }
 

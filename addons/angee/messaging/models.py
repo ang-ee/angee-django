@@ -1483,6 +1483,12 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel)
         CHATTER = "chatter", "Chatter"
         SOURCE = "source", "Source"
 
+    @classmethod
+    def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
+        """Only a threaded model keeps chatter; any declared target retains source conversations."""
+
+        return (cls.AttachmentRole.CHATTER.value,) if issubclass(target, ThreadedModelMixin) else ()
+
     sqid_prefix = "tha_"
     thread = models.ForeignKey(
         "messaging.Thread",
@@ -1530,7 +1536,7 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel)
         chatter = rows.filter(role=cls.AttachmentRole.CHATTER)
         if not chatter.exists():
             return NotImplemented
-        target = cls.objects.ensure_for_record(survivor, title=str(survivor))
+        target = cls.objects.db_manager(rows.db).ensure_for_record(survivor, title=str(survivor))
         for edge in chatter.select_related("thread").order_by("pk"):
             thread = edge.thread.canonical()
             if thread.pk != target.thread_id:

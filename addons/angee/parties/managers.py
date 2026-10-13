@@ -620,7 +620,8 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
     def merge(self, source: Any, *, into: Any) -> Any | None:
         """Compatibility entry for bridge alias resolution; Handle owns the fold.
 
-        A repeated fold of the same retained alias returns ``None``, as the
+        Removed in 0.4.0: the bridges then call ``into.fold([source])`` under their
+        own identity locks. A repeated fold of the same retained alias returns ``None``, as the
         former delete-based entry did after its alias had gone. Alias keys stay
         reserved so a later sync still lands on the operational survivor.
         """

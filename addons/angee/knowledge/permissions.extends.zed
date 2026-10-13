@@ -20,5 +20,5 @@ definition messaging/thread_attachment {
 
 definition messaging/thread {
     relation record_page: knowledge/page // rebac:field={"path":"attachments__knowledge_page","filters":{"attachments__role":"chatter"}}
-    permission read_direct = record_page->read
+    permission read_granted = record_page->read
 }

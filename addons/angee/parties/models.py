@@ -388,12 +388,6 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             self.apply_merge_field_overrides(row, field_overrides)
             self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
 
-    def retire_merged(self, merged: Any) -> None:
-        """Keep the redirect and its history under the authorized merge changeset."""
-
-        merged.merged_into = self
-        merged.save(using=self._state.db, update_fields=("merged_into", "updated_at"))
-
 
 class Person(models.Model, metaclass=RebacModelBase):
     """A human party — carries name parts and an optional platform-user link."""
@@ -674,6 +668,9 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         owner = type(self).objects.db_manager(self._state.db)
         owner.resolve(merged)
         owner.resolve(self)
+        # Resolution wrote the owner on its own locked row; the redirect's history
+        # snapshot must carry that owner, not this instance's stale one.
+        merged.refresh_from_db(using=self._state.db, fields=("party", "party_link_confirmed"))
         super().retire_merged(merged)
 
     def _party_links_resolved(self) -> None:

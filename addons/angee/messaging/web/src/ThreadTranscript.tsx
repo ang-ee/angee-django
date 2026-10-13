@@ -89,6 +89,8 @@ export function ThreadTranscript({
           {t(allCopies ? "copies.collapse" : "copies.showAll")}
         </Button>
       </div>
+    {/* Remount per thread, anchor and copy mode: each is a different row set, so the
+        virtualizer's measurements and the scroll anchor start over. */}
     <TranscriptBody
       key={`${threadId}:${anchor}:${allCopies}`}
       threadId={threadId}

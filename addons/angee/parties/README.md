@@ -34,7 +34,8 @@ value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
 `Handle.objects.merge(alias, into=kept)` is the bridge compatibility entry for
-that system fold. Its model hooks and ordinary actor merge use the same coordinator.
+that system fold, removed in 0.4.0 once the bridges call `kept.fold([alias])`.
+Its model hooks and ordinary actor merge use the same coordinator.
 
 Ordinary person edits assert normal statements; confirm/dismiss writes preferred
 statements without rewriting the source or copying evidence. Person preferences

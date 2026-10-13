@@ -17,6 +17,7 @@ import {
   RECORD_UNREAD_COUNT_MODELS,
   RecordThreadUnreadCountDocument,
   THREAD_ATTACHMENT_MODEL,
+  THREAD_CHATTER_EDGE,
 } from "./documents";
 
 export { CHANNEL_MODEL } from "./documents";
@@ -79,6 +80,16 @@ export interface MessagingAddonOptions {
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
 }
 
+/** Whether the viewed record's type keeps chatter: its resource lists the thread attachment edge's chatter role. */
+export function recordKeepsChatter(context: ChatterViewContext): boolean {
+  return context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false;
+}
+
+/** Whether the viewed record's type retains source conversations: its schema names it a thread attachment target. */
+export function recordCarriesThreads(context: ChatterViewContext): boolean {
+  return context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false;
+}
+
 /** The shared Comments tab, for an addon's `record#aside` or `<model>#aside`, configurable without another addon. */
 export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAddonOptions & { aliases?: readonly string[] } = {}): ContainerChild<ChatterTabContent> {
   return {
@@ -86,7 +97,8 @@ export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAdd
     content: {
       label: "Comments", icon: "comments",
       ...(aliases ? { aliases } : {}),
-      when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
+      // Per role, not per edge: a file is a thread attachment target only for its source conversations.
+      when: recordKeepsChatter,
       useCount: useRecordCommentsUnread,
       render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
     },
@@ -133,12 +145,13 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     // Messaging contributes record comments and retained source conversations.
     "record#aside": {
       "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-      "messaging.sources": {
+      // `messaging.sources` is the one-release alias of the renamed tab.
+      "messaging.related": {
         sequence: 60,
         content: {
-          label: "Conversations", icon: "inbox", aliases: ["sources"],
+          label: "Conversations", icon: "inbox", aliases: ["messaging.sources", "sources"],
           // Only on types whose schema lets a record retain source conversations.
-          when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
+          when: recordCarriesThreads,
           render: (context) => <RecordSourceThreadsPane context={context} />,
         },
       },

@@ -233,14 +233,16 @@ export function RecordThreadConversation({
 
   // Drop local reply / editing state the moment its message leaves the feed (a
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
+  // An older page is a window, not the feed: browsing it for context keeps the intent.
   React.useEffect(() => {
+    if (timelineOffset > 0) return;
     if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
       setEditingMessageId(null);
     }
     setReplyToMessage((current) =>
       current && !messages.some((message) => message.id === current.id) ? null : current,
     );
-  }, [messages, editingMessageId]);
+  }, [messages, editingMessageId, timelineOffset]);
 
   const handleStartEdit = React.useCallback((messageId: string) => {
     setError(null);
@@ -381,6 +383,8 @@ export function RecordThreadConversation({
         await postMessage({ ...input, clientCreationKey: attempt.clientCreationKey });
         if (postAttempt.current === attempt) postAttempt.current = null;
         setReplyToMessage(null);
+        // The new entry lands on the newest page.
+        setPage({ key: pageKey, offset: 0 });
         return true;
       } catch (cause) {
         setError(
@@ -392,7 +396,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, pageKey, t],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {

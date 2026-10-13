@@ -1,8 +1,10 @@
 """Move record-task subjects off chatter attachments, including retained history.
 
-This source migration runs before schema autodetection. It refuses a historical
-attachment pointer that no longer resolves, rather than silently erasing that
-history. The prior record_tasks migration is preserved unchanged.
+This source migration runs before schema autodetection. A live task whose
+attachment no longer resolves refuses the migration. A history version may point
+at an attachment a record deletion took with it (its history key has no
+constraint), so an unresolvable version keeps a null record identity rather than
+blocking the upgrade. The prior record_tasks migration is preserved unchanged.
 """
 
 from django.db import migrations, models
@@ -61,7 +63,7 @@ class MoveTaskSubjects(migrations.operations.base.Operation):
                 if not self.allow_migrate_model(alias, attachment_model):
                     raise RuntimeError("Task subject migration requires its attachment mappings on the same database.")
                 missing = rows.exclude(subject_id__in=attachments.values("pk"))
-                if missing.exists():
+                if name == "task" and missing.exists():
                     raise RuntimeError(
                         f"{app_label}.{name}: a retained subject attachment is missing; "
                         "restore its record mapping before migrating task subjects."
