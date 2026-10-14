@@ -35,7 +35,7 @@ from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.fields import SqidField
 from angee.compose.migrations import DropGuardAutodetector
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
-from angee.projects.runtime_migrations import record_tasks
+from angee.projects.runtime_migrations import record_tasks, task_subject
 from angee.projects.testing.models import Project, Queue, Task
 from angee.projects.upgrade import GUARD_DISPATCH_UID, check_cutover_guard, record_task_types
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
@@ -332,7 +332,7 @@ def _released(*, owners: bool = True) -> ProjectState:
         ("id", models.BigAutoField(primary_key=True)),
         ("content_type", models.ForeignKey("contenttypes.contenttype", models.CASCADE, null=True, related_name="+")),
         ("object_id", models.CharField(max_length=64, default="")),
-    ])
+    ], ordering=("sqid",))
     _add(state, "messaging", "ActivityType", [
         ("id", models.BigAutoField(primary_key=True)),
         ("key", models.SlugField(max_length=64, unique=True)),
@@ -524,6 +524,32 @@ def test_released_activities_become_record_tasks_and_messaging_retires_them(owne
             tables = set(connection.introspection.table_names(cursor))
         assert "test_released_messaging_threadactivity" not in tables
         assert promoted.pk
+
+
+def test_record_task_subjects_move_from_their_attachments_to_their_records() -> None:
+    released = _released()
+    with _released_tables(released):
+        with connection.schema_editor() as editor:
+            _create(released.apps, editor)
+            seeded = _seed(released.apps)
+            converted = record_tasks.Migration("0099_record_tasks", "projects").apply(released, editor)
+        assert task_subject.applies(converted)
+        with connection.schema_editor() as editor:
+            upgraded = task_subject.Migration("0100_task_subject", "projects").apply(converted, editor)
+
+        assert not task_subject.applies(upgraded)
+        record = (ContentType.objects.get_for_model(ChatterDoc).pk, 1)
+        tasks = upgraded.apps.get_model("projects", "Task")._base_manager.order_by("pk")
+        assert [(task.title, task.subject_content_type_id, task.subject_object_id) for task in tasks] == [
+            ("Promoted", *record),
+            ("Project work", None, None),
+            ("Call", *record),
+            ("Stale", *record),
+            (LONG_SUMMARY[:239] + "…", *record),
+        ]
+        history = upgraded.apps.get_model("projects", "HistoricalTask")._base_manager.order_by("history_id")
+        assert {(row.subject_content_type_id, row.subject_object_id) for row in history} == {record}
+        assert seeded["attachment"].pk
 
 
 def test_a_stack_without_projects_drops_its_seeded_catalog_and_refuses_live_activities() -> None:
