@@ -467,10 +467,12 @@ class RecordHistory:
             for version in versions.order_by("history_id"):
                 redacted = self._redacted(subject_model, version.subject_id)
                 declaration = statement_model.statement_aspects[version.aspect]
+                # A relation reads its stored key, never the related row.
                 values = {
-                    name: _reference_value(statement_model._meta.get_field(name), getattr(version, name))
+                    name: _reference_value(field, field.value_from_object(version))
                     for name in (*declaration.fields, *declaration.members)
                     if name not in redacted
+                    for field in (statement_model._meta.get_field(name),)
                 }
                 yield HistoryStatementType(
                     id=PublicID(public_id_for(statement_model, version.id)),
