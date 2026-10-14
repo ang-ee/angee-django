@@ -1020,8 +1020,9 @@ and current contracts before applying a historical example to a new deployment.
   provenance's
   [`retire_reversion`](../../addons/angee/provenance/runtime_migrations/retire_reversion.py)).
   Copy-local `RunPython` functions use historical models from `apps` and
-  `_base_manager`; clear ordering before writes when it can name live-model alias
-  fields such as `sqid`. Ship a new declaration for a new transition and preserve
+  `_base_manager`; clear ordering on every query that can carry it (a write, or a
+  sliced `[:1]` subquery) when it can name live-model alias fields such as `sqid`.
+  Ship a new declaration for a new transition and preserve
   materialized bodies. Source compatibility exceptions require the owner's
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
