@@ -12,7 +12,6 @@ from collections.abc import Iterable
 from typing import Any
 
 from django.apps import apps
-from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -24,10 +23,11 @@ from rebac import (
 )
 
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin
+from angee.base.mixins import AuditMixin, HierarchyMixin, HierarchyQuerySet, HistoryMixin, OwnerMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
+    AngeeQuerySet,
     role_anchor,
 )
 from angee.base.refs import MergePolicy, RecordRefMixin
@@ -131,7 +131,7 @@ class ProductManager(AngeeManager):
             return product
 
 
-class Product(AuditMixin, AngeeDataModel):
+class Product(OwnerMixin, HistoryMixin, AngeeDataModel):
     """A perpetual subject passing through phases rather than toward fulfillment."""
 
     runtime = True
@@ -139,13 +139,6 @@ class Product(AuditMixin, AngeeDataModel):
 
     name = models.CharField(max_length=240)
     body = models.TextField(blank=True, default="")
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="owned_portfolio_products",
-    )
     lifecycle = StateField(choices_enum=ProductLifecycle, default=ProductLifecycle.IDEA)
     originated_from = models.ForeignKey(
         "projects.Project",
@@ -171,27 +164,28 @@ class Product(AuditMixin, AngeeDataModel):
             ),
         )
 
+    # Promotion lineage stays on the original retained identity.
+    merge_policies = {"originated_from": MergePolicy.KEEP}
+
     def __str__(self) -> str:
         """Return the Product name."""
 
         return self.name
 
 
-class Initiative(HierarchyMixin, AuditMixin, AngeeDataModel):
+class InitiativeQuerySet(HierarchyQuerySet[Any], AngeeQuerySet[Any]):
+    """Initiative hierarchy writes use the shared saved-row contract."""
+
+
+class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """A tree-shaped long-horizon intent whose pushes can be fulfilled."""
 
     runtime = True
     sqid_prefix = "ini_"
+    objects = AngeeManager.from_queryset(InitiativeQuerySet)()
 
     name = models.CharField(max_length=240)
     body = models.TextField(blank=True, default="")
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="owned_portfolio_initiatives",
-    )
     status = StateField(choices_enum=InitiativeStatus, default=InitiativeStatus.PROPOSED)
     health = StateField(
         choices_enum=InitiativeHealth,
@@ -426,7 +420,7 @@ class UpdateManager(AngeeManager):
             return self.insert(report)
 
 
-class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
+class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """A required-health report on a Project or Initiative, never a Product."""
 
     merge_policy = MergePolicy.MOVE
@@ -528,7 +522,7 @@ class Update(AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.record_model_label}:{self.record_public_id} {self.health}"
 
 
-class Release(AuditMixin, AngeeDataModel):
+class Release(HistoryMixin, AuditMixin, AngeeDataModel):
     """The named artifact a ship Project leaves on a Product timeline."""
 
     runtime = True

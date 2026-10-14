@@ -54,6 +54,7 @@ function fixture(nativeLive = false) {
   const roots = [
     ["messaging.Message", "messageChanged"], ["messaging.Thread", "threadChanged"],
     ["parties.Handle", "handleChanged"], ["parties.Party", "partyChanged"], ["storage.File", "fileChanged"],
+    ["provenance.Changeset", "changesetChanged"],
   ] as const;
   const sinks = new Map<string, { next(value: unknown): void }>();
   const nativeProvider = createAngeeChangeLiveProvider({
@@ -85,7 +86,7 @@ test("real Refine transport sends fixed cuts and revalidation documents through 
   const feed = fixture();
   const { result, unmount } = renderHook(() => useThreadMessageFeed("thread-a"), { wrapper: feed.wrapper });
   await waitFor(() => expect(messageFeedRows(result.current.data)).toHaveLength(2));
-  expect(feed.custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ threadId: "thread-a", anchor: "", beforeCursor: null, throughCursor: null, limit: 50 });
+  expect(feed.custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ threadId: "thread-a", anchor: "", allCopies: false, beforeCursor: null, throughCursor: null, limit: 50 });
   await act(async () => { await result.current.fetchNextPage({ cancelRefetch: false }); });
   expect(feed.custom.mock.calls[1]?.[0].meta?.gqlVariables).toMatchObject({ beforeCursor: "opaque-message-2", throughCursor: null });
   feed.refresh();
@@ -96,13 +97,13 @@ test("real Refine transport sends fixed cuts and revalidation documents through 
   expect(feed.custom.mock.calls[2]?.[0].meta?.gqlVariables).toMatchObject({ beforeCursor: null, throughCursor: "opaque-message-2" });
   expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored"] })).toHaveLength(1);
   expect(feed.subscribe).toHaveBeenCalledWith(expect.objectContaining({ params: { models: [
-    "messaging.Message", "messaging.Reaction", "messaging.Thread", "parties.Handle", "parties.Party", "storage.File",
+    "messaging.Message", "messaging.Reaction", "messaging.Thread", "parties.Handle", "parties.Party", "storage.File", "provenance.Changeset",
   ] } }));
   expect(feed.custom.mock.calls[0]?.[0].meta?.signal).toBeInstanceOf(AbortSignal);
   unmount(); expect(feed.unsubscribe).toHaveBeenCalledWith("messages");
 });
 
-test.each(["parties.Handle", "parties.Party", "messaging.Thread", "storage.File"])("actual %s change events revalidate the transcript projection", async (model) => {
+test.each(["parties.Handle", "parties.Party", "messaging.Thread", "storage.File", "provenance.Changeset"])("actual %s change events revalidate the transcript projection", async (model) => {
   const feed = fixture(true);
   const { result } = renderHook(() => useThreadMessageFeed("thread-a"), { wrapper: feed.wrapper });
   await waitFor(() => expect(messageFeedRows(result.current.data)).toHaveLength(2));

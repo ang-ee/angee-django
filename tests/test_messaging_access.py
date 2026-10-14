@@ -60,15 +60,17 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
             RelationshipTuple(to_object_ref(record), role, to_subject_ref(actor))
             for role, actor in (("reader", reader), ("writer", writer), ("owner", owner))
         ] + [RelationshipTuple(to_object_ref(other), "reader", to_subject_ref(other_reader))])
-        attachment = ThreadAttachment.objects.for_record(record)
+        # A record's creation is a history line, not a message: the chatter thread, its
+        # attachment and the first message exist from the record's first use.
         chatter = record.message_thread()
+        attachment = ThreadAttachment.objects.for_record(record)
         other_chatter = other.message_thread()
         source = Thread.objects.create()
         ThreadAttachment.objects.create(
             thread=source, content_type_id=attachment.content_type_id, object_id=record.pk, role="source",
         )
         unattached = Thread.objects.create()
-        message = Message._base_manager.filter(thread=chatter).first()
+        message = record.message_log("A note on record A")
 
     for actor in (*users, AnonymousUser()):
         subject = to_subject_ref(actor)

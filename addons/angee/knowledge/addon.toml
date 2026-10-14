@@ -31,3 +31,8 @@ module = "runtime_migrations.markdown_page_history"
 name = "history_changeset"
 app_label = "knowledge"
 module = "runtime_migrations.history_changeset"
+
+[[migrations]]
+name = "page_hierarchy"
+app_label = "knowledge"
+module = "runtime_migrations.page_hierarchy"

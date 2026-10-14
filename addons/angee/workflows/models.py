@@ -21,7 +21,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, update_fields_with_auto_now
+from angee.base.mixins import AppendOnlyModel, AppendOnlyQuerySet, AuditMixin, HistoryMixin, update_fields_with_auto_now
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -139,7 +139,7 @@ def _empty_workflow_output_schema() -> dict[str, Any]:
     return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
-class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class Workflow(ResourceLoadMixin, AuditMixin, HistoryMixin, AngeeDataModel):
     """Editable identity and draft, pointing to one immutable published version."""
 
     runtime = True
@@ -781,7 +781,7 @@ class StepRecord(RecordRefMixin, AngeeDataModel):
         )]
 
 
-class StepWatch(RecordRefMixin, AngeeDataModel):
+class StepWatch(RecordRefMixin, HistoryMixin, AngeeDataModel):
     """One transactional observation and its durable, coalesced wake obligation."""
 
     merge_policy = MergePolicy.MOVE

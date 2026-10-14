@@ -28,19 +28,18 @@ class TaskLabelQueryBudgetTests(TransactionTestCase):
         with system_context(reason="projects label query budget fixture"):
             owner = get_user_model().objects.create_user(username="task-label-owner")
             outsider = get_user_model().objects.create_user(username="task-label-outsider")
-            tasks = task_model.objects.bulk_create(
-                [
-                    task_model(
-                        title=f"Task {index:02}",
-                        owner=owner,
-                        created_by=owner,
-                        updated_by=owner,
-                        sort_order=float(index),
-                        sub_sort_order=float(index),
-                    )
-                    for index in range(25)
-                ]
-            )
+            # A task is a hierarchy row: its path derives on save, so the fixture inserts one by one.
+            tasks = [
+                task_model.objects.create(
+                    title=f"Task {index:02}",
+                    owner=owner,
+                    created_by=owner,
+                    updated_by=owner,
+                    sort_order=float(index),
+                    sub_sort_order=float(index),
+                )
+                for index in range(25)
+            ]
             hidden = task_model.objects.create(title="Hidden", owner=outsider, created_by=outsider, updated_by=outsider)
             self.client.force_login(owner, backend="angee.iam.auth.ModelBackend")
         query = """

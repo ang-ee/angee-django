@@ -39,15 +39,18 @@ const NOTE_LIST: ChatterRoute = { name: "notes.all", path: "/records", viewType:
 type Tabs = Readonly<Record<string, ContainerChild<ChatterTabContent>>>;
 
 /**
- * The composed aside: the framework's placeholder tabs (unless `framework` is
- * false), extra children per address, and per-layer rules on `record#aside`.
+ * Addon-owned example tabs plus extra children and per-layer narrowing rules.
  */
 function aside(
   children: Readonly<Record<string, Tabs>> = {},
-  { rules = [], framework = true }: { rules?: (Omit<ContainerRule, "exempt" | "rank"> & { rank?: number })[]; framework?: boolean } = {},
+  { rules = [], examples = true }: { rules?: (Omit<ContainerRule, "exempt" | "rank"> & { rank?: number })[]; examples?: boolean } = {},
 ): ComposedContainers {
-  const core = framework ? CHATTER_CONTAINERS : CHATTER_CONTAINERS.map(({ children: _children, ...container }) => container);
-  const base = containersFromChildren(core, {});
+  const base = containersFromChildren(CHATTER_CONTAINERS, examples ? {
+    "record#aside": {
+      "notes.comments": { sequence: 10, content: { label: "Comments", aliases: ["comments"], render: () => <span>Comments content</span> } },
+      "notes.history": { sequence: 20, content: { label: "History", aliases: ["history", "activity"], render: () => <span>History content</span> } },
+    },
+  } : {});
   const added = containersFromChildren([], children);
   return {
     ...base,
@@ -64,13 +67,19 @@ const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<Chat
 const onRoute = (...routes: string[]) => ({ apps: [], routes });
 
 describe("Chatter", () => {
+  test("the framework contributes no placeholder tabs", async () => {
+    renderChatter({ containers: aside({}, { examples: false }) });
+    expect(await screen.findByText("Aside hidden")).toBeTruthy();
+    expect(screen.queryByRole("tab")).toBeNull();
+  });
+
   test("a layer's only on the route narrows the tabs before they render or count", async () => {
     const excludedRender = vi.fn(() => <span>Excluded content</span>);
     const excludedCount = vi.fn(() => 9);
     renderChatter({
       containers: aside(
         { "record#aside": { "agents.chat": tab({ label: "Agents", useCount: excludedCount, render: excludedRender }) } },
-        { rules: [{ layer: "notes", when: { route: "notes.record" }, only: ["chatter.comments"] }] },
+        { rules: [{ layer: "notes", when: { route: "notes.record" }, only: ["notes.comments"] }] },
       ),
       containerScope: onRoute("notes.record"),
     });
@@ -86,7 +95,7 @@ describe("Chatter", () => {
     renderChatter({
       containers: aside(
         { "record#aside": { "notes.conditional": tab({ label: "Conditional", when: () => false, render: hiddenRender }) } },
-        { rules: [{ layer: "notes", only: ["chatter.history", "notes.conditional"] }] },
+        { rules: [{ layer: "notes", only: ["notes.history", "notes.conditional"] }] },
       ),
     });
     expect(await screen.findByRole("tab", { name: "History" })).toBeTruthy();
@@ -111,17 +120,17 @@ describe("Chatter", () => {
   });
 
   test("an aside whose every tab a layer excepts is absent", async () => {
-    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["chatter.comments", "chatter.history"] }] }) });
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["notes.comments", "notes.history"] }] }) });
     expect(await screen.findByText("Aside hidden")).toBeTruthy();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
   test("a hidden tab leaves its siblings; a later layer shows it again", async () => {
-    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", hide: ["chatter.history"] }] }) });
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", hide: ["notes.history"] }] }) });
     expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "History" })).toBeNull();
     cleanup();
-    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", hide: ["chatter.history"] }, { layer: "product", show: ["chatter.history"] }] }) });
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", hide: ["notes.history"] }, { layer: "product", show: ["notes.history"] }] }) });
     expect(await screen.findByRole("tab", { name: "History" })).toBeTruthy();
   });
 
@@ -130,7 +139,7 @@ describe("Chatter", () => {
     render(chatterContentView(published, "local", { containers: aside() }));
     expect(await screen.findByRole("tab", { name: "Local" })).toBeTruthy();
     expect(screen.getByText("Local content")).toBeTruthy();
-    // Not a record view: the framework's record-level tabs stay off.
+    // Not a record view: the examples's record-level tabs stay off.
     expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
     cleanup();
     const rules = [{ layer: "notes", when: { route: "notes.home" }, only: [] }];
@@ -145,7 +154,7 @@ describe("Chatter", () => {
     renderChatter({
       containers: aside({ "record#aside": {
         "messaging.history": tab({ label: "Messages", aliases: ["history"], render: () => <span>Message history</span> }, 15),
-      } }, { rules: [{ layer: "messaging", except: ["chatter.history"] }] }),
+      } }, { rules: [{ layer: "messaging", except: ["notes.history"] }] }),
     }, { search: "?chatterTab=history" });
     const selected = await screen.findByRole("tab", { name: "Messages" });
     await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
@@ -153,7 +162,7 @@ describe("Chatter", () => {
   });
 
   test("a chatterTab link names a tab by its current id too", async () => {
-    renderChatter({ containers: aside() }, { search: "?chatterTab=chatter.history" });
+    renderChatter({ containers: aside() }, { search: "?chatterTab=notes.history" });
     const selected = await screen.findByRole("tab", { name: "History" });
     await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
   });
@@ -167,7 +176,7 @@ describe("Chatter", () => {
       "messaging.comments": tab({ label: "Comments", aliases: ["comments"], render: () => <span>Comment thread</span> }, 10),
       "messaging.history": tab({ label: "History", aliases: ["history"], render: () => <span>History log</span> }, 20),
       "messaging.sources": tab({ label: "Sources", aliases: ["sources"], render: () => <span>Source threads</span> }, 30),
-    } }, { framework: false });
+    } }, { examples: false });
     // Neither is the first tab, so an unresolved id would fall back to Comments.
     renderChatter({ containers }, { defaultTab: "history", children: <OpenSources /> });
     const history = await screen.findByRole("tab", { name: "History" });
@@ -213,7 +222,7 @@ describe("Chatter", () => {
           count: 5,
           render: () => <span>History panel</span>,
         }, 20),
-      } }, { framework: false }),
+      } }, { examples: false }),
     });
 
     expect(await screen.findByRole("tab", { name: /History\s*5/ })).toBeTruthy();
@@ -240,7 +249,7 @@ describe("Chatter", () => {
           }),
         },
         "crm.Vip#aside": { "crm.perks": tab({ label: "Perks", render: () => <span>Perks</span> }) },
-      }, { framework: false }),
+      }, { examples: false }),
     });
 
     const historyTab = await screen.findByRole("tab", { name: "History" });

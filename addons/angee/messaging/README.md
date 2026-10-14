@@ -1,5 +1,38 @@
 # Messaging contracts
 
+Record chatter and source conversations have different identity. Chatter folds
+through core `MergeableMixin`: the retired thread redirects to its survivor,
+while its messages, follower occurrences and history stay on their physical rows.
+The current record owns read and post admission. Comments includes a single
+bounded timeline of comments and native provenance history; History remains a
+record tab provided by provenance. `TrackingValue` and save-time chatter tracking
+are retired. The upgrade preserves every old tracking column in the retained
+notification's `legacy_tracking` metadata and writes an ordinary readable body.
+
+Source threads and messages remain channel occurrences. A native `same_as` pair
+statement is the identity fact, and applying it folds the newer copy into the
+older through core `MergeableMixin` as a retained redirect (`merged_into`): no
+message, member, cursor or part moves, so reply, correction, delivery, unread
+cursors and provider purge always address the physical occurrence. Readers
+collapse copies through `canonical()`, which keeps showing a copy whose survivor
+the reader cannot reach, so an account that sees only its own channel still sees
+the message. Show source copies lists the survivor and every readable copy with
+its channel and reply transport. The `messaging.source_identity` rule asserts an
+RFC Message-ID match after the envelope commits (account-local chat/provider ids
+are never compared); people confirm or keep copies separate through the same
+statement, and a kept-separate decision splits the redirect and refuses a later
+fold. The pair rule principal is granted read and write on threads and messages
+like the parties statement sources.
+
+The channel-thread upgrade preserves message ids and source payloads, separates
+old shared physical containers, redirects each copied container to its original
+and each email's newer copies to its oldest row, and rebases every original and
+copied follow to its own channel at the old chronological cutoff. Retained pair
+evidence protects its endpoints from destructive channel purge (statements are
+never deleted, so purge reports the evidence as a blocker; disconnect the
+channel to stop synchronization). A redirect without evidence, such as one the
+upgrade wrote, releases its copy when the survivor's channel is purged.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and

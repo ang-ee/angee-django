@@ -120,10 +120,14 @@ class RecordTaskGraphQLTests(WorkCase):
         self.assertEqual(hidden.data["record_tasks"], [])
 
 
-    def test_a_record_type_without_chatter_is_refused_with_its_code(self):
+    def test_a_record_type_that_takes_no_tasks_is_refused_naming_those_that_do(self):
         person = {"model": "parties.Person", "id": self.Person._base_manager.get(user=self.owner).sqid}
         with self.assertNoLogs("angee.graphql.schema", level="ERROR"):
             listed = self.raw(LIST, person, self.owner)
             scheduled = self.raw(SCHEDULE, {**person, "title": "No"}, self.owner)
-        for result in (listed, scheduled):
-            self.assertEqual([error.extensions.get("code") for error in result.errors], ["BAD_RECORD"])
+        # A task's subject edge declares which record types take tasks; chatter is not the gate.
+        self.assertEqual([error.extensions.get("code") for error in listed.errors], ["VALIDATION"])
+        self.assertIn("Task may target only", listed.errors[0].message)
+        self.assertFalse(scheduled.errors, scheduled.errors)
+        self.assertFalse(scheduled.data["schedule_record_task"]["ok"])
+        self.assertIn("Task may target only", scheduled.data["schedule_record_task"]["message"])

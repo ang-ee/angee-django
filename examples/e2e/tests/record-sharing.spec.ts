@@ -16,16 +16,12 @@ const CREATE_PERSONAL_DASHBOARD = `
   }
 `;
 
-const ARCHIVE_PERSONAL_DASHBOARD = `
-  mutation ArchiveRecordSharingDashboard(
-    $id: ID!
-    $expectedRevision: Int!
-  ) {
-    set_personal_dashboard_archived(
-      id: $id
-      expected_revision: $expectedRevision
-      archived: true
-    ) { status message }
+// The shared trash verb removes the dashboard; the suite leaves nothing behind.
+const TRASH_PERSONAL_DASHBOARD = `
+  mutation TrashRecordSharingDashboard($id: ID!) {
+    trash_record(target_type: "dashboards.Dashboard", target_id: $id, reason: "e2e cleanup", confirm: true) {
+      ok message
+    }
   }
 `;
 
@@ -222,11 +218,8 @@ test.describe("shared record access", () => {
         page.getByRole("button", { name: "Share", exact: true }),
       ).toHaveCount(1);
     } finally {
-      const archived = await consoleApi.query(ARCHIVE_PERSONAL_DASHBOARD, {
-        id: dashboard!.id,
-        expectedRevision: dashboard!.revision,
-      });
-      expect(archived.errors).toBeUndefined();
+      const removed = await consoleApi.query(TRASH_PERSONAL_DASHBOARD, { id: dashboard!.id });
+      expect(removed.errors).toBeUndefined();
     }
   });
 

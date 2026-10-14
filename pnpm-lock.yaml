@@ -177,6 +177,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine
@@ -535,6 +538,9 @@ importers:
       '@angee/parties':
         specifier: workspace:*
         version: link:../../parties/web
+      '@angee/provenance':
+        specifier: workspace:*
+        version: link:../../provenance/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../packages/refine

@@ -9,6 +9,10 @@ definition messaging/thread_attachment {
     relation note: notes/note // rebac:field=target
 
     permission target_write = note->write
-    permission record_read = note->read
-    permission record_write = note->write
+}
+
+definition projects/task {
+    relation subject_note: notes/note // rebac:field=subject
+    permission subject_read = subject_note->read
+    permission subject_write = subject_note->write
 }

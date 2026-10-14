@@ -1,0 +1,4 @@
+rows:
+  - resource: provenance/role:messaging_identity_source
+    relation: member
+    subject: angee.messaging.source_identity

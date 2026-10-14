@@ -29,16 +29,16 @@ export function DecisionRunOrigin() {
 }
 
 /** The record aside uses the same timeline a page can publish on the left. */
-export const recordTimelineTab: ContainerChild<ChatterTabContent> = {
-  sequence: 40,
+export const recordRunsTab: ContainerChild<ChatterTabContent> = {
+  sequence: 30,
   content: {
-    icon: "versions", label: <TimelineLabel />,
+    icon: "versions", label: <RunsLabel />,
+    aliases: ["workflows.timeline"],
     useCount: ({ view, route }) => {
       const record = useMemo(() => ({ model: route!.canonicalLabel!, id: view.sqid! }), [route?.canonicalLabel, view.sqid]);
       return useRecordTimelineAttention(record);
     },
-    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && view.sqid !== REFINE_CREATE_ID
-      && !route?.canonicalLabel?.startsWith("workflows."),
+    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && view.sqid !== REFINE_CREATE_ID,
     render: ({ view, route }) => view.sqid && route?.canonicalLabel
       ? <RecordTimeline record={{ model: route.canonicalLabel, id: view.sqid }} /> : null,
   },
@@ -47,4 +47,4 @@ export const recordTimelineTab: ContainerChild<ChatterTabContent> = {
 /** The run a decision waits in, as a `decisions#origin` child. */
 export const decisionRunOrigin: ContainerChild<ReactNode> = { content: <DecisionRunOrigin /> };
 
-function TimelineLabel() { const t = useWorkflowsT(); return <>{t("timeline.title")}</>; }
+function RunsLabel() { const t = useWorkflowsT(); return <>{t("runs.title")}</>; }

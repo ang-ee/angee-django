@@ -776,8 +776,9 @@ def test_spaces_fragment_binds_the_vault_to_its_team_roster() -> None:
         for line in block.splitlines()
         if line.strip().startswith("permission ")
     }
-    assert "team->post" in permissions["read"]
-    assert "team->write" in permissions["write"]
+    # Contributed arms land on the granted sets; `read`/`write` compose them beside the trash exclusion.
+    assert "team->post" in permissions["read_granted"]
+    assert "team->write" in permissions["write_granted"]
     assert "share" in permissions["write__team"]
     assert "team" not in permissions["delete"]
     assert "team" not in permissions["share"]

@@ -43,7 +43,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
             ]
         )
         record = ChatterDoc.objects.create(title="Large audience")
-        attachment = record.message_thread_attachment(create=False)
+        # A record's creation is a history line, not a message: the chatter thread exists from its first use.
+        attachment = record.message_thread_attachment()
         write_relationships(
             [RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(account)) for account in accounts[::2]]
         )

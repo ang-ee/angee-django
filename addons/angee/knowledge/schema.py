@@ -62,7 +62,7 @@ RecordBinding = apps.get_model("knowledge", "RecordBinding")
 
 
 @strawberry_django.type(Vault)
-class VaultType(AngeeNode):
+class VaultType(TrashedRefMixin, AngeeNode):
     """GraphQL projection of a vault."""
 
     display_name: str = strawberry_django.field(
@@ -75,7 +75,8 @@ class VaultType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    permissions = permissions_field(("write",))
+    is_trashed: auto
+    permissions = permissions_field(("write", "delete"))
 
     @strawberry_django.field(only=["owner_id"])
     def owner(self) -> strawberry.ID | None:
@@ -373,7 +374,9 @@ _VAULT_RESOURCE = hasura_model_resource(
     VaultType,
     model=Vault,
     name="vaults",
-    filterable=["id", "name", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_filterable_fields")],
+    filterable=[
+        "id", "name", "is_trashed", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_filterable_fields"),
+    ],
     sortable=["name", "created_at", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_sortable_fields")],
     aggregatable=["id", *declared_hasura_resource_fields(Vault, "hasura_aggregatable_fields")],
     groupable=["updated_at", *declared_hasura_resource_fields(Vault, "hasura_groupable_fields")],

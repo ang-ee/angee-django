@@ -1722,7 +1722,7 @@ describe("createApp resource route index", () => {
       {
         id: "notes",
         menus: [{ id: "notes", route: "notes.home" }],
-        containers: { "record#aside": [{ only: ["chatter.comments"], when: { route: "notes.home" } }] },
+        containers: { "record#aside": [{ "notes.comments": { content: { label: "Comments", render: () => null } } }, { only: ["notes.comments"], when: { route: "notes.home" } }] },
         routes: [
           {
             name: "notes.home",
@@ -1748,7 +1748,7 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note parties.Party storage.FileAttachment id chatter.comments");
+        expect(host.textContent).toContain("notes.Note parties.Party storage.FileAttachment id notes.comments");
       });
     } finally {
       root.unmount();

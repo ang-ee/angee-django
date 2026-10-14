@@ -34,7 +34,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import GenericTarget, generic_target
 
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, HistoryMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
 from angee.base.refs import MergePolicy, RecordRefMixin
@@ -322,7 +322,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         )
 
 
-class CurrencyRate(RecordRefMixin, ArchiveMixin, AngeeDataModel):
+class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
     """One dated global or exact-context exchange rate per reference unit.
 
     A global row has no context or explicit reference and remains relative to

@@ -9,7 +9,7 @@ from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, StrEnum
-from itertools import groupby
+from itertools import batched, groupby
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
@@ -17,9 +17,9 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import DatabaseError, IntegrityError, models, router, transaction
+from django.db import DatabaseError, IntegrityError, NotSupportedError, connections, models, router, transaction
 from django.db.models import F, Q, Value
 from django.db.models.functions import Replace
 from django.utils import timezone
@@ -28,17 +28,16 @@ from rebac import (
     RebacMixin,
     SubjectRef,
     actor_context,
-    backend,
-    check_new,
     current_actor,
     system_context,
     to_subject_ref,
 )
 from rebac.actors import is_sudo
-from rebac.field_backing import _proposed_forward_relationships
+from rebac.errors import SchemaError
+from rebac.field_backing import resolve_field_backing
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_for_subject_type, model_resource_type
-from rebac.schema.introspection import relation_dependencies
+from rebac.schema import ConstBinding, FieldBinding
 from simple_history.manager import HistoryDescriptor, HistoryManager
 from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
@@ -58,7 +57,7 @@ from angee.base.querysets import (
     _AngeeQuerySetMixin,
     model_history,
 )
-from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
+from angee.base.scoping import by_key, candidate_relationships, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, json_safe, strip_null_bytes
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -713,11 +712,15 @@ class TrashMixin(models.Model):
         db = using or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=db):
             self._require_trash_state(trashed=False, using=db)
+            self.validate_trash()
             self.is_trashed = True
             self.trashed_at = timezone.now()
             self.trashed_by_id = actor_user_id(instance_actor(self))
             self.trash_reason = reason
             self.save(using=db, update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
+
+    def validate_trash(self) -> None:
+        """Refuse domain-invalid removal while the shared trash owner holds its row lock."""
 
     def restore(self, *, using: str | None = None) -> None:
         """Take this row out of the trash, clearing its trash stamps."""
@@ -780,6 +783,15 @@ class TrashQuerySet(models.QuerySet[_TrashModelT]):
 
         return cast(Self, self.filter(**{TRASH_FLAG_FIELD: False}))
 
+    def canonical(self) -> Self:
+        """Operational rows are outside the trash; the merge scope composes on top.
+
+        The chain ends at the base queryset every model composes, so a trashable
+        mergeable model's ``canonical()`` reads the same on every model.
+        """
+
+        return cast(Self, super().canonical().untrashed())  # type: ignore[misc]
+
     def trash_targets(self) -> Self:
         """Return the rows the shared trash verbs may address.
 
@@ -840,13 +852,21 @@ class MergeContractMixin(models.Model):
     ``merge_identity`` set drops the merged record's copy as the same fact,
     asking :meth:`merge_collapse` first when the two differ beyond it; any other
     unique collision refuses the merge. ``merge_contract`` replaces the whole move
-    for a model that retains collisions instead (statements).
+    for a model that retains collisions instead (statements). A hook returns
+    ``NotImplemented`` for a reference the default mover should handle.
     """
 
-    merge_contract: ClassVar[Callable[..., None] | None] = None
+    merge_contract: ClassVar[Callable[..., Any] | None] = None
 
     merge_identity: ClassVar[tuple[tuple[str, ...], ...]] = ()
     """Unique field sets whose equal rows state one fact."""
+
+    merge_policies: ClassVar[Mapping[str, Any]] = {}
+    """Foreign keys whose merge policy differs from what their ``on_delete`` implies, by field name.
+
+    A lineage key (``converted_from``) ``KEEP``\\s pointing at the merged record
+    as history, where its delete behaviour alone would move it.
+    """
 
     class Meta:
         abstract = True
@@ -1032,17 +1052,17 @@ class ModelHistory(HistoricalRecords):
             yield first, last, previous
         # Deferred: angee.data's contract closure imports this module and must stay
         # transport-neutral (refs imports contenttypes models; tests/test_layering.py).
-        from angee.base.refs import generic_pointer_model
+        from angee.base.refs import concrete_lineage
 
         # An unchanged merge survivor has no new snapshot. Its touched owner and
         # origin still define a boundary, without an artificial stamp-only save.
         origin = changeset.record_ref
         if (
             changeset.activity == "merge"
-            and origin.model_label.lower() == generic_pointer_model(model)._meta.label_lower
+            and origin.model_label.lower() in {table._meta.label_lower for table in concrete_lineage(model)}
         ):
             pk = model._meta.pk.to_python(origin.object_id)
-            if pk not in seen:
+            if pk not in seen and model._base_manager.using(using).filter(pk=pk).exists():
                 timeline = history.filter(**{key: pk})
                 boundary = timeline.order_by("-history_id").first()
                 if boundary is None:
@@ -1057,33 +1077,80 @@ class ModelHistory(HistoricalRecords):
 
         last.instance.lock_for_revert(using=first._state.db)
 
-    def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
-        """Authorize before staging or replaying any history."""
+    def snapshot_allows(self, snapshot: Any, action: str, *, actor: Any) -> bool:
+        """Check retained relationship facts through native candidate permissions.
 
-        target = (previous or last).instance
+        Unlike ``instance``, native ``history_object`` does not refill excluded
+        fields from a current row. Omitted columns remain unresolved facts, never
+        constructor defaults that might accidentally grant access. This preflight
+        cannot reproduce a deleted row's stored grants; current rows must use
+        their ordinary permission owner before considering a snapshot.
+        """
+
+        if is_sudo():
+            return True
+        if actor is None:
+            return False
+        target = snapshot.history_object
+        resource = model_resource_type(type(target))
+        if resource is None:
+            return True
+        tracked = {field.attname for field in snapshot.tracked_fields}
+        for field in target._meta.concrete_fields:
+            if field.attname not in tracked:
+                setattr(target, field.attname, F(field.attname))
+        try:
+            candidate = candidate_relationships(target, action, using=snapshot._state.db)
+            if candidate is None:
+                return False
+            definition, required, relations = candidate.definition, candidate.required, candidate.relationships
+            for relation in definition.relations:
+                if relation.name not in required or isinstance(relation.backing, ConstBinding):
+                    continue
+                # New-row preflight knows an absent ledger or reverse relation
+                # is empty. A retained snapshot cannot prove that former fact.
+                if not isinstance(relation.backing, FieldBinding):
+                    relations[relation.name] = None
+                    continue
+                resolved = resolve_field_backing(definition, relation)
+                if resolved is None:
+                    return False
+                first = target._meta.get_field(resolved.path.split("__", 1)[0])
+                if resolved.generic is None and not isinstance(first, (models.ForeignKey, models.OneToOneField)):
+                    relations[relation.name] = None
+                    continue
+                # Native preflight trusts an inserted FK's constraint. A history
+                # column retains the identity after the target itself is gone.
+                for subject in relations.get(relation.name) or ():
+                    if not resolved.target_model._base_manager.using(snapshot._state.db).filter(
+                        **{resolved.target_id_attr: subject.subject_id},
+                    ).exists():
+                        relations[relation.name] = None
+                        break
+            return candidate.allows(actor, action)
+        except (
+            FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist,
+            SchemaError, NotImplementedError, ValidationError, ValueError,
+        ):
+            # Retained evidence can outlive a relationship target or its schema.
+            # Neither grants access when native preflight cannot resolve it.
+            return False
+
+    def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
+        """Admit both the current row and the snapshot's proposed relationships."""
+
+        snapshot = previous or last
+        target = snapshot.history_object
+        action = target.history_revert_permission
         stored = type(target)._base_manager.using(first._state.db).filter(pk=target.pk).first()
         if stored is not None:
-            stored.require_access("write", actor=actor)
-        elif not is_sudo():
-            if actor is None:
-                raise PermissionDenied("History restoration requires an actor.")
-            resource = model_resource_type(type(target))
-            if resource is None:
+            stored.require_access(action, actor=actor)
+            if action == "write":
+                # Existing records may be writable through stored grants which
+                # an id-less proposed-relationship check cannot reproduce.
                 return
-            schema = backend().schema()
-            definition = schema.get_definition(resource)
-            if definition is None:
-                raise PermissionDenied(f"No schema definition admits restoration of {resource}.")
-            relations = _proposed_forward_relationships(
-                target,
-                definition,
-                required_relations=relation_dependencies(schema, resource, "write"),
-                using=first._state.db,
-            )
-            if not check_new(
-                subject=to_subject_ref(actor), action="write", resource_type=resource, relationships=relations
-            ).allowed:
-                raise PermissionDenied(f"{target._meta.label} {target.pk}: restoration requires write on its snapshot.")
+        if not self.snapshot_allows(snapshot, action, actor=actor):
+            raise PermissionDenied(f"{target._meta.label} {target.pk}: restoration requires {action} on its snapshot.")
 
     def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
         """Restore parents first; remove creations after reference replay, children first."""
@@ -1097,7 +1164,12 @@ class ModelHistory(HistoricalRecords):
         """Ordinary rows need no uniqueness staging."""
 
     def revert_row(self, first: Any, last: Any, previous: Any) -> list[Any]:
-        """Replay one exact native predecessor, writing only locally owned MTI fields."""
+        """Replay one exact native predecessor onto every column its history tracks.
+
+        A multi-table child's save records only the child's history, so its version
+        carries the inherited columns too and restores them; a parent level that
+        recorded its own version of the same write restores the same values.
+        """
 
         model = type(first.instance)
         using = first._state.db
@@ -1119,10 +1191,13 @@ class ModelHistory(HistoricalRecords):
         else:
             # Compare the stored snapshots directly: native ``diff_against`` reads
             # editable fields only, and a revert restores trash and audit columns too.
+            tracked = {field.attname for field in previous.tracked_fields}
             changed = {
                 field.name
-                for field in model._meta.local_concrete_fields
-                if not field.primary_key and getattr(last, field.attname) != getattr(previous, field.attname)
+                for field in model._meta.concrete_fields
+                if not field.primary_key and field.attname in tracked
+                and not (field.is_relation and field.remote_field.parent_link)
+                and getattr(last, field.attname) != getattr(previous, field.attname)
             }
             if isinstance(row, TrashMixin) and "is_trashed" in changed:
                 row.revert_removal(previous, using=using)
@@ -1240,6 +1315,18 @@ class ModelHistory(HistoricalRecords):
             field.remote_field.model = apps.get_model(changeset_model_label())
             field.remote_field.field_name = field.remote_field.model._meta.pk.name
             extra["changeset"] = field
+        native_instance = extra["instance"].fget
+
+        def get_instance(record: Any) -> Any:
+            # Native construction fills excluded columns (counters) from the stored
+            # row through the default manager. That read rebuilds a snapshot for
+            # replay, not a projection to the caller: a gated counter would refuse it.
+            if not record._history_excluded_fields:
+                return native_instance(record)
+            with system_context(reason="angee.history.instance"):
+                return native_instance(record)
+
+        extra["instance"] = property(get_instance)
         return extra
 
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
@@ -1277,6 +1364,34 @@ class HistoryMixin(models.Model):
     """Track concrete models through django-simple-history's inherited descriptor."""
 
     history = ModelHistory(inherit=True)
+    history_revert_permission: ClassVar[str] = "write"
+    """Permission admitting replay; immutable edges use their unlink/relink authority."""
+    history_relations: ClassVar[tuple[str, ...]] = ()
+    """Owned reverse foreign-key collections included in this document's history.
+
+    These are document parts, not arbitrary references or separately owned work.
+    Each child keeps its own capture and permission policy.
+    """
+
+    def history_scope(self) -> dict[type[models.Model], Q]:
+        """Snapshot predicates for this record's concrete tables and owned lines."""
+
+        # refs imports contenttypes models; the data-contract layer loads this
+        # module before Django app population (the same seam as changeset_states).
+        from angee.base.refs import concrete_lineage
+
+        scopes = {table: Q(**{table._meta.pk.attname: self.pk}) for table in concrete_lineage(type(self))
+                  if model_history(table) is not None}
+        for name in self.history_relations:
+            relation = self._meta.get_field(name)
+            if not relation.one_to_many or relation.field.remote_field.parent_link:
+                raise ImproperlyConfigured(f"{self._meta.label}.{name}: history requires an owned reverse FK.")
+            child = relation.related_model
+            if model_history(child) is None:
+                raise ImproperlyConfigured(f"{child._meta.label}: an owned history relation must keep history.")
+            predicate = Q(**{relation.field.attname: self.pk})
+            scopes[child] = scopes[child] | predicate if child in scopes else predicate
+        return scopes
 
     class Meta:
         abstract = True
@@ -1347,7 +1462,7 @@ class StatementSourceMixin(models.Model):
         raise ImproperlyConfigured("Statement principals must implement source_kind.")
 
     @classmethod
-    def kind_for(cls, source: SubjectRef) -> SourceKind | None:
+    def kind_for(cls, source: SubjectRef, *, using: str | None = None) -> SourceKind | None:
         """Classify a persisted principal; ineligible sources have no kind."""
 
         resolved = model_for_subject_type(source.subject_type)
@@ -1357,7 +1472,7 @@ class StatementSourceMixin(models.Model):
         if not issubclass(model, cls):
             return None
         try:
-            principal = system_queryset(model).get(**{id_attr: source.subject_id})
+            principal = system_queryset(model).using(using).get(**{id_attr: source.subject_id})
             return SourceKind(principal.source_kind)
         except model.DoesNotExist, ValueError, TypeError, ImproperlyConfigured, ValidationError:
             return None
@@ -1498,16 +1613,34 @@ class StatementsMixin(models.Model):
     class Meta:
         abstract = True
 
+    @classmethod
+    def statement_models(cls) -> Iterable[type[models.Model]]:
+        """Yield the declared statement tables once, including MTI parents."""
+
+        seen = set()
+        for owner in (*reversed(cls._meta.get_parent_list()), cls):
+            declaration = getattr(owner, "statements", None)
+            if declaration is not None and declaration.model not in seen:
+                seen.add(declaration.model)
+                yield declaration.model
+
+    @classmethod
+    def pair_models(cls) -> tuple[type[models.Model], ...]:
+        """Read generated pair carriers from Django's declared endpoint relations."""
+
+        carriers = {
+            relation.related_model
+            for relation in cls._meta.get_fields(include_hidden=True)
+            if relation.auto_created and relation.one_to_many
+            and issubclass(relation.related_model, StatementPair)
+        }
+        return tuple(sorted(carriers, key=lambda model: model._meta.label_lower))
+
     def statement_managers(self) -> Iterable[Any]:
         """Yield each MTI owner's bound table once, including parent declarations."""
 
-        seen = set()
-        for owner in (*reversed(self._meta.get_parent_list()), type(self)):
-            declaration = getattr(owner, "statements", None)
-            if declaration is None or declaration.model in seen:
-                continue
-            seen.add(declaration.model)
-            subject_model = declaration.model.statement_subject_model
+        for model in self.statement_models():
+            subject_model = model.statement_subject_model
             subject = (
                 self
                 if subject_model is type(self)
@@ -1994,7 +2127,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
-        cls.objects.merge(reference, rows, survivor=survivor)
+        cls.objects.db_manager(rows.db).merge(reference, rows, survivor=survivor)
 
 
 class StatementPairQuerySet(TrashQuerySet, AngeeUnscopedQuerySet):
@@ -2027,15 +2160,14 @@ class StatementPair(
         """Lock both endpoint owners before their retained pair."""
 
         for endpoint in (self.left, self.right):
-            for manager in endpoint.statement_managers():
-                manager.db_manager(using).lock_subject(manager.instance, {})
+            endpoint.lock_statement_subject({}, using=using)
         return super().lock_statement_subject(members, using=using)
 
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:
         """Union third-party stances while retaining the merged pair as evidence."""
 
-        cls.objects.merge(reference, rows, survivor=survivor)
+        cls.objects.db_manager(rows.db).merge(reference, rows, survivor=survivor)
 
     def apply_resolved(
         self,
@@ -2712,14 +2844,83 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
     def update(self, **kwargs: Any) -> int:
         """Keep parent moves and derived paths on the saved-row owner."""
 
-        if {"path", "parent", "parent_id"} & kwargs.keys():
-            raise ValidationError("The hierarchy parent and path belong to the saved-row owner.")
+        owned = {"path", "parent", "parent_id"}
+        for name in self.model.hierarchy_scope_fields:
+            field = self.model._meta.get_field(name)
+            owned.update((field.name, field.attname))
+        if owned & kwargs.keys():
+            raise ValidationError("The hierarchy parent, scope and path belong to the saved-row owner.")
         return super().update(**kwargs)
 
     def bulk_create(self, *args: Any, **kwargs: Any) -> list[_HierarchyModelT]:
         """Require saves to derive paths from persisted row and parent identities."""
 
-        raise ValidationError("Create hierarchy rows through save(); paths belong to the saved-row owner.")
+        raise ValidationError(
+            "Create hierarchy rows through save() or create_forest(); paths belong to the saved-row owner."
+        )
+
+    def create_forest(self, rows: Sequence[_HierarchyModelT]) -> list[_HierarchyModelT]:
+        """Insert unsaved rows and derive every parent link and path; return them saved.
+
+        A row's ``parent`` is a saved row (with its path loaded) or another row of
+        ``rows``, in the same scope. Every row is one INSERT, then one UPDATE sets
+        each parent and path, whatever the tree's depth; each row records one
+        creation version, path included. No row is saved one by one, so ``save()``
+        hooks do not run; the caller sends what lifecycle signals it owes.
+        """
+
+        model = self.model
+        using = self.db
+        history = model_history(model)
+        field = model._meta.get_field("parent")
+        rows = list(rows)
+        if any(row.pk is not None for row in rows):
+            raise ValidationError("A forest insert takes unsaved rows.")
+        if not connections[using].features.can_return_rows_from_bulk_insert:
+            raise NotSupportedError("A forest insert requires bulk-insert primary keys on this database.")
+        members = {id(row) for row in rows}
+        parents = {id(row): field.get_cached_value(row, None) for row in rows}
+        order: list[_HierarchyModelT] = []
+        placed: set[int] = set()
+        pending = rows
+        while pending:
+            ready = [row for row in pending if (parent := parents[id(row)]) is None
+                     or id(parent) in placed or (id(parent) not in members and parent.pk is not None)]
+            if not ready:
+                raise ValidationError("Forest parents must form a tree of these rows and saved rows.")
+            order.extend(ready)
+            placed.update(id(row) for row in ready)
+            pending = [row for row in pending if id(row) not in placed]
+        scope = [model._meta.get_field(name).attname for name in model.hierarchy_scope_fields]
+        for row in rows:
+            parent = parents[id(row)]
+            if parent is not None and any(getattr(row, name) != getattr(parent, name) for name in scope):
+                raise ValidationError({"parent": "Parent must belong to the same scope."})
+            # Django refuses to insert a row naming an unsaved parent; the link lands below.
+            row.parent = None
+        with transaction.atomic(using=using), write_group():
+            # Below the hierarchy guard and the history capture: the creation version
+            # below records each row with its parent and path.
+            super(_AngeeQuerySetMixin, self).bulk_create(rows)
+            for row in order:
+                parent = parents[id(row)]
+                row.parent = parent
+                row.path = row._hierarchy_path(parent)
+            for chunk in batched(rows, 500):
+                # The caller's queryset carries its authority (a sudo) to this write.
+                super(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk])).update(
+                    parent_id=models.Case(
+                        *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
+                        output_field=field.target_field,
+                    ),
+                    path=models.Case(
+                        *(models.When(pk=row.pk, then=models.Value(row.path)) for row in chunk),
+                        output_field=model._meta.get_field("path"),
+                    ),
+                )
+            if history is not None and rows:
+                history.bulk_history_create(model, [row.pk for row in rows], "+", using=using)
+        return rows
 
     def owner_update(self, **kwargs: Any) -> int:
         """Protected API: apply an owner-validated write through downstream guards.
@@ -2796,9 +2997,8 @@ class HierarchyMixin(models.Model):
     :attr:`path_segment_width` = 12 each segment costs 13 characters, so
     ``max_length=255`` holds ~19 levels — deeper than any ERP location/category
     tree, but a consumer expecting deeper nesting must widen the column.
-    Maintenance writes go through queryset ``update()`` (the one-UPDATE cascade),
-    so ``path`` changes bypass ``post_save`` — a ``HistoryMixin`` consumer's
-    historical rows do not track ``path``, a derivable server-owned value.
+    Maintenance writes go through the shared queryset capture path. History
+    includes these writes; replay derives paths again from the restored parents.
     """
 
     path_segment_width: ClassVar[int] = 12
@@ -2882,37 +3082,83 @@ class HierarchyMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
-        if self._state.adding:
-            self._save_created(*args, **kwargs)
-        elif self._hierarchy_needs_repath():
-            self._save_reparented(*args, **kwargs)
-        else:
-            super().save(*args, **kwargs)
+        if args:
+            # Django still accepts save()'s arguments positionally; name them once here.
+            kwargs.update(zip(("force_insert", "force_update", "using", "update_fields"), args, strict=False))
+            args = ()
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        kwargs["using"] = using
+        with transaction.atomic(using=using):
+            if self._state.adding:
+                self._save_created(*args, **kwargs)
+            else:
+                self._validate_hierarchy_scope(kwargs.get("update_fields"), using=using)
+                if self._hierarchy_needs_repath(using=using):
+                    self._save_reparented(*args, **kwargs)
+                else:
+                    super().save(*args, **kwargs)
         if "parent_id" in self.__dict__:
             self._hierarchy_saved_parent_id = self.parent_id
+
+    def _validate_hierarchy_scope(self, update_fields: Iterable[str] | None, *, using: str) -> None:
+        """A scope edit must keep the parent and existing children in one scope.
+
+        Moving an entire tree between owners requires its own admitted verb;
+        changing one row must never silently move or strand its descendants.
+        """
+
+        fields = [self._meta.get_field(name) for name in self.hierarchy_scope_fields]
+        touched = [field for field in fields if field.attname in self.__dict__ and (
+            update_fields is None or field.name in update_fields or field.attname in update_fields
+        )]
+        if not touched:
+            return
+        rows = system_queryset(type(self), lock=("self",)).using(using)
+        stored = rows.filter(pk=self.pk).values(*(field.attname for field in touched)).get()
+        changed = {field.attname: getattr(self, field.attname) for field in touched
+                   if stored[field.attname] != getattr(self, field.attname)}
+        if not changed:
+            return
+        self._reject_cross_scope_parent(self._hierarchy_parent(using=using), using=using)
+        if rows.filter(parent_id=self.pk).exclude(**changed).exists():
+            raise ValidationError("Move or detach this node's children before changing its scope.")
 
     def _save_created(self, *args: Any, **kwargs: Any) -> None:
         """Insert the row, then derive its ``path`` from the parent's committed path."""
 
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            parent = self._hierarchy_parent()
+        using = kwargs["using"]
+        history = model_history(type(self))
+        with transaction.atomic(using=using):
+            if history is not None:
+                # The creation is one version, captured below once its derived path is stored.
+                self.skip_history_when_saving = True
+            try:
+                super().save(*args, **kwargs)
+            finally:
+                if history is not None:
+                    del self.skip_history_when_saving
+            parent = self._hierarchy_parent(using=using)
             if parent is not None:
                 # Re-read the parent's committed path under lock before deriving the
                 # child prefix: a create racing a reparent of that parent would
                 # otherwise bake in a stale prefix that the reparent's cascade never
                 # reaches (the new row is not yet under the old prefix it rewrites).
-                fresh = self._locked_paths([parent.pk])
+                fresh = self._locked_paths([parent.pk], using=using)
                 if parent.pk in fresh:
                     parent.path = fresh[parent.pk]
-            self._reject_cross_scope_parent(parent)
+            self._reject_cross_scope_parent(parent, using=using)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
-                self._write_hierarchy_path(
-                    system_queryset(type(self)).filter(pk=self.pk),
-                    new_path,
-                )
+                rows = system_queryset(type(self)).using(using).filter(pk=self.pk)
+                if history is not None:
+                    # Below the hierarchy guard and the history capture: the
+                    # creation version records the path with the row.
+                    super(_AngeeQuerySetMixin, rows).update(path=new_path)
+                else:
+                    self._write_hierarchy_path(rows, new_path)
                 self.path = new_path
+            if history is not None:
+                history.bulk_history_create(type(self), [self.pk], "+", using=using)
 
     def _save_reparented(self, *args: Any, **kwargs: Any) -> None:
         """Validate the move under lock, then rewrite the subtree in one UPDATE."""
@@ -2923,15 +3169,16 @@ class HierarchyMixin(models.Model):
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
-        with transaction.atomic():
-            old_path = self._lock_moved_paths()
-            subtree = system_queryset(type(self), lock=("self",)).filter(path__startswith=old_path)
+        using = kwargs["using"]
+        with transaction.atomic(using=using):
+            old_path = self._lock_moved_paths(using=using)
+            subtree = system_queryset(type(self), lock=("self",)).using(using).filter(path__startswith=old_path)
             if old_path:
                 # Evaluate SELECT FOR UPDATE before moving any descendant's path.
                 list(subtree.order_by("pk").values_list("pk", flat=True))
-            parent = self._hierarchy_parent()
+            parent = self._hierarchy_parent(using=using)
             self._reject_cycle(parent)
-            self._reject_cross_scope_parent(parent)
+            self._reject_cross_scope_parent(parent, using=using)
             new_path = self._hierarchy_path(parent)
             self.path = new_path
             super().save(*args, **kwargs)
@@ -2964,7 +3211,7 @@ class HierarchyMixin(models.Model):
             return queryset.owner_update(path=path_value)
         return queryset.update(path=path_value)
 
-    def _lock_moved_paths(self) -> str:
+    def _lock_moved_paths(self, *, using: str) -> str:
         """Row-lock this node and its new parent, refreshing committed paths.
 
         Two overlapping reparents interleaving on stale in-memory paths is the
@@ -2975,21 +3222,21 @@ class HierarchyMixin(models.Model):
         """
 
         pks = [self.pk] if self.parent_id is None else [self.pk, self.parent_id]
-        fresh = self._locked_paths(pks)
+        fresh = self._locked_paths(pks, using=using)
         self.path = fresh.get(self.pk, self.path)
         if self.parent_id is not None and self.parent_id in fresh:
-            parent = self._hierarchy_parent()
+            parent = self._hierarchy_parent(using=using)
             if parent is not None:
                 parent.path = fresh[self.parent_id]
         return self.path
 
-    def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
+    def _locked_paths(self, pks: list[Any], *, using: str) -> dict[Any, str]:
         """Return committed paths, serializing overlapping moves when supported."""
 
-        reader = system_queryset(type(self), lock=("self",))
+        reader = system_queryset(type(self), lock=("self",)).using(using)
         return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
 
-    def _hierarchy_needs_repath(self) -> bool:
+    def _hierarchy_needs_repath(self, *, using: str) -> bool:
         """Return whether an existing row's ``parent`` moved (or its path is unset)."""
 
         # An unrelated deferred save must not load tree columns into its UPDATE.
@@ -3003,19 +3250,28 @@ class HierarchyMixin(models.Model):
         # so a reparent would be invisible if we compared ``parent_id`` to itself.
         # Fetch the committed ``parent_id`` from the row to compare against the
         # in-memory FK the caller may have moved.
-        return self._hierarchy_committed_parent_id() != self.parent_id
+        return self._hierarchy_committed_parent_id(using=using) != self.parent_id
 
-    def _hierarchy_committed_parent_id(self) -> Any:
+    def _hierarchy_committed_parent_id(self, *, using: str | None = None) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
-        return system_queryset(type(self)).filter(pk=self.pk).values_list("parent_id", flat=True).first()
+        using = using or self._state.db or router.db_for_read(type(self), instance=self)
+        return system_queryset(type(self)).using(using).filter(pk=self.pk).values_list("parent_id", flat=True).first()
 
-    def _hierarchy_parent(self) -> HierarchyMixin | None:
-        """Return the parent instance (cached when assigned), or ``None`` for a root."""
+    def _hierarchy_parent(self, *, using: str | None = None) -> HierarchyMixin | None:
+        """Return the parent on this database, preserving Django's relation cache."""
 
         if self.parent_id is None:
             return None
-        return cast("HierarchyMixin", self.parent)
+        using = using or self._state.db or router.db_for_read(type(self), instance=self)
+        field = self._meta.get_field("parent")
+        if field.is_cached(self):
+            parent = field.get_cached_value(self)
+            if parent is not None and parent._state.db == using:
+                return cast("HierarchyMixin", parent)
+        parent = system_queryset(field.related_model).using(using).get(pk=self.parent_id)
+        field.set_cached_value(self, parent)
+        return cast("HierarchyMixin", parent)
 
     def _hierarchy_path(self, parent: HierarchyMixin | None) -> str:
         """Return this node's derived path under ``parent`` (a root when ``None``)."""
@@ -3031,12 +3287,20 @@ class HierarchyMixin(models.Model):
         if parent.path.startswith(self.path):
             raise ValidationError({"parent": "A node cannot be moved under itself or a descendant."})
 
-    def _reject_cross_scope_parent(self, parent: HierarchyMixin | None) -> None:
+    def _reject_cross_scope_parent(self, parent: HierarchyMixin | None, *, using: str | None = None) -> None:
         """Reject a parent that differs on any declared :attr:`hierarchy_scope_fields`."""
 
         if parent is None:
             return
-        for name in self.hierarchy_scope_fields:
-            attname = self._meta.get_field(name).attname
-            if getattr(self, attname) != getattr(parent, attname):
-                raise ValidationError({"parent": f"Parent must belong to the same {name}."})
+        if not self.hierarchy_scope_fields:
+            return
+        using = using or self._state.db or router.db_for_read(type(self), instance=self)
+        fields = [self._meta.get_field(name) for name in self.hierarchy_scope_fields]
+        # The parent is a row of the hierarchy's own model; a multi-table child
+        # of it may not have a row in this model's table.
+        committed = system_queryset(type(parent)).using(using).filter(pk=parent.pk).values(
+            *(field.attname for field in fields),
+        ).get()
+        for field in fields:
+            if getattr(self, field.attname) != committed[field.attname]:
+                raise ValidationError({"parent": f"Parent must belong to the same {field.name}."})
