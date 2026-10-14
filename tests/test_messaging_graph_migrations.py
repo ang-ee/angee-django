@@ -92,6 +92,9 @@ def test_channel_split_rebases_original_and_copy_receipts_before_other_source_pu
     unread_follow = follows.create(thread=thread, party_id=43, notification_policy="muted")
     notice = notifications.create(thread=thread, message=anchor, attachment=original_edge,
                                   follower=original_follow, read_at=start)
+    # A single-channel conversation is never visited: even its stale counter stays.
+    single = threads.create(channel=channel_a, platform="email", external_id="single", message_count=7)
+    messages.create(thread=single, channel=channel_a, sent_at=start, created_at=start)
     assert source_thread_channels.applies(state)
     with connection.schema_editor() as editor:
         upgraded = source_thread_channels.Migration("source_thread_channels", "messaging").apply(state.clone(), editor)
@@ -127,7 +130,7 @@ def test_channel_split_rebases_original_and_copy_receipts_before_other_source_pu
     assert retained_notice.read_at == start
     assert follows.get(pk=unread_follow.pk).last_read_message_id is None
     assert follows.get(thread=other_thread, party_id=43).last_read_message_id is None
-    assert dict(threads.values_list("pk", "message_count")) == {thread.pk: 2, other_thread.pk: 1}
+    assert dict(threads.values_list("pk", "message_count")) == {thread.pk: 2, other_thread.pk: 1, single.pk: 7}
     messages.filter(thread=other_thread).delete()
     assert follows.get(pk=original_follow.pk).last_read_message_id == before.pk
     assert follows.get(pk=copied_follow.pk).last_read_message_id is None
