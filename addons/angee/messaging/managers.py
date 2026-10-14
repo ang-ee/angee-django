@@ -29,6 +29,7 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import nullcontext
 from contextvars import Context
 from datetime import datetime, time, timedelta
 from functools import partial, reduce
@@ -896,6 +897,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         platform: str,
         external_id: str,
         defaults: dict[str, Any],
+        ownerless: bool = False,
     ) -> tuple[Any, bool]:
         """Get-or-create a thread on its ``(channel, platform, external_id)`` identity, indexed.
 
@@ -906,6 +908,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         the same converge-on-unique contract the old column constraint provided.
         Channel-bound inserts skip personal ownership through the model's save;
         their access follows the channel while creation attribution remains intact.
+        ``ownerless`` inserts a thread nobody owns (a record's chatter without a creator).
         """
 
         # Identity resolution is system bookkeeping (the callers gate reads at their
@@ -924,7 +927,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             return existing, False
         try:
             with transaction.atomic(using=using):
-                thread.save(force_insert=True, using=using)
+                thread.save(force_insert=True, using=using, ownerless=ownerless)
                 return thread, True
         except IntegrityError:
             existing = queryset.first()
@@ -1085,25 +1088,39 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             raise ValueError("Cannot attach a thread to an unsaved record.")
+        # The host owns whether its record chatter streams over changes(); stamp its
+        # opt-in onto the thread so broadcasts_changes() is O(1) at publish time and
+        # never re-resolves the polymorphic target.
+        host_broadcasts = bool(getattr(record, "thread_broadcasts_changes", False))
         if existing := self.for_record(record, role=role):
+            self._reconcile_broadcast_state(existing.thread, host_broadcasts=host_broadcasts)
             return existing
         content_type, object_id = generic_pointer_target(record)
         _assert_canonical_composes_thread_mixin(record, content_type)
         external_id = f"record:{content_type.app_label}.{content_type.model}:{object_id}:{role}"
         thread_model = self.model._meta.get_field("thread").related_model
         fragment_model = apps.get_model("messaging", "Fragment")
-        # The host owns whether its record chatter streams over changes(); stamp its
-        # opt-in onto the thread so broadcasts_changes() is O(1) at publish time and
-        # never re-resolves the polymorphic target.
-        host_broadcasts = bool(getattr(record, "thread_broadcasts_changes", False))
         title_text = strip_null_bytes(title or str(record)).strip()
         using = self._db or router.db_for_write(self.model, instance=record)
-        with transaction.atomic(using=using):
+        # A chatter edge is the record's own thread: the record's verb has admitted
+        # the actor, and the edge and its thread are written as system rows. A
+        # source edge is created under the actor, who needs write on the record.
+        elevated = (
+            system_context(reason="messaging.thread_attachment.chatter")
+            if role == self.model.AttachmentRole.CHATTER else nullcontext()
+        )
+        # A record's chatter belongs to the record's creator, never to whoever first
+        # follows or posts: ownership is standing access the record does not grant.
+        creator_id = getattr(record, "created_by_id", None) if role == self.model.AttachmentRole.CHATTER else None
+        owned = {"owner_id": creator_id} if creator_id is not None else {}
+        with elevated, transaction.atomic(using=using):
             title_fragment = fragment_model.objects.db_manager(using).upsert(text=title_text) if title_text else None
             thread, _created = thread_model.objects.db_manager(using).get_or_create_by_external_id(
                 platform=thread_model._meta.get_field("platform").choices_enum.OTHER,
                 external_id=external_id,
+                ownerless=role == self.model.AttachmentRole.CHATTER and creator_id is None,
                 defaults={
+                    **owned,
                     "title_id": title_fragment.pk if title_fragment is not None else None,
                     "modality": thread_model.Modality.GROUP,
                     "visibility": thread_model.Visibility.PRIVATE,
@@ -1217,13 +1234,19 @@ class ThreadFollowerQuerySet(AngeeQuerySet[Any]):
         return cast(ThreadFollowerQuerySet, self.filter(thread_id__in=thread.member_threads().values("pk")))
 
     def effective_for_thread(self, thread: Any) -> ThreadFollowerQuerySet:
-        """Current thread preferences win; otherwise retain the earliest physical follow."""
+        """Current thread preferences win; otherwise retain the earliest physical follow.
 
-        rows = self.for_thread(thread)
-        kept = rows.filter(party_id=models.OuterRef("party_id")).order_by(
+        Which physical follow represents a party is a fact of the rows, not an
+        access decision: the choice reads the table unscoped, and the caller's
+        own scope (an actor, a sudo) applies to the rows it returns.
+        """
+
+        members = thread.member_threads().values("pk")
+        physical = self.model._base_manager.using(self.db).filter(thread_id__in=members)
+        kept = physical.filter(party_id=models.OuterRef("party_id")).order_by(
             models.Case(models.When(thread_id=thread.canonical().pk, then=0), default=1), "pk",
         ).values("pk")[:1]
-        return cast(ThreadFollowerQuerySet, rows.filter(pk=models.Subquery(kept)))
+        return cast(ThreadFollowerQuerySet, self.filter(thread_id__in=members, pk=models.Subquery(kept)))
 
     def for_attachment(self, attachment: Any) -> ThreadFollowerQuerySet:
         return self.effective_for_thread(attachment.thread)
@@ -3673,7 +3696,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         for parsed in parsed_messages:
             if not parsed.external_id:
                 continue
-            with changeset(activity="pull", origin=channel), transaction.atomic():
+            # The sync entrypoint (a stream cycle, a scheduled pull) owns the changeset.
+            with transaction.atomic():
                 message, handles = self._ingest_one(
                     parsed,
                     channel=channel,

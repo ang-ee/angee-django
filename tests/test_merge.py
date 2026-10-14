@@ -293,7 +293,9 @@ def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     assert edges["workflows.StepWatch"] == MergePolicy.MOVE
     assert edges["workflows.WorkflowRun"] == MergePolicy.KEEP
     assert edges["integrate.RecordLink"] == MergePolicy.MOVE
-    assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
+    # A merge folds the merged record's chatter into the survivor's (the edge's merge contract).
+    assert edges["messaging.ThreadAttachment"] == MergePolicy.MOVE
+    assert edges["projects.Task"] == MergePolicy.MOVE
 
 
 def test_a_generic_pointer_no_edge_declares_blocks() -> None:
@@ -422,8 +424,8 @@ def test_a_key_to_a_multi_table_child_points_and_moves_by_the_shared_key() -> No
             reference.move(reference.rows(survivor), survivor=plain)
 
 
-def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A direct share is a stored row the retired record would take with it."""
+def test_a_record_named_in_stored_relationships_is_retained_by_its_merge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A direct share is a stored row the retired record would take with it, so the record stays as a redirect."""
 
     owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
     with system_context(reason="merge test share"):
@@ -434,8 +436,12 @@ def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: p
 
     mobile, mobil, _ada, _bob = _vocabulary()
     monkeypatch.setattr(merge_module, "named_in_relationships", lambda record: record.pk == mobil.pk)
-    with actor_context(_curator("merge-shared")), pytest.raises(ValidationError, match="shared"):
+    # A record with evidence (`retained()`) is kept as a redirect instead of deleted,
+    # so the stored relationship outlives the merge and nothing refuses it.
+    with actor_context(_curator("merge-shared")):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+    with system_context(reason="merge test read"):
+        assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
 
 
 def test_a_many_to_many_to_its_own_model_moves_the_links_other_records_hold() -> None:

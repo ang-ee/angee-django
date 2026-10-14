@@ -170,7 +170,8 @@ def test_workflow_cutover_discards_waiters_instead_of_converting_them():
 def test_current_execution_ddl_resolves_constraints_after_circular_parent_field():
     """The run/step cycle must be built before constraints reference parent_step."""
     state = ProjectState.from_apps(apps)
-    for name in ("stepwatch", "steprecord", "stepattempt", "steprun", "workflowrun"):
+    # A history table leaves with its model.
+    for name in ("historicalstepwatch", "stepwatch", "steprecord", "stepattempt", "steprun", "workflowrun"):
         state.remove_model("workflows", name)
     assert current_execution.applies(state)
     for operation in current_execution.Migration.operations:

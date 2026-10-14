@@ -16,16 +16,12 @@ const CREATE_PERSONAL_DASHBOARD = `
   }
 `;
 
+// The shared trash verb removes the dashboard; the suite leaves nothing behind.
 const TRASH_PERSONAL_DASHBOARD = `
-  mutation TrashRecordSharingDashboard(
-    $id: ID!
-    $expectedRevision: Int!
-  ) {
-    set_personal_dashboard_trashed(
-      id: $id
-      expected_revision: $expectedRevision
-      trashed: true
-    ) { status message }
+  mutation TrashRecordSharingDashboard($id: ID!) {
+    trash_record(target_type: "dashboards.Dashboard", target_id: $id, reason: "e2e cleanup", confirm: true) {
+      ok message
+    }
   }
 `;
 
@@ -222,10 +218,7 @@ test.describe("shared record access", () => {
         page.getByRole("button", { name: "Share", exact: true }),
       ).toHaveCount(1);
     } finally {
-      const removed = await consoleApi.query(TRASH_PERSONAL_DASHBOARD, {
-        id: dashboard!.id,
-        expectedRevision: dashboard!.revision,
-      });
+      const removed = await consoleApi.query(TRASH_PERSONAL_DASHBOARD, { id: dashboard!.id });
       expect(removed.errors).toBeUndefined();
     }
   });

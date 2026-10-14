@@ -28,14 +28,15 @@ definition messaging/thread {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    // A retained redirect (a folded conversation) also reads through its survivor's
-    // grants; its own grants keep it readable to an account that reaches only it.
-    relation merged_into: messaging/thread // rebac:field=merged_into
+    // A folded conversation (`merged_into`) keeps its own grants: a channel copy
+    // reads through its channel, and a retired record's chatter is read through
+    // the surviving record's transcript. No arm reaches the survivor here: it
+    // would inline every chatter grant a second time, past SQLite's expression depth.
     // The identity rule asserts same_as statements, which need read and write on both copies.
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
     permission read_granted = channel->read + owner + editor + reader + identity_source + admin->member
-    permission read = read_granted + merged_into->read_granted
+    permission read = read_granted
     permission write  = channel->write + owner + editor + identity_source + admin->member
     permission share  = owner + editor + admin->member
     permission delete = owner + channel->delete + admin->member

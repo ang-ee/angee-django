@@ -520,8 +520,9 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         assert original.thread_id == thread.pk
         assert list(original.parts.values_list("pk", flat=True)) == part_ids
         assert original.edit_history == []
-        assert thread.message_count == 2
-        assert other.message_count == 1
+        # A record's creation is its first history line, not a message: only the ingest counts.
+        assert thread.message_count == 1
+        assert other.message_count == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -571,7 +572,8 @@ def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
     assert message.subtype.key == "comment"
     assert message.subtype.model_label == "messaging.ThreadedTicket"
     assert message.preview == "Please follow up with the customer."
-    assert thread.message_count == 2
+    # The record's creation is a history line, not a message: the post is the thread's first.
+    assert thread.message_count == 1
     assert thread.last_message_at == message.sent_at
     part = Part._base_manager.select_related("fragment").get(message=message)
     assert part.role == "body"
@@ -744,20 +746,19 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
     The record's chatter thread is private to it, so deleting the record must remove its
-    thread, attachment, messages, followers, notifications, and record tasks rather than
-    orphaning them (a leftover attachment on a reused primary key would mis-resolve). A
-    sibling record's chatter is untouched.
+    thread, attachment, messages, followers and notifications rather than orphaning them
+    (a leftover attachment on a reused primary key would mis-resolve). A sibling record's
+    chatter is untouched. Record tasks point at their subject directly and go with it
+    through the task owner (projects), not through the thread.
     """
 
     del composed_tables
     user_model = get_user_model()
     with system_context(reason="test threaded model delete cascade setup"):
-        author = user_model.objects.create_user(username="cascade-author", email="cascade-author@example.com")
         watcher = user_model.objects.create_user(username="cascade-watcher", email="cascade-watcher@example.com")
         ticket = ThreadedTicket.objects.create(title="Cascade case")
         ticket.message_subscribe(user=watcher)
         ticket.message_post("Body to be collected.")
-        task = ProjectTask.objects.schedule(ticket, title="Follow up", assignee=author, due_date=_AT.date())
         survivor = ThreadedTicket.objects.create(title="Survivor case")
         survivor_message = survivor.message_post("Untouched body.")
 
@@ -767,7 +768,6 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     attachment_pk = ThreadAttachment._base_manager.get(object_id=ticket.pk).pk
     assert Message._base_manager.filter(thread_id=thread_pk).exists()
     assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert ProjectTask._base_manager.filter(pk=task.pk).exists()
 
     with system_context(reason="test threaded model delete cascade"):
         ticket.delete(*delete_args)
@@ -777,7 +777,6 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadNotification._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ProjectTask._base_manager.filter(pk=task.pk).exists()
     survivor_thread = survivor.message_thread(create=False)
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
@@ -810,13 +809,11 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
         )
         doc.message_subscribe(user=watcher)
         doc.message_post("Body to be collected by owner delete.")
-        task = ProjectTask.objects.schedule(doc, title="Follow up", assignee=watcher, due_date=_AT.date())
 
     thread = doc.message_thread(create=False)
     assert thread is not None
     thread_pk = thread.pk
     assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert ProjectTask._base_manager.filter(pk=task.pk).exists()
 
     with actor_context(owner):
         doc.delete()
@@ -826,7 +823,6 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
     assert not ThreadAttachment._base_manager.filter(object_id=doc.pk).exists()
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ProjectTask._base_manager.filter(pk=task.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -874,16 +870,13 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     delete collector can never cascade from a deleted record up to its private ``Thread``
     or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
     row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message, follower, or record task behind.
+    chattered record leaves no orphaned thread, message or follower behind.
     """
 
     del composed_tables
-    user_model = get_user_model()
     with system_context(reason="test threaded model bulk delete setup"):
-        author = user_model.objects.create_user(username="bulk-author", email="bulk-author@example.com")
         ticket = ThreadedTicket.objects.create(title="Bulk cascade case")
         ticket.message_post("Body to be collected in bulk.")
-        task = ProjectTask.objects.schedule(ticket, title="Follow up", assignee=author, due_date=_AT.date())
         survivor = ThreadedTicket.objects.create(title="Bulk survivor case")
         survivor_message = survivor.message_post("Untouched bulk body.")
 
@@ -891,7 +884,6 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert thread is not None
     thread_pk = thread.pk
     assert Message._base_manager.filter(thread_id=thread_pk).exists()
-    assert ProjectTask._base_manager.filter(pk=task.pk).exists()
 
     with system_context(reason="test threaded model bulk delete"):
         deleted, _details = ThreadedTicket.objects.filter(pk=ticket.pk).delete()
@@ -902,10 +894,6 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert not ThreadAttachment._base_manager.filter(object_id=ticket.pk).exists()
     assert not Message._base_manager.filter(thread_id=thread_pk).exists()
     assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
-    assert not ProjectTask._base_manager.filter(pk=task.pk).exists()
-    # The teardown's own capturing delete wrote the task's deletion once; the collector's
-    # later pre_delete for the same GenericRelation-collected row adds nothing.
-    assert ProjectTask.history.filter(id=task.pk, history_type="-").count() == 1
     survivor_thread = survivor.message_thread(create=False)
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
@@ -1092,11 +1080,12 @@ def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     assert "edited_at" not in edited.metadata
     assert "edited_by_id" not in edited.metadata
     assert Part._base_manager.select_related("fragment").get(message=edited).fragment.text == "Updated body"
-    assert Message._base_manager.count() == 2
+    # The record's creation is a history line, not a message: the comment is the only row.
+    assert Message._base_manager.count() == 1
     assert ThreadNotification._base_manager.count() == notification_count
     assert thread is not None
     thread.refresh_from_db()
-    assert thread.message_count == 2
+    assert thread.message_count == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1658,7 +1647,8 @@ def test_threaded_model_history_preserves_multiple_field_changes(composed_tables
         ticket.save(update_fields=("title", "status"))
         versions = list(ticket.history.order_by("history_id").values_list("title", "status"))
         assert versions == [("Initial", "open"), ("Escalated", "closed")]
-        assert Message._base_manager.count() == 1
+        # The creation and the edits are history lines; no message is written.
+        assert Message._base_manager.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1670,7 +1660,8 @@ def test_threaded_model_history_uses_persisted_update_fields(composed_tables: No
         ticket.save(update_fields=("status",))
         latest = ticket.history.order_by("-history_id").first()
         assert (latest.title, latest.status) == ("Unchanged", "closed")
-        assert Message._base_manager.count() == 1
+        # The creation and the edit are history lines; no message is written.
+        assert Message._base_manager.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1949,7 +1940,7 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
     monkeypatch.setattr(
         messaging_managers.transaction,
         "on_commit",
-        lambda callback: callbacks.append(callback),
+        lambda callback, **options: callbacks.append(callback),
     )
     monkeypatch.setattr(
         type(Party.objects),
@@ -1973,8 +1964,12 @@ def test_ingest_suggests_each_unresolved_handle_once_after_batch_commit(
 
     assert len(landed) == 2
     assert suggested == []
-    assert len(callbacks) == 1
-    callback = callbacks[0]
+    # History capture registers its own commit callbacks; the one suggestion batch is the manager's.
+    batches = [
+        callback for callback in callbacks if getattr(callback, "__qualname__", "").startswith("MessageManager.")
+    ]
+    assert len(batches) == 1
+    callback = batches[0]
     callback()
     assert suggested == [Handle._base_manager.get(value="shared@example.com").pk]
 
@@ -2660,13 +2655,14 @@ def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> No
     finally:
         post_save.disconnect(sender=Thread, dispatch_uid="test-thread-bump-probe")
 
-    # One thread INSERT and one bump each for the creation note and the explicit post.
+    # One thread INSERT and one bump for the explicit post; the record's creation is a
+    # history line, not a message, so it bumps nothing.
     bumps = [row for row in saves if not row["created"]]
-    assert len(bumps) == 2
+    assert len(bumps) == 1
     assert all({"message_count", "last_message_at"} <= bump["update_fields"] for bump in bumps)
 
     thread = Thread._base_manager.get()
-    assert thread.message_count == 2
+    assert thread.message_count == 1
     assert thread.last_message_at == message.sent_at
 
 

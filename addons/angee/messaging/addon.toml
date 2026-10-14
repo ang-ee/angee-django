@@ -15,6 +15,10 @@ dependencies = [
 ]
 
 [resources]
+install = [
+  { path = "resources/install/030_provenance.rule.yaml", adopt = "key" },
+  { path = "resources/install/040_source_identity_grants.yaml", kind = "grants", depends_on = ["resources/install/030_provenance.rule.yaml"] },
+]
 master = []
 # Activity types moved to angee.projects. On a stack without it, the drop guard lets
 # the catalog rows messaging's resource files seeded go with the removed model.

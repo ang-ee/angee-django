@@ -211,7 +211,9 @@ class DuplicateLinkTests(WorkCase):
             retained = self.Link.objects.create(target=canonical, url=collision.url)
         self.assertTrue(self.scoped(moved, self.outsider))
         self.assertFalse(self.scoped(moved, self.reader))
-        before = list(active_relationship_model().objects.order_by("pk").values())
+        # The merge's own changeset records its actor (provenance attribution, not a grant).
+        grants = active_relationship_model().objects.exclude(resource_fk__resource_type="provenance/changeset")
+        before = list(grants.order_by("pk").values())
         with actor_context(self.admin):
             self.as_user(source, self.admin).mark_duplicate(canonical)
         moved.refresh_from_db()
@@ -220,7 +222,7 @@ class DuplicateLinkTests(WorkCase):
         self.assertTrue(self.Link._base_manager.filter(pk=retained.pk).exists())
         self.assertTrue(self.scoped(moved, self.reader))
         self.assertFalse(self.scoped(moved, self.outsider))
-        self.assertEqual(list(active_relationship_model().objects.order_by("pk").values()), before)
+        self.assertEqual(list(grants.order_by("pk").values()), before)
 
 
 def test_work_task_access(tmp_path: Path):

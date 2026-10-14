@@ -24,6 +24,13 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 
 
+def grant_rows(store):
+    """A relationship store's rows; a changeset's attribution of its actor is provenance, not a grant."""
+
+    field = "resource_type" if store._meta.model_name == "relationship" else "resource_fk__resource_type"
+    return list(store._base_manager.exclude(**{field: "provenance/changeset"}).order_by("pk").values())
+
+
 class HasuraFilterDeclarationTests(TransactionTestCase):
     """Every current source-addon alias and filter provider builds in the composed graph."""
 
@@ -339,7 +346,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         need = self.need(email="", party=self.party(self.reader))
         decision = need.access_decision
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        before = [list(store._base_manager.order_by("pk").values()) for store in stores]
+        before = [grant_rows(store) for store in stores]
         mutation = """
           mutation Decide($id: ID!, $revision: Int!) {
             decide(id: $id, revision: $revision, chosen: ["intake.approve"]) {
@@ -358,7 +365,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, ["intake.approve"])
         self.assertEqual(need.access_answered_by_id, self.admin.pk)
         self.assertEqual(need._account_for_party(need.party_id).pk, self.reader.pk)
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
+        self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_need_without_cutover_question_refuses_plainly(self):
         # A need captured before the decisions cutover carries no question; an authorised answerer
@@ -542,10 +549,10 @@ class NeedAccessDecisionTests(IntakeAccessCase):
     def test_deciding_writes_neither_relationship_store(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        before = [list(store._base_manager.order_by("pk").values()) for store in stores]
+        before = [grant_rows(store) for store in stores]
         need.decide_access("intake.deny")
         need.decide_access("intake.approve")
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
+        self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_access_projections_batch_one_seat_query_for_lists(self):
         query = "query { intake_needs { access_verdict access_answered_at } }"

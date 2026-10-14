@@ -364,9 +364,10 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         """Copy template pages within the authorized vault-cloning transaction.
 
         The clone owner supplies actor-readable source pages. Their unchanged
-        scalar values retain source validation. The hierarchy owner saves parents
-        before their children and derives each path; normal saves own history
-        capture and lifecycle signals.
+        scalar values retain source validation. The hierarchy owner inserts the
+        tree level by level and derives each path (``create_forest``), recording
+        each page's creation once; lifecycle subscribers then hear of each page.
+        A cloned tree is a copy, not authored pages: nobody is made to follow them.
         """
 
         user_id = actor_user_id(actor)
@@ -382,19 +383,24 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         except CycleError as error:
             raise ValidationError("Template page parents must form a tree.") from error
         copies: dict[Any, Page] = {}
+        for pk in order:
+            source = pages[pk]
+            copies[pk] = self.model(
+                vault=vault,
+                parent=copies.get(source.parent_id),
+                title=source.title,
+                icon=source.icon,
+                created_by_id=user_id,
+                updated_by_id=user_id,
+            )
+        elevated = self.sudo(reason="knowledge.page.clone")
         with write_group():
-            for pk in order:
-                source = pages[pk]
-                page = self.model(
-                    vault=vault,
-                    parent=copies.get(source.parent_id),
-                    title=source.title,
-                    icon=source.icon,
-                    created_by_id=user_id,
-                    updated_by_id=user_id,
+            elevated.create_forest(list(copies.values()))
+            for page in copies.values():
+                page.with_actor(actor)
+                post_save.send(
+                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
                 )
-                page.sudo(reason="knowledge.page.clone").save()
-                copies[pk] = page.with_actor(actor)
         return copies
 
 
@@ -429,6 +435,9 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
         on_delete=models.CASCADE,
         related_name="pages",
     )
+    # A page's subtree is its content: deleting a folder page deletes the pages
+    # below it, where the hierarchy's default protects a parent with children.
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="children")
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
 

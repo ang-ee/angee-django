@@ -179,6 +179,30 @@ def test_trash_withholds_record_tasks_from_readers_but_keeps_removal_authority()
             Task.objects.schedule(concern.with_actor(reader), title="After concealing")
 
 
+@pytest.mark.parametrize("bulk", [False, True])
+def test_a_deleted_record_takes_its_tasks_with_it(bulk: bool) -> None:
+    """A subject pointer has no database cascade; the task owner tears the tasks down on delete."""
+
+    writer = _user("record-deleter")
+    doc, other = _doc("Doomed record"), _doc("Surviving record")
+    _grant(doc, "owner", writer)
+    _grant(other, "owner", writer)
+    with actor_context(writer):
+        task = Task.objects.schedule(_as(writer, doc), title="Goes with the record")
+        kept = Task.objects.schedule(_as(writer, other), title="Stays with its record")
+
+    with actor_context(writer):
+        if bulk:
+            ChatterDoc.objects.as_user(writer).filter(pk=doc.pk).delete()
+        else:
+            _as(writer, doc).delete()
+
+    assert not ChatterDoc._base_manager.filter(pk=doc.pk).exists()
+    assert not Task._base_manager.filter(pk=task.pk).exists()
+    assert Task.history.filter(id=task.pk, history_type="-").count() == 1
+    assert Task._base_manager.filter(pk=kept.pk).exists()
+
+
 def test_a_record_task_is_assigned_only_to_someone_who_reads_the_record() -> None:
     writer, outsider = _user("record-assigner"), _user("record-outsider")
     doc = _doc()

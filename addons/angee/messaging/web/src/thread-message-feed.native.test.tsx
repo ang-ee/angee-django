@@ -54,6 +54,7 @@ function fixture(nativeLive = false) {
   const roots = [
     ["messaging.Message", "messageChanged"], ["messaging.Thread", "threadChanged"],
     ["parties.Handle", "handleChanged"], ["parties.Party", "partyChanged"], ["storage.File", "fileChanged"],
+    ["provenance.Changeset", "changesetChanged"],
   ] as const;
   const sinks = new Map<string, { next(value: unknown): void }>();
   const nativeProvider = createAngeeChangeLiveProvider({

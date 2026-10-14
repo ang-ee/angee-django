@@ -920,7 +920,12 @@ and current contracts before applying a historical example to a new deployment.
   creating a Party never enrolls it in a remote address book.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
-  row. Base autoconfig enables the native
+  row. A queryset update that writes only columns the history excludes (a
+  counter), with at most auto-now stamps, records no version. A multi-table
+  child's save records the child's history only; its version carries the inherited
+  columns, and its revert restores them. A record's chatter thread and edge are its
+  bookkeeping: they revert under the record's `write`, and undoing the record's
+  creation tears them down with it. Base autoconfig enables the native
   `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
   allocates a separate nullable text change-reason field for each historical
   model; inherited tracking must never share mutable field instances across models.
@@ -1295,6 +1300,10 @@ and current contracts before applying a historical example to a new deployment.
   including when `of` is requested. Backends
   supporting row locks still enforce their supported lock options. Do not set
   private queryset write state or duplicate Django's feature checks.
+- **Hierarchy rows are created through `save()` or `HierarchyQuerySet.create_forest`.**
+  A batch (a cloned page tree) is one INSERT and one parent-and-path UPDATE
+  whatever its depth, and each row records one creation version, path included;
+  `save()` hooks do not run, so the caller sends the lifecycle signals it owes.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
   by column name.** A subtree that must stay inside a tenant or other scope
   declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
@@ -2016,7 +2025,10 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   A domain authority that is not `delete` (record-chatter moderation) keeps its own
   verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
   sudo read path it owns, such as the chatter transcript, must exclude trashed rows
-  itself. Work tasks keep their concealing stage as the removal convention.
+  itself. Work tasks enter the trash by moving into a concealing stage. Managers
+  are a positive arm beside the exclusion, never an exclusion inside it: rebac's
+  named-grant scan cannot compile an exclusion that holds another
+  ([tasks](../../addons/angee/projects/permissions.zed)).
 
 ### Addon WebSocket endpoints
 

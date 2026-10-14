@@ -206,11 +206,12 @@ class ProjectSetupReceipt(CreationKeyMixin, models.Model):
         constraints = (CreationKeyMixin.creation_key_constraint(scope=("actor", "task")),)
 
 
-class TaskQuerySet(
-    HierarchyQuerySet[Any], MergeableQuerySet[Any], TrashQuerySet[Any],
-    CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any],
-):
-    """Task rows with shared creation replay and ownership release contracts."""
+class TaskVisibilityQuerySet(models.QuerySet[Any]):
+    """Keep visibility transitions on the authorized instance verb.
+
+    A guard on ``update`` sits after ``HierarchyQuerySet`` in the task queryset so
+    the hierarchy's own path rewrites pass through it (``angee.E021``).
+    """
 
     def update(self, **kwargs: Any) -> int:
         """Keep visibility transitions on the authorized instance verb."""
@@ -225,6 +226,13 @@ class TaskQuerySet(
         if "visibility" in fields:
             raise ValueError("Task.visibility requires set_visibility().")
         return super().bulk_update(objs, fields, *args, **kwargs)
+
+
+class TaskQuerySet(
+    HierarchyQuerySet[Any], TaskVisibilityQuerySet, MergeableQuerySet[Any], TrashQuerySet[Any],
+    CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any],
+):
+    """Task rows with shared creation replay and ownership release contracts."""
 
     def for_record(self, record: Any, *, include_done: bool = True) -> Any:
         """Return ``record``'s tasks this queryset reads: open first, then by due date and title.

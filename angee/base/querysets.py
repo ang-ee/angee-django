@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
@@ -95,10 +95,14 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
         return self
 
     def update(self, **kwargs: Any) -> int:
-        """Capture stored state after an authorized write of frozen, locked keys."""
+        """Capture stored state after an authorized write of frozen, locked keys.
+
+        A write to columns the history excludes (a counter), with at most its
+        timestamp stamps, changes no tracked state and records no version.
+        """
 
         history = model_history(self.model)
-        if history is None or self.query.is_sliced:
+        if history is None or self.query.is_sliced or not self._changes_tracked_state(history, kwargs):
             return super().update(**kwargs)
         self._for_write = True
         selection = self._system_capture(reason="angee.history.rows") if isinstance(self, RebacQuerySet) else self
@@ -112,6 +116,18 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
                 history.bulk_history_create(self.model, keys, "~", using=self.db)
                 self._result_cache = None
                 return count
+
+    def _changes_tracked_state(self, history: ModelHistory, values: Mapping[str, Any]) -> bool:
+        """Whether an update writes a column the history tracks, beyond auto-now stamps."""
+
+        tracked = {field.attname for field in history.fields_included(self.model)} | {
+            field.name for field in history.fields_included(self.model)
+        }
+        stamps = {
+            name for field in self.model._meta.concrete_fields if getattr(field, "auto_now", False)
+            for name in (field.name, field.attname)
+        }
+        return any(name in tracked for name in values if name not in stamps)
 
     def bulk_create(
         self,

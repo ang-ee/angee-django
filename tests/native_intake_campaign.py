@@ -14,7 +14,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase
+from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
 
 
 class IntakeCampaign(IntakeAccessCase):
@@ -35,10 +35,7 @@ class IntakeCampaign(IntakeAccessCase):
                 user.save(update_fields=("username", "email"))
 
     def tuples(self):
-        return tuple(
-            list(apps.get_model("rebac", name)._base_manager.order_by("pk").values())
-            for name in ("Relationship", "RelationshipRegistry")
-        )
+        return tuple(grant_rows(apps.get_model("rebac", name)) for name in ("Relationship", "RelationshipRegistry"))
 
     def test_reconsideration_retains_answer_and_approval_is_final(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))
@@ -302,7 +299,7 @@ class CaptureCampaign(TransactionTestCase):
         channel = self.webform(domains=("example.test",))
         email = f"claim-{self._testMethodName}@example.test"
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
-        before = [list(store._base_manager.order_by("pk").values()) for store in stores]
+        before = [grant_rows(store) for store in stores]
         for key in ("first", "first", "second"):
             parsed = channel.webform_message(
                 submission_id=key,
@@ -329,7 +326,7 @@ class CaptureCampaign(TransactionTestCase):
         link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
         self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
         self.assertEqual(link.evidence, [{"model": need._meta.label, "id": public_id_of(need)} for need in needs])
-        self.assertEqual([list(store._base_manager.order_by("pk").values()) for store in stores], before)
+        self.assertEqual([grant_rows(store) for store in stores], before)
 
     def test_email_capture_requires_confirmed_sender_link_and_replays_once(self):
         email = f"sender-{self._testMethodName}@example.test"

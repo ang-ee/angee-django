@@ -263,7 +263,7 @@ class DashboardQuery:
             if current_actor() is None:
                 return DashboardPayload(status="absent")
             try:
-                Dashboard.objects.check_create({"owner": (session_user(info),)})
+                Dashboard.objects.may_create(session_user(info))
                 can_edit = True
             except PermissionDenied:
                 can_edit = False

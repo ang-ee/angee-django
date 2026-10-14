@@ -1857,6 +1857,11 @@ class AgentSession(OwnerMixin, AngeeDataModel):
 
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
+    # A session is its owner's own conversation: deleting the owner deletes it, and
+    # refuses while one of its turns still runs, where other owned roots are released.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, editable=False, on_delete=models.CASCADE, related_name="+",
+    )
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
     """The view from which this conversation was started, independent of its turns."""
