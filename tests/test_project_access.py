@@ -91,7 +91,9 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_sche
         reader = create_user("permission-reader")
         with system_context(reason="tests.projects.permissions.seed"):
             project = Project.objects.create(title="Permission project", owner=owner)
-            Task.objects.bulk_create([Task(project=project, owner=owner, assignee=assignee) for _ in range(50)])
+            # A hierarchy row derives its path on save, so the batch inserts one by one.
+            for _ in range(50):
+                Task.objects.create(project=project, owner=owner, assignee=assignee)
             write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(reader))])
         document = """
             query Permissions($limit: Int!) {

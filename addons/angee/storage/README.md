@@ -38,3 +38,7 @@ effective arm before accepting a record upload, `record_files` offers uploads
 tab uses the existing `file_upload_begin` record target with `visibility: RECORD`. The tab is the
 `record#aside/storage.files` child (`?chatterTab=files` still selects it); a product
 narrowing `record#aside` with `only` keeps it by listing `storage.files`.
+
+Folders compose the native hierarchy and transferable ownership, scoped to their
+drive. Files, folders and FileAttachment edges retain changeset history; a merge
+can restore an attachment's former target without moving the file's bytes.

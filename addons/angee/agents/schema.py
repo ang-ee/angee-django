@@ -226,7 +226,7 @@ class AgentSessionType(AngeeNode):
     """Owner-visible projection of one persisted agent conversation."""
 
     agent: AgentType
-    owner: UserType
+    owner: UserType | None
     title: auto
     context: JSON
     status: auto

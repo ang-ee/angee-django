@@ -9,13 +9,12 @@ describe("agents addon manifest", () => {
     expect(() => expectValidBaseAddon(agents)).not.toThrow();
   });
 
-  test("registers the session route pair and the record aside's chat tab", () => {
+  test("registers the session route pair and the shell agent drawer", () => {
     const sessionRoute = agents.routes?.find((route) => route.name === "agents.session");
     expect(sessionRoute?.parent).toBe("agents.sessions");
     expect(sessionRoute?.path).toBe("/agents/sessions/$id");
-    // Every record view's aside; `?chatterTab=agents` links keep resolving through the alias.
-    expect(agents.containers?.["record#aside"]).toMatchObject({
-      "agents.chat": { sequence: 0, content: { label: "Agents", icon: "agent", aliases: ["agents"] } },
+    expect(agents.containers?.["shell#drawers-right"]).toMatchObject({
+      "agents.chat": { sequence: 10, content: { title: "Agents", icon: "agent" } },
     });
   });
 

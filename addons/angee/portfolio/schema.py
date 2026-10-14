@@ -273,13 +273,14 @@ def _product_resource(node_type: type) -> Any:
         sortable=["name", "lifecycle", "created_at", "updated_at"],
         aggregatable=["id"],
         groupable=["owner", "lifecycle"],
-        insertable=["name", "body", "owner", "lifecycle"],
-        updatable=["name", "body", "owner", "lifecycle"],
+        # The owner is the creator and moves only through `transfer_ownership`.
+        insertable=["name", "body", "lifecycle"],
+        updatable=["name", "body", "lifecycle"],
         field_id_decode={
             "owner": public_pk_decoder(User),
             "originated_from": public_pk_decoder(Project),
         },
-        write_backend=AngeeHasuraWriteBackend(Product, public_id_fields=("owner",)),
+        write_backend=AngeeHasuraWriteBackend(Product),
     )
 
 
@@ -330,11 +331,11 @@ def _initiative_resource(node_type: type) -> Any:
             "target_date_resolution",
             "priority",
         ],
+        # The owner is the creator and moves only through `transfer_ownership`.
         insertable=[
             "parent",
             "name",
             "body",
-            "owner",
             "status",
             "target_date",
             "target_date_resolution",
@@ -345,7 +346,6 @@ def _initiative_resource(node_type: type) -> Any:
             "parent",
             "name",
             "body",
-            "owner",
             "status",
             "target_date",
             "target_date_resolution",
@@ -358,7 +358,7 @@ def _initiative_resource(node_type: type) -> Any:
         },
         write_backend=AngeeHasuraWriteBackend(
             Initiative,
-            public_id_fields=("parent", "owner"),
+            public_id_fields=("parent",),
         ),
     )
 

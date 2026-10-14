@@ -26,8 +26,8 @@ from angee.workflows.triggers import RecordChanged, RecordChangedOptIn, TriggerG
 
 EXPECTED_MODELS = {
     "workflows": (
-        "StepAttempt StepRecord StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun "
-        "WorkflowVersion"
+        "HistoricalStepWatch HistoricalWorkflow StepAttempt StepRecord StepRun StepWatch Trigger TriggerEvent "
+        "Workflow WorkflowRun WorkflowVersion"
     ),
     "decisions": "Decision DecisionRecord",
     "extraction": "Extraction ExtractionLineage ExtractionPage ExtractionPart ExtractionSource",

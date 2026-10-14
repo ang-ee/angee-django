@@ -10,7 +10,6 @@ import { enMessagingMessages } from "./i18n";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
-import { RecordHistoryPane } from "./RecordHistoryPane";
 import { RecordChatterPane } from "./RecordChatterPane";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
@@ -18,6 +17,7 @@ import {
   RECORD_UNREAD_COUNT_MODELS,
   RecordThreadUnreadCountDocument,
   THREAD_ATTACHMENT_MODEL,
+  THREAD_CHATTER_EDGE,
 } from "./documents";
 
 export { CHANNEL_MODEL } from "./documents";
@@ -80,7 +80,12 @@ export interface MessagingAddonOptions {
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
 }
 
-/** Whether the viewed record's type carries thread attachments: its schema names it a thread attachment target. */
+/** Whether the viewed record's type keeps chatter: its resource lists the thread attachment edge's chatter role. */
+export function recordKeepsChatter(context: ChatterViewContext): boolean {
+  return context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false;
+}
+
+/** Whether the viewed record's type retains source conversations: its schema names it a thread attachment target. */
 export function recordCarriesThreads(context: ChatterViewContext): boolean {
   return context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false;
 }
@@ -92,6 +97,8 @@ export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAdd
     content: {
       label: "Comments", icon: "comments",
       ...(aliases ? { aliases } : {}),
+      // Per role, not per edge: a file is a thread attachment target only for its source conversations.
+      when: recordKeepsChatter,
       useCount: useRecordCommentsUnread,
       render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
     },
@@ -135,24 +142,14 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    // Messaging supplies the real comments and history in place of the framework's placeholders.
+    // Messaging contributes record comments and retained source conversations.
     "record#aside": {
-      "chatter.comments": { remove: true },
-      "chatter.history": { remove: true },
       "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-      "messaging.history": {
-        sequence: 20,
-        // "activity" and "messaging.activity" are the former ids, kept in `?chatterTab=` links until angee 0.4.0
-        // removes them (.changeset/chatter-history-tab.md).
+      // `messaging.sources` is the one-release alias of the renamed tab.
+      "messaging.related": {
+        sequence: 60,
         content: {
-          label: "History", icon: "activity", aliases: ["history", "activity", "messaging.activity"],
-          render: (context) => <RecordHistoryPane context={context} />,
-        },
-      },
-      "messaging.sources": {
-        sequence: 30,
-        content: {
-          label: "Sources", icon: "inbox", aliases: ["sources"],
+          label: "Conversations", icon: "inbox", aliases: ["messaging.sources", "sources"],
           // Only on types whose schema lets a record retain source conversations.
           when: recordCarriesThreads,
           render: (context) => <RecordSourceThreadsPane context={context} />,

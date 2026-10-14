@@ -21,6 +21,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
+import { MessageSourceCopies } from "./MessageSourceCopies";
 import { messagingReactionCopy } from "./reaction-copy";
 import type { ThreadTranscriptRow } from "./documents";
 import { messageFeedRows } from "./message-feed";
@@ -79,11 +80,21 @@ export function ThreadTranscript({
   timezone,
   onPreviewFile,
 }: ThreadTranscriptProps): React.ReactElement {
-  // Remount per thread so scroll anchors and virtualizer measurements reset.
+  const [allCopies, setAllCopies] = React.useState(false);
+  const t = useMessagingT();
   return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex justify-end border-b border-border-subtle p-2">
+        <Button size="sm" variant="ghost" aria-pressed={allCopies} onClick={() => setAllCopies(!allCopies)}>
+          {t(allCopies ? "copies.collapse" : "copies.showAll")}
+        </Button>
+      </div>
+    {/* Remount per thread, anchor and copy mode: each is a different row set, so the
+        virtualizer's measurements and the scroll anchor start over. */}
     <TranscriptBody
-      key={`${threadId}:${anchor}`}
+      key={`${threadId}:${anchor}:${allCopies}`}
       threadId={threadId}
+      allCopies={allCopies}
       order={order}
       anchor={anchor}
       onAnchorChange={onAnchorChange}
@@ -92,11 +103,13 @@ export function ThreadTranscript({
       timezone={timezone}
       onPreviewFile={onPreviewFile}
     />
+    </div>
   );
 }
 
 function TranscriptBody({
   threadId,
+  allCopies,
   order = "conversation",
   anchor = "",
   onAnchorChange,
@@ -104,9 +117,9 @@ function TranscriptBody({
   renderWindow,
   timezone,
   onPreviewFile,
-}: ThreadTranscriptProps): React.ReactElement {
+}: ThreadTranscriptProps & { allCopies: boolean }): React.ReactElement {
   const t = useMessagingT();
-  const transcript = useThreadMessageFeed(threadId, anchor);
+  const transcript = useThreadMessageFeed(threadId, anchor, allCopies);
   // Render oldest-to-newest so the latest turn sits at the bottom.
   const messages = React.useMemo(
     () => messageFeedRows(transcript.data).reverse(),
@@ -293,6 +306,8 @@ function TranscriptBody({
                   t={t}
                   onPreviewFile={onPreviewFile}
                 />
+                <MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name}
+                  renderActions={renderMessageActions} />
                 {renderMessageActions ? (
                   <div className="mt-2 flex justify-end">
                     {renderMessageActions(message)}

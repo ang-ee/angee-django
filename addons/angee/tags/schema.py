@@ -190,6 +190,7 @@ _TAG_RESOURCE = hasura_model_resource(
     TagType,
     model=Tag,
     name="tags",
+    get_queryset=lambda info: Tag.objects.canonical(),
     filterable=list(_TAG_FILTERABLE_FIELDS),
     sortable=["name", "created_at", "updated_at"],
     aggregatable=["id"],

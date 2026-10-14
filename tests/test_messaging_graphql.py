@@ -369,15 +369,6 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
                 }
             )
 
-        if surface == "record_thread":
-            creation_note = messaging_models.Message._base_manager.get(thread=thread, message_type="notification")
-            expected.append(
-                {
-                    "id": str(creation_note.sqid),
-                    "parts": [{"id": str(part.sqid)} for part in creation_note.parts.order_by("pk")],
-                }
-            )
-
     # IDs alone must not incidentally request the structural/content fields
     # whose deferral would make the manager reject the optimizer's prefetch.
     query = (
@@ -781,7 +772,6 @@ def test_record_thread_sender_projection_omits_party_for_non_admin_reader(
     )["record_thread"]
     assert visible == {
         "messages": [
-            {"sender": None},
             {
                 "sender": {
                     "display_name": "Ada Envelope",
@@ -1075,7 +1065,8 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             request=_request(admin),
         )
     )["record_thread"]
-    assert before == {"error_code": None, "thread": {"id": messaging_models.Thread._base_manager.get().sqid}}
+    # The record's creation is a history line, not a message: no thread exists before the first post.
+    assert before == {"error_code": None, "thread": None}
 
     posted = _data(
         execute_schema(
@@ -1116,7 +1107,7 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
     assert posted["message"]["title"] == ""
     assert posted["message"]["preview"] == "Follow up from GraphQL."
     assert posted["message"]["parts"][0]["fragment"]["text"] == "Follow up from GraphQL."
-    assert posted["thread"] == {"title": {"text": "Case 101"}, "message_count": 2}
+    assert posted["thread"] == {"title": {"text": "Case 101"}, "message_count": 1}
     assert posted["follower_count"] == 1
     assert posted["is_following"] is True
     assert posted["followers"] == [{"user": {"username": "msg-chatter-admin"}}]
@@ -1144,11 +1135,8 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
     )["record_thread"]
     assert after["error_code"] is None
     assert after["thread"]["title"] == {"text": "Case 101"}
-    assert after["thread"]["message_count"] == 2
-    assert after["thread"]["messages"] == [
-        {"preview": "Follow up from GraphQL."},
-        {"preview": "Threaded ticket created"},
-    ]
+    assert after["thread"]["message_count"] == 1
+    assert after["thread"]["messages"] == [{"preview": "Follow up from GraphQL."}]
     assert after["follower_count"] == 1
     assert after["is_following"] is True
 
@@ -1207,7 +1195,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             "preview": "Internal note from GraphQL.",
             "subtype": {"key": "note", "description": "Internal note"},
         },
-        "thread": {"message_count": 2},
+        "thread": {"message_count": 1},
     }
 
 
@@ -1287,7 +1275,6 @@ def test_record_chatter_post_reply(composed_tables: None) -> None:
     assert reply["thread"]["messages"] == [
         {"preview": "Reply from GraphQL.", "parent": {"preview": "Original from GraphQL."}},
         {"preview": "Original from GraphQL.", "parent": None},
-        {"preview": "Threaded ticket created", "parent": None},
     ]
 
 
@@ -1475,8 +1462,9 @@ def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
     other = _platform_admin("msg-star-other")
     with system_context(reason="test.messaging.record_star.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 109")
+        # A logged note stands beside the comment as the thread's notification row.
+        creation = ticket.message_log("Case opened.")
         message = ticket.message_post("Star this.")
-        creation = messaging_models.Message._base_manager.get(thread_id=message.thread_id, message_type="notification")
     schema = _schema()
 
     starred = _data(
@@ -1601,7 +1589,8 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
     admin = _platform_admin("msg-edit-admin")
     with system_context(reason="test.messaging.record_chatter_edit.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 111")
-        creation = messaging_models.Message._base_manager.get(message_type="notification")
+        # A logged note stands beside the comment as the thread's notification row.
+        creation = ticket.message_log("Case opened.")
     schema = _schema()
 
     posted = _data(
@@ -1673,7 +1662,7 @@ def test_record_chatter_update_message(composed_tables: None) -> None:
             "status": "EDITED",
             "preview": "Updated GraphQL body.",
         },
-        {"id": creation.sqid, "status": "SENT", "preview": "Threaded ticket created"},
+        {"id": creation.sqid, "status": "SENT", "preview": "Case opened."},
     ]
 
 
@@ -1683,7 +1672,8 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
     admin = _platform_admin("msg-delete-admin")
     with system_context(reason="test.messaging.record_chatter_delete.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 113")
-        creation = messaging_models.Message._base_manager.get(message_type="notification")
+        # A logged note stands beside the comments as the thread's notification row.
+        creation = ticket.message_log("Case opened.")
     schema = _schema()
 
     first = _data(
@@ -1759,7 +1749,7 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
         "message_count": 2,
         "messages": [
             {"id": second["id"], "preview": "Keep me."},
-            {"id": creation.sqid, "preview": "Threaded ticket created"},
+            {"id": creation.sqid, "preview": "Case opened."},
         ],
     }
     first_exists = messaging_models.Message._base_manager.filter(
@@ -1768,25 +1758,13 @@ def test_record_chatter_deletes_message(composed_tables: None) -> None:
     assert first_exists is False
 
 
-def test_record_chatter_update_rejects_tracking_message(composed_tables: None) -> None:
-    """The GraphQL edit mutation keeps tracking messages immutable."""
+def test_record_chatter_update_rejects_retained_notification(composed_tables: None) -> None:
+    """The GraphQL edit mutation keeps retained notifications immutable."""
 
     admin = _platform_admin("msg-edit-guard-admin")
     with system_context(reason="test.messaging.record_chatter_edit_guard.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 112")
-        message = ticket.message_track(
-            (
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_value": "new",
-                    "new_value": "done",
-                    "old_display": "New",
-                    "new_display": "Done",
-                },
-            ),
-        )
+        message = ticket.message_log("Stage: New → Won")
     schema = _schema()
 
     payload = _data(
@@ -1818,108 +1796,32 @@ def test_record_chatter_update_rejects_tracking_message(composed_tables: None) -
     assert payload["message"] is None
 
 
-def test_record_chatter_query_returns_tracking_values(composed_tables: None) -> None:
-    """The record chatter query returns structured tracking rows for auto-comments."""
-
-    admin = _platform_admin("msg-tracking-admin")
-    with system_context(reason="test.messaging.record_tracking.seed"):
-        ticket = messaging_models.ThreadedTicket.objects.create(title="Case 505")
-        ticket.message_track(
-            (
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_value": "new",
-                    "new_value": "won",
-                    "old_display": "New",
-                    "new_display": "Won",
-                },
-            ),
-        )
-    schema = _schema()
-
-    payload = _data(
-        execute_schema(
-            schema,
-            """
-            query RecordThreadTracking($model: String!, $id: ID!) {
-              record_thread(input: {model_label: $model, record_id: $id}) {
-                error_code
-                thread {
-                  messages {
-                    message_type
-                    preview
-                    subtype {
-                      key
-                      description
-                    }
-                    tracking_values {
-                      field_name
-                      field_label
-                      field_type
-                      old_display
-                      new_display
-                    }
-                  }
-                }
-              }
-            }
-            """,
-            {"model": "messaging.ThreadedTicket", "id": ticket.sqid},
-            request=_request(admin),
-        )
-    )["record_thread"]
-
-    assert payload["error_code"] is None
-    assert payload["thread"]["messages"] == [
-        {
-            "message_type": "AUTO_COMMENT",
-            "preview": "Stage: New -> Won",
-            "subtype": {
-                "key": "record_updated",
-                "description": "Record updated",
-            },
-            "tracking_values": [
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_display": "New",
-                    "new_display": "Won",
-                },
-            ],
-        },
-        {
-            "message_type": "NOTIFICATION",
-            "preview": "Threaded ticket created",
-            "subtype": {"key": "record_created", "description": "Record created"},
-            "tracking_values": [],
-        },
+def test_record_chatter_returns_retained_notification_body(composed_tables: None) -> None:
+    admin = _platform_admin("msg-retained-admin")
+    with system_context(reason="retained notification read"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case")
+        ticket.message_log("Stage: New → Won")
+    result = _data(execute_schema(_schema(), """
+        query Retained($id: ID!) {
+          record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id, search: "Stage"}) {
+            messages { message_type parts { fragment { text } } }
+          }
+        }
+    """, {"id": ticket.sqid}, request=_request(admin)))["record_thread"]
+    assert result["messages"] == [
+        {"message_type": "NOTIFICATION", "parts": [{"fragment": {"text": "Stage: New → Won"}}]},
     ]
 
 
-def test_record_chatter_searches_messages_and_tracking_values(composed_tables: None) -> None:
-    """The record chatter API searches comment bodies and tracking rows."""
+def test_record_chatter_searches_comments_and_retained_notification_bodies(composed_tables: None) -> None:
+    """The record chatter API searches comment and retained notification bodies."""
 
     admin = _platform_admin("msg-search-admin")
     with system_context(reason="test.messaging.record_search.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 515")
         ticket.message_post("General update.")
         ticket.message_post("Rollout needle is blocked.")
-        ticket.message_track(
-            (
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_value": "new",
-                    "new_value": "won",
-                    "old_display": "New",
-                    "new_display": "Won",
-                },
-            ),
-        )
+        ticket.message_log("Stage: New → Won")
     schema = _schema()
 
     def search(term: str) -> dict[str, Any]:
@@ -1935,11 +1837,6 @@ def test_record_chatter_searches_messages_and_tracking_values(composed_tables: N
                       message_type
                       preview
                       parts { fragment { text } }
-                      tracking_values {
-                        field_label
-                        old_display
-                        new_display
-                      }
                     }
                   }
                 }
@@ -1958,10 +1855,8 @@ def test_record_chatter_searches_messages_and_tracking_values(composed_tables: N
     tracking_result = search("Won")
     assert tracking_result["error_code"] is None
     assert tracking_result["message_result_count"] == 1
-    assert tracking_result["messages"][0]["message_type"] == "AUTO_COMMENT"
-    assert tracking_result["messages"][0]["tracking_values"] == [
-        {"field_label": "Stage", "old_display": "New", "new_display": "Won"}
-    ]
+    assert tracking_result["messages"][0]["message_type"] == "NOTIFICATION"
+    assert tracking_result["messages"][0]["parts"][0]["fragment"]["text"] == "Stage: New → Won"
 
 
 def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
@@ -2025,7 +1920,8 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
 
     first_page = fetch(limit=2)
     assert first_page["error_code"] is None
-    assert first_page["message_result_count"] == 6
+    # The five posts; the record's creation is a history line, not a message.
+    assert first_page["message_result_count"] == 5
     # The newest window is still selected, but returned chronological ascending.
     assert [message["preview"] for message in first_page["messages"]] == [
         "Window message 4",
@@ -2101,10 +1997,9 @@ def test_record_chatter_orders_interleaved_backfilled_email(composed_tables: Non
         )["record_thread"]
         return [message["preview"] for message in payload["messages"]]
 
-    # Chronological order is Message 1, 2, Backfilled email, 3, 4, 5. The newest window
-    # includes the newer creation note; the backfilled email is *not* among them
-    # despite carrying the highest pk.
-    assert previews(limit=3) == ["Message 4", "Message 5", "Threaded ticket created"]
+    # Chronological order is Message 1, 2, Backfilled email, 3, 4, 5. The backfilled
+    # email is *not* in the newest window despite carrying the highest pk.
+    assert previews(limit=3) == ["Message 3", "Message 4", "Message 5"]
     # Cursoring before Message 3 returns the two rows chronologically before it, so the
     # interleaved backfilled email cannot be skipped at the page boundary.
     assert previews(limit=2, before=messages[2].sqid) == ["Message 2", "Backfilled email"]
@@ -2117,19 +2012,7 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     with actor_context(admin), system_context(reason="test.messaging.record_capability.seed"):
         ticket = messaging_models.ThreadedTicket.objects.create(title="Case 808")
         ticket.message_post("Editable comment.")
-        ticket.message_track(
-            (
-                {
-                    "field_name": "stage",
-                    "field_label": "Stage",
-                    "field_type": "selection",
-                    "old_value": "new",
-                    "new_value": "won",
-                    "old_display": "New",
-                    "new_display": "Won",
-                },
-            ),
-        )
+        ticket.message_log("Stage: New → Won")
     schema = _schema()
 
     payload = _data(
@@ -2156,13 +2039,13 @@ def test_record_thread_projects_edit_and_delete_capability(composed_tables: None
     capabilities = {
         message["message_type"]: (message["can_edit"], message["can_delete"]) for message in payload["messages"]
     }
-    # A plain comment is editable and deletable; tracking and system notes are retained.
+    # A plain comment is editable and deletable; notifications are retained.
     assert capabilities["COMMENT"] == (True, True)
-    assert capabilities["AUTO_COMMENT"] == (False, False)
+    assert capabilities["NOTIFICATION"] == (False, False)
 
 
 def test_record_message_capabilities_have_constant_query_count(composed_tables: None, record_property) -> None:
-    """Both capability fields share one tracking-existence projection per list."""
+    """Both capability fields use the fetched kind without per-message reads."""
 
     admin = _platform_admin("msg-capability-budget-admin")
     with actor_context(admin), system_context(reason="test.messaging.capability.budget.seed"), mute_changes():
@@ -2174,14 +2057,11 @@ def test_record_message_capabilities_have_constant_query_count(composed_tables: 
             message = messaging_models.Message.objects.create(
                 thread=attachment.thread,
                 direction="internal",
-                message_type="comment",
+                message_type="notification" if index % 2 == 0 else "comment",
                 created_by=admin,
                 sender=sender,
             )
-            tracked = index % 2 == 0
-            if tracked:
-                messaging_models.TrackingValue.objects.create(message=message, field_name="status")
-            expected[str(message.sqid)] = not tracked
+            expected[str(message.sqid)] = index % 2 != 0
     query = """
         query Capabilities($id: ID!, $limit: Int!) {
           record_thread(input: {model_label: "messaging.ThreadedTicket", record_id: $id, message_limit: $limit}) {
@@ -2392,7 +2272,6 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
     assert unread["unread_count"] == 2
     assert unread["needaction_count"] == 2
     assert {message["preview"]: message["needaction"] for message in unread["messages"]} == {
-        "Threaded ticket created": False,
         "First needaction item.": True,
         "Second needaction item.": True,
     }
@@ -2455,7 +2334,6 @@ def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
         )
     )["record_thread"]
     assert {message["id"]: message["needaction"] for message in refreshed["messages"]} == {
-        messaging_models.Message._base_manager.get(thread=thread, message_type="notification").sqid: False,
         first.sqid: False,
         second.sqid: True,
     }
@@ -3427,7 +3305,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(composed_tables:
 
     Fix 2: the inventory (:meth:`ChannelManager.inventory`) counts the channel's
     threads/messages AND their top-level CASCADE children (parts, reactions, stars,
-    tracking values, edges, participants, notifications, followers), so the count-based
+    edges, participants, notifications, followers), so the count-based
     forecast matches what ``teardown_for_channel`` + the channel delete remove — no
     under-count from omitted subtrees. Compared against Django's authoritative per-call
     ``.delete()`` totals over the exact same scope.
@@ -3453,16 +3331,13 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(composed_tables:
             thread=thread2, channel=channel, external_id="acc-a2", status="synced", created_by_id=owner_id
         )
         # Message-rooted CASCADE children on msg1: a nested part tree, a reaction, a star,
-        # a tracking value; a cross-message edge; and both participant flavors (message- and
+        # a cross-message edge; and both participant flavors (message- and
         # thread-attached, to exercise the OR predicate) plus a delivery notification.
         root_part = messaging_models.Part._base_manager.create(message=msg1, fragment=fragment, role="body")
         messaging_models.Part._base_manager.create(message=msg1, parent=root_part, fragment=fragment, role="quoted")
         messaging_models.Part._base_manager.create(message=msg2, fragment=fragment, role="body")
         messaging_models.Reaction._base_manager.create(message=msg1, reaction="like", created_by_id=owner_id)
         messaging_models.MessageStar._base_manager.create(message=msg1, user_id=owner_id, created_by_id=owner_id)
-        messaging_models.TrackingValue._base_manager.create(
-            message=msg1, field_name="stage", field_label="Stage", created_by_id=owner_id
-        )
         messaging_models.MessageEdge._base_manager.create(src=msg1, dst=msg2, created_by_id=owner_id)
         messaging_models.Participant._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
         messaging_models.Participant._base_manager.create(thread=thread2, handle=handle, created_by_id=owner_id)

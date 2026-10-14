@@ -44,11 +44,13 @@ Hosted list views retain their declared row actions, filter chrome, and row
 links. Hosted Gantt views retain the declaration's lane label content, including
 secondary text and people avatars.
 
-Installed baselines have no actor owner. Their [permission policy](permissions.zed)
-derives shared reads through a filtered constant over that column, so bulk owner
-changes take effect without tuple reconciliation. Dashboard and widget reads use
-the same REBAC scope as authored dashboards; the shared reader grants no write
-access.
+Installed baselines have no actor owner. The [resource adapter](resources.py)
+declares their baseline role independently of transferable ownership; clearing an
+authored dashboard's owner never shares it. Their [permission policy](permissions.zed)
+derives baseline reads from that role without granting write access. Personal
+removal uses trash and the catalogue's shared Removed list restores it. Widget
+archival remains availability inside a snapshot. Dashboard history includes its
+owned widgets in the same changeset.
 
 ## Declared table columns
 

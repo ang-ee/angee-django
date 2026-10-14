@@ -16,50 +16,33 @@ import tests.test_messaging  # noqa: F401 -- register the fixture model graph be
 from angee.graphql.publishing import mute_changes
 from angee.messaging import delivery
 from angee.messaging.backends import DeliveryOutcome
-from angee.messaging.testing.models import Message, TrackingValue
+from angee.messaging.testing.models import Message
 from tests.test_messaging import channel as channel
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("tracked", [False, True])
-def test_content_edit_validation_reads_tracking(
+@pytest.mark.parametrize("kind", list(Message.MessageKind))
+def test_content_edit_validation_uses_retained_kind(
     composed_tables: None,
     django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
-    tracked: bool,
+    kind: str,
 ) -> None:
-    """The edit and delete predicates consume the same SQL projection for free."""
-    with system_context(reason="messaging edit validation setup"), mute_changes():
-        message = Message.objects.create(direction=Message.Direction.INTERNAL, message_type=Message.MessageKind.COMMENT)
-        if tracked:
-            TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
-        message = Message.objects.annotate(
-            _has_tracking_values=Message.has_tracking_values_expression(),
-        ).get(pk=message.pk)
+    """The edit and delete predicates consume the row's owning kind without extra reads."""
+    message = Message(direction=Message.Direction.INTERNAL, message_type=kind)
     with django_assert_num_queries(0):
-        assert message.content_edit_error() == ("Messages with tracking values cannot be edited." if tracked else None)
-        assert message.delete_error() == ("Messages with tracking values cannot be deleted." if tracked else None)
+        assert (message.content_edit_error() is None) == (kind == Message.MessageKind.COMMENT)
+        assert (message.delete_error() is None) == (kind == Message.MessageKind.COMMENT)
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("prefetched", [False, True])
-def test_content_edit_validation_rechecks_tracking_after_prefetch(
-    composed_tables: None,
-    django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
-    prefetched: bool,
-) -> None:
-    """Stale or actor-scoped prefetches cannot hide immutable tracking values."""
-    with system_context(reason="messaging prefetched tracking setup"), mute_changes():
-        message = Message.objects.create(
-            direction=Message.Direction.INTERNAL,
-            message_type=Message.MessageKind.COMMENT,
-        )
-        if prefetched:
-            message = Message.objects.prefetch_related("tracking_values").get(pk=message.pk)
-        TrackingValue.objects.create(message_id=message.pk, field_name="status", field_label="Status")
-    with system_context(reason="messaging prefetched tracking validation"):
-        # The system queryset audits its use, then checks the authoritative rows.
-        with django_assert_num_queries(2):
-            assert message.content_edit_error() == "Messages with tracking values cannot be edited."
+def test_legacy_notification_payload_remains_readonly(composed_tables: None) -> None:
+    """Retired field-tracking messages use the same retained-notification policy."""
+    message = Message(direction="internal", message_type="notification", metadata={
+        "legacy_tracking": [{"field_name": "status", "old_value": "open", "new_value": "closed"}],
+    })
+    assert message.content_edit_error() is not None
+    assert message.delete_error() is not None
+    assert message.trash_error() is not None
 
 
 @pytest.mark.django_db(transaction=True)
