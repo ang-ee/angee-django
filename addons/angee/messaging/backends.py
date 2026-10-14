@@ -229,8 +229,8 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     source_kind: ClassVar[SourceKind | None] = None
     """How a channel on this protocol is classified when it asserts statements.
 
-    A takeout or export backend whose channel asserts facts as an identified
-    integration declares ``SourceKind.IMPORT``. A transport that only lands
+    A takeout, export or content-feed backend whose channel asserts facts as an
+    identified integration declares ``SourceKind.IMPORT``. A transport that only lands
     messages keeps ``None``: its channel asserts nothing and is refused as a source.
     """
 
