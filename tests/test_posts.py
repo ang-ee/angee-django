@@ -30,6 +30,7 @@ from rebac import (
     write_relationships,
 )
 
+from angee.base.mixins import SourceKind, StatementSourceMixin
 from angee.integrate import scheduler
 from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
@@ -72,6 +73,17 @@ def _feed(slug: str = "feed") -> Any:
     """Create a Feed (an Integration child + Bridge) bound to the stub backend."""
 
     return make_integration(slug, model=Feed, backend_class="feed", feed_backend_class="stub")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_feed_is_an_import_statement_source(posts_tables: None) -> None:
+    """What an import lands from a feed is the feed's assertion: its integration classifies as IMPORT."""
+
+    del posts_tables
+    with system_context(reason="test feed statement source"):
+        feed = _feed("import-source")
+        integration = Integration._base_manager.get(pk=feed.pk)
+    assert StatementSourceMixin.kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
 
 
 def _post(
