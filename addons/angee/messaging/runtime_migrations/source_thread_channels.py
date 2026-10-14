@@ -70,9 +70,14 @@ def retain_channel_occurrences(apps, schema_editor):
     follows = follower._base_manager.using(alias)
     chatter = attachment._base_manager.using(alias).filter(role="chatter").values("thread_id")
     # Explicit record chatter keeps its own container. Channel-backed source
-    # threads may have accepted messages from more than one account historically.
+    # threads may have accepted messages from more than one account historically;
+    # only a thread holding a message from another channel than its own splits,
+    # so a single-channel conversation is never visited.
+    foreign = messages.filter(channel__isnull=False).filter(
+        models.Q(thread__channel__isnull=True) | ~models.Q(channel_id=models.F("thread__channel_id")),
+    )
     source_threads = threads.exclude(pk__in=chatter).filter(
-        pk__in=messages.filter(channel__isnull=False).order_by().values("thread_id"),
+        pk__in=foreign.order_by().values("thread_id"),
     ).order_by("pk")
     for original in source_threads.iterator():
         original_follows = list(
