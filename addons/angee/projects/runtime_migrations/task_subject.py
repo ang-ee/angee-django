@@ -48,7 +48,8 @@ class MoveTaskSubjects(migrations.operations.base.Operation):
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         alias = schema_editor.connection.alias
         attachment_model = from_state.apps.get_model("messaging", "ThreadAttachment")
-        attachments = attachment_model._base_manager.using(alias)
+        # The attachment's own ordering names fields its migration state lacks.
+        attachments = attachment_model._base_manager.using(alias).order_by()
         for name in MODELS:
             source = from_state.models.get((app_label, name))
             if source is None or "subject" not in source.fields:
