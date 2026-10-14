@@ -8,10 +8,9 @@ from django.db.migrations.state import ProjectState
 
 def applies(state: ProjectState) -> bool:
     model = state.models.get(("storage", "folder"))
-    if model is None:
+    if model is None or "parent" not in model.fields or "drive" not in model.fields:
+        # Not this upgrade's floor: an older Folder shape or a smart-folder-only schema.
         return False
-    if "parent" not in model.fields or "drive" not in model.fields:
-        raise ValueError("The Folder hierarchy requires its existing parent and drive fields.")
     return "path" not in model.fields
 
 

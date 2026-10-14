@@ -52,7 +52,8 @@ def candidates(request, public_policy):
     if request.param == "dashboard":
         owner = create_user("public-row-owner")
         return (
-            DashboardTarget(name="Shared", scope="addon", scope_key="shared"),
+            # A shared dashboard is an installed baseline; an ownerless row alone no longer reads as shared.
+            DashboardTarget(name="Shared", scope="addon", scope_key="shared", is_baseline=True),
             DashboardTarget(name="Owned", scope="addon", scope_key="owned", owner=owner),
         )
     if request.param in {"group", "queue"}:
@@ -167,6 +168,9 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
             allowed = readable if read_gated_create else (
                 kind == "administrator" or (kind == "reader" and model is not CurrencyRate)
             )
+            if model is DashboardTarget and index == 0 and not read_gated_create:
+                # An installed baseline dashboard is seeded by resources, never created through the gate.
+                allowed = False
             assert _check_new_model(candidate, subject=subject, using="default").allowed == allowed
             if not allowed:
                 with pytest.raises(PermissionDenied), transaction.atomic():
@@ -202,17 +206,23 @@ def test_creation_and_column_updates_change_reads_without_tuples(public_policy, 
     if issubclass(model, Group):
         columns = ("visibility",)
     elif model is DashboardTarget:
-        columns = ("owner_id",)
+        # A shared dashboard is an ownerless installed baseline.
+        columns = ("owner_id", "is_baseline")
     else:
         columns = ("context_content_type_id", "context_object_id", "reference_currency_id")
     matching, nonmatching = ({name: getattr(row, name) for name in columns} for row in candidates)
     before = _relationship_counts()
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):
         manager = model.objects.with_actor(administrator)
-        # Hierarchy saves derive paths, including the parent path of multi-table children.
-        shared, private = (
-            [manager.insert(row) for row in candidates] if issubclass(model, Group) else manager.bulk_create(candidates)
-        )
+        if issubclass(model, Group):
+            # Hierarchy saves derive paths, including the parent path of multi-table children.
+            shared, private = [manager.insert(row) for row in candidates]
+        elif model is DashboardTarget:
+            # A baseline is installed by resources, never created through the gate.
+            with system_context(reason="test.public_row.baseline"):
+                shared, private = model._base_manager.bulk_create(candidates)
+        else:
+            shared, private = manager.bulk_create(candidates)
         if issubclass(model, Group):
             assert all(row.path for row in (shared, private))
         assert set(model.objects.with_actor(reader).values_list("pk", flat=True)) == {shared.pk}

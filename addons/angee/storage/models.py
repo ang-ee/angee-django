@@ -540,6 +540,13 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
     objects = FolderManager()
 
+    def insert_owner_default(self) -> Any:
+        """A folder in a drive belongs to the drive; only a smart folder is a user's own."""
+
+        if self.drive_id is not None:
+            return None
+        return super().insert_owner_default()
+
     class SmartKind(models.TextChoices):
         """Backing queries a smart folder can surface."""
 

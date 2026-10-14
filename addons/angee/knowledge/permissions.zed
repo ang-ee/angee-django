@@ -43,6 +43,15 @@ definition knowledge/vault {
                       + admin->member
     permission read = (read_granted - withheld) + delete
     permission write = (write_granted - withheld) + delete
+    // What a vault lends the record tasks about it: its direct holders and roles,
+    // never the team or project arms, which a point check would inline whole.
+    permission read_as_subject = owner + editor + viewer
+                      + vault_viewer->member + vault_editor->member
+                      + vault_admin->member + knowledge_admin->member
+                      + admin->member
+    permission write_as_subject = owner + editor
+                      + vault_editor->member + vault_admin->member
+                      + knowledge_admin->member + admin->member
     permission transfer = owner + admin->member
     permission share = owner + admin->member
     permission write__owner = transfer
@@ -73,6 +82,11 @@ definition knowledge/page {
     permission create = vault->write
     permission read   = (read_granted - withheld) + vault->delete
     permission write  = (write_granted - withheld) + vault->delete
+    // What a page lends the record tasks about it: its own viewers and what its
+    // vault lends, one arrow each and no walk up the tree, so a task's reads stay
+    // one statement and within SQLite's depth.
+    permission read_as_subject = viewer + vault->read_as_subject
+    permission write_as_subject = vault->write_as_subject
     // Trash authority follows the hierarchy; hard deletion protects children.
     permission delete = parent->delete + vault->delete
 }

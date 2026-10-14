@@ -476,8 +476,17 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             .first()
         )
 
+    def may_create(self, owner: Any, actor: Any = None) -> Any:
+        """Authorize the actor to create an ordinary (non-baseline) dashboard owned by ``owner``.
+
+        The create gate excludes installed baselines through the row's own flag, so
+        the check runs on the candidate row rather than on its relationships alone.
+        """
+
+        return self.model(owner=owner, is_baseline=False).require_access("create", actor or current_actor())
+
     def create_personal(self, owner: Any, *, name: str, description: str = "", client_creation_key: str) -> Any:
-        actor = self.check_create({"owner": (owner,)})
+        actor = self.may_create(owner)
         if to_subject_ref(owner) != actor:
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
         if not client_creation_key:

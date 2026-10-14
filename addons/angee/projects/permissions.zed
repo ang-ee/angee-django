@@ -62,30 +62,43 @@ definition projects/task {
     permission subject_read = nil
     permission subject_write = nil
     permission subject_withheld = nil
+    permission subject_keeper = nil
     permission create = (((unbound->free) + subject_write) - subject_withheld) + admin->member
     permission read_granted = inherited_project->read + owner + assignee + reader + editor
     relation trashed: projects/task // rebac:const={"target_id":"trashed","filters":{"is_trashed":true}}
     permission conceal = authenticated
-    permission withheld = trashed->conceal - remove
-    permission read = (((read_granted & unbound->free) + subject_read) - withheld - subject_withheld) + admin->member
+    // Contributors withhold tasks through `withheld` (a retired clarification).
+    permission withheld = nil
+    // A trashed task is concealed from everyone but its direct removal authority
+    // (project writers, its owner) and administrators, its managers, who keep every
+    // verb (as on knowledge pages). The authority is a positive
+    // arm beside the exclusion: no exclusion holds another, which rebac's named
+    // grant scan cannot compile, and none crosses the subject arrow.
+    permission concealed = trashed->conceal
+    permission concealed_keeper = delete_granted & concealed
+    // What a task lends the record tasks about it while it is trashed: the plain
+    // fact, and its owner, who keeps reading them.
+    permission withheld_as_subject = concealed
+    permission keeper_as_subject = owner
+    permission read = (((read_granted & unbound->free) + subject_read) - withheld - concealed - subject_withheld) + concealed_keeper + subject_keeper + admin->member
     permission read_as_subject = owner + assignee + reader + editor + admin->member
     permission read_promoted_phase = promoted_project->read + admin->member
     permission write_granted = inherited_project->write + owner + assignee + editor
     permission write_withheld = nil
-    permission write = (((write_granted & unbound->free) + subject_write) - withheld - write_withheld - subject_withheld) + admin->member
+    permission write = (((write_granted & unbound->free) + subject_write) - withheld - concealed - write_withheld - subject_withheld) + concealed_keeper + admin->member
     permission write_as_subject = owner + assignee + editor + admin->member
     permission share_granted = inherited_project->share + owner + editor
-    permission share = (((share_granted & unbound->free) + subject_write) - withheld - subject_withheld) + admin->member
+    permission share = (((share_granted & unbound->free) + subject_write) - withheld - concealed - subject_withheld) + concealed_keeper + admin->member
     permission narrow = write
     permission widen = ((((project->share + owner) & unbound->free) + subject_write) - subject_withheld) + admin->member
     permission delete_granted = inherited_project->write + owner
     permission remove = (((delete_granted & unbound->free) + subject_write) - subject_withheld) + admin->member
-    permission delete = (remove - withheld) + admin->member
+    permission delete = (remove - withheld - concealed) + concealed_keeper + admin->member
     permission transfer = (((owner & unbound->free) + subject_write) - subject_withheld) + admin->member
     permission write__owner = transfer
     permission comment_granted = write_granted
     permission comment_withheld = nil
-    permission comment = (((comment_granted & unbound->free) + subject_write) - withheld - comment_withheld - subject_withheld) + admin->member
+    permission comment = (((comment_granted & unbound->free) + subject_write) - withheld - concealed - comment_withheld - subject_withheld) + concealed_keeper + admin->member
     permission write__assignee = share
     // Who brings a withheld task back. Contributors that withhold tasks name their
     // managers here; administrators always may.

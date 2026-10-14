@@ -15,9 +15,12 @@ def applies(state):
         "form_schema", "basis", "errors", "group", "index", "resolution", "resolved_by", "resolved_at",
     }.issubset(decision.fields):
         raise RuntimeError("The old decision schema is incomplete.")
+    # A history table's key (no database constraint) retains a retired identity
+    # and cannot hold the cutover; only an owner's live link waits.
     return not any(
         field.is_relation and isinstance(field.remote_field.model, str)
         and field.remote_field.model.lower() in {"decisions.decision", "decisions.decisiongroup"}
+        and getattr(field, "db_constraint", True)
         for (label, _), model in state.models.items() if label != "decisions"
         for field in model.fields.values()
     )

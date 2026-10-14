@@ -354,6 +354,17 @@ class ThreadedModelMixin(models.Model):
             return actor_context(actor)
         return nullcontext()
 
+    def revert_removal(self, *, using: str, reason: str = "") -> None:
+        """An undone creation takes the record's own chatter with it, as its deletion does.
+
+        The chatter edge is the record's bookkeeping, not a reference that keeps it
+        alive; every other live reference or grant still refuses the removal.
+        """
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        attachment_model.objects.db_manager(using).teardown_for_record(self)
+        super().revert_removal(using=using, reason=reason)
+
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Delete this row after authorizing the record, then elevate its cascade.
 
@@ -1251,6 +1262,53 @@ class ChannelWebform(models.Model):
         )
 
 
+
+class ChatterHistory(ModelHistory):
+    """History of a thread and its edge; a record's own chatter reverts under the record's write.
+
+    Record chatter is bookkeeping the record's verbs write as system rows, so a
+    revert of the record's changeset (its creation, a merge) is authorized by the
+    record's writers. A source conversation keeps the thread's own rule.
+    """
+
+    def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
+        record = self.chatter_record(previous or last, using=first._state.db)
+        if record is None:
+            super().authorize_revert(first, last, previous, actor)
+            return
+        record.require_access("write", actor=actor)
+
+    def revert_row(self, first: Any, last: Any, previous: Any) -> list[Any]:
+        """Never remove a living record's chatter: the record's deletion tears it down."""
+
+        removal = previous is None or previous.history_type == "-"
+        if removal and self.chatter_record(previous or last, using=first._state.db) is not None:
+            return []
+        return super().revert_row(first, last, previous)
+
+    @staticmethod
+    def chatter_record(snapshot: Any, *, using: str) -> models.Model | None:
+        """Return the stored record whose chatter this version belongs to, or ``None``."""
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        chatter = attachment_model.AttachmentRole.CHATTER
+        if isinstance(snapshot.instance, attachment_model):
+            if snapshot.role != chatter:
+                return None
+            content_type_id, object_id = snapshot.content_type_id, snapshot.object_id
+        else:
+            edge = attachment_model._base_manager.using(using).filter(
+                thread_id=snapshot.id, role=chatter,
+            ).values_list("content_type_id", "object_id").first()
+            if edge is None:
+                return None
+            content_type_id, object_id = edge
+        model = ContentType.objects.db_manager(using).get_for_id(content_type_id).model_class()
+        if model is None:
+            return None
+        return model._base_manager.using(using).filter(pk=object_id).first()
+
+
 class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
     """An aggregation of related messages — an email conversation or a social post.
 
@@ -1280,7 +1338,7 @@ class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataMo
     ``same_as`` evidence folds one channel's copy of a conversation into another's.
     """
 
-    history = ModelHistory(inherit=True, excluded_fields=("message_count", "last_message_at"))
+    history = ChatterHistory(inherit=True, excluded_fields=("message_count", "last_message_at"))
 
     def member_threads(self) -> models.QuerySet:
         """Physical chatter containers under the current, flattened survivor."""
@@ -1441,6 +1499,7 @@ class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataMo
 class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
+    history = ChatterHistory(inherit=True)
     merge_policy = MergePolicy.MOVE
     merge_identity = (("thread", "content_type", "object_id", "role"),)
     runtime = True

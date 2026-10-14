@@ -31,6 +31,10 @@ definition parties/party {
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
     permission read = read_granted + carrier_reader
+    // What a party lends the record tasks about it: its direct holders only, so
+    // task access never recurses through a thread the party follows (rebac.E016).
+    permission read_as_subject = owner + editor + reader + statement_source + admin->member
+    permission write_as_subject = owner + editor + statement_source + admin->member
     permission read_private = owner + editor + reader + admin->member
     permission read__notes = read_private
     permission read__first_met_note = read_private

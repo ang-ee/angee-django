@@ -20,6 +20,7 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
@@ -308,6 +309,26 @@ _TASK_ACTION_ANNOTATIONS = {
 }
 
 
+
+def _subject_label(info: strawberry.Info, reference: Any) -> str:
+    """Return the subject's display label through the reader's own scope, once per record and request.
+
+    A subject the reader cannot read keeps its public id as its label.
+    """
+
+    request = getattr(info.context, "request", None)
+    cache = getattr(request, "_projects_subject_labels", None) if request is not None else None
+    if cache is None:
+        cache = {}
+        if request is not None:
+            request._projects_subject_labels = cache
+    key = (reference.model_label, reference.object_id)
+    if key not in cache:
+        model = apps.get_model(reference.model_label)
+        row = read_scoped_queryset(model, current_actor()).filter(pk=reference.object_id).first()
+        cache[key] = str(row) if row is not None else ""
+    return cache[key]
+
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
 
@@ -328,11 +349,13 @@ class TaskProjectionMixin:
         return cast(Any, self).activity_type_id
 
     @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
-    def subject(self) -> RecordPointerType | None:
-        """Project the task's direct subject, admitted by its subject-read gate."""
+    def subject(self, info: strawberry.Info) -> RecordPointerType | None:
+        """Project the task's direct subject, labelled as its reader sees it."""
 
         reference = cast(Any, self).record_ref
-        return RecordPointerType.from_reference(reference) if reference.public_id else None
+        if not reference.public_id:
+            return None
+        return RecordPointerType.from_reference(reference, label=_subject_label(info, reference))
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:

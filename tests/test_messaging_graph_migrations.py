@@ -96,19 +96,24 @@ def test_channel_split_rebases_original_and_copy_receipts_before_other_source_pu
     with connection.schema_editor() as editor:
         upgraded = source_thread_channels.Migration("source_thread_channels", "messaging").apply(state.clone(), editor)
     assert not source_thread_channels.applies(upgraded)
-    threads = upgraded.apps.get_model("messaging", "Thread").objects
-    messages = upgraded.apps.get_model("messaging", "Message").objects
     other_thread = threads.get(channel=channel_b)
+
+    def redirect(model, pk):
+        # The pre-upgrade models know no `merged_into`; read it through the upgraded state.
+        return upgraded.apps.get_model("messaging", model).objects.filter(pk=pk).values_list(
+            "merged_into_id", flat=True,
+        ).get()
+
     # What one container showed as one conversation stays one: the copy redirects
     # to the original, and the email received through both accounts to its oldest row.
-    assert other_thread.merged_into_id == thread.pk
-    assert threads.get(pk=thread.pk).merged_into_id is None
+    assert redirect("Thread", other_thread.pk) == thread.pk
+    assert redirect("Thread", thread.pk) is None
     assert messages.get(pk=before.pk).thread_id == thread.pk
     assert messages.get(pk=after.pk).thread_id == thread.pk
     assert messages.get(pk=anchor.pk).thread_id == other_thread.pk
-    assert messages.get(pk=anchor.pk).merged_into_id == before.pk
-    assert messages.get(pk=before.pk).merged_into_id is None
-    assert messages.get(pk=after.pk).merged_into_id is None
+    assert redirect("Message", anchor.pk) == before.pk
+    assert redirect("Message", before.pk) is None
+    assert redirect("Message", after.pk) is None
     assert follows.get(pk=original_follow.pk).last_read_message_id == before.pk
     copied_follow = follows.get(thread=other_thread, party_id=42)
     assert copied_follow.last_read_message_id == anchor.pk

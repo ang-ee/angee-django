@@ -20,8 +20,10 @@ from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin
-from angee.base.models import AngeeDataModel
+from angee.base.merge import MergeableMixin
+from angee.base.mixins import AuditMixin, TrashMixin, TrashQuerySet
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.querysets import MergeableQuerySet
 from angee.base.stages import Stage as OrderedStage
 from angee.base.stages import StagedModelMixin
 from angee.graphql.data import hasura_model_resource
@@ -109,6 +111,9 @@ class CreateTaskHost(models.Model):
 
     hand_actions = AbstractTask.__dict__["hand_actions"]
     validate_action = AbstractTask.validate_action
+    # A task merges under write on each duplicate and keeps it as a redirect.
+    MERGED_PERMISSION = AbstractTask.MERGED_PERMISSION
+    retains_merged = AbstractTask.retains_merged
 
     @classmethod
     def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
@@ -123,8 +128,12 @@ class CreateTaskHost(models.Model):
         abstract = True
 
 
-class CreateTask(TaskWork, CreateTaskHost, AuditMixin, AngeeDataModel):
-    """Native Work donor over the lifecycle columns it projects."""
+class CreateTaskQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
+    """The stand-in task's operational scopes: canonical rows and the trash."""
+
+
+class CreateTask(TaskWork, CreateTaskHost, MergeableMixin, TrashMixin, AuditMixin, AngeeDataModel):
+    """Native Work donor over the lifecycle columns it projects; duplicates are retained merges, removal is trash."""
 
     sqid_prefix = "ctk_"
     TaskStatus = AbstractTask.TaskStatus
@@ -145,6 +154,8 @@ class CreateTask(TaskWork, CreateTaskHost, AuditMixin, AngeeDataModel):
     hasura_groupable_fields = ()
     hasura_insertable_fields = ()
     hasura_updatable_fields = ()
+    # A trash owner's default manager carries the trash row scopes (angee.E036).
+    objects = AngeeManager.from_queryset(CreateTaskQuerySet)()
 
     class Meta:
         app_label = "scopedemo"

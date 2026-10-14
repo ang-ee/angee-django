@@ -9,11 +9,7 @@ from typing import Any, TypeVar, cast
 
 from django.core.exceptions import EmptyResultSet
 from django.db import connections, models
-from rebac import check_new, to_subject_ref
-from rebac.backends import backend
-from rebac.field_backing import _proposed_forward_relationships
 from rebac.resources import model_resource_type
-from rebac.schema.introspection import relation_dependencies
 from rebac.watch import KEY_CHUNK
 from rebac.watch import by_key as native_by_key
 
@@ -39,6 +35,8 @@ class CandidateRelationships:
     def allows(self, subject: Any, action: str) -> bool:
         """Whether ``subject`` may perform ``action`` on the candidate these relations describe."""
 
+        from rebac import check_new, to_subject_ref
+
         return check_new(
             subject=to_subject_ref(subject), action=action, resource_type=self.resource_type,
             relationships=self.relationships,
@@ -47,6 +45,12 @@ class CandidateRelationships:
 
 def candidate_relationships(instance: models.Model, action: str, *, using: str | None) -> CandidateRelationships | None:
     """Read the relations ``instance`` would carry for ``action``; ``None`` when its type has no definition."""
+
+    # The composer imports this module at settings time, before the app registry
+    # is ready; rebac's backend and field backing load auth models on import.
+    from rebac.backends import backend
+    from rebac.field_backing import _proposed_forward_relationships
+    from rebac.schema.introspection import relation_dependencies
 
     resource_type = model_resource_type(type(instance))
     if resource_type is None:

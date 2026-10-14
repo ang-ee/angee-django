@@ -92,7 +92,11 @@ definition projects/task {
     relation subject_page: knowledge/page // rebac:field=subject
     relation subject_vault: knowledge/vault // rebac:field=subject
 
-    permission subject_read = subject_task->read_as_subject + subject_project->read + subject_party->read + subject_page->read + subject_vault->read
-    permission subject_write = subject_task->write_as_subject + subject_project->write + subject_party->write + subject_page->write + subject_vault->write
-    permission subject_withheld = subject_task->withheld
+    // Each subject lends its direct holders (`*_as_subject`), never its whole read:
+    // a point check inlines every arm, and the full reads together overflow
+    // SQLite's expression depth. A project lends its read as before.
+    permission subject_read = subject_task->read_as_subject + subject_project->read + subject_party->read_as_subject + subject_page->read_as_subject + subject_vault->read_as_subject
+    permission subject_write = subject_task->write_as_subject + subject_project->write + subject_party->write_as_subject + subject_page->write_as_subject + subject_vault->write_as_subject
+    permission subject_withheld = subject_task->withheld_as_subject
+    permission subject_keeper = subject_task->keeper_as_subject
 }

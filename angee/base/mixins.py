@@ -9,7 +9,7 @@ from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, StrEnum
-from itertools import groupby
+from itertools import batched, groupby
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
@@ -19,7 +19,7 @@ from django.contrib.auth import get_user_model
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import DatabaseError, IntegrityError, models, router, transaction
+from django.db import DatabaseError, IntegrityError, NotSupportedError, connections, models, router, transaction
 from django.db.models import F, Q, Value
 from django.db.models.functions import Replace
 from django.utils import timezone
@@ -1164,7 +1164,12 @@ class ModelHistory(HistoricalRecords):
         """Ordinary rows need no uniqueness staging."""
 
     def revert_row(self, first: Any, last: Any, previous: Any) -> list[Any]:
-        """Replay one exact native predecessor, writing only locally owned MTI fields."""
+        """Replay one exact native predecessor onto every column its history tracks.
+
+        A multi-table child's save records only the child's history, so its version
+        carries the inherited columns too and restores them; a parent level that
+        recorded its own version of the same write restores the same values.
+        """
 
         model = type(first.instance)
         using = first._state.db
@@ -1189,8 +1194,9 @@ class ModelHistory(HistoricalRecords):
             tracked = {field.attname for field in previous.tracked_fields}
             changed = {
                 field.name
-                for field in model._meta.local_concrete_fields
+                for field in model._meta.concrete_fields
                 if not field.primary_key and field.attname in tracked
+                and not (field.is_relation and field.remote_field.parent_link)
                 and getattr(last, field.attname) != getattr(previous, field.attname)
             }
             if isinstance(row, TrashMixin) and "is_trashed" in changed:
@@ -1309,6 +1315,18 @@ class ModelHistory(HistoricalRecords):
             field.remote_field.model = apps.get_model(changeset_model_label())
             field.remote_field.field_name = field.remote_field.model._meta.pk.name
             extra["changeset"] = field
+        native_instance = extra["instance"].fget
+
+        def get_instance(record: Any) -> Any:
+            # Native construction fills excluded columns (counters) from the stored
+            # row through the default manager. That read rebuilds a snapshot for
+            # replay, not a projection to the caller: a gated counter would refuse it.
+            if not record._history_excluded_fields:
+                return native_instance(record)
+            with system_context(reason="angee.history.instance"):
+                return native_instance(record)
+
+        extra["instance"] = property(get_instance)
         return extra
 
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
@@ -2837,7 +2855,72 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
     def bulk_create(self, *args: Any, **kwargs: Any) -> list[_HierarchyModelT]:
         """Require saves to derive paths from persisted row and parent identities."""
 
-        raise ValidationError("Create hierarchy rows through save(); paths belong to the saved-row owner.")
+        raise ValidationError(
+            "Create hierarchy rows through save() or create_forest(); paths belong to the saved-row owner."
+        )
+
+    def create_forest(self, rows: Sequence[_HierarchyModelT]) -> list[_HierarchyModelT]:
+        """Insert unsaved rows and derive every parent link and path; return them saved.
+
+        A row's ``parent`` is a saved row (with its path loaded) or another row of
+        ``rows``, in the same scope. Every row is one INSERT, then one UPDATE sets
+        each parent and path, whatever the tree's depth; each row records one
+        creation version, path included. No row is saved one by one, so ``save()``
+        hooks do not run; the caller sends what lifecycle signals it owes.
+        """
+
+        model = self.model
+        using = self.db
+        history = model_history(model)
+        field = model._meta.get_field("parent")
+        rows = list(rows)
+        if any(row.pk is not None for row in rows):
+            raise ValidationError("A forest insert takes unsaved rows.")
+        if not connections[using].features.can_return_rows_from_bulk_insert:
+            raise NotSupportedError("A forest insert requires bulk-insert primary keys on this database.")
+        members = {id(row) for row in rows}
+        parents = {id(row): field.get_cached_value(row, None) for row in rows}
+        order: list[_HierarchyModelT] = []
+        placed: set[int] = set()
+        pending = rows
+        while pending:
+            ready = [row for row in pending if (parent := parents[id(row)]) is None
+                     or id(parent) in placed or (id(parent) not in members and parent.pk is not None)]
+            if not ready:
+                raise ValidationError("Forest parents must form a tree of these rows and saved rows.")
+            order.extend(ready)
+            placed.update(id(row) for row in ready)
+            pending = [row for row in pending if id(row) not in placed]
+        scope = [model._meta.get_field(name).attname for name in model.hierarchy_scope_fields]
+        for row in rows:
+            parent = parents[id(row)]
+            if parent is not None and any(getattr(row, name) != getattr(parent, name) for name in scope):
+                raise ValidationError({"parent": "Parent must belong to the same scope."})
+            # Django refuses to insert a row naming an unsaved parent; the link lands below.
+            row.parent = None
+        with transaction.atomic(using=using), write_group():
+            # Below the hierarchy guard and the history capture: the creation version
+            # below records each row with its parent and path.
+            super(_AngeeQuerySetMixin, self).bulk_create(rows)
+            for row in order:
+                parent = parents[id(row)]
+                row.parent = parent
+                row.path = row._hierarchy_path(parent)
+            for chunk in batched(rows, 500):
+                # The caller's queryset carries its authority (a sudo) to this write.
+                super(_AngeeQuerySetMixin, self.filter(pk__in=[row.pk for row in chunk])).update(
+                    parent_id=models.Case(
+                        *(models.When(pk=row.pk, then=models.Value(row.parent_id)) for row in chunk),
+                        output_field=field.target_field,
+                    ),
+                    path=models.Case(
+                        *(models.When(pk=row.pk, then=models.Value(row.path)) for row in chunk),
+                        output_field=model._meta.get_field("path"),
+                    ),
+                )
+            if history is not None and rows:
+                history.bulk_history_create(model, [row.pk for row in rows], "+", using=using)
+        return rows
 
     def owner_update(self, **kwargs: Any) -> int:
         """Protected API: apply an owner-validated write through downstream guards.
@@ -3044,8 +3127,16 @@ class HierarchyMixin(models.Model):
         """Insert the row, then derive its ``path`` from the parent's committed path."""
 
         using = kwargs["using"]
+        history = model_history(type(self))
         with transaction.atomic(using=using):
-            super().save(*args, **kwargs)
+            if history is not None:
+                # The creation is one version, captured below once its derived path is stored.
+                self.skip_history_when_saving = True
+            try:
+                super().save(*args, **kwargs)
+            finally:
+                if history is not None:
+                    del self.skip_history_when_saving
             parent = self._hierarchy_parent(using=using)
             if parent is not None:
                 # Re-read the parent's committed path under lock before deriving the
@@ -3058,11 +3149,16 @@ class HierarchyMixin(models.Model):
             self._reject_cross_scope_parent(parent, using=using)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
-                self._write_hierarchy_path(
-                    system_queryset(type(self)).using(using).filter(pk=self.pk),
-                    new_path,
-                )
+                rows = system_queryset(type(self)).using(using).filter(pk=self.pk)
+                if history is not None:
+                    # Below the hierarchy guard and the history capture: the
+                    # creation version records the path with the row.
+                    super(_AngeeQuerySetMixin, rows).update(path=new_path)
+                else:
+                    self._write_hierarchy_path(rows, new_path)
                 self.path = new_path
+            if history is not None:
+                history.bulk_history_create(type(self), [self.pk], "+", using=using)
 
     def _save_reparented(self, *args: Any, **kwargs: Any) -> None:
         """Validate the move under lock, then rewrite the subtree in one UPDATE."""
@@ -3200,7 +3296,9 @@ class HierarchyMixin(models.Model):
             return
         using = using or self._state.db or router.db_for_read(type(self), instance=self)
         fields = [self._meta.get_field(name) for name in self.hierarchy_scope_fields]
-        committed = system_queryset(type(self)).using(using).filter(pk=parent.pk).values(
+        # The parent is a row of the hierarchy's own model; a multi-table child
+        # of it may not have a row in this model's table.
+        committed = system_queryset(type(parent)).using(using).filter(pk=parent.pk).values(
             *(field.attname for field in fields),
         ).get()
         for field in fields:
