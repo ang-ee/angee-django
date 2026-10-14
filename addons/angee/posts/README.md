@@ -26,6 +26,10 @@ from `apply_record()` inside the page transaction, and excludes them from
 and commits successful records and the page cursor together. Providers need no
 refusal dataclass or page-application overrides.
 
+A feed is an IMPORT statement source (its channel backend declares
+`SourceKind.IMPORT`): what an import lands from a feed's own history, such as a
+contact its comments name, is that feed's assertion, ranked below a person's.
+
 `Feed.live_since` is stamped once by `Feed.discovery_finished()` after integrate's
 committed `discovery_finished(sender=type(bridge), instance=bridge)` signal. Each
 record is historical when its sent timestamp is absent, precedes the horizon, or
