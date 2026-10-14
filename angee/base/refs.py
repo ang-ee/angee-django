@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -343,13 +343,19 @@ class RecordRefMixin(MergeContractMixin, models.Model):
 
     @classmethod
     def declared_target_model(cls, model_label: str) -> type[models.Model]:
-        """Return the declared target model for a ``app_label.model`` label, or a ``ValidationError``."""
+        """Return the declared target a ``app_label.model`` label names, or a ``ValidationError``.
 
-        declared = cls.declared_target_models()
+        A label names its canonical type, as :meth:`declares_target` decides: a
+        multi-table child (a person) addresses its typed parent (a party).
+        """
+
         try:
-            return declared[str(model_label).strip().lower()]
-        except KeyError as error:
-            raise cls._undeclared_target(declared) from error
+            model = apps.get_model(str(model_label).strip())
+        except (LookupError, ValueError) as error:
+            raise cls._undeclared_target(cls.declared_target_models()) from error
+        if not cls.declares_target(model):
+            raise cls._undeclared_target(cls.declared_target_models())
+        return cast(type[models.Model], canonical_model(model))
 
     @classmethod
     def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
