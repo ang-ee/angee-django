@@ -13,12 +13,13 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
 from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
+from angee.base.mixins import SourceKind
 from angee.knowledge import schema as knowledge_schema
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
@@ -29,6 +30,7 @@ from tests.core_persistence import OwnedRow
 pytestmark = pytest.mark.usefixtures("composed_tables")
 
 Party = apps.get_model("parties", "Party")
+Handle = apps.get_model("parties", "Handle")
 
 HISTORY = """
 query History($model: String!, $id: ID!, $limit: Int, $offset: Int) {
@@ -251,6 +253,24 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     assert {row["source_kind"] for row in identity} == {"PERSON"}
     assert {row["status"] for row in identity} == {"asserted"}
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
+
+
+def test_history_names_a_statements_related_row_by_its_public_id() -> None:
+    person = create_user("statement-handle-person")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Grace Hopper")
+    with system_context(reason="tests.history.handle_statement"), changeset(fresh=True, change_reason="Add handle"):
+        handle = Handle.objects.create(platform="email", value="grace@example.com", created_by_id=person.pk)
+        Party.statements.model._base_manager.create(
+            subject=party, handle=handle, aspect="handle",
+            asserted_by=str(to_subject_ref(person)), source_kind=SourceKind.PERSON,
+        )
+
+    history = _history(_schema(), person, "parties.Party", party)
+
+    handles = [row for entry in history["entries"] for row in entry["statements"] if row["aspect"] == "handle"]
+    assert handles
+    assert {tuple(row["values"].items()) for row in handles} == {(("handle", public_id_of(handle)),)}
 
 
 def test_metadata_marks_a_resource_that_keeps_history() -> None:
