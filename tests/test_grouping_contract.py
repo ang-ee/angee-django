@@ -19,6 +19,8 @@ from graphql import (
     build_schema,
 )
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -38,7 +40,7 @@ def _composed_notes_sdl(tmp_path: Path) -> str:
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
     assert result.returncode == 0, f"fresh schema composition failed:\n{result.stdout}\n{result.stderr}"
