@@ -409,7 +409,13 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._load_credentials()
         client = self._connect()
         names = sorted(self._select_mailboxes(client))
-        return tuple(StreamDefinition(key="messages", partition=name) for name in names)
+        return tuple(self._mailbox_stream(name) for name in names)
+
+    @staticmethod
+    def _mailbox_stream(name: str) -> StreamDefinition:
+        """Declare one mailbox's event feed."""
+
+        return StreamDefinition(key="messages", partition=name)
 
     def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         """Move legacy delivery policy while retaining per-mailbox positions."""
@@ -481,7 +487,11 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             self.close()
 
         try:
-            streams = tuple(open_stream(self.bridge, "messages", partition, self) for partition in sorted(snapshot))
+            # The mailboxes were just discovered: each opens against its declaration without listing again.
+            streams = tuple(
+                open_stream(self.bridge, "messages", name, self, definition=self._mailbox_stream(name))
+                for name in sorted(snapshot)
+            )
         finally:
             self.close()
         retained = {stream.partition: stream.cursor for stream in streams}

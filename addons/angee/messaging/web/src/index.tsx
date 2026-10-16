@@ -80,6 +80,11 @@ export interface MessagingAddonOptions {
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
 }
 
+/** Whether the viewed record's type carries thread attachments: its schema names it a thread attachment target. */
+export function recordCarriesThreads(context: ChatterViewContext): boolean {
+  return context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false;
+}
+
 /** The shared Comments tab, for an addon's `record#aside` or `<model>#aside`, configurable without another addon. */
 export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAddonOptions & { aliases?: readonly string[] } = {}): ContainerChild<ChatterTabContent> {
   return {
@@ -149,7 +154,7 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
         content: {
           label: "Sources", icon: "inbox", aliases: ["sources"],
           // Only on types whose schema lets a record retain source conversations.
-          when: (context) => context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false,
+          when: recordCarriesThreads,
           render: (context) => <RecordSourceThreadsPane context={context} />,
         },
       },

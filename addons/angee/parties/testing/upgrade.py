@@ -305,6 +305,12 @@ def upgrade_rounds(state: ProjectState | None = None, *, origins: Iterable[str] 
     own round loop, keyed by each declaration's source module; one that never becomes
     applicable is absent. It models the chain's own ordering, not a stack that skips
     releases (see ``RuntimeMigrations.schedule``).
+
+    From a migrated state the chain still reports ``retire_reversion``: reversion's
+    tables are not in the project state, so its guard holds wherever reversion is not
+    installed and materialization bounds its one run. An adopter proving its own
+    declarations idle on its migrated schema replays only its own origins through
+    ``replay_rounds``.
     """
 
     return replay_rounds(pre_upgrade_state() if state is None else state, (*UPGRADE_CHAIN, *origins))

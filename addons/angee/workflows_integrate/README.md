@@ -20,7 +20,13 @@ Success sums completed stream-stage outputs, including mapped partitions.
 
 [`StreamStage`](steps.py) (`integrate_stream`) applies one bounded page per IO
 attempt, checkpoints acknowledged counts through `next_page`, and resumes from
-the cursor that integrate committed with the page. Fan out partitions with the
+the cursor that integrate committed with the page. A stage run is one drain of
+its partition: its first page opens the stream against the adapter's current
+declaration and later pages resume it, so the adapter's `streams()` runs once per
+mapped partition per cycle. An adapter synced through a cycle therefore declares
+from local state, without transport; the live declaration cannot go stale inside a
+run. The first adapter that must discover its partitions remotely needs the
+enumerating step to hand each stage its definition instead. Fan out partitions with the
 native workflow `map`. The shared `PageResult` continuation guard rejects stalled
 pages and repeated baseline resets; checkpoints retain its digest and reset count,
 never a second cursor. No bridge-reference input or separate dispatch setting is
