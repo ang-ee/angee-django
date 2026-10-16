@@ -474,10 +474,11 @@ class ServerVerbCase(ProjectSetupFixture):
         }""", {"selection": self.selection(good, promoted)}, user=self.manager)["remove_tasks"]
         self.assertEqual([row["ok"] for row in rows], [True, False])
         good.refresh_from_db()
-        self.assertTrue(good.stage.conceals)
+        # Removal is shared trash: the task keeps its workflow stage and stays as a row.
+        self.assertTrue(good.is_trashed)
         self.assertTrue(self.Task._base_manager.filter(pk=good.pk).exists())
-        with actor_context(self.manager), self.assertRaises(PermissionDenied):
-            self.as_user(good, self.manager).accept()
+        # A trashed row stays with its managers (the shared trash rule), who restore it.
+        self.assertTrue(self.Task.objects.with_actor(self.manager).filter(pk=good.pk).exists())
 
     def test_resolve_many_is_a_manager_operation_with_per_question_revision(self):
         project = self.setup_project()

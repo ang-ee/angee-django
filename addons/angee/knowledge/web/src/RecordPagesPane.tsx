@@ -36,7 +36,7 @@ export interface RecordPagesTabOptions {
 
 /** A role-scoped Pages tab, for an addon's `<model>#aside` or `record#aside`. */
 export function recordPagesTab(options: RecordPagesTabOptions = {}): ContainerChild<ChatterTabContent> {
-  const { label = "Pages", role, sequence = 40, when, aliases } = options;
+  const { label = "Pages", role, sequence = 50, when, aliases } = options;
   return {
     sequence,
     content: {

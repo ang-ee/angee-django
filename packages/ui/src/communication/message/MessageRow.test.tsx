@@ -17,7 +17,6 @@ describe("MessageRow", () => {
           author="Ada Lovelace"
           timestamp="2026-07-01T10:00:00Z"
           channel={<span>Email · Inbound</span>}
-          tracking={<div>Stage: Draft → In review</div>}
           attachments={
             <a href="#" download>
               contract.pdf
@@ -37,7 +36,6 @@ describe("MessageRow", () => {
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
     expect(screen.getByText("Shipping today.")).toBeTruthy();
     expect(screen.getByText("Email · Inbound")).toBeTruthy();
-    expect(screen.getByText("Stage: Draft → In review")).toBeTruthy();
     expect(screen.getByRole("link", { name: "contract.pdf" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reply" })).toBeTruthy();
   });

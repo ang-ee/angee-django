@@ -23,7 +23,7 @@ export function useRecordTimelinePane({ record, side }: RecordTimelineProps & { 
   const pane = useMemo(() => <RecordTimeline record={record} />, [record]);
   const query = useRecordTimelineAttentionQuery(record, !passive);
   const count = query.data?.record_timeline.open_decision_count ?? 0;
-  const right = useMemo(() => !passive && side === "right" ? { tabs: [{ id: "workflows.timeline", label: t("timeline.title"), count, children: pane }] } : null, [passive, side, pane, count, t]);
+  const right = useMemo(() => !passive && side === "right" ? { tabs: [{ id: "workflows.runs", label: t("runs.title"), count, children: pane }] } : null, [passive, side, pane, count, t]);
   const left = useMemo(() => !passive && side === "left" ? <ScrollArea className="h-full" viewportClassName="overflow-x-hidden p-4">{pane}</ScrollArea> : null, [passive, side, pane]);
   useChatterContent(right);
   usePrimaryPane(left);
@@ -35,7 +35,7 @@ export function useRecordTimelineAttention(record: RecordTimelineProps["record"]
   const chatter = useChatter();
   const query = useRecordTimelineAttentionQuery(record);
   const reveal = useCallback(() => {
-    chatter.setActiveTab("workflows.timeline"); chatter.setCollapsed(false);
+    chatter.setActiveTab("workflows.runs"); chatter.setCollapsed(false);
   }, [chatter.setActiveTab, chatter.setCollapsed]);
   const entries = query.data?.record_timeline.records ?? NO_RECORDS;
   useDecisionFieldMarks(entries, reveal);
@@ -49,10 +49,10 @@ export function useRecordTimelineAttention(record: RecordTimelineProps["record"]
     const current = new Set(ids.split("|").filter(Boolean));
     if (side === "right") {
       if (previous.current?.key !== key) {
-        if (hasRuns || current.size) chatter.setInitialActiveTab("workflows.timeline");
+        if (hasRuns || current.size) chatter.setInitialActiveTab("workflows.runs");
         if (current.size) chatter.setCollapsed(false);
       } else if ([...current].some((id) => !previous.current!.ids.has(id))) {
-        chatter.setInitialActiveTab("workflows.timeline", true); chatter.setCollapsed(false);
+        chatter.setInitialActiveTab("workflows.runs", true); chatter.setCollapsed(false);
       }
     }
     previous.current = { key, ids: current };

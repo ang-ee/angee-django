@@ -1,4 +1,4 @@
-"""Removing a task records why; restoring returns it to the stage it held before."""
+"""Task removal uses shared trash while workflow stage remains a separate fact."""
 
 from pathlib import Path
 
@@ -41,14 +41,14 @@ class TaskRemovalTests(WorkCase):
     def removed(self, user, **scope):
         return self.graphql(REMOVED, scope, user=user)["removed_tasks"]
 
-    def test_remove_records_its_reason_and_restore_returns_the_previous_stage(self):
+    def test_remove_records_its_reason_and_restore_keeps_the_workflow_stage(self):
         task = self.task("Doing")
         self.share(task, self.reader)
         self.assertTrue(self.remove(task, "  Duplicate of an older request  ")["ok"])
         task.refresh_from_db()
-        self.assertEqual(task.stage_id, self.stages["Removed"].pk)
-        latest = task.history.order_by("-history_date", "-history_id").first()
-        self.assertEqual(latest.history_change_reason, "Duplicate of an older request")
+        self.assertEqual(task.stage_id, self.stages["Doing"].pk)
+        self.assertTrue(task.is_trashed)
+        self.assertEqual(task.trash_reason, "Duplicate of an older request")
         self.assertFalse(self.scoped(task, self.reader))
 
         self.assertFalse(self.restore(task, user=self.reader)["ok"])
@@ -59,7 +59,7 @@ class TaskRemovalTests(WorkCase):
         self.assertTrue(self.scoped(task, self.reader))
         self.assertFalse(self.restore(task)["ok"])
 
-    def test_queue_writers_list_and_restore_a_question_they_cannot_read(self):
+    def test_queue_writers_manage_shared_trash_and_restore_a_question(self):
         request = self.task("Ready", title="Request")
         question = self.task("Doing", title="Question", parent=request)
         self.share(question, self.reader)
@@ -67,8 +67,8 @@ class TaskRemovalTests(WorkCase):
         queue = str(self.queue.sqid)
 
         for user in (self.manager, self.moderator):
-            self.assertFalse(self.scoped(question, user))
-            self.assertFalse(self.scoped(question, user, "write"))
+            self.assertTrue(self.scoped(question, user))
+            self.assertTrue(self.scoped(question, user, "write"))
             self.assertTrue(self.scoped(question, user, "restore"))
         for user in (self.reader, self.member, self.viewer, self.outsider):
             self.assertFalse(self.scoped(question, user, "restore"))
@@ -91,7 +91,7 @@ class TaskRemovalTests(WorkCase):
         self.assertTrue(self.scoped(question, self.reader))
         self.assertEqual(self.removed(self.manager, queue=queue), [])
 
-    def test_a_restricted_removed_task_stays_with_administrators(self):
+    def test_a_restricted_removed_task_stays_with_its_owner_and_administrators(self):
         task = self.task("Doing", visibility="restricted")
         self.assertTrue(self.remove(task, user=self.owner)["ok"])
         queue = str(self.queue.sqid)
@@ -100,7 +100,8 @@ class TaskRemovalTests(WorkCase):
         self.assertEqual(self.removed(self.manager, queue=queue), [])
         self.assertFalse(self.restore(task, user=self.manager)["ok"])
         self.assertEqual([row["id"] for row in self.removed(self.admin, queue=queue)], [str(task.sqid)])
-        self.assertTrue(self.restore(task)["ok"])
+        self.assertTrue(self.scoped(task, self.owner, "restore"))
+        self.assertTrue(self.restore(task, user=self.owner)["ok"])
 
     def test_restore_returns_a_triage_task_to_triage(self):
         task = self.task("Triage")
@@ -109,13 +110,26 @@ class TaskRemovalTests(WorkCase):
         task.refresh_from_db()
         self.assertEqual(task.stage_id, self.stages["Triage"].pk)
 
-    def test_restore_falls_back_to_the_default_stage_when_the_previous_one_is_gone(self):
+    def test_restore_keeps_a_stage_that_became_rule_owned_while_trashed(self):
         task = self.task("Doing")
         self.assertTrue(self.remove(task)["ok"])
         with system_context(reason="tests.work.removal.retire_stage"):
             self.Stage._base_manager.filter(pk=self.stages["Doing"].pk).update(rule_owned=True)
         self.assertTrue(self.restore(task)["ok"])
         task.refresh_from_db()
+        self.assertEqual(task.stage_id, self.stages["Doing"].pk)
+
+    def test_workflow_concealment_restore_falls_back_when_earlier_stage_is_reserved(self):
+        task = self.task("Doing")
+        with actor_context(self.owner):
+            task = self.as_user(task)
+            task.stage = self.stages["Removed"]
+            task.save(update_fields=("stage",))
+        with system_context(reason="tests.work.removal.retire_stage"):
+            self.Stage._base_manager.filter(pk=self.stages["Doing"].pk).update(rule_owned=True)
+        self.assertTrue(self.restore(task)["ok"])
+        task.refresh_from_db()
+        self.assertFalse(task.is_trashed)
         self.assertEqual(task.stage_id, self.stages["Ready"].pk)
 
     def test_removed_task_takes_its_whole_conversation_from_a_non_manager(self):

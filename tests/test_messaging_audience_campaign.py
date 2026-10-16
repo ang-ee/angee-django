@@ -245,13 +245,15 @@ def test_undeclared_or_null_team_keeps_only_explicit_followers(audience_record, 
     assert ThreadNotification._base_manager.filter(message=fanout(case)).count() == 1
 
 
-def test_system_creation_logs_a_note_without_an_author_follow(audience_record):
+def test_system_creation_writes_no_note_no_thread_and_no_follow(audience_record):
+    # A record's creation is its first history line, not a chatter message: an
+    # elevated insert leaves no thread behind and subscribes nobody.
     with system_context(reason="test.audience.system-create"):
         record = Project.objects.create(title="System-created record")
-        attachment = record.thread_attachments.get(role="chatter")
-    assert Message._base_manager.filter(thread=attachment.thread, message_type="notification",
-                                        created_by__isnull=True).count() == 1
-    assert not ThreadFollower._base_manager.filter(thread=attachment.thread).exists()
+        assert not record.thread_attachments.filter(role="chatter").exists()
+        assert not Message._base_manager.filter(message_type="notification", created_by__isnull=True,
+                                                thread__attachments__object_id=record.pk).exists()
+        assert not ThreadFollower._base_manager.filter(thread__attachments__object_id=record.pk).exists()
 
 
 @pytest.mark.parametrize("size", [1, 10])

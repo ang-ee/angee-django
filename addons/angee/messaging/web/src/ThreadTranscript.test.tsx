@@ -42,7 +42,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 });
 
 vi.mock("./thread-message-feed", () => ({ useThreadMessageFeed: mocks.useThreadMessageFeed }));
-
+vi.mock("./MessageSourceCopies", () => ({ MessageSourceCopies: () => null }));
 
 function message(overrides: Partial<ThreadTranscriptRow> = {}): ThreadTranscriptRow {
   return {

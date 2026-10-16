@@ -98,7 +98,6 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
     sent_at: "2026-07-06T00:00:00Z",
     created_at: "2026-07-06T00:00:00Z",
     reaction_groups: [],
-    tracking_values: [],
     parts: [part("part-1", "Ping the room")],
     ...overrides,
   } as unknown as RecordMessageRow;
@@ -117,6 +116,8 @@ function threadPayload(
       error_code: null,
       thread: { id: "thr_1", title: { text: "Room" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
+      timeline_count: messages.length,
+      timeline: messages.map((message) => ({ ...message, __typename: "RecordMessageType" as const })),
       audience_label: "People with access to this record" as string | null,
       post_kinds: ["COMMENT", "NOTE"],
       messages,

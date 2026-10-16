@@ -7,7 +7,7 @@ the surface-isolation scenarios that ``ThreadedTicket`` (ungated — ``can_post`
 always allows) cannot:
 
 - **part 1** — an actor granted ``writer`` may change a tracked field (``write``)
-  but may not post comments (``post``), so an automatic tracked-field log must land
+  but may not post comments (``post``); native history captures the edit
   without consulting ``can_post``.
 - **part 3** — a user with no grant cannot read the record, so its record tasks are
   unreachable: the task schema derives them from the record's chatter read and
@@ -23,17 +23,16 @@ from __future__ import annotations
 from django.db import models
 
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import AuditMixin, HistoryMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.messaging.models import ThreadedModelMixin
 
 
-class ChatterDoc(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
+class ChatterDoc(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
     """A gated document that opts into record chatter with post-access divergence."""
 
     sqid_prefix = "cdc_"
-    thread_tracking_fields = ("status",)
     thread_post_access = "post"
 
     title = models.CharField(max_length=160)
@@ -57,13 +56,13 @@ class ChatterDoc(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
         return self.title
 
 
-class TrackedRecordParent(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
+class TrackedRecordParent(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
     """Concrete threaded parent standing in for a materialized ``extends`` target.
 
-    Opts into field tracking on ``status`` and guards that column with a
+    Keeps native history and guards ``status`` with a
     ``StateTransitions`` graph whose transition persists through ``save_state`` — so
-    a transition drives the same chatter save the tracking rides. Ungated (no
-    ``rebac_resource_type``), like ``ThreadedTicket``, to keep the tracking scenario
+    a transition creates a native version without a chatter callback. Ungated (no
+    ``rebac_resource_type``), like ``ThreadedTicket``, to keep the history scenario
     free of permission setup.
     """
 
@@ -74,7 +73,6 @@ class TrackedRecordParent(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel)
         CLOSED = "closed", "Closed"
 
     sqid_prefix = "trp_"
-    thread_tracking_fields = ("status",)
 
     title = models.CharField(max_length=160)
     status = StateField(choices_enum=Status, default=Status.OPEN)
@@ -114,7 +112,7 @@ class TrackedRecordChild(_AbstractTrackedRecordChild, TrackedRecordParent):
 
     Native Django MTI inherits the parent's framework columns. A transition save
     traverses ``ThreadedModelMixin.save`` once and writes both tables, producing
-    one tracking note for the state change.
+    the native historical version for the state change.
     """
 
     class Meta:

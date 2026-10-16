@@ -12,7 +12,6 @@ import {
   useAppRuntime,
   useActiveRoute,
   useContainer,
-  type ChatterRoute,
   type ChatterTabContent,
   type ChatterView,
   type ChatterViewContext,
@@ -174,8 +173,7 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
   visible: boolean;
   tabs: readonly ComposedContainerChild<ChatterTabContent | ChatterTab>[];
 } {
-  const runtime = useAppRuntime();
-  const context = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const context = useActiveChatterView();
   const { content } = useChatter();
   const published = explicitTabs ?? content?.tabs;
   const models = React.useMemo(
@@ -221,9 +219,9 @@ function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: 
   ))}</>;
 }
 
-function useActiveChatterView(
-  routes: readonly ChatterRoute[],
-): ChatterViewContext {
+/** The current route and record context, shared by the aside and shell drawers. */
+export function useActiveChatterView(): ChatterViewContext {
+  const routes = useAppRuntime().chatterRoutes ?? [];
   const match = useMatches({ select: leafMatch });
   const route = useActiveRoute(routes);
   const pathname = useRouterState({

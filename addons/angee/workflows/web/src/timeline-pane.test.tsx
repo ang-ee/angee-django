@@ -37,11 +37,11 @@ test("attention forces only a newly opened id on the same record, including a co
   owner.count = 0; owner.ids = []; hook.rerender();
   expect(owner.initial).not.toHaveBeenCalled(); expect(owner.collapse).not.toHaveBeenCalled();
   owner.count = 1; owner.ids = ["second"]; hook.rerender();
-  expect(owner.initial).toHaveBeenCalledExactlyOnceWith("workflows.timeline", true);
+  expect(owner.initial).toHaveBeenCalledExactlyOnceWith("workflows.runs", true);
   owner.initial.mockClear(); owner.collapse.mockClear(); hook.rerender();
   expect(owner.initial).not.toHaveBeenCalled();
   owner.ids = ["third"]; hook.rerender();
-  expect(owner.initial).toHaveBeenCalledExactlyOnceWith("workflows.timeline", true);
+  expect(owner.initial).toHaveBeenCalledExactlyOnceWith("workflows.runs", true);
 });
 
 test("an unsaved record does not enable the eager timeline read", () => {

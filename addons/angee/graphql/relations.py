@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
@@ -21,12 +21,31 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import RecordRef, RecordRefMixin
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
 from angee.graphql.node import AngeeNode
+
+
+@strawberry.type
+class RecordPointerType:
+    """Minimal record identity from an already authorized reference."""
+
+    label: str
+    model_label: str = strawberry.field(name="model_label")
+    record_id: strawberry.ID = strawberry.field(name="record_id")
+
+    @classmethod
+    def from_reference(cls, reference: RecordRef, *, label: str = "") -> Self:
+        """Project identity without loading the target; navigation rechecks access."""
+
+        return cls(
+            label=label or reference.public_id,
+            model_label=reference.model_label,
+            record_id=strawberry.ID(reference.public_id),
+        )
 
 _UNCACHED = object()
 

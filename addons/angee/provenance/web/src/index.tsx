@@ -7,7 +7,7 @@ import { enProvenanceMessages } from "./i18n";
 /**
  * The provenance addon's console surface: one History tab on every saved
  * record whose resource keeps native history (`resource.history`), composed
- * from the framework's record-tab seam exactly as integrate's Streams tab is.
+ * through the shared form sections container.
  */
 const provenance = defineBaseAddon({
   id: "provenance",
@@ -33,13 +33,14 @@ const provenance = defineBaseAddon({
 export {
   HISTORY_TAB_ID,
   HistoryPane,
+  HistoryEntrySummary,
   HistoryTimeline,
   RecordHistoryTimeline,
   useRecordHistory,
   type HistoryTimelineProps,
   type RecordHistoryTimelineProps,
 } from "./RecordHistory";
-export type { HistoryEntry, HistoryFieldChange, HistoryStatement, RecordHistory } from "./documents.console";
+export type { HistoryEntry, HistoryFieldChange, HistoryStatement, HistorySummaryEntry, RecordHistory } from "./documents.console";
 export { entryTone, historyValue, statementVerb, type HistoryValue, type StatementVerb } from "./history-entries";
 
 export default provenance;

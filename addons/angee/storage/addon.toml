@@ -5,7 +5,7 @@ name = "angee.storage"
 description = "Drives, folders, and content-addressed files with chunked uploads"
 keywords = ["storage", "files", "drives"]
 category = "Data"
-depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.tags", "django.contrib.contenttypes"]
+depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.tags", "django.contrib.contenttypes", "angee.provenance"]
 dependencies = [
   "python-magic>=0.4.27",
 ]
@@ -28,3 +28,8 @@ install = [
   { path = "resources/install/010_storage.backend.yaml", adopt = "slug" },
   { path = "resources/install/020_storage.drive.yaml", adopt = "slug" },
 ]
+
+[[migrations]]
+name = "folder_hierarchy"
+app_label = "storage"
+module = "runtime_migrations.folder_hierarchy"

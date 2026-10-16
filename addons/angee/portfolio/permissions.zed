@@ -10,22 +10,30 @@ definition portfolio/role {
     permission effective_member = member + admin->member
 }
 
+// A product or initiative is owned by its creator (OwnerMixin): the owner writes
+// and hands it over; portfolio administrators reach every row.
 definition portfolio/product {
+    relation owner: auth/user // rebac:field=owner
     relation manager: portfolio/role // rebac:const=portfolio_admin
 
     permission create = manager->effective_member
     permission read   = authenticated + manager->effective_member
-    permission write  = manager->effective_member
-    permission delete = manager->effective_member
+    permission write  = owner + manager->effective_member
+    permission delete = owner + manager->effective_member
+    permission transfer = owner + manager->effective_member
+    permission write__owner = transfer
 }
 
 definition portfolio/initiative {
+    relation owner: auth/user // rebac:field=owner
     relation manager: portfolio/role // rebac:const=portfolio_admin
 
     permission create = manager->effective_member
     permission read   = authenticated + manager->effective_member
-    permission write  = manager->effective_member
-    permission delete = manager->effective_member
+    permission write  = owner + manager->effective_member
+    permission delete = owner + manager->effective_member
+    permission transfer = owner + manager->effective_member
+    permission write__owner = transfer
 }
 
 definition portfolio/initiative_project {

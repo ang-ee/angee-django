@@ -8,6 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.merge import references
 from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
 from angee.projects.testing.models import Link, Project, Queue, Stage, Task
 from angee.spaces.testing.models import Membership
@@ -48,12 +49,12 @@ def test_concealment_revokes_held_instances_and_all_list_shapes(queue_case, role
         # has no intake donor; current admission is exercised in the emitted host.
         [need] = Need._base_manager.bulk_create([Need(task=task, body="Legacy evidence")])
         thread = task.message_thread()
-        message = Message._base_manager.filter(thread=thread).first()
     with actor_context(people["owner"]):
+        message = task.with_actor(people["owner"]).message_post("Visible discussion")
         changing = Task.objects.get(pk=task.pk)
         changing.stage = removed
         changing.save(update_fields=("stage",))
-    allowed = role == "admin"
+    allowed = role in {"owner", "manager", "admin"}
     for permission in ("read", "write", "share", "comment", "delete"):
         assert held.has_access(permission) is allowed
         assert Task.objects.with_actor(actor).with_action(permission).filter(pk=task.pk).exists() is allowed
@@ -76,14 +77,13 @@ def test_concealment_revokes_held_instances_and_all_list_shapes(queue_case, role
                 held.message_post("Refused comment")
     with actor_context(people["admin"]):
         restored = Task.objects.get(pk=task.pk)
-        restored.stage = Stage.resolve_default(restored.queue)
-        restored.save(update_fields=("stage",))
+        restored.restore()
     assert Task.objects.with_actor(actor).filter(pk=task.pk).exists()
 
 
 @pytest.mark.parametrize("method", ("clean", "save"))
 @pytest.mark.parametrize(
-    "mutation", ("default_becomes_concealing", "concealing_default", "rule_and_conceal", "promoted")
+    "mutation", ("default_becomes_concealing", "concealing_default", "rule_and_conceal", "promoted", "populated")
 )
 def test_stage_owner_rejects_concealment_that_breaks_its_invariants(queue_case, method, mutation):
     _, queue, removed, task = queue_case
@@ -98,6 +98,12 @@ def test_stage_owner_rejects_concealment_that_breaks_its_invariants(queue_case, 
             candidate = Stage.objects.create(queue=queue, name="Promoted", category="started")
             Task._base_manager.filter(pk=task.pk).update(stage=candidate)
             Project.objects.create(title="Promoted project", converted_from=task)
+            candidate.conceals = True
+        elif mutation == "populated":
+            # Tasks are trashed by entering a concealing stage, each under its own
+            # authority; a stage edit cannot trash the tasks it already holds.
+            candidate = Stage.objects.create(queue=queue, name="Populated", category="started")
+            Task._base_manager.filter(pk=task.pk).update(stage=candidate)
             candidate.conceals = True
         else:
             candidate = Stage._base_manager.get(pk=queue.default_stage_id)
@@ -161,7 +167,8 @@ def test_link_retargeting_reads_live_without_writing_either_tuple_store(queue_ca
     assert link.with_actor(people["member"]).has_access("read")
     before = relationship_snapshot()
     with system_context(reason="tests.t3.move_links"), CaptureQueriesContext(connection) as queries:
-        source._move_links_to(target)
+        edge = next(reference for reference in references(Task) if reference.model is Link)
+        edge.move(edge.rows(source), survivor=target)
     link.refresh_from_db()
     assert link.object_id == target.pk
     assert not link.with_actor(people["member"]).has_access("read")
@@ -224,9 +231,10 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case, d
     )
     list(query.values_list("pk", flat=True))
     # The fetch-only column guard shares one schema operation. Together with
-    # scoping: two revision reads, actor sets, twelve arrow sources (a record
-    # task's subject adds its attachment, record type and task), ordered SELECT.
-    with django_assert_num_queries(16) as queries:
+    # scoping: two revision reads, actor sets, seventeen arrow sources (a record
+    # task reaches each declared subject type's direct holders, and a trashed
+    # task its removal authority), ordered SELECT. None grows with the rows.
+    with django_assert_num_queries(21) as queries:
         assert list(query.values_list("pk", flat=True)) == [first.pk, task.pk]
     # One SELECT orders by stage position; the task arrow source reads the table on its own.
     ordered = [

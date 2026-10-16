@@ -12,6 +12,9 @@ definition projects/project {
 }
 
 definition projects/task {
+    relation subject_round: proposals/round // rebac:field=subject
+    permission subject_read = subject_round->manage
+    permission subject_write = subject_round->manage
     relation proposal_viewer: auth/user | auth/group#member
     relation track_proposal: proposals/proposal // rebac:field={"path":"project__source_proposal"}
     relation round_responder: auth/user // rebac:field={"path":"proposal_rounds__proposals__responder","filters":{"proposal_rounds__proposals__retired_at__isnull":true}}
@@ -43,12 +46,10 @@ definition auth/user {
 }
 
 // A round carries source conversations under its writers, and record tasks under
-// its managers (internal to-dos, never its responders'): the thread attachment
-// edge reaches the round through its GenericForeignKey.
+// its managers (internal to-dos, never its responders'). Each capability declares
+// its own direct generic edge to the round.
 definition messaging/thread_attachment {
     relation round: proposals/round // rebac:field=target
 
     permission target_write = round->write
-    permission record_read = round->manage
-    permission record_write = round->manage
 }
