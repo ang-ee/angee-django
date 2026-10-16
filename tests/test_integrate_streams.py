@@ -984,6 +984,30 @@ def test_data_error_quarantines_record_after_savepoint_rollback(
         assert not RecordLink.objects.filter(stream=stream).exists()
 
 
+def test_finish_page_runs_after_every_applied_link_is_promoted(stream_bridge: Channel) -> None:
+    """The page hook sees promoted links and runs before the cursor advances."""
+
+    seen: list[tuple[str, bool]] = []
+
+    class FinishAdapter(MemoryAdapter):
+        def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
+            assert connection.in_atomic_block
+            assert SyncStream.objects.get(pk=stream.pk).cursor == before
+            seen.extend(
+                (link.external_key, link.applied_base_id is not None)
+                for link in RecordLink.objects.filter(stream=stream).order_by("external_key")
+            )
+
+    stream = SyncStream.objects.current(stream_bridge, "records", "inbox", kind=StreamKind.RECORD_REPLICA)
+    before = stream.cursor
+    records = tuple(RecordChange(key, {"name": key}, key, mapped_payload={"name": key}) for key in ("a", "b"))
+    advance_stream(stream, FinishAdapter(pages=[StreamPage(records, {"offset": 2})]))
+
+    assert seen == [("a", True), ("b", True)]
+    stream.refresh_from_db()
+    assert stream.cursor == {"offset": 2}
+
+
 def test_message_metadata_refusal_quarantines_record_and_continues_page(stream_bridge: Channel) -> None:
     """The existing metadata budget is a field refusal, never a poison-page error."""
 
