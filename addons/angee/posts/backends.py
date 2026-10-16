@@ -35,6 +35,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import system_context
 
+from angee.base.mixins import SourceKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HttpClientMixin, ResponseTooLargeError
@@ -526,12 +527,17 @@ class ManualFeedBackend(FeedBackend):
 
 
 class FeedChannelBackend(ManualChannelBackend):
-    """Mark a feed's Channel parent as a content source without a second transport."""
+    """Mark a feed's Channel parent as a content source without a second transport.
+
+    A feed is an import source: what is landed from a feed's own history, such as a
+    contact its comments name, is that feed's assertion, ranked below a person's.
+    """
 
     key = "feed"
     category = "feed"
     label = "Feed"
     icon = "rss"
+    source_kind = SourceKind.IMPORT
 
     def __init__(self, integration: Any) -> None:
         """Resolve the feed child once; it owns both publish and sync identity."""

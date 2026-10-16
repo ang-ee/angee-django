@@ -7,15 +7,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
-from jsonschema.exceptions import ValidationError as SchemaValidationError
 from rebac import SubjectRef
 from rebac.resources import model_for_resource_type
 
 from angee.base.fields import SqidField
-from angee.base.scoping import read_scoped_queryset
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -48,32 +45,6 @@ class PublicIdentity(models.Model):
     def public_id_lookup(cls, value: str) -> dict[str, Any]:
         """Return the primary-key lookup; public-id fields override this contract."""
         return {cls._meta.pk.name: value}
-
-
-def relation_permission_validator(actor: Any) -> Any:
-    """Return a native JSON Schema keyword hook for actor-readable public IDs.
-
-    Relation filters remain picker-query hints; submission enforces the declared
-    standing permission through the model's existing queryset scope. A submitted
-    relation requires an actor; schema-only validation omits this hook.
-    """
-
-    def validate_relation(validator: Any, relation: dict[str, Any], value: Any, schema: Any) -> Any:
-        if not isinstance(value, str):
-            return
-        if actor is None:
-            yield SchemaValidationError("A relation value requires an actor.")
-            return
-        try:
-            model = apps.get_model(relation["resource"])
-        except LookupError, ValueError:
-            yield SchemaValidationError("The relation target is unavailable.")
-            return
-        queryset = read_scoped_queryset(model, actor, action=relation.get("permission", "read"))
-        if value not in instances_from_public_ids(model, [value], queryset=queryset):
-            yield SchemaValidationError("The selected record is absent or inaccessible.")
-
-    return validate_relation
 
 
 @dataclass(frozen=True, slots=True)

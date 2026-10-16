@@ -998,6 +998,14 @@ and current contracts before applying a historical example to a new deployment.
   [The composer migration owner](../composer.md#addon-owned-runtime-migrations)
   defines declaration and materialization behavior. Guards select the exact old
   state, skip complete new or absent states, and reject recognized partial states.
+  A transition whose old state is data the project state cannot show (stored
+  tuples, tables of an app that left the app set) has no schema to select: its
+  guard holds whenever its models exist, materialization bounds it to one run, and
+  its body is a no-op where that data is absent, so a fresh stack materializes it
+  once without effect (spaces'
+  [`drop_stored_roster`](../../addons/angee/spaces/runtime_migrations/drop_stored_roster.py),
+  provenance's
+  [`retire_reversion`](../../addons/angee/provenance/runtime_migrations/retire_reversion.py)).
   Copy-local `RunPython` functions use historical models from `apps` and
   `_base_manager`; clear ordering before writes when it can name live-model alias
   fields such as `sqid`. Ship a new declaration for a new transition and preserve
