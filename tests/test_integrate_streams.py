@@ -1130,6 +1130,48 @@ def test_identity_rescan_resolves_current_remote_state_without_advancing_stream(
     assert SyncStream.objects.count() == 1
 
 
+def test_identity_rescan_skips_an_identity_another_attempt_healed_while_it_read(stream_bridge: Channel) -> None:
+    """A rescan's read never meets a base that moved after it selected the identity."""
+
+    class RacingAdapter(ReadKeysAdapter):
+        def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+            records = tuple(super().read_keys(stream, keys))
+            if len(self.reads) == 1:
+                # An earlier attempt, still running, applies the same identity first.
+                begin_stream_cycle(stream, self)
+            return records
+
+    stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+    base = RecordChange("person:1", {"name": "base"}, "base", mapped_payload={"name": "base"})
+    adapter = RacingAdapter(pages=[StreamPage((base,), {"page": 1})])
+    advance_stream(stream, adapter)
+    # The local projection is the applied base the adapter read, as a pull-only replica's is.
+    changed = RecordChange(
+        "person:1", {"name": "v2"}, "v2", "base", mapped_payload={"name": "v2"}, projection={"name": "base"}
+    )
+    adapter.semantic_key = "person:1"
+    adapter.pages = [StreamPage((changed,), {"page": 2})]
+    result = advance_stream(stream, adapter)
+    failure = next(
+        row for row in SyncStream.objects.get(pk=stream.pk).sync_failures() if row.id == result.failure_ids[0]
+    )
+    failure_state(failure, retry_at=timezone.now())
+    adapter.semantic_key = ""
+    adapter.applied.clear()
+    adapter.remote = {"person:1": changed}
+
+    begin_stream_cycle(stream, adapter)
+
+    link = RecordLink.objects.get(stream=stream, external_key="person:1")
+    assert adapter.reads == [("person:1",), ("person:1",)]
+    assert adapter.applied == ["person:1"]
+    assert link.status == LinkStatus.CURRENT
+    assert link.applied_base.source_hash == "v2"
+    assert applied_history().filter(id=link.pk).count() == 2
+    assert not SyncStream.objects.get(pk=stream.pk).sync_failures(open_only=True)
+    assert failure_state(failure).status == SyncFailureStatus.RESOLVED
+
+
 def test_changed_remote_failure_defers_older_quarantine_for_the_same_identity(stream_bridge: Channel) -> None:
     stream = SyncStream.objects.current(stream_bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
     adapter = ReadKeysAdapter(
