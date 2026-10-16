@@ -3692,15 +3692,22 @@ class SyncStreamManager(AngeeManager):
                 raise RuntimeError("The extracted page belongs to a retired stream generation.")
             return locked
 
-    def current_for_bridge(self, bridge: models.Model, key: str) -> Any:
-        """Return one current epoch per partition for the bridge's named stream."""
+    def current_for_bridge(self, bridge: models.Model, key: str | None = None) -> Any:
+        """Return one current epoch per partition of the bridge's named stream, or of every stream.
 
-        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(
-            integration_id=bridge.pk,
-            key=key,
+        Without ``key`` this is one query over every (key, partition) the bridge
+        has opened, so a caller resolving across streams reads them once.
+        """
+
+        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
+        if key is not None:
+            rows = rows.filter(key=key)
+        latest = (
+            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            .order_by("-generation")
+            .values("generation")[:1]
         )
-        latest = rows.filter(partition=OuterRef("partition")).order_by("-generation").values("generation")[:1]
-        return rows.filter(generation=Subquery(latest)).order_by("partition")
+        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
 
     def current(
         self,
