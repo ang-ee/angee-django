@@ -3692,15 +3692,22 @@ class SyncStreamManager(AngeeManager):
                 raise RuntimeError("The extracted page belongs to a retired stream generation.")
             return locked
 
-    def current_for_bridge(self, bridge: models.Model, key: str) -> Any:
-        """Return one current epoch per partition for the bridge's named stream."""
+    def current_for_bridge(self, bridge: models.Model, key: str | None = None) -> Any:
+        """Return one current epoch per partition of the bridge's named stream, or of every stream.
 
-        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(
-            integration_id=bridge.pk,
-            key=key,
+        Without ``key`` this is one query over every (key, partition) the bridge
+        has opened, so a caller resolving across streams reads them once.
+        """
+
+        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
+        if key is not None:
+            rows = rows.filter(key=key)
+        latest = (
+            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            .order_by("-generation")
+            .values("generation")[:1]
         )
-        latest = rows.filter(partition=OuterRef("partition")).order_by("-generation").values("generation")[:1]
-        return rows.filter(generation=Subquery(latest)).order_by("partition")
+        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
 
     def current(
         self,
@@ -4214,15 +4221,24 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
         link.save_without_historical_record(using=self.db, update_fields=("target_content_type", "target_object_id"))
 
     def revalidate(self, link: Any, *, target: Any = UNSET) -> Any:
-        """Restore a verified identity without advancing its application base."""
+        """Restore a verified identity without advancing its application base.
+
+        A link already current on the same target is left unsaved: the delivery's
+        observation recorded it, and a save would repeat that snapshot in history.
+        """
+        fields = ("target_content_type_id", "target_object_id", "status", "tombstoned_at")
         locked = self.lock_if_supported().get(pk=link.pk)
+        before = [getattr(locked, name) for name in fields]
         if target is not UNSET:
             self._set_target(locked, target)
         locked.status = LinkStatus.CURRENT
         locked.tombstoned_at = None
         locked.update_sync_status()
-        locked.save(update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"])
-        for name in ("target_content_type_id", "target_object_id", "status", "tombstoned_at"):
+        if [getattr(locked, name) for name in fields] != before:
+            locked.save(
+                update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"]
+            )
+        for name in fields:
             setattr(link, name, getattr(locked, name))
         return locked
 

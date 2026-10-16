@@ -79,7 +79,12 @@ class BridgeImpl(IntegrationImpl):
     """Declare identity reads; otherwise retries request a fresh baseline."""
 
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
-        """Declare each independently ordered partition exactly once."""
+        """Declare each independently ordered partition exactly once.
+
+        The generic sync declares once per cycle. A workflow cycle declares once per
+        drained partition (``workflows_integrate.StreamStage``), so an adapter synced
+        through one declares from local state, without transport.
+        """
         raise AdapterContractError("Stream adapters must declare their partitions.")
 
     def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -153,7 +158,13 @@ class BridgeImpl(IntegrationImpl):
         """Withdraw native projection visibility when absence changes link status."""
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
-        """Finish domain batch relationships before the page cursor commits."""
+        """Finish domain batch relationships before the page cursor commits.
+
+        Runs once per page inside the page transaction, after the driver has decided
+        every record of the page; each applied record's link is already promoted.
+        ``outcomes`` are the applied records' results in page order. The cursor has
+        not advanced yet, so a raise here rolls the whole page back.
+        """
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
         """Project only selected local identities, or all candidates when keys is None."""

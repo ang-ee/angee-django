@@ -30,6 +30,11 @@ class StreamReference(BaseModel):
     key: str = Field(min_length=1)
     partition: str = ""
 
+    def current_stream(self, bridge: Bridge) -> Any:
+        """Resolve the opened partition's current epoch through its durable owner."""
+        manager = apps.get_model("integrate", "SyncStream").objects
+        return _pull_only(manager.current_for_bridge(bridge, self.key).get(partition=self.partition))
+
 
 class StreamStageInput(StreamReference):
     """One mapped partition and its page bound; SyncStream alone owns the cursor."""
@@ -74,10 +79,7 @@ class CoverageInput(BaseModel):
 
     def current_streams(self, bridge: Bridge) -> list[Any]:
         """Resolve each declared partition through the durable epoch owner."""
-        manager = apps.get_model("integrate", "SyncStream").objects
-        return [
-            _pull_only(manager.current_for_bridge(bridge, row.key).get(partition=row.partition)) for row in self.streams
-        ]
+        return [row.current_stream(bridge) for row in self.streams]
 
 
 class RescanConfig(BaseModel):
@@ -95,6 +97,10 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
     lost after the page commits cannot replay that page; its unacknowledged
     count is absent because stream advancement and workflow settlement commit
     independently. Fan-out belongs to the native map step.
+
+    A stage run is one drain of its partition: its first page opens the stream, which
+    reconciles it with the adapter's current declaration (``open_stream``), and each
+    later page resumes the stream that page opened.
     """
 
     key = "integrate_stream"
@@ -107,7 +113,10 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
         """Apply exactly one bounded page with integrate's page/cursor transaction."""
         bridge = _bridge_subject(ctx)
         with _stream_io(ctx, bridge) as adapter:
-            stream = _pull_only(open_stream(bridge, ctx.input.key, ctx.input.partition, adapter))
+            if ctx.state.get("progress") is None:
+                stream = _pull_only(open_stream(bridge, ctx.input.key, ctx.input.partition, adapter))
+            else:
+                stream = ctx.input.current_stream(bridge)
             page = advance_stream(stream, adapter, page_bound=ctx.input.page_bound)
         progress, resets = page.check_continuation(
             previous=ctx.state.get("progress"),
