@@ -104,12 +104,11 @@ client for project-wide quotas), and `quota_reset_timezone` with the reset IANA 
 The shared `Quota` owner atomically enforces the current configured limit, leaving
 the reply reserve for polling; local midnight periods honor DST. `quota_limit` is
 read from the requesting feed for every check and never persisted onto the shared
-row; the ledger's legacy `quota_limit` is historical data. Each debit opens the period
-once; historical NULL-scope ledgers are never reopened. Retry-After parsing belongs
-to `FeedBackend.retry_after(response)`.
+row. Each debit opens the required provider scope's period once. Retry-After parsing
+belongs to `FeedBackend.retry_after(response)`.
 
-Deleting the original integration authorization anchor preserves a shared scope's
-ledger and usage; remaining spenders continue against that same budget.
+The required integration is the ledger's authorization anchor and is protected
+from deletion while its quota periods remain.
 
 Re-observation of the `active_thread_days` window (default 30 days) catches edits,
 moderation changes, hides and deletes. Declare it as its own event-feed

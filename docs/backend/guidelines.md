@@ -464,6 +464,10 @@ data through REBAC, never a queryset bypass.
   const-backed relations, `authenticated`, and SQL read scopes are evaluated
   against the Django rows themselves, which no remote tuple store can see. Do not
   mirror column facts into tuples to keep another backend viable.
+- **Permission fragments widen `read_granted`; the owner derives `read`.**
+  Consumer addons union their additional read arms into the resource owner's
+  `read_granted` permission. The owning definition alone derives `read`, so its
+  withholding and other final policy cannot be bypassed or copied by fragments.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared
