@@ -53,7 +53,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
         self.enterContext(override_settings(
             ANGEE_EXTRACTION_PROFILE_CLASSES={"plain_text": f"{__name__}.DeterministicProfile"},
         ))
-        storage = self.enterContext(TemporaryDirectory(prefix="extraction-composed-", dir="/private/tmp"))
+        storage = self.enterContext(TemporaryDirectory(prefix="extraction-composed-"))
         with system_context(reason="composed extraction fixtures"):
             self.actor = get_user_model().objects.create_user(username="extraction-runner")
             grant_role(actor=self.actor, role="angee/role:admin")
