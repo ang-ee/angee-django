@@ -26,6 +26,9 @@ export const CODEMIRROR_THEME = EditorView.theme({
     minHeight: "12rem",
     padding: "0.5rem 0.75rem",
   },
+  // basicSetup draws its own cursor and hides the native caret, so caretColor
+  // alone leaves CodeMirror's default black cursor on a dark sheet.
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--brand)" },
   ".cm-line": { lineHeight: "1.5rem" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--brand-soft)",
