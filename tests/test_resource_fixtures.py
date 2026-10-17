@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_declared_resource_values_are_accepted_by_their_model_field(tmp_path: Path) -> None:
     """All local addon fixtures resolve through a fresh composed Django registry.
@@ -33,7 +35,7 @@ def test_declared_resource_values_are_accepted_by_their_model_field(tmp_path: Pa
         env=env,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
     assert result.returncode == 0, f"fresh composed host failed:\n{result.stdout}\n{result.stderr}"

@@ -65,7 +65,8 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
 and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
 for each worker. The composed-host subprocess tests use Django's test runner to
-create separate worker-named secondary test databases. The full
+create separate worker-named secondary test databases; every caller bounds the
+subprocess with the one hang limit in [`composed_host.py`](../tests/composed_host.py). The full
 suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
 apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
@@ -239,18 +240,38 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
-  and the 25 slowest test durations, with migrations enabled and `DATABASE_URL`
-  unset. Structural tests remain part of this suite.
-- **PostgreSQL:** the named workflow, decision and agent session selection runs with
-  `-n 4 --dist loadfile --nomigrations`, writes JUnit output, and checks that it
-  did not skip tests.
+- **SQLite:** the full framework Python suite once, as six shards that
+  pytest-split cuts into contiguous chunks of equal stored time from the
+  committed [durations](../.test_durations), so each test file stays in one or two
+  shards. Each shard runs
+  `-n auto --dist loadfile` with a 40-minute limit and prints its 25 slowest test
+  durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
+  remain part of this suite. Per-file scheduling keeps a file on one worker, so the
+  heaviest files (the proposals access, owner-gate adopters and agents GraphQL
+  campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
+  Their cost is per-test fixture setup, a `rebac sync` before every test; making
+  that setup cheaper is how the limit comes down.
+- **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
+  same way and with the same limit, the named workflow, decision and agent session
+  selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
+  slowest test durations; each shard writes JUnit output and checks that it did
+  not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
+  each worker creates every table in one transaction. The `uv` job passes only
+  when every shard of both passes, so callers keep one check name.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
   and addon fragments, and run the bridges repository's pytest suite. Framework
   composed-host tests create their own temporary hosts in the SQLite suite; the
   stack job does not repeat that framework suite.
+
+A test missing from the durations still runs: pytest-split gives it the average
+duration and places it in exactly one shard. Refresh the file when a shard nears
+its limit or its balance drifts (the shards' printed estimates against their wall
+times): run `uv run pytest -q -n 4 --dist loadfile --store-durations` in the
+framework checkout and commit `.test_durations`. Ties in the assignment fall back
+to collection order, so an opt-in `-p randomly` run must give every shard one
+shared `--randomly-seed`.
 
 Separate structural and downstream tiers are not implemented. Separate workflows
 enforce private-path exclusion and other repository policies. Executable jobs in
