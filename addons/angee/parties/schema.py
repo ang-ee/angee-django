@@ -791,6 +791,7 @@ _HANDLE_RESOURCE = hasura_model_resource(
     HandleType,
     model=Handle,
     name="handles",
+    get_queryset=lambda info: Handle.objects.canonical(),
     filterable=[
         "id",
         "value",

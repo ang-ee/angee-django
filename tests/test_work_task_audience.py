@@ -15,15 +15,13 @@ class TaskAudienceTests(WorkCase):
         with actor_context(self.owner):
             return self.as_user(task).message_post(body)
 
-    def test_roster_creation_note_comments_preferences_and_followers(self):
+    def test_roster_comments_preferences_and_followers(self):
         self.membership(self.manager, role="owner")
         with actor_context(self.owner):
             task = self.Task.objects.create(title="Created request", queue=self.queue, stage=self.stages["Ready"])
-        with actor_context(self.owner):
-            creation = task.message_thread_attachment(create=False).thread.messages.order_by("pk").first()
-        self.assertIsNotNone(creation)
         expected = {self.member.pk, self.manager.pk, self.moderator.pk}
-        self.assertEqual(self.recipients(creation), expected)
+        # A task's creation is its first history line, not a note: the roster hears the first post.
+        self.assertEqual(self.recipients(self.post(task, "First update")), expected)
         before = self.ThreadFollower._base_manager.count()
         self.assertEqual(self.recipients(self.post(task)), expected)
         self.assertEqual(self.ThreadFollower._base_manager.count(), before)

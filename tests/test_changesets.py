@@ -203,8 +203,9 @@ def test_each_actor_under_one_boundary_records_its_own_changeset() -> None:
         "alice-again": str(to_subject_ref(alice)),
         "bob": str(to_subject_ref(bob)),
     }
+    # Each user's storage Trash folder keeps history, so creating the users records its own boundary.
     assert {(context.change_reason, context.state, context.outcome) for context in changesets()} == {
-        ("loop", "closed", "success")
+        ("loop", "closed", "success"), ("storage.trash_folder", "closed", "success"),
     }
 
 

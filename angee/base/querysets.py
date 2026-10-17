@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
@@ -62,6 +62,23 @@ def record_history(model: type[models.Model]) -> ModelHistory | None:
     return model_history(model)
 
 
+class MergeableQuerySet(models.QuerySet[_ModelT]):
+    """Operational identities; compose trash and archival scopes independently."""
+
+    def canonical(self) -> Any:
+        """Rows that redirect nowhere, plus a retained redirect whose survivor these rows do not reach.
+
+        A redirect is identity, not content: a reader this scope withholds the
+        survivor from (an actor's read, a channel filter) still reads the copy it
+        does reach, so a merged record never disappears from a reader who could
+        see only it.
+        """
+
+        rows = super().canonical()
+        survivors = self.filter(pk=models.OuterRef("merged_into_id")).order_by().values("pk")
+        return rows.filter(models.Q(merged_into__isnull=True) | ~models.Exists(survivors))
+
+
 class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
     """Shared lookup, locking and history capture, preserving each manager's policy.
 
@@ -72,11 +89,20 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
 
     model: type[_ModelT]
 
+    def canonical(self) -> Any:
+        """All rows until an owning capability narrows the operational scope."""
+
+        return self
+
     def update(self, **kwargs: Any) -> int:
-        """Capture stored state after an authorized write of frozen, locked keys."""
+        """Capture stored state after an authorized write of frozen, locked keys.
+
+        A write to columns the history excludes (a counter), with at most its
+        timestamp stamps, changes no tracked state and records no version.
+        """
 
         history = model_history(self.model)
-        if history is None or self.query.is_sliced:
+        if history is None or self.query.is_sliced or not self._changes_tracked_state(history, kwargs):
             return super().update(**kwargs)
         self._for_write = True
         selection = self._system_capture(reason="angee.history.rows") if isinstance(self, RebacQuerySet) else self
@@ -90,6 +116,18 @@ class _AngeeQuerySetMixin(models.QuerySet[_ModelT]):
                 history.bulk_history_create(self.model, keys, "~", using=self.db)
                 self._result_cache = None
                 return count
+
+    def _changes_tracked_state(self, history: ModelHistory, values: Mapping[str, Any]) -> bool:
+        """Whether an update writes a column the history tracks, beyond auto-now stamps."""
+
+        tracked = {field.attname for field in history.fields_included(self.model)} | {
+            field.name for field in history.fields_included(self.model)
+        }
+        stamps = {
+            name for field in self.model._meta.concrete_fields if getattr(field, "auto_now", False)
+            for name in (field.name, field.attname)
+        }
+        return any(name in tracked for name in values if name not in stamps)
 
     def bulk_create(
         self,
@@ -245,7 +283,9 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         subjects = read_scoped_queryset(self.model.statement_subject_model, actor)
         return self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
 
-    def canonical(self) -> Any:
+    def applied(self) -> Any:
+        """Standing value assertions selected by survivorship."""
+
         return self.current().filter(
             status=self.model.StatementStatus.ASSERTED, applied=True, snak=self.model.StatementSnak.VALUE
         )

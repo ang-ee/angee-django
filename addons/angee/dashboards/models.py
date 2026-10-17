@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, Self, cast
 
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
@@ -20,11 +19,17 @@ from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
     CreationKeyQuerySet,
+    HistoryMixin,
+    ImmutableFieldsMixin,
     OptimisticLockMixin,
+    OwnerMixin,
+    TrashMixin,
+    TrashQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.permissions import effective_rebac_definition
 from angee.base.scoping import read_scoped_queryset
+from angee.dashboards.resources import DashboardResource
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.data.hasura import declared_hasura_resource_fields
 from angee.graphql.introspection import FieldPathError, require_field_for_path
@@ -447,9 +452,14 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
 
 
 class DashboardQuerySet(
-    CreationKeyQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any],
+    CreationKeyQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any],
 ):
-    """Archive scopes layered over actor-scoped dashboard reads."""
+    """Actor-scoped dashboards with removal reserved for personal snapshots."""
+
+    def trash_targets(self) -> Self:
+        """Installed and scoped snapshots reset through their owning verb."""
+
+        return self.filter(scope="personal")
 
 
 class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: ignore[misc]
@@ -461,13 +471,22 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         if scope == "personal":
             raise ValueError("Personal dashboards resolve by public id.")
         return (
-            self.filter(models.Q(owner=owner) | models.Q(owner__isnull=True), scope=scope, scope_key=scope_key)
+            self.filter(models.Q(owner=owner) | models.Q(is_baseline=True), scope=scope, scope_key=scope_key)
             .order_by(models.F("owner").desc(nulls_last=True))
             .first()
         )
 
+    def may_create(self, owner: Any, actor: Any = None) -> Any:
+        """Authorize the actor to create an ordinary (non-baseline) dashboard owned by ``owner``.
+
+        The create gate excludes installed baselines through the row's own flag, so
+        the check runs on the candidate row rather than on its relationships alone.
+        """
+
+        return self.model(owner=owner, is_baseline=False).require_access("create", actor or current_actor())
+
     def create_personal(self, owner: Any, *, name: str, description: str = "", client_creation_key: str) -> Any:
-        actor = self.check_create({"owner": (owner,)})
+        actor = self.may_create(owner)
         if to_subject_ref(owner) != actor:
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
         if not client_creation_key:
@@ -638,28 +657,27 @@ DashboardObjects = DashboardManager()
 
 
 class Dashboard(
-    CreationKeyMixin, OptimisticLockMixin,
-    ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel,
+    CreationKeyMixin, ImmutableFieldsMixin, OptimisticLockMixin,
+    ResourceLoadMixin, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
     runtime = True
+    resource_class = DashboardResource
+    immutable_fields = ("is_baseline",)
     sqid_prefix = "dsh_"
     creation_key_scope = "owner"
     rebac_grantable = {"viewer": "share", "editor": "share"}
+    history_relations = ("widgets",)
 
     class DashboardScope(models.TextChoices):
         PERSONAL = "personal", "Personal"
         ADDON = "addon", "Addon"
         RESOURCE = "resource", "Resource"
 
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="dashboards",
-        null=True,
-        blank=True,
-    )
+    is_baseline = models.BooleanField(default=False, editable=False)
+    """An installed shared definition, independent of an authored snapshot's owner."""
+
     scope = StateField(choices_enum=DashboardScope, db_index=True)
     scope_key = models.CharField(max_length=255, null=True, blank=True)
     name = models.CharField(max_length=200)
@@ -677,7 +695,7 @@ class Dashboard(
         constraints = (
             models.CheckConstraint(
                 condition=(
-                    models.Q(scope="personal", scope_key__isnull=True, owner__isnull=False)
+                    models.Q(scope="personal", scope_key__isnull=True)
                     | (
                         models.Q(scope__in=("addon", "resource"))
                         & models.Q(scope_key__isnull=False)
@@ -692,8 +710,8 @@ class Dashboard(
             ),
             models.CheckConstraint(condition=models.Q(revision__gte=1), name="dashboard_revision_positive"),
             models.CheckConstraint(
-                condition=(models.Q(scope="personal") | models.Q(is_archived=False)),
-                name="dashboard_scoped_not_archived",
+                condition=(models.Q(scope="personal") | models.Q(is_trashed=False)),
+                name="dashboard_scoped_not_trashed",
             ),
             models.UniqueConstraint(
                 fields=("owner", "scope", "scope_key"),
@@ -702,8 +720,12 @@ class Dashboard(
             ),
             models.UniqueConstraint(
                 fields=("scope", "scope_key"),
-                condition=models.Q(owner__isnull=True),
+                condition=models.Q(is_baseline=True),
                 name="dashboard_installed_scoped_target",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(is_baseline=False) | models.Q(owner__isnull=True, scope__in=("addon", "resource")),
+                name="dashboard_baseline_shape",
             ),
             CreationKeyMixin.creation_key_constraint(scope="owner", name="dashboard_owner_creation_key"),
         )
@@ -711,23 +733,12 @@ class Dashboard(
     def __str__(self) -> str:
         return self.name
 
-    def set_personal_archived(self, *, archived: bool, expected_revision: int) -> Any:
-        """Archive one personal dashboard under its revision lock and actor gate."""
+    def insert_owner_default(self) -> Any:
+        """Keep installed scoped baselines ownerless; authored snapshots name their owner."""
 
-        if self.scope != self.DashboardScope.PERSONAL:
-            raise ValidationError("Only personal dashboards can be archived.")
-        actor = self.actor()
-        if not self.has_access("archive"):
-            raise PermissionDenied("You cannot archive this dashboard.")
-        with transaction.atomic(), system_context(reason="dashboards.archive"):
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
-            locked.require_revision(expected_revision)
-            if locked.is_archived != archived:
-                locked.is_archived = archived
-                locked.sudo(reason="dashboards.archive").save(
-                    update_fields=["is_archived"]
-                )
-        return locked.with_actor(actor)
+        if self.is_baseline:
+            return None
+        return super().insert_owner_default()
 
     def snapshot(self) -> dict[str, Any]:
         """Return the complete persisted snapshot in the public wire shape."""
@@ -756,6 +767,8 @@ class Dashboard(
     def validate_installed_snapshot(self) -> None:
         """Validate one resource-owned baseline after all declared rows load."""
 
+        if not self.is_baseline:
+            raise ValidationError({"is_baseline": "Dashboard resources must name installed baselines."})
         if self.owner_id is not None:
             raise ValidationError({"owner": "Resource-installed dashboards cannot name an actor owner."})
         if self.scope not in {self.DashboardScope.ADDON, self.DashboardScope.RESOURCE}:
@@ -792,7 +805,7 @@ class DashboardWidgetQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
 DashboardWidgetManager = AngeeManager.from_queryset(DashboardWidgetQuerySet)
 
 
-class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
+class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel):
     """One versioned widget specification inside a snapshot."""
 
     runtime = True
@@ -850,6 +863,6 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
         loaded = tuple(instances)
         dashboard_model = cls._meta.get_field("dashboard").remote_field.model
         dashboard_ids = sorted({cast("DashboardWidget", widget).dashboard_id for widget in loaded})
-        for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, owner__isnull=True):
+        for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, is_baseline=True):
             dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source)

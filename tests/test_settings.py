@@ -273,6 +273,10 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "django.contrib.postgres.apps.PostgresConfig",
         "angee.messaging.apps.MessagingConfig",
+        # The notes example takes record tasks, so projects and its dependencies sort before it.
+        "angee.knowledge.apps.KnowledgeConfig",
+        "angee.scheduling.apps.SchedulingConfig",
+        "angee.projects.apps.ProjectsConfig",
         "angee.workflows.apps.WorkflowsConfig",
         "example.notes",
     ]

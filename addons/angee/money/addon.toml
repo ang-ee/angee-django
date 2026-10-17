@@ -3,7 +3,7 @@ name = "angee.money"
 description = "Currencies, dated exchange rates, and money semantics (rounding + conversion)."
 keywords = ["money", "currency", "exchange-rate", "iso-4217"]
 category = "Foundation"
-depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
+depends_on = ["angee.provenance", "angee.iam", "angee.resources", "angee.graphql"]
 
 [resources]
 master = [{ path = "resources/master/010_money.currency.yaml", adopt = "code" }]

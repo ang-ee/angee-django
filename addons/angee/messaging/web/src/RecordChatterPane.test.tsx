@@ -80,7 +80,6 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
     sent_at: "2026-06-27T00:00:00Z",
     created_at: "2026-06-27T00:00:00Z",
     reaction_groups: [],
-    tracking_values: [],
     parts: [{ role: "user", fragment: { text: "Hello there" }, file: null }],
     ...overrides,
   } as unknown as RecordMessageRow;
@@ -95,6 +94,8 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
       error_code: null,
       thread: { id: "thr_1", title: { text: "Rec" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
+      timeline_count: messages.length,
+      timeline: messages.map((message) => ({ ...message, __typename: "RecordMessageType" as const })),
       audience_label: null,
       post_kinds: ["COMMENT", "NOTE"],
       messages,

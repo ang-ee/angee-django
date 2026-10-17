@@ -22,6 +22,7 @@ from django.utils import timezone
 from rebac import actor_context, generic_target, system_context
 from rebac.actors import is_sudo
 
+from angee.base.changesets import changeset
 from angee.base.errors import exception_text
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.publishing import publish_change
@@ -280,13 +281,17 @@ class Runner:
         try:
             with (
                 _database_timeout(ctx.step.timeout) if database else nullcontext()
-            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor):
+            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor), changeset(
+                fresh=True, activity="run", origin=ctx.run,
+            ) as failed:
                 if is_sudo():
                     raise RuntimeError("The step body must run under its actor, outside system_context.")
                 settlement = ctx.step.check(ctx.step().run(ctx), config=ctx.config)
                 settlement = settlement.admit(ctx)
-                if database and isinstance(settlement, Fail):
-                    transaction.set_rollback(True)
+                if isinstance(settlement, Fail):
+                    failed()
+                    if database:
+                        transaction.set_rollback(True)
                 return _AttemptRecord.from_settlement(settlement)
         except Superseded:
             raise

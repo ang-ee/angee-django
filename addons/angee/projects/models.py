@@ -28,20 +28,26 @@ from rebac.field_backing import canonical_model
 from angee.base.actors import actor_user_id
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
+from angee.base.merge import MergeableMixin
 from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
     CreationKeyQuerySet,
+    HierarchyMixin,
+    HierarchyQuerySet,
     HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
     OptimisticLockMixin,
     OwnerMixin,
     OwnerQuerySet,
+    TrashMixin,
+    TrashQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import bind_actor, system_queryset
+from angee.base.scoping import bind_actor, candidate_relationships, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
@@ -200,8 +206,12 @@ class ProjectSetupReceipt(CreationKeyMixin, models.Model):
         constraints = (CreationKeyMixin.creation_key_constraint(scope=("actor", "task")),)
 
 
-class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
-    """Task rows with shared creation replay and ownership release contracts."""
+class TaskVisibilityQuerySet(models.QuerySet[Any]):
+    """Keep visibility transitions on the authorized instance verb.
+
+    A guard on ``update`` sits after ``HierarchyQuerySet`` in the task queryset so
+    the hierarchy's own path rewrites pass through it (``angee.E021``).
+    """
 
     def update(self, **kwargs: Any) -> int:
         """Keep visibility transitions on the authorized instance verb."""
@@ -217,17 +227,21 @@ class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
             raise ValueError("Task.visibility requires set_visibility().")
         return super().bulk_update(objs, fields, *args, **kwargs)
 
+
+class TaskQuerySet(
+    HierarchyQuerySet[Any], TaskVisibilityQuerySet, MergeableQuerySet[Any], TrashQuerySet[Any],
+    CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any],
+):
+    """Task rows with shared creation replay and ownership release contracts."""
+
     def for_record(self, record: Any, *, include_done: bool = True) -> Any:
         """Return ``record``'s tasks this queryset reads: open first, then by due date and title.
 
-        The task schema answers who reads them (the record's readers); a
-        record without chatter has none.
+        The task schema answers who reads them through its declared subject.
         """
 
-        attachment = record.message_thread_attachment(create=False)
-        if attachment is None:
-            return self.none()
-        tasks = self.filter(subject=attachment)
+        self.model.validate_target(record)
+        tasks = self.filter(**generic_target(record).lookups(self.model, "subject"))
         if not include_done:
             tasks = tasks.filter(status=self.model.TaskStatus.OPEN)
         closed = models.Case(
@@ -260,7 +274,7 @@ class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
 
 
 class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[misc]
-    """Own record tasks: tasks whose subject is a record's chatter attachment.
+    """Own record tasks: tasks whose subject is a declared record.
 
     permissions.zed derives a record task's access from its record, so these
     verbs write under the actor and the task schema refuses a record the actor
@@ -279,9 +293,8 @@ class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[mis
     ) -> Any:
         """Create an open record task, assigned to ``assignee`` or the actor and due today by default."""
 
-        if not isinstance(record, ThreadedModelMixin):
-            raise ValidationError(f"{record._meta.label} keeps no chatter, so it takes no tasks.")
-        if isinstance(record, self.model) and record.subject_id is not None:
+        self.model.validate_target(record)
+        if isinstance(record, self.model) and record.subject_object_id is not None:
             # Its access is its record's: a task about it would answer to nobody's.
             raise ValidationError("A record task takes no record tasks of its own.")
         title = strip_null_bytes(title or "").strip()
@@ -297,7 +310,7 @@ class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[mis
                 note=strip_null_bytes(note or ""),
                 assignee_id=assignee_id,
                 due_date=due_date or timezone.localdate(),
-                subject=record.message_thread_attachment(),
+                **generic_target(record).lookups(self.model, "subject"),
                 activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
             task.allocate_ordering_ranks()
@@ -426,6 +439,7 @@ class Project(
 
     runtime = True
     sqid_prefix = "prj_"
+    history_relations = ("milestones",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     class ProjectStatus(models.TextChoices):
@@ -509,6 +523,9 @@ class Project(
                 name="uq_projects_project_converted_from",
             ),
         )
+
+    # Promotion lineage stays on the original retained identity.
+    merge_policies = {"converted_from": MergePolicy.KEEP}
 
     def __str__(self) -> str:
         """Return the project title."""
@@ -719,7 +736,7 @@ class MilestoneQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
         return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
 
 
-class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Milestone(HistoryMixin, CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     """A named marker reached within one project."""
 
     runtime = True
@@ -862,6 +879,10 @@ class ActivityType(AuditMixin, AngeeDataModel):
 
 
 class Task(
+    HierarchyMixin,
+    MergeableMixin,
+    TrashMixin,
+    RecordRefMixin,
     TaggedModel,
     CreationKeyMixin,
     ImmutableFieldsMixin,
@@ -875,7 +896,9 @@ class Task(
 
     runtime = True
     sqid_prefix = "tsk_"
-    thread_tracking_fields = ("status", "assignee", "due_date", "priority", "visibility")
+    MERGED_PERMISSION = "write"
+    retains_merged = True
+    merge_policy = MergePolicy.MOVE
     thread_post_access = "comment"
     owner_container = "project"
     immutable_fields = ("visibility",)
@@ -938,13 +961,6 @@ class Task(
         on_delete=models.SET_NULL,
         related_name="tasks",
     )
-    parent = models.ForeignKey(
-        "self",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="subtasks",
-    )
     title = models.CharField(max_length=240)
     note = models.TextField(blank=True, default="")
     status = StateField(choices_enum=TaskStatus, default=TaskStatus.OPEN)
@@ -974,14 +990,12 @@ class Task(
     sub_sort_order = FractionalRankField()
     done_at = models.DateTimeField(null=True, blank=True, db_index=True)
     dropped_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    subject = models.ForeignKey(
-        "messaging.ThreadAttachment",
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="subject_tasks",
-        help_text="The record this task is about, through its chatter attachment.",
+    subject_content_type = models.ForeignKey(
+        ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+",
     )
+    subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    subject = GenericForeignKey("subject_content_type", "subject_object_id")
+    """The record this action is about; independent of its optional conversation."""
     activity_type = models.ForeignKey(
         "projects.ActivityType",
         to_field="key",
@@ -1007,6 +1021,11 @@ class Task(
         ordering = ("project", "sort_order", "sub_sort_order", "sqid")
         rebac_resource_type = "projects/task"
         constraints = (
+            models.CheckConstraint(
+                condition=(Q(subject_content_type__isnull=True, subject_object_id__isnull=True)
+                           | Q(subject_content_type__isnull=False, subject_object_id__isnull=False)),
+                name="ck_projects_task_subject_pair",
+            ),
             models.UniqueConstraint(
                 fields=("project", "sort_order"),
                 name="uq_projects_task_project_rank",
@@ -1020,7 +1039,8 @@ class Task(
             CreationKeyMixin.creation_key_constraint(),
         )
         indexes = (
-            models.Index(fields=("subject", "status", "due_date")),
+            *HierarchyMixin.Meta.indexes,
+            models.Index(fields=("subject_content_type", "subject_object_id", "status", "due_date")),
             models.Index(fields=("assignee", "status", "due_date")),
         )
 
@@ -1028,6 +1048,18 @@ class Task(
         """Return the task title."""
 
         return self.title
+
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
+        """Append reparented children through the rank and hierarchy owners."""
+
+        if reference.name != "parent":
+            return NotImplemented
+        list(system_queryset(cls, lock=("self",)).using(rows.db).filter(parent=survivor).order_by("pk"))
+        for child in rows.order_by("sub_sort_order", "pk"):
+            child.parent = survivor
+            child.sub_sort_order = None
+            child.save(using=rows.db, update_fields=("parent", "sub_sort_order", "updated_at"))
 
     @classmethod
     def setup_state_expression(cls, actor: Any) -> models.Expression:
@@ -1090,7 +1122,7 @@ class Task(
 
         super().clean()
         self._normalize_insert_lifecycle()
-        self._validate_structure(lock=False)
+        self._validate_structure()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Authorize project moves and assignment before revalidating task structure."""
@@ -1127,7 +1159,7 @@ class Task(
         structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
         if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
             with transaction.atomic():
-                self._validate_structure(lock=True)
+                self._validate_structure()
                 super().save(*args, **kwargs)
                 # The persisted candidate lets REBAC evaluate every composed share arm.
                 # A refusal rolls the insert and its transactional side effects back.
@@ -1163,17 +1195,23 @@ class Task(
         """
 
         if action in ("complete", "drop"):
-            closed = Q(subject__isnull=False) & ~Q(status=cls.TaskStatus.OPEN)
+            closed = Q(subject_object_id__isnull=False) & ~Q(status=cls.TaskStatus.OPEN)
             return ((closed, {"status": "Reopen this record task first."}),)
         return ()
 
     @classmethod
+    def action_permission(cls, action: str) -> str:
+        """The permission admitting a hand verb; contributors own stricter actions."""
+
+        return "write"
+
+    @classmethod
     def action_allowed_expression(cls, actor: Any, action: str) -> models.Expression:
-        """Batch the verb's write permission and its blockers for one actor's rows."""
+        """Batch the verb's permission and its blockers for one actor's rows."""
 
         if actor is None:
             return models.Value(False)
-        rows = cls.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
+        rows = cls.objects.with_actor(actor).with_action(cls.action_permission(action)).scoped_for_aggregate()
         for condition, _error in cls.action_blockers(action):
             rows = rows.exclude(condition)
         return models.Exists(rows.filter(pk=models.OuterRef("pk")))
@@ -1224,50 +1262,28 @@ class Task(
         a task about no record posts nothing.
         """
 
-        if self.subject_id is None:
+        if self.subject_object_id is None:
             return
         # Structural: whoever completes a record task reads its record.
         with system_context(reason="projects.task.post_completion"):
-            record = self._meta.get_field("subject").related_model._base_manager.get(pk=self.subject_id).target
-        if record is None:
+            record = self.subject
+        if not isinstance(record, ThreadedModelMixin):
             return
         kinds = self._meta.get_field("activity_type").related_model
         body = kinds.completion_line(self.activity_type_id, self.title)
         feedback = strip_null_bytes(feedback or "").strip()
         record.message_system_post(
             body=f"{body}\n\n{feedback}" if feedback else body,
-            message_type=apps.get_model("messaging", "Message").MessageKind.AUTO_COMMENT,
+            message_type=apps.get_model("messaging", "Message").MessageKind.NOTIFICATION,
             subtype_key="activity_done",
             creation_actor=current_actor(),
         )
 
-    @classmethod
-    def subject_pointer_annotations(cls) -> dict[str, models.Expression]:
-        """The pointer annotations of each row's subject, as messaging's edge declares them.
-
-        Whoever reads a record task reads its record, so the pointer needs no gate
-        of its own; the chatter edge row itself is never loaded.
-        """
-
-        return cls._meta.get_field("subject").related_model.pointer_annotations("subject")
-
-    def subject_pointer(self) -> models.Model | None:
-        """Return the unsaved chatter edge carrying the record this task is about, or ``None``."""
-
-        return self._meta.get_field("subject").related_model.pointer_from_row(self, "subject")
-
     def _message_after_create(self) -> None:
         """A record task keeps its conversation on the record, not a thread of its own."""
 
-        if self.subject_id is None:
+        if self.subject_object_id is None:
             super()._message_after_create()
-
-    def message_track(self, changes: Any, **kwargs: Any) -> Any:
-        """Track field changes only for tasks with their own conversation."""
-
-        if self.subject_id is not None:
-            return None
-        return super().message_track(changes, **kwargs)
 
     def drop(self, reason: str | TaskDroppedReason) -> Task:
         """Drop this task for ``reason``, idempotently preserving the drop time."""
@@ -1385,17 +1401,14 @@ class Task(
 
         super().validate_record_access_subject(relation, subject)
         reference = to_subject_ref(subject)
-        if self.subject_id is None or reference.optional_relation or reference.subject_type != "auth/user":
+        if self.subject_object_id is None or reference.optional_relation or reference.subject_type != "auth/user":
             return
         if self.effective_actor()[1]:
             return
         if reference.subject_id == "*":
             raise RecordAccessSubjectRefused()
-        with system_context(reason="projects.task.record_holder"):
-            attachment = self._meta.get_field("subject").related_model._base_manager.get(pk=self.subject_id)
-        if not backend().check_access(
-            subject=reference, action="record_read", resource=to_object_ref(attachment),
-        ).allowed:
+        candidate = candidate_relationships(self, "subject_read", using=self._state.db)
+        if candidate is None or not candidate.allows(reference, "subject_read"):
             raise RecordAccessSubjectRefused()
 
     def thread_audience_members(self) -> Iterable[AudienceMember]:
@@ -1427,8 +1440,8 @@ class Task(
         if self.done_at is not None or self.dropped_at is not None or self.dropped_reason is not None:
             raise ValidationError({"status": "An open task cannot carry done or dropped state."})
 
-    def _validate_structure(self, *, lock: bool) -> None:
-        """Validate milestone scope and the complete parent chain."""
+    def _validate_structure(self) -> None:
+        """Validate project-owned milestone scope; HierarchyMixin owns ancestry."""
 
         with system_context(reason="projects.task.validate_structure"):
             if self.milestone_id is not None:
@@ -1437,19 +1450,9 @@ class Task(
                 if milestone is not None and milestone.project_id != self.project_id:
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
-            ancestor_id = self.parent_id
-            visited: set[Any] = set()
-            while ancestor_id is not None:
-                if ancestor_id == self.pk or ancestor_id in visited:
-                    raise ValidationError({"parent": "Task parents cannot form a cycle."})
-                visited.add(ancestor_id)
-                ancestors = type(self).objects.filter(pk=ancestor_id)
-                if lock:
-                    ancestors = ancestors.lock_if_supported()
-                ancestor_id = ancestors.values_list("parent_id", flat=True).first()
 
 
-class TaskRelation(AuditMixin, AngeeDataModel):
+class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
     """One canonical directed relation between two tasks."""
 
     runtime = True
@@ -1459,14 +1462,11 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         """Canonical task relation kinds."""
 
         BLOCKS = "blocks", "Blocks"
-        DUPLICATE = "duplicate", "Duplicate"
         RELATES = "relates", "Relates"
 
     SYMMETRIC_KINDS = frozenset({TaskRelationKind.RELATES})
     """Kinds whose endpoints have no semantic direction.
 
-    Duplicate edges deliberately keep ``task -> related_task`` direction: the
-    first endpoint is the duplicate and the second is its canonical task.
     """
 
     task = models.ForeignKey(
@@ -1534,8 +1534,6 @@ class TaskRelation(AuditMixin, AngeeDataModel):
 
         if self.kind == self.TaskRelationKind.BLOCKS:
             return "blocked_by"
-        if self.kind == self.TaskRelationKind.DUPLICATE:
-            return "duplicated_by"
         return str(self.kind)
 
     def __str__(self) -> str:
@@ -1544,7 +1542,7 @@ class TaskRelation(AuditMixin, AngeeDataModel):
         return f"{self.task_id} {self.kind} {self.related_task_id}"
 
 
-class Participant(AuditMixin, AngeeDataModel):
+class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
     """A party's involvement in a project, never an access grant."""
 
     runtime = True
@@ -1588,7 +1586,7 @@ class Participant(AuditMixin, AngeeDataModel):
         return f"{self.party_id} in {self.project_id}"
 
 
-class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
+class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """One explicit projects-owned statement that a resource belongs to a project.
 
     The resource is stored at :func:`rebac.generic_target`. ``permissions.zed``
@@ -1599,6 +1597,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     binding is not moved: the library refuses a retargeting save under an actor.
     """
 
+    history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("project", "content_type", "object_id"),)
     runtime = True
@@ -1655,7 +1654,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.project_id} -> {self.content_type_id}:{self.object_id}"
 
 
-class Link(AuditMixin, RecordRefMixin, AngeeDataModel):
+class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """A URL-keyed external reference attached to a project or task."""
 
     merge_policy = MergePolicy.MOVE

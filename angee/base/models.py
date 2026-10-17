@@ -33,6 +33,7 @@ from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDeni
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
+from simple_history.models import HistoricalChanges
 
 from angee.base.actors import instance_actor
 from angee.base.identity import PublicIdentity
@@ -273,11 +274,30 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
     _angee_base = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
 
-    def revert_removal(self, *, using: str, reason: str = "") -> None:
-        """Remove a reverted creation only when no retained evidence points at it."""
+    def retained(self) -> bool:
+        """Whether a live or historical reference, or a stored grant, names this row.
 
-        if named_in_relationships(self) or any(reference.retains(self) for reference in references(type(self))):
-            raise ValidationError(f"{self._meta.label} {self.pk}: retained rows prevent removal without a trash owner.")
+        This is evidence retention, distinct from a model's ``retains_merged``
+        policy and an individual reference's ``retains`` predicate.
+        """
+
+        return named_in_relationships(self) or any(reference.retains(self) for reference in references(type(self)))
+
+    def revert_removal(self, *, using: str, reason: str = "") -> None:
+        """Remove an undone creation while preserving live references and grants.
+
+        Native historical snapshots may outlive deleted targets. They retain a
+        merge identity but do not prevent removal of its reverted creation.
+        """
+
+        live_references = (
+            reference for reference in references(type(self))
+            if not issubclass(reference.model, HistoricalChanges)
+        )
+        if named_in_relationships(self) or any(
+            reference.rows(self).using(using).exists() for reference in live_references
+        ):
+            raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete(using=using)
 
     extends: str | None = None

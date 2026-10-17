@@ -13,12 +13,13 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from rebac import RelationshipTuple, actor_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
 from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
+from angee.base.mixins import SourceKind
 from angee.knowledge import schema as knowledge_schema
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
@@ -29,6 +30,7 @@ from tests.core_persistence import OwnedRow
 pytestmark = pytest.mark.usefixtures("composed_tables")
 
 Party = apps.get_model("parties", "Party")
+Handle = apps.get_model("parties", "Handle")
 
 HISTORY = """
 query History($model: String!, $id: ID!, $limit: Int, $offset: Int) {
@@ -36,7 +38,7 @@ query History($model: String!, $id: ID!, $limit: Int, $offset: Int) {
     model id total
     entries {
       id actor actor_model actor_id source_kind action activity change_reason outcome can_revert
-      changes { field old new }
+      changes { model id field old new }
       statements { aspect asserted_by source_kind status applied history_type values }
       merge { survivor { model id retained } absorbed { model id retained } }
     }
@@ -187,7 +189,7 @@ def test_revert_refuses_a_changeset_that_did_not_touch_the_record() -> None:
     )["revert_changeset"]
 
     assert refused["ok"] is False
-    assert "did not touch" in refused["message"]
+    assert "complete write boundary" in refused["message"]
 
 
 @pytest.fixture
@@ -253,6 +255,24 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
 
 
+def test_history_names_a_statements_related_row_by_its_public_id() -> None:
+    person = create_user("statement-handle-person")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Grace Hopper")
+    with system_context(reason="tests.history.handle_statement"), changeset(fresh=True, change_reason="Add handle"):
+        handle = Handle.objects.create(platform="email", value="grace@example.com", created_by_id=person.pk)
+        Party.statements.model._base_manager.create(
+            subject=party, handle=handle, aspect="handle",
+            asserted_by=str(to_subject_ref(person)), source_kind=SourceKind.PERSON,
+        )
+
+    history = _history(_schema(), person, "parties.Party", party)
+
+    handles = [row for entry in history["entries"] for row in entry["statements"] if row["aspect"] == "handle"]
+    assert handles
+    assert {tuple(row["values"].items()) for row in handles} == {(("handle", public_id_of(handle)),)}
+
+
 def test_metadata_marks_a_resource_that_keeps_history() -> None:
     """A gated, tracked record is flagged; a statement shadow table, read through its subject, is not."""
 
@@ -263,3 +283,50 @@ def test_metadata_marks_a_resource_that_keeps_history() -> None:
     assert resources["parties.PartyStatement"].history is False
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["knowledge.Page"]["history"] is True
+
+
+def test_document_history_includes_owned_lines_and_reverts_the_complete_edit() -> None:
+    owner = create_user("document-history-owner")
+    project_model = apps.get_model("projects", "Project")
+    milestone_model = apps.get_model("projects", "Milestone")
+    with actor_context(owner), changeset(fresh=True, change_reason="Plan"):
+        project = project_model.objects.create(title="Original plan", owner=owner)
+        milestone = milestone_model.objects.create(project=project, name="Original phase")
+    with actor_context(owner), changeset(fresh=True, change_reason="Revise plan"):
+        project.title = "Revised plan"
+        project.save(update_fields=("title",))
+        milestone.name = "Revised phase"
+        milestone.save(update_fields=("name",))
+    schema = _schema()
+    entry = _history(schema, owner, "projects.Project", project)["entries"][0]
+    changes = {(row["model"], row["id"], row["field"]): (row["old"], row["new"]) for row in entry["changes"]}
+    assert changes["projects.Project", public_id_of(project), "title"] == ("Original plan", "Revised plan")
+    assert changes["projects.Milestone", public_id_of(milestone), "name"] == ("Original phase", "Revised phase")
+    assert entry["can_revert"] is True
+    result = result_data(execute_schema(schema, REVERT, {
+        "model": "projects.Project", "id": public_id_of(project), "changeset": entry["id"],
+    }, user=owner))["revert_changeset"]
+    assert result["ok"] is True
+    project.refresh_from_db()
+    milestone.refresh_from_db()
+    assert (project.title, milestone.name) == ("Original plan", "Original phase")
+
+
+def test_record_history_refuses_reverting_a_boundary_that_also_changes_another_record() -> None:
+    owner = create_user("history-boundary-owner")
+    _vault, page = _titled_page(owner)
+    _other_vault, other = _titled_page(owner, vault_name="Other document")
+    with actor_context(owner), changeset(fresh=True, change_reason="Joint edit"):
+        for record in (page, other):
+            record.title = "Joint edit"
+            record.save(update_fields=("title",))
+    schema = _schema()
+    entry = _history(schema, owner, "knowledge.Page", page)["entries"][0]
+    assert entry["can_revert"] is False
+    result = result_data(execute_schema(schema, REVERT, {
+        "model": "knowledge.Page", "id": public_id_of(page), "changeset": entry["id"],
+    }, user=owner))["revert_changeset"]
+    assert result["ok"] is False
+    page.refresh_from_db()
+    other.refresh_from_db()
+    assert page.title == other.title == "Joint edit"

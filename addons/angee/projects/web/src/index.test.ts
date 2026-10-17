@@ -46,7 +46,7 @@ describe("projects addon manifest", () => {
     );
   });
 
-  test("offers the Tasks tab only on records whose type carries thread attachments", () => {
+  test("offers the Tasks tab only on records whose type takes tasks as their subject", () => {
     const tasks = (projects.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["projects.tasks"]!;
     const record = (recordEdges?: readonly string[]): ChatterViewContext => ({
       pathname: "/records/rec_1", params: { id: "rec_1" },
@@ -55,8 +55,10 @@ describe("projects addon manifest", () => {
     });
     // The chatter shell offers a tab without a `when` on every record.
     const offered = (recordEdges?: readonly string[]) => tasks.content.when?.(record(recordEdges)) ?? true;
-    expect(offered(["messaging.ThreadAttachment", "storage.FileAttachment"])).toBe(true);
-    expect(offered(["storage.FileAttachment"])).toBe(false);
+    // A record type takes tasks once its resource lists the task's subject edge; chatter alone does not.
+    expect(offered([TASK_MODEL, "messaging.ThreadAttachment"])).toBe(true);
+    expect(offered([TASK_MODEL])).toBe(true);
+    expect(offered(["messaging.ThreadAttachment", "storage.FileAttachment"])).toBe(false);
     expect(offered()).toBe(false);
   });
 

@@ -80,3 +80,9 @@ pages trashed with it, never a page trashed on its own.
 Page access follows the current schema. The former one-shot author-attribution
 transition and its management command were removed before any deployment used
 them; schema sync is the only policy transition for this addon.
+
+Pages compose the shared hierarchy for parent moves and subtree scopes, and their
+Comments pane reads through the page policy. Vault removal uses trash: its pages
+are withheld while preserving their own removal flags, so restoring a vault does
+not restore separately removed pages. RecordBinding retargets retain history for
+merge reversal.

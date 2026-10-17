@@ -5,7 +5,7 @@ name = "angee.workflows"
 description = "Immutable workflow graphs and actor-scoped execution"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
-depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions"]
+depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions", "angee.provenance"]
 
 # Runs first: a pre-rebuild history is retired whole, so the cutovers below never match it.
 [[migrations]]

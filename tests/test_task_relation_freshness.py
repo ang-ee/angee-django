@@ -59,14 +59,13 @@ class FreshnessTask(TaskWork, AbstractTask):
     links = None
     file_attachments = None
     thread_attachments = None
-    thread_create_log = False
     thread_create_autofollow_author = False
-    thread_tracking_fields = ()
 
     class Meta(AbstractTask.Meta):
         abstract = False
         app_label = "scopedemo"
-        constraints = _local_constraints(AbstractTask.Meta.constraints[:2])
+        # The subject pair check and both rank uniqueness rules; the creation key is not mirrored.
+        constraints = _local_constraints(AbstractTask.Meta.constraints[:3])
         # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_task"
 

@@ -51,6 +51,7 @@ from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
+    HistoryMixin,
 )
 from angee.base.models import (
     AngeeDataModel,
@@ -58,10 +59,12 @@ from angee.base.models import (
     AngeeQuerySet,
     role_anchor,
 )
+from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
 
 
 class TagQuerySet(
+    MergeableQuerySet[Any],
     ArchiveQuerySet[Any],
     AngeeQuerySet[Any],
 ):
@@ -71,7 +74,7 @@ class TagQuerySet(
 TagManager = AngeeManager.from_queryset(TagQuerySet)
 
 
-class Tag(MergeableMixin, ArchiveMixin, AngeeDataModel):
+class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
     """One label in a vocabulary shared by every non-anonymous actor."""
 
     runtime = True
@@ -200,10 +203,10 @@ class TagAssignmentManager(AngeeManager.from_queryset(TagAssignmentQuerySet)):  
         tag_row = instance_from_public_id(tag_model, str(tag_id))
         if tag_row is None:
             raise ValueError(f"tag {str(tag_id)!r} not found")
-        return tag_row
+        return tag_row.canonical()
 
 
-class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
+class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     """Polymorphic edge attaching one :class:`Tag` to a record of a taggable type.
 
     The ``target`` generic foreign key stores :func:`rebac.generic_target`. Each
@@ -212,6 +215,7 @@ class TagAssignment(AuditMixin, RecordRefMixin, AngeeDataModel):
     relations and the models composing :class:`TaggedModel` to match.
     """
 
+    history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("tag", "content_type", "object_id"),)
     runtime = True
