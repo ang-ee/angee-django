@@ -98,7 +98,6 @@ class NeedType(AngeeNode):
     task: TaskType | None = actor_scoped_to_one("task")
     project: ProjectType | None = actor_scoped_to_one("project")
     source_message: MessageType | None = actor_scoped_to_one("source_message")
-    original_task: TaskType | None = actor_scoped_to_one("original_task")
     access_answered_by: UserType | None = strawberry_django.field(
         only=["access_decision_id"], prefetch_related=["access_decision__answered_by"],
     )
@@ -279,7 +278,6 @@ _NEED_RESOURCE = hasura_model_resource(
         "project",
         "importance",
         "source_message",
-        "original_task",
         "created_at",
         "updated_at",
     ],
@@ -293,7 +291,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "updated_at",
     ],
     aggregatable=["id"],
-    groupable=["party", "task", "project", "importance", "original_task"],
+    groupable=["party", "task", "project", "importance"],
     insertable=["party", "task", "project", "importance", "body"],
     updatable=["party", "importance", "body"],
     field_id_decode={
@@ -302,7 +300,6 @@ _NEED_RESOURCE = hasura_model_resource(
         "task__project": public_pk_decoder(Project),
         "project": public_pk_decoder(Project),
         "source_message": public_pk_decoder(Message),
-        "original_task": public_pk_decoder(Task),
     },
     write_backend=AngeeHasuraWriteBackend(
         Need,

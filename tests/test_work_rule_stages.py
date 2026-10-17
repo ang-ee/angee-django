@@ -16,7 +16,7 @@ class RuleStageTests(WorkCase):
     def test_stage_path_classification_is_owned_by_the_stage(self):
         self.assertTrue(self.stages["Ready"].on_path)
         self.assertTrue(self.stages["Active"].on_path)
-        self.assertFalse(self.stages["Removed"].on_path)
+        self.assertFalse(self.stages["Declined"].on_path)
 
     def test_generated_update_refuses_rule_stage(self):
         task = self.task()
@@ -67,10 +67,9 @@ class RuleStageTests(WorkCase):
                     with self.subTest(elevated=elevated, verb=name), self.assertRaises(ValidationError):
                         getattr(self.as_user(reserved), name)(*args)
 
-    def test_manual_categories_skip_reserved_and_concealing_stages(self):
+    def test_manual_categories_skip_reserved_stages(self):
         task = self.task()
         self.Stage._base_manager.filter(rule_owned=True).update(position=1)
-        self.Stage._base_manager.filter(conceals=True).update(position=0)
         with actor_context(self.owner):
             self.as_user(task).complete()
             task.refresh_from_db()
@@ -87,22 +86,14 @@ class RuleStageTests(WorkCase):
             triage.refresh_from_db()
             self.assertEqual(triage.stage_id, self.stages["Triage"].pk)
 
-    def test_default_and_rule_flags_reject_concealment_in_clean_and_save(self):
+    def test_default_stage_rejects_rule_ownership_in_clean_and_save(self):
         for operation in ("clean", "save"):
             with system_context(reason="tests.work.default_stage"):
-                queue = self.Queue._base_manager.get(pk=self.queue.pk)
-                queue.default_stage = self.stages["Removed"]
+                stage = self.Stage._base_manager.get(pk=self.stages["Ready"].pk)
+                stage.rule_owned = True
+                self.Queue._base_manager.filter(pk=self.queue.pk).update(default_stage=stage)
                 with self.assertRaises(ValidationError):
-                    getattr(queue, operation)()
-                queue.default_stage = self.stages["Ready"]
-                queue.save(update_fields=("default_stage", "updated_at"))
-                for name in ("Ready", "Active"):
-                    stage = self.Stage._base_manager.get(pk=self.stages[name].pk)
-                    stage.conceals = True
-                    with self.subTest(operation=operation, stage=name), self.assertRaises(ValidationError):
-                        getattr(stage, operation)()
-        with system_context(reason="tests.work.invalid_stage"), self.assertRaises(ValidationError):
-            self.Stage.objects.create(queue=self.queue, name="Invalid", rule_owned=True, conceals=True)
+                    getattr(stage, operation)()
 
     def test_stage_edits_preserve_mappings_and_promoted_tasks(self):
         task = self.task()
@@ -111,25 +102,13 @@ class RuleStageTests(WorkCase):
         with system_context(reason="tests.work.stage_configuration"):
             self.Milestone.objects.create(project=project, name="Delivery", active_stage=self.stages["Final"])
             other = self.Queue.objects.create(name="Other", key="OTHER", owner=self.manager, provision_stages=False)
-            for fields in ({"rule_owned": False}, {"conceals": True}, {"queue": other}):
+            for fields in ({"rule_owned": False}, {"queue": other}):
                 for operation in ("clean", "save"):
                     stage = self.Stage._base_manager.get(pk=self.stages["Final"].pk)
                     for name, value in fields.items():
                         setattr(stage, name, value)
                     with self.subTest(fields=fields, operation=operation), self.assertRaises(ValidationError):
                         getattr(stage, operation)()
-            # Older rows may lack rule ownership: promotion still prevents a flag flip.
-            self.Task._base_manager.filter(pk=task.pk).update(stage=self.stages["Doing"])
-            for operation in ("clean", "save"):
-                stage = self.Stage._base_manager.get(pk=self.stages["Doing"].pk)
-                stage.conceals = True
-                with self.assertRaises(ValidationError):
-                    getattr(stage, operation)()
-            self.Stage._base_manager.filter(pk=self.stages["Doing"].pk).update(conceals=True)
-            legacy = self.Task._base_manager.get(pk=task.pk)
-            legacy.title = "Updated title"
-            legacy.save(update_fields=("title", "updated_at"))
-            self.assertEqual(self.Task._base_manager.get(pk=task.pk).title, "Updated title")
 
 
 def test_work_rule_stages(tmp_path: Path):

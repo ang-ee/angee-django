@@ -4,7 +4,6 @@ from celery import shared_task
 from django.apps import apps
 from rebac import SubjectRef
 
-from angee.base.scoping import system_queryset
 from angee.jobs.locks import LockKey, task_lock
 from angee.workflows.runner import runner
 
@@ -25,7 +24,7 @@ def wake_run(run_id: int) -> int:
 def cancel(run_id: int, actor: str) -> None:
     """Cancel outside the requesting transaction, retaining its permission scope."""
     model = apps.get_model("workflows", "WorkflowRun")
-    run = system_queryset(model).filter(pk=run_id).first()
+    run = model.system_queryset().filter(pk=run_id).first()
     if run is not None:
         model.objects.cancel(run, actor=SubjectRef.parse(actor), timeout=None)
 

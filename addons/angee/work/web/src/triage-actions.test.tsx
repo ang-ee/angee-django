@@ -57,7 +57,6 @@ describe("triage action relation scopes", () => {
         { field: "category", operator: "ne", value: "triage" },
         { field: "category", operator: "ne", value: "duplicate" },
         { field: "rule_owned", operator: "eq", value: false },
-        { field: "conceals", operator: "eq", value: false },
       ],
     });
     expect(staticArgs(duplicate?.args)?.[0]).toMatchObject({

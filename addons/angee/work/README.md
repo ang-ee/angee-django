@@ -1,7 +1,7 @@
 # Work
 
 The [stage statusbar](web/src/stage-statusbar.tsx) reads each stage's model-owned
-`on_path` projection. Canceled, duplicate and concealing stages appear as one
+`on_path` projection. Canceled and duplicate stages appear as one
 side-state chip while the ordinary stages remain in queue order. The task's
 reopen verb stays in the form header action bar.
 
@@ -35,10 +35,8 @@ One outer transaction commits eligible rows; each refused row rolls back to a
 savepoint and returns its own result. A whole-call error rolls back every row.
 Retrying with an old revision reports a conflict, including an otherwise
 idempotent verb. Remove uses shared trash and keeps the workflow stage; it refuses
-promoted tasks. Trash owns the removal time, actor and reason. A stage configured
-to conceal invokes that same primitive when entered. Restore normally clears
-trash; for a workflow concealment it also returns to the last admissible stage
-or the queue default. Owners, inherited queue writers and administrators manage
+promoted tasks. Trash owns the removal time, actor and reason, and restore clears
+that state. Owners, inherited queue writers and administrators manage
 the removed task. `removed_tasks(queue, parent)` scopes native trash to the
 reader's restore permission; merge redirects stay in history instead of that list.
 

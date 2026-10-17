@@ -47,8 +47,8 @@ function aside(
 ): ComposedContainers {
   const base = containersFromChildren(CHATTER_CONTAINERS, examples ? {
     "record#aside": {
-      "notes.comments": { sequence: 10, content: { label: "Comments", aliases: ["comments"], render: () => <span>Comments content</span> } },
-      "notes.history": { sequence: 20, content: { label: "History", aliases: ["history", "activity"], render: () => <span>History content</span> } },
+      "notes.comments": { sequence: 10, content: { label: "Comments", render: () => <span>Comments content</span> } },
+      "notes.history": { sequence: 20, content: { label: "History", render: () => <span>History content</span> } },
     },
   } : {});
   const added = containersFromChildren([], children);
@@ -150,41 +150,10 @@ describe("Chatter", () => {
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  test("a chatterTab link naming a tab's earlier id selects it through its aliases", async () => {
-    renderChatter({
-      containers: aside({ "record#aside": {
-        "messaging.history": tab({ label: "Messages", aliases: ["history"], render: () => <span>Message history</span> }, 15),
-      } }, { rules: [{ layer: "messaging", except: ["notes.history"] }] }),
-    }, { search: "?chatterTab=history" });
-    const selected = await screen.findByRole("tab", { name: "Messages" });
-    await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
-    expect(screen.getByText("Message history")).toBeTruthy();
-  });
-
-  test("a chatterTab link names a tab by its current id too", async () => {
+  test("a chatterTab link names a tab by its id", async () => {
     renderChatter({ containers: aside() }, { search: "?chatterTab=notes.history" });
     const selected = await screen.findByRole("tab", { name: "History" });
     await waitFor(() => expect(selected.getAttribute("aria-selected")).toBe("true"));
-  });
-
-  test("setActiveTab and the default tab resolve an earlier id through the aliases", async () => {
-    function OpenSources() {
-      const { setActiveTab } = useChatter();
-      return <button type="button" onClick={() => setActiveTab("sources")}>Open sources</button>;
-    }
-    const containers = aside({ "record#aside": {
-      "messaging.comments": tab({ label: "Comments", aliases: ["comments"], render: () => <span>Comment thread</span> }, 10),
-      "messaging.history": tab({ label: "History", aliases: ["history"], render: () => <span>History log</span> }, 20),
-      "messaging.sources": tab({ label: "Sources", aliases: ["sources"], render: () => <span>Source threads</span> }, 30),
-    } }, { examples: false });
-    // Neither is the first tab, so an unresolved id would fall back to Comments.
-    renderChatter({ containers }, { defaultTab: "history", children: <OpenSources /> });
-    const history = await screen.findByRole("tab", { name: "History" });
-    expect(history.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("History log")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open sources" }));
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Sources" }).getAttribute("aria-selected")).toBe("true"));
-    expect(await screen.findByText("Source threads")).toBeTruthy();
   });
 
   test("only renders the agents tab when an addon contributes it", async () => {

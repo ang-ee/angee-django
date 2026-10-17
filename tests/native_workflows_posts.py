@@ -36,11 +36,11 @@ from rebac.roles import revoke as revoke_role
 
 from angee.agents.context import record_view_context
 from angee.agents.grants import (
-    RESOURCE_READER_ROLE,
     builtin_mcp_server,
     sync_builtin_tool_catalogue,
 )
 from angee.agents.provisioning import provision_agent
+from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.runners import TurnOutcome
 from angee.agents.sessions import run_next_turn
 from angee.agents.testing.drivers import FakeRunner, update_chunk

@@ -45,7 +45,7 @@ const knowledge = defineBaseAddon({
   menus: knowledgeMenu,
   i18n: { knowledge: enKnowledgeMessages },
   containers: {
-    "record#aside": { "knowledge.pages": recordPagesTab({ aliases: ["pages"] }) },
+    "record#aside": { "knowledge.pages": recordPagesTab() },
   },
   // The Vault create form, used wherever a vault is created (the wiki's
   // relation-picker inline create resolves it via the model name).

@@ -16,6 +16,5 @@ grants no access. Reset or identity replacement clears that receipt. Failed appl
 the Need verb. Captured messaging webforms keep their own input schema.
 
 Task merges move Needs through their model-owned reference contract and normal
-assignment checks, inside the shared merge changeset. `original_task` retains the
-previous target and its history stays available; the changeset's origin is the
-cause of the write, not a replacement for that operational lineage.
+assignment checks, inside the shared merge changeset. Need history retains every
+previous target; the changeset records the cause of each write.

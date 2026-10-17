@@ -15,6 +15,7 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.impl import impl_choices_enum
+from angee.base.models import AngeeQuerySet
 from angee.base.scoping import system_queryset
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
@@ -376,12 +377,19 @@ class MessageTriggerTests(TransactionTestCase):
                 workflow=self.workflow, source=RefinedMessageIngested.key, channel=self.channel,
             )
         refined = Trigger.objects.enable(refined, actor=self.admin)
+        locked = []
+        lock = AngeeQuerySet.lock_if_supported
+
+        def count_lock(rows, **kwargs):
+            locked.append(rows.model)
+            return lock(rows, **kwargs)
+
         with (
-            patch.object(triggers, "lock_if_supported", wraps=triggers.lock_if_supported) as locked,
+            patch.object(AngeeQuerySet, "lock_if_supported", count_lock),
             patch.object(type(StepWatch.objects), "record_change", autospec=True) as observed,
         ):
             self.ingest()
-        self.assertEqual([call.args[0].model for call in locked.call_args_list], [Message])
+        self.assertEqual(locked.count(Message), 1)
         self.assertEqual(observed.call_count, 1)
         events = system_queryset(TriggerEvent).order_by("trigger_id")
         self.assertEqual([event.trigger_id for event in events], [base.pk, refined.pk])
