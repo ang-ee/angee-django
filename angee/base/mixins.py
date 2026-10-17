@@ -1544,7 +1544,13 @@ class StatementsMixin(models.Model):
         return [self]
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Ordinary person edits assert normal statements; resolved saves stay ordinary."""
+        """Ordinary person edits assert normal statements; resolved saves stay ordinary.
+
+        An aspect whose declared precedence leaves PERSON out is not a person's to
+        state: its fields belong to the native owner, so a person's save writes them
+        as an ordinary save and records no statement that later resolution could
+        restore over the owner's writes. Explicit confirm and dismiss stay available.
+        """
 
         if is_sudo():
             super().save(*args, **kwargs)
@@ -1574,6 +1580,7 @@ class StatementsMixin(models.Model):
                     if (
                         declaration.members
                         or not fields
+                        or (declaration.precedence and SourceKind.PERSON not in declaration.precedence)
                         or not any(
                             (saved_fields is None or name in saved_fields)
                             and (previous is None or getattr(previous, name) != getattr(self, name))

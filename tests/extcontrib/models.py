@@ -52,11 +52,17 @@ class ClaimedBilling(models.Model):
     """
 
     vat = models.CharField(max_length=32, blank=True, default="")
+    registry = models.CharField(max_length=32, blank=True, default="")
     statements = StatementRecords(
         aspects={
             "tax": Aspect(
                 fields=("vat",),
                 precedence=cast(tuple[SourceKind, ...], (SourceKind.PERSON, SourceKind.SYSTEM_OF_RECORD)),
+            ),
+            # People never state the registry entry: only a system of record or an import does.
+            "registry": Aspect(
+                fields=("registry",),
+                precedence=cast(tuple[SourceKind, ...], (SourceKind.SYSTEM_OF_RECORD, SourceKind.IMPORT)),
             ),
         },
     )

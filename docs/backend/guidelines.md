@@ -1909,8 +1909,11 @@ kinds, for normal-rank statements only. `SyncStream.objects.set_authoritative`
 flips it and re-derives the linked subjects. Composer extensions do not reach
 generated models.
 
-Ordinary person saves on aspect-backed fields assert normal statements, including
-separate MTI child tables; parent declarations keep their shared-pk owner.
+Ordinary person saves on aspect-backed fields assert normal statements on aspects
+whose precedence admits a person, including separate MTI child tables; parent
+declarations keep their shared-pk owner. An aspect whose precedence leaves PERSON
+out belongs to its native owner: a person's save writes those fields as an ordinary
+save, and confirm or dismiss stay explicit.
 Consumers contribute domain aspects through the descriptor's abstract donors: the
 subject source's own declaration finalizes the one statement table (bases, prefix,
 queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
