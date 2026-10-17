@@ -4,7 +4,7 @@ import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import active_relationship_model
@@ -48,7 +48,8 @@ def test_clone_copies_complete_independent_tree_bodies_links_and_attribution(clo
             assert page.sqid != original.sqid
             assert (page.kind, page.icon) == (original.kind, original.icon)
             assert page.created_by_id == page.updated_by_id == fixture.actor.pk
-            assert page.history.count() == 1 + int(page.parent_id is not None)
+            # A created page is one version, its derived path included.
+            assert page.history.count() == 1
             assert page.created_at is not None and page.updated_at is not None
             assert page.parent_id == (copies[source_by_id[original.parent_id].title].pk if original.parent_id else None)
         originals = {body.pk: body for body in MarkdownPage.objects.filter(vault=fixture.source)}
@@ -250,11 +251,12 @@ def test_invalid_template_rolls_back_clone_and_its_receipt(clone_template, inval
             with connection.cursor() as cursor:
                 cursor.execute(f"UPDATE {table} SET kind = %s WHERE {column} = %s", ["external", fixture.note.pk])
         elif invalid == "cycle":
-            Page.objects.filter(pk=fixture.note.pk).update(parent=fixture.note)
+            # Stored corruption, written below the hierarchy owner's guard.
+            models.QuerySet.update(Page._base_manager.filter(pk=fixture.note.pk), parent=fixture.note)
         else:
             foreign = Vault.objects.create(name="Foreign", owner=None)
             parent = Page.objects.create(vault=foreign, title="Foreign parent")
-            Page.objects.filter(pk=fixture.note.pk).update(parent=parent)
+            models.QuerySet.update(Page._base_manager.filter(pk=fixture.note.pk), parent=parent)
         before = Vault.objects.count(), Page.objects.count(), MarkdownPage.objects.count()
     with actor_context(fixture.actor), pytest.raises(ValidationError):
         Vault.objects.create_from(fixture.source, name="Invalid", client_creation_key="invalid")
@@ -306,7 +308,7 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
         with system_context(reason="test.clone.budget.contents"):
             assert Page.objects.filter(vault=clone).count() == size
             assert MarkdownPage.objects.filter(vault=clone).count() == size
-            assert Page.history.filter(vault_id=clone.pk).count() == 2 * size - 1
+            assert Page.history.filter(vault_id=clone.pk).count() == size
     assert counts[1] - counts[0] <= 6, counts
 
 

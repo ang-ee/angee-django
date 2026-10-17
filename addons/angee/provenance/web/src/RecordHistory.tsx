@@ -14,6 +14,7 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingPanel,
+  MessageRow,
   RecordActionBar,
   RecordReference,
   StepList,
@@ -31,6 +32,7 @@ import {
   RecordHistoryDocument,
   type HistoryEntry,
   type HistoryStatement,
+  type HistorySummaryEntry,
   type RecordHistory,
 } from "./documents.console";
 import { entryTone, historyValue, statementVerb } from "./history-entries";
@@ -193,8 +195,26 @@ export function HistoryTimeline({
   );
 }
 
+/** Compact changeset line for an already paged Comments entry; no second read or pager. */
+export function HistoryEntrySummary({ entry, model, id }: {
+  entry: HistorySummaryEntry;
+  model: string;
+  id: string;
+}): ReactElement {
+  const t = useProvenanceT();
+  return (
+    <MessageRow
+      author={<EntryTitle entry={entry} t={t} />}
+      timestamp={entry.recorded_at}
+      meta={<RecordReference model={model} id={id} tab={HISTORY_TAB_ID} label={t("history.openTab")} />}
+    >
+      {entry.change_reason || null}
+    </MessageRow>
+  );
+}
+
 /** "<actor> <activity> · <action>": who wrote, how the write came about, what it did. */
-function EntryTitle({ entry, t }: { entry: HistoryEntry; t: ProvenanceT }): ReactElement {
+function EntryTitle({ entry, t }: { entry: HistorySummaryEntry; t: ProvenanceT }): ReactElement {
   const actor = entry.actor_model && entry.actor_id
     ? <RecordReference model={entry.actor_model} id={entry.actor_id} />
     : <span>{entry.actor ?? t("history.system")}</span>;
@@ -237,8 +257,14 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
   t: ProvenanceT;
 }): ReactElement | null {
   const rows: ComparisonRow[] = entry.changes.map((change) => ({
-    key: change.field,
-    label: <Code>{change.field}</Code>,
+    key: `${change.model}:${change.id}:${change.field}`,
+    label: (
+      <span className="grid gap-0.5">
+        {change.model !== record.model || change.id !== record.id
+          ? <RecordReference model={change.model} id={change.id} /> : null}
+        <Code>{change.field}</Code>
+      </span>
+    ),
     before: <HistoryValueCell value={change.old} t={t} />,
     after: <HistoryValueCell value={change.new} t={t} />,
     changed: true,
@@ -358,6 +384,8 @@ function activityLabel(t: ProvenanceT, activity: string | null | undefined): str
       return t("history.activity.seed");
     case "system":
       return t("history.activity.system");
+    case "run":
+      return t("history.activity.run");
     default:
       return optionToken(activity);
   }

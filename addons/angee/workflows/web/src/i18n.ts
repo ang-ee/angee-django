@@ -7,7 +7,7 @@ export const enWorkflowsMessages = {
   "timeline.continuedBy": "Continued at the request of {name}",
   ...enCatalogueMessages,
   "timeline.unavailable": "Timeline unavailable.",
-  "timeline.title": "Timeline",
+  "runs.title": "Runs",
   "timeline.groupBy": "Group by",
   "timeline.byRecord": "By record",
   "timeline.byQuestion": "By question",

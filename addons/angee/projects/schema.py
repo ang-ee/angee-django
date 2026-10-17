@@ -20,6 +20,7 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
@@ -31,16 +32,14 @@ from angee.graphql.data import (
     public_pk_decoder,
     row_annotations,
 )
-from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import RecordPointerType, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
-from angee.messaging.models import chatter_record
-from angee.messaging.schema import RecordPointerType
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
@@ -310,6 +309,26 @@ _TASK_ACTION_ANNOTATIONS = {
 }
 
 
+
+def _subject_label(info: strawberry.Info, reference: Any) -> str:
+    """Return the subject's display label through the reader's own scope, once per record and request.
+
+    A subject the reader cannot read keeps its public id as its label.
+    """
+
+    request = getattr(info.context, "request", None)
+    cache = getattr(request, "_projects_subject_labels", None) if request is not None else None
+    if cache is None:
+        cache = {}
+        if request is not None:
+            request._projects_subject_labels = cache
+    key = (reference.model_label, reference.object_id)
+    if key not in cache:
+        model = apps.get_model(reference.model_label)
+        row = read_scoped_queryset(model, current_actor()).filter(pk=reference.object_id).first()
+        cache[key] = str(row) if row is not None else ""
+    return cache[key]
+
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
 
@@ -329,17 +348,14 @@ class TaskProjectionMixin:
 
         return cast(Any, self).activity_type_id
 
-    @strawberry_django.field(only=["subject_id"], annotate=Task.subject_pointer_annotations())
-    def subject(self) -> RecordPointerType | None:
-        """Return the record this task is about as a minimal pointer.
+    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
+    def subject(self, info: strawberry.Info) -> RecordPointerType | None:
+        """Project the task's direct subject, labelled as its reader sees it."""
 
-        The label, model label and public id come from the record's chatter edge
-        through the join; the task schema admits only the record's readers to a
-        record task, and following the link re-gates through the record's read.
-        """
-
-        pointer = cast(Any, self).subject_pointer()
-        return None if pointer is None else RecordPointerType.from_attachment(pointer)
+        reference = cast(Any, self).record_ref
+        if not reference.public_id:
+            return None
+        return RecordPointerType.from_reference(reference, label=_subject_label(info, reference))
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
@@ -562,9 +578,10 @@ class RecordTaskLogInput:
 
 
 def _record(model_label: str, record_id: strawberry.ID) -> Any:
-    """Resolve a record with chatter under the actor's read scope, or refuse like a missing row."""
+    """Resolve a declared subject under its native actor-scoped manager."""
 
-    record = chatter_record(model_label, str(record_id))
+    model = Task.declared_target_model(model_label)
+    record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
     if record is None:
         raise ObjectDoesNotExist("Record not found.")
     return record
@@ -573,7 +590,8 @@ def _record(model_label: str, record_id: strawberry.ID) -> Any:
 def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry.ID, include_done: bool) -> Any:
     """Return the record's tasks the actor reads, optimized for the selected task fields."""
 
-    record = chatter_record(model_label, str(record_id))
+    model = Task.declared_target_model(model_label)
+    record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
     if record is None:
         return Task.objects.none()
     return optimize(Task.objects.for_record(record, include_done=include_done), info)
@@ -1028,6 +1046,7 @@ def _task_resource(node_type: type) -> Any:
         node_type,
         model=Task,
         name="project_tasks",
+        get_queryset=lambda info: Task.objects.canonical(),
         filterable=[
             "owner",
             "id",

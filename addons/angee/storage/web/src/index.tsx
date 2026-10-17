@@ -62,7 +62,7 @@ const storage = defineBaseAddon({
     },
     "record#aside": {
       "storage.files": {
-        sequence: 35,
+        sequence: 40,
         content: {
           label: "Files",
           icon: "file",

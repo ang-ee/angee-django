@@ -35,8 +35,8 @@ from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.fields import SqidField
 from angee.compose.migrations import DropGuardAutodetector
 from angee.messaging.testing.models import Message, Part, ThreadAttachment
-from angee.projects.runtime_migrations import record_tasks
-from angee.projects.testing.models import Project, Queue, Stage, Task
+from angee.projects.runtime_migrations import record_tasks, task_subject
+from angee.projects.testing.models import Project, Queue, Task
 from angee.projects.upgrade import GUARD_DISPATCH_UID, check_cutover_guard, record_task_types
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
 from tests.conftest import create_platform_admin
@@ -84,7 +84,8 @@ def test_record_tasks_answer_to_their_records_readers_and_writers() -> None:
     with actor_context(writer):
         task = Task.objects.schedule(_as(writer, doc), title="Chase the supplier")
     assert task.assignee_id == writer.pk
-    assert task.subject_id == ThreadAttachment._base_manager.get(object_id=doc.pk, role="chatter").pk
+    assert task.subject_object_id == doc.pk
+    assert task.subject_content_type_id == ContentType.objects.get_for_model(doc).pk
     with actor_context(reader):
         assert list(Task.objects.for_record(_as(reader, doc))) == [task]
         with pytest.raises(PermissionDenied):
@@ -104,12 +105,11 @@ def test_a_records_reader_reads_its_tasks_subject_pointer_without_loading_the_ed
     with actor_context(owner):
         task = Task.objects.schedule(_as(owner, doc), title="Answer the memo")
     with actor_context(reader):
-        (row,) = Task.objects.for_record(_as(reader, doc)).annotate(**Task.subject_pointer_annotations())
+        (row,) = Task.objects.for_record(_as(reader, doc))
         with CaptureQueriesContext(connection) as queries:
-            pointer = row.subject_pointer()
+            reference = row.record_ref
     assert queries.captured_queries == []
-    reference = pointer.record_ref
-    assert (row.pk, pointer.label) == (task.pk, "Supplier memo")
+    assert row.pk == task.pk
     assert (reference.model_label, reference.public_id) == ("chatterdemo.ChatterDoc", doc.sqid)
 
 
@@ -159,29 +159,48 @@ def test_a_task_takes_record_tasks_under_its_own_grants() -> None:
     assert _posts() == ["Done: Call the supplier"]
 
 
-def test_a_concealed_tasks_holders_lose_its_record_tasks() -> None:
-    """Concealing a task withholds the record tasks about it, and through them its title."""
+def test_trash_withholds_record_tasks_from_readers_but_keeps_removal_authority() -> None:
+    """The subject's trash policy governs its tasks; deleters can inspect and restore."""
 
-    owner = _user("concealed-owner")
+    owner, reader = _user("concealed-owner"), _user("concealed-reader")
     with system_context(reason="test.record_tasks.concealed"):
         queue = Queue.objects.create(name="Concerns", key="CN", owner=owner)
-        removed = Stage.objects.create(queue=queue, name="Removed", category="canceled", conceals=True)
         concern = Task.objects.create(title="Concealed concern", queue=queue, owner=owner)
         follow_up = Task.objects.schedule(concern, title="Call about it", assignee=owner)
-    with actor_context(owner):
+    _grant(concern, "reader", reader)
+    with actor_context(reader):
         assert Task.objects.filter(pk=follow_up.pk).exists()
-    verbs = ("read", "write", "share", "delete", "comment", "widen", "transfer")
-    assert all(Task._base_manager.get(pk=follow_up.pk).with_actor(owner).has_access(verb) for verb in verbs)
     with actor_context(owner):
-        Task.objects.create(title="Before concealing", subject_id=follow_up.subject_id)
-    with system_context(reason="test.record_tasks.conceal"):
-        Task._base_manager.filter(pk=concern.pk).update(stage=removed)
-    with actor_context(owner):
+        concern.with_actor(owner).trash(reason="Removed")
+        assert Task.objects.filter(pk=follow_up.pk).exists()
+    with actor_context(reader):
         assert not Task.objects.filter(pk=follow_up.pk).exists()
         with pytest.raises(PermissionDenied):
-            Task.objects.create(title="After concealing", subject_id=follow_up.subject_id)
-    concealed = Task._base_manager.get(pk=follow_up.pk).with_actor(owner)
-    assert not [verb for verb in verbs if concealed.has_access(verb)]
+            Task.objects.schedule(concern.with_actor(reader), title="After concealing")
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_a_deleted_record_takes_its_tasks_with_it(bulk: bool) -> None:
+    """A subject pointer has no database cascade; the task owner tears the tasks down on delete."""
+
+    writer = _user("record-deleter")
+    doc, other = _doc("Doomed record"), _doc("Surviving record")
+    _grant(doc, "owner", writer)
+    _grant(other, "owner", writer)
+    with actor_context(writer):
+        task = Task.objects.schedule(_as(writer, doc), title="Goes with the record")
+        kept = Task.objects.schedule(_as(writer, other), title="Stays with its record")
+
+    with actor_context(writer):
+        if bulk:
+            ChatterDoc.objects.as_user(writer).filter(pk=doc.pk).delete()
+        else:
+            _as(writer, doc).delete()
+
+    assert not ChatterDoc._base_manager.filter(pk=doc.pk).exists()
+    assert not Task._base_manager.filter(pk=task.pk).exists()
+    assert Task.history.filter(id=task.pk, history_type="-").count() == 1
+    assert Task._base_manager.filter(pk=kept.pk).exists()
 
 
 def test_a_record_task_is_assigned_only_to_someone_who_reads_the_record() -> None:
@@ -313,7 +332,7 @@ def _released(*, owners: bool = True) -> ProjectState:
         ("id", models.BigAutoField(primary_key=True)),
         ("content_type", models.ForeignKey("contenttypes.contenttype", models.CASCADE, null=True, related_name="+")),
         ("object_id", models.CharField(max_length=64, default="")),
-    ])
+    ], ordering=("sqid",))
     _add(state, "messaging", "ActivityType", [
         ("id", models.BigAutoField(primary_key=True)),
         ("key", models.SlugField(max_length=64, unique=True)),
@@ -505,6 +524,32 @@ def test_released_activities_become_record_tasks_and_messaging_retires_them(owne
             tables = set(connection.introspection.table_names(cursor))
         assert "test_released_messaging_threadactivity" not in tables
         assert promoted.pk
+
+
+def test_record_task_subjects_move_from_their_attachments_to_their_records() -> None:
+    released = _released()
+    with _released_tables(released):
+        with connection.schema_editor() as editor:
+            _create(released.apps, editor)
+            seeded = _seed(released.apps)
+            converted = record_tasks.Migration("0099_record_tasks", "projects").apply(released, editor)
+        assert task_subject.applies(converted)
+        with connection.schema_editor() as editor:
+            upgraded = task_subject.Migration("0100_task_subject", "projects").apply(converted, editor)
+
+        assert not task_subject.applies(upgraded)
+        record = (ContentType.objects.get_for_model(ChatterDoc).pk, 1)
+        tasks = upgraded.apps.get_model("projects", "Task")._base_manager.order_by("pk")
+        assert [(task.title, task.subject_content_type_id, task.subject_object_id) for task in tasks] == [
+            ("Promoted", *record),
+            ("Project work", None, None),
+            ("Call", *record),
+            ("Stale", *record),
+            (LONG_SUMMARY[:239] + "…", *record),
+        ]
+        history = upgraded.apps.get_model("projects", "HistoricalTask")._base_manager.order_by("history_id")
+        assert {(row.subject_content_type_id, row.subject_object_id) for row in history} == {record}
+        assert seeded["attachment"].pk
 
 
 def test_a_stack_without_projects_drops_its_seeded_catalog_and_refuses_live_activities() -> None:

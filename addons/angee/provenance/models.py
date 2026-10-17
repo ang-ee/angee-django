@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import nullcontext
+from graphlib import CycleError, TopologicalSorter
+from itertools import groupby
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -118,6 +120,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         REVERT = "revert", "Revert"
         SEED = "seed", "Seed"
         SYSTEM = "system", "System"
+        RUN = "run", "Run"
 
     class State(models.TextChoices):
         OPEN = "open", "Open"
@@ -302,10 +305,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             with system_context(reason="changeset.revert"):
                 for history, first, last, previous in states:
                     history.stage_revert(first, last, previous)
-                for history, first, last, previous in sorted(
-                    states,
-                    key=lambda state: state[0].revert_order(*state[1:]),
-                ):
+                for history, first, last, previous in self._revert_states(states):
                     for subject in history.revert_row(first, last, previous):
                         subjects[(type(subject), subject.pk)] = subject
                 for subject in subjects.values():
@@ -314,3 +314,45 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                             manager.resolve()
                 result = current_changeset(required=True, record=True)
         return result
+
+    @staticmethod
+    def _revert_states(states: list[Any]) -> Any:
+        """Keep replay phases and order each phase by native FK dependencies.
+
+        MTI and ordinary document lines use the same graph. Restorations precede
+        their dependents; removing creations reverses that order. A cyclic
+        restoration refuses atomically instead of depending on table names.
+        """
+
+        ordered = sorted(states, key=lambda state: state[0].revert_order(*state[1:]))
+        for phase, entries in groupby(ordered, key=lambda state: state[0].revert_order(*state[1:])[0]):
+            batch = list(entries)
+            snapshots = [(state[3] or state[2]).instance for state in batch]
+            identities = {
+                (type(row), field.name, getattr(row, field.attname)): index
+                for index, row in enumerate(snapshots)
+                for field in row._meta.concrete_fields if field.unique
+            }
+            graph = {index: set() for index in range(len(batch))}
+            for index, row in enumerate(snapshots):
+                for field in row._meta.concrete_fields:
+                    if not field.is_relation or not field.many_to_one and not field.one_to_one:
+                        continue
+                    target = identities.get((field.related_model, field.target_field.name, getattr(row, field.attname)))
+                    if target is not None and target != index:
+                        if phase == 2:
+                            graph[target].add(index)
+                        elif batch[target][2].history_type == "-" or issubclass(type(row), field.related_model):
+                            # A row saves against the restored state of a row of its own
+                            # model it names (a hierarchy parent, a merge redirect).
+                            # Other existing rows already satisfy each other's FKs.
+                            graph[index].add(target)
+            ordering = TopologicalSorter(graph)
+            try:
+                ordering.prepare()
+            except CycleError as error:
+                raise ValidationError("The changeset contains cyclic restoration dependencies.") from error
+            while ordering.is_active():
+                for index in sorted(ordering.get_ready()):
+                    yield batch[index]
+                    ordering.done(index)

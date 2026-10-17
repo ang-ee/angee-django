@@ -53,7 +53,7 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.actors import instance_actor
 from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, OwnerMixin
+from angee.base.mixins import AuditMixin, HistoryMixin, OwnerMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.scoping import lock_if_supported
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -852,7 +852,7 @@ class MCPTool(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Agent(ResourceLoadMixin, OwnerMixin, AngeeDataModel):
+class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -1844,7 +1844,7 @@ class AgentSessionManager(AngeeManager):
                 session._close_locked()
 
 
-class AgentSession(AuditMixin, AngeeDataModel):
+class AgentSession(OwnerMixin, AngeeDataModel):
     """Runtime-neutral conversation whose turns run once, without crash recovery.
 
     A pending turn retained across a rebuild runs first when the user next posts.
@@ -1857,7 +1857,11 @@ class AgentSession(AuditMixin, AngeeDataModel):
 
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions")
+    # A session is its owner's own conversation: deleting the owner deletes it, and
+    # refuses while one of its turns still runs, where other owned roots are released.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, editable=False, on_delete=models.CASCADE, related_name="+",
+    )
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
     """The view from which this conversation was started, independent of its turns."""

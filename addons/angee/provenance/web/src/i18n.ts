@@ -46,6 +46,7 @@ export const enProvenanceMessages: Record<string, string> = {
   "history.activity.revert": "reverted",
   "history.activity.seed": "seeded",
   "history.activity.system": "system write",
+  "history.activity.run": "ran",
   "history.outcome.failure": "Failed",
   "history.statement.asserted": "asserted",
   "history.statement.applied": "applied",

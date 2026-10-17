@@ -15,7 +15,7 @@ export { RecordNotesStream, recordNotesTab, type RecordNotesStreamProps, type Re
 const KNOWLEDGE_ID = "knowledge";
 
 const knowledgeRoutes: readonly BaseAddonRoute[] = [
-  ...resourcePageRoutes("knowledge.home", "/knowledge", lazyRouteComponent(() => import("./views/KnowledgePage"), "KnowledgePage"), undefined, { detailName: "knowledge.page", menu: KNOWLEDGE_ID }),
+  ...resourcePageRoutes("knowledge.home", "/knowledge", lazyRouteComponent(() => import("./views/KnowledgePage"), "KnowledgePage"), "knowledge.Page", { detailName: "knowledge.page", menu: KNOWLEDGE_ID }),
   {
     // The vaults admin. A static `/knowledge/settings` outranks the
     // `/knowledge/$id` page route, so it is a sibling, not a page id.

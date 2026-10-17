@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Mapping
+from types import NotImplementedType
 from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
@@ -18,10 +19,11 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id, instance_actor
-from angee.base.errors import DomainError
+from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, OptimisticLockMixin
+from angee.base.mixins import AuditMixin, HistoryMixin, OptimisticLockMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.refs import MergePolicy
 from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
@@ -342,7 +344,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             yield report
 
 
-class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
+class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
     """One external or manually-authored request attached to one semantic target."""
 
     runtime = True
@@ -440,6 +442,24 @@ class Need(ResourceLoadMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
             # Each task's first request (task_requester_rows) is an ordered LIMIT 1 probe.
             models.Index(fields=("task", "created_at", "id")),
         )
+
+    # The prior task identity stays on the request as history.
+    merge_policies = {"original_task": MergePolicy.KEEP}
+
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> NotImplementedType | None:
+        """Retarget requests through their assignment owner."""
+
+        if reference.name != "task":
+            return NotImplemented
+        for need in rows.order_by("pk").lock_if_supported():
+            need.original_task_id = need.task_id
+            need.task = survivor
+            try:
+                need.save(update_fields=("task", "original_task", "updated_at"))
+            except RecordAccessSubjectRefused as error:
+                raise ValidationError({"canonical": error.code}) from error
+        return None
 
     @property
     def requester_access_granted(self) -> bool:

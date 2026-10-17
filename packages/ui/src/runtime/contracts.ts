@@ -176,7 +176,8 @@ export interface ChatterRoute {
   viewType: string;
   modelLabel?: string;
   canonicalLabel?: string;
-  /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can carry. */
+  /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can
+   *  carry, plus `<label>:<role>` for each role of a role-bearing edge (`messaging.ThreadAttachment:chatter`). */
   recordEdges?: readonly string[];
   recordParam?: string;
 }

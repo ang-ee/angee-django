@@ -710,10 +710,18 @@ data through REBAC, never a queryset bypass.
     deleting a merged record's copy of an identity row the survivor already
     holds. Under an actor, REBAC only deletes and recreates an edge, which would
     cost attachments their identity and dependants.
-  - Retiring a merged record stays the actor's own delete.
+  - Retiring a merged record (`retire_merged`) keeps it as a redirect
+    (`merged_into`, plus trash on a trash owner) where `MergeableMixin.retains`
+    says so: the model retains every merged record, it composes `TrashMixin`, or
+    live or historical references name it. Only an unretained record is the
+    actor's own delete. Readers resolve a redirect through `canonical()`; a
+    `merged_from` row stays visible as such.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
-    `fold_records` directly with its own carry-over and retirement, as
-    [`Handle.objects.merge`](../../addons/angee/parties/managers.py) does.
+    the system entry [`MergeableMixin.fold`](../../angee/base/merge.py), which
+    joins the open changeset and runs the same hooks under a system boundary, as
+    a `merge_contract` redirecting chatter threads and
+    [`Handle.objects.merge`](../../addons/angee/parties/managers.py), the bridge
+    compatibility entry, do.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
@@ -912,7 +920,12 @@ and current contracts before applying a historical example to a new deployment.
   creating a Party never enrolls it in a remote address book.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
-  row. Base autoconfig enables the native
+  row. A queryset update that writes only columns the history excludes (a
+  counter), with at most auto-now stamps, records no version. A multi-table
+  child's save records the child's history only; its version carries the inherited
+  columns, and its revert restores them. A record's chatter thread and edge are its
+  bookkeeping: they revert under the record's `write`, and undoing the record's
+  creation tears them down with it. Base autoconfig enables the native
   `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
   allocates a separate nullable text change-reason field for each historical
   model; inherited tracking must never share mutable field instances across models.
@@ -1007,8 +1020,9 @@ and current contracts before applying a historical example to a new deployment.
   provenance's
   [`retire_reversion`](../../addons/angee/provenance/runtime_migrations/retire_reversion.py)).
   Copy-local `RunPython` functions use historical models from `apps` and
-  `_base_manager`; clear ordering before writes when it can name live-model alias
-  fields such as `sqid`. Ship a new declaration for a new transition and preserve
+  `_base_manager`; clear ordering on every query that can carry it (a write, or a
+  sliced `[:1]` subquery) when it can name live-model alias fields such as `sqid`.
+  Ship a new declaration for a new transition and preserve
   materialized bodies. Source compatibility exceptions require the owner's
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
@@ -1287,11 +1301,15 @@ and current contracts before applying a historical example to a new deployment.
   including when `of` is requested. Backends
   supporting row locks still enforce their supported lock options. Do not set
   private queryset write state or duplicate Django's feature checks.
+- **Hierarchy rows are created through `save()` or `HierarchyQuerySet.create_forest`.**
+  A batch (a cloned page tree) is one INSERT and one parent-and-path UPDATE
+  whatever its depth, and each row records one creation version, path included;
+  `save()` hooks do not run, so the caller sends the lifecycle signals it owes.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
   by column name.** A subtree that must stay inside a tenant or other scope
   declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
-  by stored id); the mixin rejects a reparent or create under a parent that differs
-  on any listed field. It is generic and iam-free — there is no scope-field-name
+  by stored id); the mixin rejects a parent that differs on any listed field
+  and refuses a scope edit that would strand existing children. It is generic and iam-free — there is no scope-field-name
   fallback, so a scoped tree that omits the declaration silently accepts a parent
   outside its scope. Compose `HierarchyQuerySet` before every other queryset
   guard, including on secondary managers; the base `angee.E021` check rejects
@@ -1919,6 +1937,29 @@ preferred no-value clears the aspect's operational values so a dismissal sticks.
 Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
 the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
 
+[`MergeableMixin`](../../angee/base/merge.py) owns operational redirects, actor
+admission and the system fold. Models declare domain refusals and carry/retire
+hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
+entry in `merge_policies` where its `on_delete` implies the wrong one) and their
+collision contract. Retained
+references include their historical versions. Redirects flatten in the same
+changeset and protect their survivor from deletion. `canonical()` selects
+operational identities; statement querysets use `applied()` for winning value
+assertions. Source-copy identity remains reversible pair evidence and never
+chooses a transport or moves channel occurrences.
+
+[`HistoryMixin.history_relations`](../../angee/base/mixins.py) declares owned
+reverse-FK collections, such as dashboard widgets or project milestones. These
+rows keep their own history and read gates; document history groups their deltas
+with record identity. An entry may revert from that record only when its complete
+write boundary belongs to the document, or it is the record's operational merge.
+Changes spanning independent documents require their wider owner. Native FK
+relationships order restoration of missing rows. Hierarchy parents are ordered
+also when present, so restoring an earlier tree does not create a temporary cycle;
+other existing rows keep their normal update order. A record task uses its own
+`RecordRefMixin` subject and declared `projects/task` permission arms; chatter is
+an independent capability.
+
 The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
 revert and deterministic lossless export. Closing a boundary writes one bookkeeping
 row; `document()` computes and records the hash through the one hash owner, so a
@@ -1985,7 +2026,10 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   A domain authority that is not `delete` (record-chatter moderation) keeps its own
   verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
   sudo read path it owns, such as the chatter transcript, must exclude trashed rows
-  itself. Work tasks keep their concealing stage as the removal convention.
+  itself. Work tasks enter the trash by moving into a concealing stage. Managers
+  are a positive arm beside the exclusion, never an exclusion inside it: rebac's
+  named-grant scan cannot compile an exclusion that holds another
+  ([tasks](../../addons/angee/projects/permissions.zed)).
 
 ### Addon WebSocket endpoints
 
