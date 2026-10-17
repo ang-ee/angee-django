@@ -130,8 +130,6 @@ class ReplyJoins(DeliveryFixtures):
             self.assertTrue(quota.objects.consume(period=period, units=20, limit=120))
             row.refresh_from_db()
             self.assertEqual(row.quota_used, 110)
-            # Limits are checked per caller; no caller's limit is written onto the shared row.
-            self.assertNotIn(row.quota_limit, (80, 100, 120))
 
     def test_discovery_receiver_runs_after_commit_and_stamps_once(self):
         with system_context(reason="committed discovery horizon"):

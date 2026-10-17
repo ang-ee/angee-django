@@ -35,7 +35,7 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import system_context
 
-from angee.base.mixins import SourceKind
+from angee.base.models import SourceKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import HttpClientMixin, ResponseTooLargeError

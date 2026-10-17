@@ -35,11 +35,9 @@ def test_content_edit_validation_uses_retained_kind(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_legacy_notification_payload_remains_readonly(composed_tables: None) -> None:
-    """Retired field-tracking messages use the same retained-notification policy."""
-    message = Message(direction="internal", message_type="notification", metadata={
-        "legacy_tracking": [{"field_name": "status", "old_value": "open", "new_value": "closed"}],
-    })
+def test_notification_messages_remain_readonly(composed_tables: None) -> None:
+    """The retained notification kind, not obsolete payload metadata, owns edit policy."""
+    message = Message(direction="internal", message_type="notification")
     assert message.content_edit_error() is not None
     assert message.delete_error() is not None
     assert message.trash_error() is not None

@@ -25,7 +25,7 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 
-from angee.base.mixins import SourceKind
+from angee.base.models import SourceKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl

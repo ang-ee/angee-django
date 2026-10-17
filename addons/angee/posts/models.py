@@ -36,8 +36,7 @@ from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, update_fields_with_auto_now
-from angee.base.models import AngeeDataModel
+from angee.base.models import AngeeDataModel, AuditMixin, update_fields_with_auto_now
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
@@ -140,7 +139,7 @@ class Feed(models.Model, metaclass=RebacModelBase):
         """Stamp once after discovery, also called by landing to recover a lost receiver."""
 
         with transaction.atomic():
-            row = type(self)._base_manager.select_for_update().get(pk=self.pk)
+            row = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if row.live_since is None:
                 row.live_since = row.discovery_completed_at or timezone.now()
                 row.save(update_fields=("live_since", "updated_at"))
@@ -283,19 +282,15 @@ class Quota(AuditMixin, AngeeDataModel):
 
     integration = models.ForeignKey(
         "integrate.Integration",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.PROTECT,
         related_name="quotas",
     )
-    """Authorization anchor; deleting one spender must not reset a shared scope's budget."""
-    scope = models.CharField(max_length=512, null=True, blank=True)
-    """Backend-declared budget identity; historical NULL rows are never reopened."""
+    """Required authorization anchor for this provider budget."""
+    scope = models.CharField(max_length=512)
+    """Backend-declared budget identity."""
     period_start = models.DateTimeField(db_index=True)
     period_end = models.DateTimeField()
     quota_used = models.PositiveIntegerField(default=0)
-    quota_limit = models.PositiveIntegerField(default=10000)
-    """Legacy per-integration ceiling; scoped checks never read or overwrite it."""
     last_updated = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)
 
@@ -309,12 +304,7 @@ class Quota(AuditMixin, AngeeDataModel):
         rebac_resource_type = "posts/quota"
         constraints = (
             models.UniqueConstraint(
-                fields=("integration", "period_start"),
-                condition=models.Q(scope__isnull=True),
-                name="uq_quota_integration_period",
-            ),
-            models.UniqueConstraint(
-                fields=("scope", "period_start"), condition=models.Q(scope__isnull=False),
+                fields=("scope", "period_start"),
                 name="uq_quota_scope_period",
             ),
         )
@@ -322,7 +312,7 @@ class Quota(AuditMixin, AngeeDataModel):
     def __str__(self) -> str:
         """Return a readable quota label for Django displays."""
 
-        return f"{self.scope or self.integration_id}: {self.quota_used} units"
+        return f"{self.scope}: {self.quota_used} units"
 
 
 # --- Same-row extensions onto messaging (the public-post payload) ---------------
@@ -410,7 +400,8 @@ class MessagePublic(models.Model):
         """
 
         message = cast("Message", self)
-        connection = connections[message._state.db or "default"]
+        using = type(message)._base_manager.db_manager(hints={"instance": message}).db
+        connection = connections[using]
         table = connection.ops.quote_name(message._meta.db_table)
         body_sql, body_params = apps.get_model("messaging", "Part").objects.plain_body_sql(
             "c.id", connection=connection,

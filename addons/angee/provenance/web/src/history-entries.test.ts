@@ -19,14 +19,14 @@ describe("historyValue", () => {
 
 describe("statementVerb", () => {
   test("a first version asserts, a later applied version applies", () => {
-    expect(statementVerb({ history_type: "+", status: "asserted", applied: false })).toBe("asserted");
-    expect(statementVerb({ history_type: "~", status: "asserted", applied: true })).toBe("applied");
-    expect(statementVerb({ history_type: "~", status: "asserted", applied: false })).toBe("asserted");
+    expect(statementVerb({ history_type: "CREATED", status: "ASSERTED", applied: false })).toBe("asserted");
+    expect(statementVerb({ history_type: "CHANGED", status: "ASSERTED", applied: true })).toBe("applied");
+    expect(statementVerb({ history_type: "CHANGED", status: "ASSERTED", applied: false })).toBe("asserted");
   });
 
   test("a terminal status speaks for itself, whatever the version", () => {
-    expect(statementVerb({ history_type: "~", status: "WITHDRAWN", applied: false })).toBe("withdrawn");
-    expect(statementVerb({ history_type: "+", status: "quarantined", applied: false })).toBe("quarantined");
+    expect(statementVerb({ history_type: "CHANGED", status: "WITHDRAWN", applied: false })).toBe("withdrawn");
+    expect(statementVerb({ history_type: "CREATED", status: "QUARANTINED", applied: false })).toBe("quarantined");
   });
 });
 

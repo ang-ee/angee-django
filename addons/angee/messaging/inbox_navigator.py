@@ -30,7 +30,6 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
 from angee.base.pagination import WindowSum
-from angee.base.scoping import read_scoped_queryset
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
 
@@ -333,11 +332,20 @@ class InboxNavigator(MessageInbox):
             # A row shows its handle's identity: load each handle's party and the
             # avatars once per page, scoped to the actor, never one row at a time.
             party_model = apps.get_model("parties", "Party")
+            file_model = apps.get_model("storage", "File")
+            party_rows = (
+                party_model.objects.none()
+                if self.actor is None
+                else party_model.objects.with_actor(self.actor).with_action("read")
+            )
+            file_rows = (
+                file_model.objects.none()
+                if self.actor is None
+                else file_model.objects.with_actor(self.actor).with_action("read")
+            )
             records = records.prefetch_related(
-                Prefetch(
-                    "party", queryset=read_scoped_queryset(party_model, self.actor).with_display_avatars(self.actor)
-                ),
-                Prefetch("avatar", queryset=read_scoped_queryset(apps.get_model("storage", "File"), self.actor)),
+                Prefetch("party", queryset=party_rows.with_display_avatars(self.actor)),
+                Prefetch("avatar", queryset=file_rows),
             )
         selected_records = {
             record.pk: record for record in records.filter(pk__in=[row["handle_pk"] for row in selected])

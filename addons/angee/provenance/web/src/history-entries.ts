@@ -25,17 +25,17 @@ export function statementVerb(statement: {
   status: string;
   applied: boolean;
 }): StatementVerb {
-  const status = statement.status.toLowerCase();
-  if (status === "withdrawn" || status === "quarantined" || status === "deprecated") return status;
-  if (statement.history_type === "+") return "asserted";
+  if (statement.status === "WITHDRAWN") return "withdrawn";
+  if (statement.status === "QUARANTINED") return "quarantined";
+  if (statement.status === "DEPRECATED") return "deprecated";
+  if (statement.history_type === "CREATED") return "asserted";
   return statement.applied ? "applied" : "asserted";
 }
 
 /** The step tone of an entry: failures and reverts stand out, merges inform, edits pass. */
 export function entryTone(entry: { activity: string; outcome?: string | null }): "danger" | "warning" | "info" | "success" {
-  if ((entry.outcome ?? "").toLowerCase() === "failure") return "danger";
-  const activity = entry.activity.toLowerCase();
-  if (activity === "revert") return "warning";
-  if (activity === "merge") return "info";
+  if (entry.outcome === "FAILURE") return "danger";
+  if (entry.activity === "REVERT") return "warning";
+  if (entry.activity === "MERGE") return "info";
   return "success";
 }

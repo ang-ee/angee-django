@@ -13,8 +13,8 @@ describe("messaging addon manifest", () => {
   test("contributes gated Comments and Conversations; provenance owns History", () => {
     const aside = messaging.containers?.["record#aside"] as Record<string, unknown>;
     expect(aside).toMatchObject({
-      "messaging.comments": { sequence: 10, content: { aliases: ["comments"] } },
-      "messaging.related": { sequence: 60, content: { aliases: ["messaging.sources", "sources"] } },
+      "messaging.comments": { sequence: 10, content: { label: "Comments" } },
+      "messaging.related": { sequence: 60, content: { label: "Conversations" } },
     });
   });
 
@@ -77,9 +77,8 @@ describe("messaging addon manifest", () => {
   });
 
   test("recordCommentsTab builds the same Comments tab for another addon's aside", () => {
-    const tab = recordCommentsTab({ submitKey: "mod-enter", aliases: ["comments"] });
-    expect(tab).toMatchObject({ sequence: 10, content: { label: "Comments", icon: "comments", aliases: ["comments"] } });
+    const tab = recordCommentsTab({ submitKey: "mod-enter" });
+    expect(tab).toMatchObject({ sequence: 10, content: { label: "Comments", icon: "comments" } });
     expect(tab.content.render?.({} as ChatterViewContext)).toMatchObject({ props: { submitKey: "mod-enter" } });
-    expect(recordCommentsTab().content.aliases).toBeUndefined();
   });
 });
