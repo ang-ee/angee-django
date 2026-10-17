@@ -21,8 +21,12 @@ import type { InboxNavigation, InboxScope } from "./state";
 
 const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://inbox-files", providerNames: [] });
 // The transcript virtualizes its rows over the measured viewport, which happy-dom
-// reports as zero-sized; give elements a viewport so the rows render.
+// reports as zero-sized; give elements a 640 x 640 viewport so the rows render,
+// whichever box the virtualizer measures (@tanstack/virtual-core reads the client
+// box since 3.19.6, the offset box before).
 beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(640);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(640);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(640);
 });
