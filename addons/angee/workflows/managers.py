@@ -30,7 +30,6 @@ from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
 from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import publish_change
@@ -49,8 +48,7 @@ from angee.workflows.states import (
 )
 from angee.workflows.steps import StepMode, Superseded
 from angee.workflows.subjects import RunSubject
-from angee.workflows.triggers import TriggerGrantTarget
-from angee.workflows.watches import RecordWatch
+from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -158,7 +156,7 @@ class WorkflowManager(AngeeManager):
     def _resolve_awaits(self, declarations: list[tuple[str, Body, list[str | int]]], actor: Any) -> list[Issue]:
         """Resolve all awaited contracts in one read-scoped query, with per-node failures."""
         issues: list[Issue] = []
-        readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
+        readable = self.model.objects.with_actor(actor) if actor is not None else self.model.system_queryset()
         awaited = [(key, node, path) for key, node, path in declarations if node.step == "await_run"]
         expects_keys = {
             expects for _, node, _ in awaited
@@ -213,7 +211,7 @@ class WorkflowManager(AngeeManager):
 
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
         """Name readable published parents whose frozen contract names this workflow."""
-        readable = read_scoped_queryset(self.model, actor) if actor is not None else system_queryset(self.model)
+        readable = self.model.objects.with_actor(actor) if actor is not None else self.model.system_queryset()
         parents = readable.exclude(pk=workflow.pk).filter(published__isnull=False).values_list(
             "key", "published__document",
         )
@@ -377,7 +375,7 @@ class WorkflowRunQuerySet(AngeeQuerySet):
             target = generic_target(record)
             targets |= Q(**target.lookups(evidence_model, "record"))
             subjects |= Q(**target.lookups(self.model, "subject"))
-        links = system_queryset(evidence_model).filter(targets)
+        links = evidence_model.system_queryset().filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
         subjects = self.filter(subjects)
@@ -565,11 +563,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             version = version or workflow.published
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
-            principal_workflow = system_queryset(apps.get_model("workflows", "Workflow")).filter(
+            principal_workflow = apps.get_model("workflows", "Workflow").system_queryset().filter(
                 user_id=identity["run_as_id"],
             ).first()
             if principal_workflow is not None:
-                granted = system_queryset(apps.get_model("workflows", "Trigger")).filter(
+                granted = apps.get_model("workflows", "Trigger").system_queryset().filter(
                     workflow=principal_workflow, enabled=True,
                 ).order_by("pk").values_list("granted_targets", flat=True)
                 version.require_publisher_access(
@@ -611,9 +609,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         model = run.subject_model_class
         if model is None or not issubclass(model, RunSubject):
             return None
-        subject = lock_if_supported(
-            system_queryset(model).filter(pk=run.subject_object_id), no_key=True,
-        ).first()
+        subject = model.system_queryset().filter(pk=run.subject_object_id).lock_if_supported(no_key=True).first()
         if subject is None and required:
             raise ValidationError("The workflow run subject no longer exists.")
         return cast(RunSubject | None, subject)
@@ -696,7 +692,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta | None = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
 
-        if not system_queryset(self.model).filter(pk=run.pk).exists():
+        if not self.model.system_queryset().filter(pk=run.pk).exists():
             return Cancellation(False, 0)
         actor = run.require_access("write", actor)
         try:
@@ -717,7 +713,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     raise ValidationError("Only terminal runs can be reprocessed.")
                 workflow = retained.version.workflow
                 model = retained.subject_model_class
-                subject = system_queryset(model).get(pk=retained.subject_object_id) if model is not None else None
+                subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
             return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
 
     def reopen(self, run: Any) -> None:
@@ -793,17 +789,17 @@ class StepWatchManager(AngeeManager):
         """
         targets = {}
         for record in records:
-            RecordWatch.check_model(type(record))
+            TriggerSource.check_model(type(record))
             if record.pk is None:
                 raise PermissionDenied("Read access to a saved watched record is required.")
             target = generic_target(record)
             targets[(target.content_type.pk, target.object_id)] = target
         with system_context(reason="workflows.watch_register"):
             for _, target in sorted(targets.items()):
-                rows = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
-                lock_if_supported(rows, no_key=True).get()
+                rows = target.content_type.model_class().system_queryset().filter(pk=target.object_id)
+                rows.lock_if_supported(no_key=True).get()
             for record in records:
-                readable = read_scoped_queryset(type(record), actor)
+                readable = type(record).objects.with_actor(actor)
                 if not readable.filter(pk=record.pk).exists():
                     raise PermissionDenied("Read access to a saved watched record is required.")
             for target in targets.values():
@@ -826,8 +822,8 @@ class StepWatchManager(AngeeManager):
             except ValueError:
                 return  # Unsaved or untyped records cannot have watches.
             with transaction.atomic(), system_context(reason="workflows.watch_capture"):
-                rows = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
-                if lock_if_supported(rows, no_key=True).first() is None:
+                rows = target.content_type.model_class().system_queryset().filter(pk=target.object_id)
+                if rows.lock_if_supported(no_key=True).first() is None:
                     return
                 if self.filter(**target.lookups(self.model, "record")).update(pending=True):
                     payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
@@ -1015,14 +1011,14 @@ class StepRunQuerySet(AngeeQuerySet):
     def changed_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> Any:
         """Select each live waiter once, even when several watched records changed."""
         watches = apps.get_model("workflows", "StepWatch")
-        pending = system_queryset(watches).filter(step_run_id=OuterRef("pk"), pending=True)
+        pending = watches.system_queryset().filter(step_run_id=OuterRef("pk"), pending=True)
         if content_type_id is not None:
             pending = pending.filter(content_type_id=content_type_id, object_id=object_id)
         return self.filter(Exists(pending), status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD)
 
     def answered_decisions(self) -> Any:
         """Wake an answered step without joining its question into the row lock."""
-        answered = system_queryset(apps.get_model("decisions", "Decision")).filter(
+        answered = apps.get_model("decisions", "Decision").system_queryset().filter(
             pk=OuterRef("decision_id"),
         ).exclude(verdict__isnull=True)
         return self.filter(

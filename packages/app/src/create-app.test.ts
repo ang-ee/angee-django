@@ -1714,7 +1714,7 @@ describe("createApp resource route index", () => {
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordEdges?.join(",") ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
+        `${route?.resourceType ?? "none"} ${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordEdges?.join(",") ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
       );
     }
 
@@ -1748,7 +1748,7 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note parties.Party storage.FileAttachment id notes.comments");
+        expect(host.textContent).toContain("notes/note notes.Note parties.Party storage.FileAttachment id notes.comments");
       });
     } finally {
       root.unmount();

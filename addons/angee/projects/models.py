@@ -153,7 +153,7 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             raise ValidationError("A task must be saved before it can be promoted.")
         actor, bypass = task.effective_actor(strict=True)
         with transaction.atomic():
-            locked_task = system_queryset(type(task), lock=("self",)).get(pk=task.pk)
+            locked_task = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
             if not bypass and not locked_task.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the task is required to promote it.")
             if expected_revision is not None:
@@ -161,10 +161,8 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             with system_context(reason="projects.project.promote_from_task.lookup"):
                 existing = self.filter(converted_from_id=task.pk).first()
             if existing is not None:
-                bind_actor(existing, actor)
-                return existing
+                return existing.with_actor(actor) if actor is not None else existing
 
-            verified_actor = self.check_create()
             project = self.model(
                 title=locked_task.title,
                 body=locked_task.note,
@@ -172,23 +170,26 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
                 converted_from_id=locked_task.pk,
             )
             project.full_clean(validate_unique=False, validate_constraints=False)
-            project.sudo(reason="projects.project.promote_from_task")
             try:
                 with transaction.atomic():
-                    project.save()
+                    if actor is None:
+                        project.sudo(reason="projects.project.promote_from_task").save()
+                    else:
+                        project = self.with_actor(actor).insert(project)
             except IntegrityError:
                 with system_context(reason="projects.project.promote_from_task.concurrent_lookup"):
                     project = self.get(converted_from_id=task.pk)
             else:
+                project.unsudo()
                 locked_task.sudo(reason="projects.task.promoted").save_without_historical_record(
                     update_fields=("revision",),
                 )
-                bind_actor(locked_task.unsudo(), actor)
-                bind_actor(project.unsudo(), verified_actor)
+                locked_task.unsudo()
+                if actor is not None:
+                    locked_task.with_actor(actor)
                 task_promoted.send(sender=type(locked_task), task=locked_task, project=project)
             task.refresh_from_db()
-            bind_actor(project, verified_actor)
-            return project
+            return project.with_actor(actor) if actor is not None else project
 
 
 class ProjectSetupReceipt(CreationKeyMixin, models.Model):
@@ -658,7 +659,7 @@ class Project(
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the project is required to change its status.")
             if expected_revision is not None:
@@ -670,7 +671,9 @@ class Project(
                 locked.sudo(reason="projects.project.set_status").save(
                     update_fields=("status", "status_changed_at", "updated_at"),
                 )
-                bind_actor(locked.unsudo(), actor)
+                locked.unsudo()
+                if actor is not None:
+                    locked.with_actor(actor)
                 project_status_changed.send(
                     sender=type(locked),
                     project=locked,
@@ -695,7 +698,7 @@ class Project(
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the project is required to select its phase.")
             if expected_revision is not None:
@@ -711,12 +714,18 @@ class Project(
                 )
                 if locked.status == self.ProjectStatus.DONE:
                     if not bypass:
-                        bind_actor(locked, actor)
+                        locked.with_actor(actor)
                     locked._set_status(str(self.ProjectStatus.OPEN))
-                bind_actor(locked.unsudo(), actor)
+                locked.unsudo()
+                if actor is not None:
+                    locked.with_actor(actor)
                 if previous is not None:
-                    bind_actor(previous.unsudo(), actor)
-                bind_actor(milestone.unsudo(), actor)
+                    previous.unsudo()
+                    if actor is not None:
+                        previous.with_actor(actor)
+                milestone.unsudo()
+                if actor is not None:
+                    milestone.with_actor(actor)
                 project_phase_changed.send(
                     sender=type(locked),
                     project=locked,
@@ -820,7 +829,7 @@ class Milestone(HistoryMixin, CreationKeyMixin, OptimisticLockMixin, ImmutableFi
 
         actor, bypass = self.effective_actor(strict=True)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("reach"):
                 raise PermissionDenied("Reach access to the milestone is required.")
             if expected_revision is not None:
@@ -832,7 +841,9 @@ class Milestone(HistoryMixin, CreationKeyMixin, OptimisticLockMixin, ImmutableFi
                 locked.sudo(reason="projects.milestone.mark_reached").save(
                     update_fields=("reached_at", "reached_by", "updated_at"),
                 )
-                bind_actor(locked.unsudo(), actor)
+                locked.unsudo()
+                if actor is not None:
+                    locked.with_actor(actor)
                 milestone_reached.send(sender=type(locked), milestone=locked)
             self.refresh_from_db()
         return self
@@ -899,6 +910,7 @@ class Task(
     MERGED_PERMISSION = "write"
     retains_merged = True
     merge_policy = MergePolicy.MOVE
+    on_target_delete = models.CASCADE
     thread_post_access = "comment"
     owner_container = "project"
     immutable_fields = ("visibility",)
@@ -1055,7 +1067,7 @@ class Task(
 
         if reference.name != "parent":
             return NotImplemented
-        list(system_queryset(cls, lock=("self",)).using(rows.db).filter(parent=survivor).order_by("pk"))
+        list(cls.system_queryset(lock=("self",)).using(rows.db).filter(parent=survivor).order_by("pk"))
         for child in rows.order_by("sub_sort_order", "pk"):
             child.parent = survivor
             child.sub_sort_order = None
@@ -1138,7 +1150,7 @@ class Task(
         previous_project_id, previous_assignee_id = None, None
         if not self._state.adding and (project_is_written or assignee_is_written):
             previous_project_id, previous_assignee_id = (
-                system_queryset(type(self)).filter(pk=self.pk).values_list("project_id", "assignee_id").get()
+                type(self).system_queryset().filter(pk=self.pk).values_list("project_id", "assignee_id").get()
             )
         if project_is_written and self.project_id is not None:
             if self._state.adding or self.project_id != previous_project_id:
@@ -1220,7 +1232,7 @@ class Task(
         """Refuse ``action`` with the first declared blocker the stored row matches."""
 
         for condition, error in self.action_blockers(action):
-            if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
                 raise ValidationError(error)
 
     def complete(self, *, feedback: str = "") -> Task:
@@ -1248,7 +1260,7 @@ class Task(
         if self.pk is None:
             return
         stored = (
-            system_queryset(type(self), lock=("self",))
+            type(self).system_queryset(lock=("self",))
             .values("status", "done_at", "dropped_at", "dropped_reason")
             .get(pk=self.pk)
         )
@@ -1360,7 +1372,7 @@ class Task(
         actor, bypass = self.effective_actor(strict=True)
         permission = self.visibility_permission(visibility)
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not bypass and (
                 actor is None
                 or not backend().check_access(subject=actor, action=permission, resource=to_object_ref(locked)).allowed
@@ -1373,7 +1385,8 @@ class Task(
                     locked.validate_visibility(visibility)
                 locked.visibility = visibility
                 locked.allow_immutable_save("visibility")
-                bind_actor(locked, actor)
+                if actor is not None:
+                    locked.with_actor(actor)
                 locked.sudo(reason="projects.task.set_visibility").save(update_fields=("visibility", "updated_at"))
             self.refresh_from_db()
         return self
@@ -1386,7 +1399,7 @@ class Task(
         their audience invariants under the same task lock.
         """
         for condition, error in self.visibility_blockers(value):
-            if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
                 raise error()
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
@@ -1416,7 +1429,7 @@ class Task(
 
         yield from super().thread_audience_members()
         if self.assignee_id is not None:
-            person = system_queryset(apps.get_model("parties", "Person")).filter(user_id=self.assignee_id).first()
+            person = apps.get_model("parties", "Person").system_queryset().filter(user_id=self.assignee_id).first()
             if person is not None:
                 yield AudienceMember(party_id=person.pk)
 

@@ -30,18 +30,15 @@ export interface RecordPagesTabOptions {
   role?: string;
   sequence?: number;
   when?: ChatterTabContent["when"];
-  /** Earlier ids a `?chatterTab=` link may still carry. */
-  aliases?: readonly string[];
 }
 
 /** A role-scoped Pages tab, for an addon's `<model>#aside` or `record#aside`. */
 export function recordPagesTab(options: RecordPagesTabOptions = {}): ContainerChild<ChatterTabContent> {
-  const { label = "Pages", role, sequence = 50, when, aliases } = options;
+  const { label = "Pages", role, sequence = 50, when } = options;
   return {
     sequence,
     content: {
       label, icon: "knowledge",
-      ...(aliases ? { aliases } : {}),
       // A record of a type whose schema lets it carry bindings; a `<model>#aside` placement also reaches list views.
       when: (context) => context.view.kind === "record"
         && (context.route?.recordEdges?.includes(RECORD_BINDING_MODEL) ?? false)

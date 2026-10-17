@@ -20,7 +20,6 @@ from strawberry_django.queryset import run_type_get_queryset
 from angee.base.identity import public_id_for
 from angee.base.impl import resolve_all_impl_classes
 from angee.base.models import record_display_label
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import (
     ActionResult,
@@ -66,12 +65,12 @@ Decision = apps.get_model("decisions", "Decision")
 DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 _RUN_POLICY_VERSION = Prefetch(
     "version",
-    queryset=system_queryset(WorkflowVersion).only("document"),
+    queryset=WorkflowVersion.system_queryset().only("document"),
     to_attr="policy_version",
 )
 _STEP_POLICY_VERSION = Prefetch(
     "run__version",
-    queryset=system_queryset(WorkflowVersion).only("document"),
+    queryset=WorkflowVersion.system_queryset().only("document"),
     to_attr="policy_version",
 )
 
@@ -139,7 +138,7 @@ class WorkflowRunType(RecordReferenceNode):
     def input(self, info: strawberry.Info) -> JSON:
         """Keep non-reference input while checking marked sources at read time."""
         run = cast(Any, self)
-        evidence = read_scoped_queryset(StepRecord, request_from_info(info).user)
+        evidence = StepRecord.objects.with_actor(request_from_info(info).user)
         readable: set[tuple[str, str]] = set()
         for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
             if row._angee_record_readable:
@@ -440,7 +439,7 @@ class TriggerType(AngeeNode):
             model = model_for_resource_type(resource_type)
             if model is None or not model._meta.managed:
                 continue
-            visible = read_scoped_queryset(model, actor)
+            visible = model.objects.with_actor(actor)
             ids = [str(row.resource_id) for row in rows if row.resource_type == resource_type]
             for target in visible.filter(pk__in=ids):
                 labels[(resource_type, str(target.pk))] = record_display_label(target)
@@ -907,7 +906,7 @@ class RecordTimelineQuery:
         concerned = []
         for reference in records:
             model = apps.get_model(reference.model)
-            record = require_instance_for_id(model, str(reference.id), queryset=read_scoped_queryset(model, actor))
+            record = require_instance_for_id(model, str(reference.id), queryset=model.objects.with_actor(actor))
             concerned.append(record)
         targets = {generic_target(record): record for record in concerned}
         run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=20)
@@ -915,11 +914,11 @@ class RecordTimelineQuery:
             run_query.order_by("-created_at", "-pk"),
             WorkflowRunType, info,
         ).select_related("parent_step").prefetch_related("records", Prefetch(
-            "trigger_event", queryset=with_record_reference_access(read_scoped_queryset(TriggerEvent, actor)),
+            "trigger_event", queryset=with_record_reference_access(TriggerEvent.objects.with_actor(actor)),
         ))) if include_runs else []
         has_runs = bool(runs) if include_runs else run_query.exists()
         decisions = list(Decision.objects.with_actor(actor).open_for(*concerned).prefetch_related(Prefetch(
-            "records", queryset=with_record_reference_access(read_scoped_queryset(DecisionRecord, actor)),
+            "records", queryset=with_record_reference_access(DecisionRecord.objects.with_actor(actor)),
         )))
         by_run = {run.pk: run for run in runs}
         result = []

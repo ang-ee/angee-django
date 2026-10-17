@@ -78,10 +78,7 @@ export function Chatter({
     [candidates],
   );
   const resolvedTabs = mergeChatterTabs(contributedTabs, publishedTabs);
-  // A `?chatterTab=` link or a caller may still name a tab by the id it carried before (one release).
-  const resolveTabId = (id: string): string =>
-    activeContributions.find((child) => child.id === id || child.content.aliases?.includes(id))?.id ?? id;
-  const requestedId = requestedTab ? resolveTabId(requestedTab) : null;
+  const requestedId = requestedTab;
   const resolvedComposer = composer ?? content?.composer;
   const requestedTabAvailable = Boolean(
     requestedId && resolvedTabs.some((tab) => tab.id === requestedId),
@@ -92,7 +89,7 @@ export function Chatter({
     setActiveTab(requestedId);
     setCollapsed(false);
   }, [requestIdentity, requestedId, requestedTabAvailable, setActiveTab, setCollapsed]);
-  const activeId = activeTab ? resolveTabId(activeTab) : activeTab;
+  const activeId = activeTab;
   const active = resolvedTabs.some((tab) => tab.id === activeId)
     ? activeId
     : resolvedTabs[0]?.id;

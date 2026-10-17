@@ -12,7 +12,6 @@ from django.db import models
 from rebac.resources import model_resource_type
 
 from angee.base.identity import instance_from_public_id, public_id_for
-from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.workflows.runner import runner
 from angee.workflows.states import DONE_OUTCOME, NoteTone, RunRelation
@@ -96,7 +95,7 @@ class StepContext:
             self._require_mode(StepMode.DATABASE)
         if not model_resource_type(model):
             raise PermissionDenied(f"{model._meta.label} has no actor-scoped read contract.")
-        queryset = read_scoped_queryset(model, self.actor, action=permission)
+        queryset = model.objects.with_actor(self.actor).with_action(permission)
         if lock:
             queryset = queryset.lock_if_supported(no_key=True)
         instance = instance_from_public_id(model, public_id, queryset=queryset)

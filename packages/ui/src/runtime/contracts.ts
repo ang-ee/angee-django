@@ -174,6 +174,8 @@ export interface ChatterRoute {
   name: string;
   path: string;
   viewType: string;
+  /** The canonical REBAC resource type, when this route's model declares one. */
+  resourceType?: string | null;
   modelLabel?: string;
   canonicalLabel?: string;
   /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can
@@ -203,8 +205,6 @@ export interface ChatterTabContent {
   useCount?: (context: ChatterViewContext) => number | undefined;
   panelClassName?: string;
   render?: (context: ChatterViewContext) => ReactNode;
-  /** Earlier ids a `?chatterTab=` link may still carry, kept for one release. */
-  aliases?: readonly string[];
 }
 
 /**

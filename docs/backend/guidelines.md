@@ -1921,7 +1921,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   A domain authority that is not `delete` (record-chatter moderation) keeps its own
   verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
   sudo read path it owns, such as the chatter transcript, must exclude trashed rows
-  itself. Work tasks enter the trash by moving into a concealing stage. Managers
+  itself. Managers
   are a positive arm beside the exclusion, never an exclusion inside it: rebac's
   named-grant scan cannot compile an exclusion that holds another
   ([tasks](../../addons/angee/projects/permissions.zed)).

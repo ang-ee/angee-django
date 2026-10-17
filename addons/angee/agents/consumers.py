@@ -20,7 +20,6 @@ from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 
 from angee.agents.acp_server import SessionAgent, V1SessionAgent, V2SessionAgent
 from angee.base.identity import instance_from_public_id
-from angee.base.scoping import read_scoped_queryset
 from angee.iam.permissions import is_authenticated
 
 logger = logging.getLogger(__name__)
@@ -76,7 +75,7 @@ class _AgentACPConsumer(AsyncWebsocketConsumer):
             agent = instance_from_public_id(
                 model,
                 self.scope["url_route"]["kwargs"]["agent"],
-                queryset=read_scoped_queryset(model, user, action="call"),
+                queryset=model.objects.with_actor(user).with_action("call"),
             )
             return agent if agent is not None and agent.chat_blocker() is None else None
 
