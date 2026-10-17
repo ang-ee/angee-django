@@ -10,16 +10,6 @@ dependencies = [
   "python-magic>=0.4.27",
 ]
 
-[[migrations]]
-name = "smart_kind_nullable"
-app_label = "storage"
-module = "runtime_migrations.smart_kind_nullable"
-
-[[migrations]]
-name = "owner_column"
-app_label = "storage"
-module = "runtime_migrations.owner_column"
-
 [resources]
 master = [
   { path = "resources/master/010_storage.mimetype.yaml", adopt = "mime_type" },
@@ -28,8 +18,3 @@ install = [
   { path = "resources/install/010_storage.backend.yaml", adopt = "slug" },
   { path = "resources/install/020_storage.drive.yaml", adopt = "slug" },
 ]
-
-[[migrations]]
-name = "folder_hierarchy"
-app_label = "storage"
-module = "runtime_migrations.folder_hierarchy"

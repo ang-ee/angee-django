@@ -97,17 +97,7 @@ A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
 `pytest_plugins` and request its `statement_sources` fixture (the framework's own
-hosts load them after every REBAC sync). A stack adopting the sync-provenance
-upgrade proves its own runtime migrations against that chain with
-[`angee.parties.testing.upgrade`](../addons/angee/parties/testing/upgrade.py) instead
-of copying it: extend `pre_upgrade_state()` with its own pre-upgrade shapes, plan the
-rounds of `UPGRADE_CHAIN` plus its own declarations with
-`upgrade_rounds(state, origins=("<addon>:<name>", ...))` (the composer's own round loop,
-`RuntimeMigrations.schedule`), and run declaration bodies in round order against
-seeded rows on an `UpgradeHost`. The replay proves the chain's own ordering, not a stack
-that skips releases; that stack's composer plan does.
-Verify adopting modules individually as well as in the full suite so collection
-order cannot hide missing models.
+hosts load them after every REBAC sync).
 
 Workflow tests reach execution states through the shared `load_workflow`,
 `start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
@@ -149,9 +139,9 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 |---|---|---|
 | Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
 | Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
-| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves migration directories and reports those belonging to removed labels |
-| Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts/dependency projection/migration history; Django bootstrap can repair runtime sources before dispatch |
-| Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition; preserves existing migration history |
+| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
+| Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts, dependency projection, and addon declarations; Django bootstrap can repair runtime sources before dispatch |
+| Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition |
 | Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run manage.py rebac sync` | After migrations when permissions change |
 | Load declared resource data | `uv run manage.py resources load` | After migrations when resource data changes |
@@ -160,8 +150,7 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 | Check GraphQL SDL | `uv run --locked manage.py schema --check` | Separate from the composer drift check |
 
 Run only lifecycle steps needed for the change and within the user's authorized
-scope. See [migration policy](backend/guidelines.md) before changing applied
-history. A rebuild is not permission to delete migrations or reset a database.
+scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 

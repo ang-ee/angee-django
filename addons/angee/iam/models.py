@@ -345,22 +345,6 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             raise AmbiguousAccountEmail
         return matches[0] if matches else None
 
-    def person_email_collisions(self) -> dict[str, list[Any]]:
-        """Group legacy person primary keys by Python-normalized nonempty email.
-
-        The operator inventory reads only primary key and email through the base
-        manager, without system scope or REBAC audit writes. Full user rows may
-        require columns that the database has not yet migrated.
-        """
-
-        groups: dict[str, list[Any]] = {}
-        rows = self.model._base_manager.filter(kind=UserKind.PERSON).order_by("pk")
-        for pk, email in rows.values_list("pk", "email").iterator():
-            key = self.normalize_email(email)
-            if key:
-                groups.setdefault(key, []).append(pk)
-        return {key: groups[key] for key in sorted(groups) if len(groups[key]) > 1}
-
     def get_by_natural_key(self, username: str) -> Any:
         """Return a user for credential checks without row-scope filtering."""
 

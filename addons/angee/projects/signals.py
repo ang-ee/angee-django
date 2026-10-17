@@ -5,26 +5,23 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from django.db.models.signals import pre_delete, pre_migrate
+from django.db.models.signals import pre_delete
 from rebac import generic_target, system_context
 
 from angee.base.scoping import system_queryset
 from angee.base.signals import connect_for_models
 from angee.messaging.models import ThreadedModelMixin
 from angee.projects.models import Milestone, Task
-from angee.projects.upgrade import GUARD_DISPATCH_UID, refuse_incomplete_cutover
 
 
 def connect() -> None:
-    """Bind the receipt rule to milestones, the task teardown to subject records, and the cutover's refusal."""
+    """Bind the receipt rule to milestones and task teardown to subject records."""
     connect_for_models(pre_delete, retain_milestone_receipt,
                        applies=lambda model: issubclass(model, Milestone),
                        dispatch_uid="projects.milestone.retain_receipt")
     connect_for_models(pre_delete, teardown_record_tasks,
                        applies=takes_record_tasks,
                        dispatch_uid="projects.record_tasks.teardown")
-    pre_migrate.connect(refuse_incomplete_cutover, sender=apps.get_app_config("projects"),
-                        dispatch_uid=GUARD_DISPATCH_UID)
 
 
 def takes_record_tasks(model: type[models.Model]) -> bool:

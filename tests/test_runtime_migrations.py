@@ -2,46 +2,72 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib
+import json
 import logging
+import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import Mock
 
 import pytest
-from django.apps import AppConfig, apps
-from django.apps.registry import Apps
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.db import connection, connections, migrations, models
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.backends.dummy.base import DatabaseWrapper as DummyDatabaseWrapper
 from django.db.backends.sqlite3.base import DatabaseWrapper
-from django.db.migrations.autodetector import MigrationAutodetector
-from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.loader import MigrationLoader
-from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
-from django.db.migrations.writer import MigrationWriter
 from django.db.models.functions import Lower
 from django.utils import timezone
 
 from angee.addons import addon_manifest
-from angee.base.fields import SqidField, StateField
-from angee.compose.history import HistoricalRuntimeConfig
-from angee.compose.migrations import DropGuardAutodetector, RetiredTableOperation, RuntimeMigrations
+from angee.base.fields import SqidField
+from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
 from angee.resources.entries import resource_manifest_for, retired_models_for
-from angee.storage.models import Folder
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from tests.conftest import make_addon, write_addon_manifest
 
 
 def _write_module(path: Path, text: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+@contextmanager
+def _default_database(name: str, wrapper: type[BaseDatabaseWrapper] = DatabaseWrapper) -> Iterator[None]:
+    """Swap the default alias to a separate SQLite (or dummy) database."""
+
+    original = connections["default"]
+    database = wrapper(
+        {
+            **original.settings_dict,
+            "ENGINE": wrapper.__module__.rpartition(".")[0],
+            "NAME": name,
+            "OPTIONS": {},
+            "TIME_ZONE": None,
+        },
+        alias="default",
+    )
+    connections["default"] = database
+    try:
+        yield
+    finally:
+        database.close()
+        connections["default"] = original
+
+
+@pytest.fixture
+def isolated_runtime_database():
+    """Exercise drop guards without colliding with the source test apps."""
+
+    with _default_database(":memory:"):
+        yield
 
 
 @pytest.fixture
@@ -126,6 +152,104 @@ class Migration(migrations.Migration):
     return materializer, addon, source_path, runtime_dir, source_root
 
 
+def test_reset_migration_history_replaces_only_composed_history(tmp_path: Path) -> None:
+    """Applied composed history becomes clean initials without changing any other app's records."""
+
+    addon_dir = tmp_path / "addons"
+    _write_module(addon_dir / "reset" / "__init__.py")
+    for name, depends_on, body in (
+        (
+            "beta",
+            ("django.contrib.auth",),
+            """\
+from django.db import models
+
+
+class Target(models.Model):
+    runtime = True
+    name = models.CharField(max_length=40)
+
+    class Meta:
+        abstract = True
+""",
+        ),
+        (
+            "alpha",
+            ("reset.beta",),
+            """\
+from django.db import models
+
+
+class Source(models.Model):
+    runtime = True
+    name = models.CharField(max_length=80)
+    target = models.ForeignKey("beta.Target", models.CASCADE)
+
+    class Meta:
+        abstract = True
+""",
+        ),
+    ):
+        package = addon_dir / "reset" / name
+        _write_module(package / "__init__.py")
+        _write_module(package / "models.py", body)
+        dependencies = ", ".join(repr(dependency) for dependency in depends_on)
+        _write_module(
+            package / "addon.toml",
+            f'[addon]\nname = "reset.{name}"\ndepends_on = [{dependencies}]\n',
+        )
+
+    report = tmp_path / "reset-migrations.json"
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "tests/composed_host.py"),
+            "--runtime-dir",
+            str(tmp_path / "runtime"),
+            "--addon-dir",
+            str(addon_dir),
+            "--no-examples",
+            "--app",
+            "reset.alpha",
+            "--action",
+            "reset-migrations",
+            "--output",
+            str(report),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=COMPOSED_TEST_TIMEOUT,
+        check=False,
+    )
+    assert result.returncode == 0, f"composed reset failed:\n{result.stdout}\n{result.stderr}"
+    outcome = json.loads(report.read_text(encoding="utf-8"))
+    assert outcome["labels"] == ["alpha", "beta"]
+    assert "manage.py migrate --database default" in outcome["pending_error"]
+    assert "manage.py makemigrations alpha beta" in outcome["drift_error"]
+    assert "manage.py migrate --database default" in outcome["drift_error"]
+    assert outcome["files"] == {"alpha": ["0001_initial.py"], "beta": ["0001_initial.py"]}
+    assert outcome["old_rows"] == [
+        ["alpha", "0001_initial"],
+        ["alpha", "0002_history_probe"],
+        ["beta", "0001_initial"],
+    ]
+    assert outcome["new_rows"] == [["alpha", "0001_initial"], ["beta", "0001_initial"]]
+    assert outcome["noncomposed_unchanged"] is True
+    assert outcome["plan_empty"] is outcome["changes_empty"] is outcome["runtime_check"] is True
+    assert outcome["declarations"] == 0
+    assert ["beta", "0001_initial"] in outcome["alpha_dependencies"]
+    assert outcome["command_output"] == [
+        "labels: alpha, beta",
+        "files removed: 3",
+        "migrations recorded: 2",
+    ]
+
+
 def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_migration_probe) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
 
@@ -144,49 +268,6 @@ def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_mi
     state = loader.project_state()
     assert "new_name" in state.models["resources", "legacy"].fields
     assert "old_name" not in state.models["resources", "legacy"].fields
-
-
-@pytest.mark.parametrize(("installed", "opt_in", "expected"), [
-    (False, True, True), (False, False, False), (True, True, False), (True, False, True),
-])
-def test_uninstalled_cutover_requires_opt_in_and_never_enables_capabilities(
-    runtime_migration_probe, settings, installed, opt_in, expected,
-):
-    materializer, addon, _, _, source_root = runtime_migration_probe
-    write_addon_manifest(addon, migrations=({
-        "name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy",
-        "uninstalled_only": opt_in,
-    },))
-    (source_root / "autoconfig.py").write_text('raise AssertionError("uninstalled autoconfig loaded")\n')
-    (source_root / "models.py").write_text('raise AssertionError("uninstalled models loaded")\n')
-    settings.ANGEE_ADDON_DIRS = (source_root.parent.parent,)
-    if not installed:
-        materializer.addons = ()
-    written = materializer.materialize(apps=None)
-    assert bool(written) is expected
-    assert not any(config.name == addon.name for config in apps.get_app_configs())
-
-
-@pytest.mark.parametrize(("app_label", "expected"), [("resources", True), ("retired", False)])
-def test_retained_only_retirement_needs_the_target_history(runtime_migration_probe, app_label, expected) -> None:
-    """An installed addon's retirement of a label it no longer composes runs only where that label has history."""
-
-    materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(addon, migrations=({
-        "name": "rename_legacy", "app_label": app_label, "module": "runtime_migrations.rename_legacy",
-        "retained_only": True,
-    },))
-    assert bool(materializer.materialize(apps=None)) is expected
-
-
-def test_rejects_retained_only_with_uninstalled_only(runtime_migration_probe) -> None:
-    materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(addon, migrations=({
-        "name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy",
-        "retained_only": True, "uninstalled_only": True,
-    },))
-    with pytest.raises(RuntimeError, match="uninstalled_only and retained_only are exclusive"):
-        materializer.materialize(apps=None)
 
 
 def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
@@ -367,7 +448,7 @@ def _donor_states() -> tuple[ProjectState, ProjectState, MigrationGraph]:
     ("tags", "target", "table probe_task_tags"),
 ])
 @pytest.mark.django_db
-@pytest.mark.usefixtures("isolated_upgrade_database")
+@pytest.mark.usefixtures("isolated_runtime_database")
 def test_autodetected_column_drop_requires_every_row_empty(field, value, storage) -> None:
     """NULL or the declared default is empty; any other stored value refuses the drop."""
 
@@ -404,7 +485,7 @@ def test_autodetected_column_drop_requires_every_row_empty(field, value, storage
 
 @pytest.mark.parametrize("rows", [0, 1])
 @pytest.mark.django_db
-@pytest.mark.usefixtures("isolated_upgrade_database")
+@pytest.mark.usefixtures("isolated_runtime_database")
 def test_autodetected_table_drop_requires_an_empty_table(rows: int) -> None:
     """A model removed from code drops its table automatically only while the table holds no row."""
 
@@ -469,7 +550,7 @@ def seed_ledger(model_label: str, public_id: str, *, addon: str = "probe", xref:
 
 @pytest.mark.parametrize("public_ids", ["sqid", "primary_key"])
 @pytest.mark.django_db
-@pytest.mark.usefixtures("isolated_upgrade_database")
+@pytest.mark.usefixtures("isolated_runtime_database")
 def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypatch, public_ids: str) -> None:
     """Only the addon that names the model vouches for its own seeded rows; any other row refuses the drop."""
 
@@ -539,7 +620,7 @@ def test_column_drop_is_refused_when_no_database_can_prove_it_empty(tmp_path, na
 
 @pytest.mark.parametrize("declared", [False, True])
 @pytest.mark.django_db
-@pytest.mark.usefixtures("isolated_upgrade_database")
+@pytest.mark.usefixtures("isolated_runtime_database")
 def test_declared_cutover_migration_owns_a_populated_column_drop(runtime_migration_probe, declared: bool) -> None:
     """A materialized addon cutover removes the field, so nothing is autodetected."""
 
@@ -754,84 +835,6 @@ def test_materialization_is_idempotent(runtime_migration_probe) -> None:
     assert second == ()
 
 
-def test_removed_declaration_preserves_materialized_body_and_graph(runtime_migration_probe) -> None:
-    materializer, addon, source_path, _, _ = runtime_migration_probe
-    (output,) = materializer.materialize(apps=apps)
-    body = output.read_bytes()
-    previous_graph = MigrationLoader(None, ignore_no_migrations=True).graph
-
-    write_addon_manifest(addon)
-    source_path.unlink()
-
-    assert materializer.materialize(apps=apps) == ()
-    materializer.check()
-
-    assert output.read_bytes() == body
-    graph = MigrationLoader(None, ignore_no_migrations=True).graph
-    assert graph.nodes.keys() == previous_graph.nodes.keys()
-    for node in graph.nodes:
-        assert graph.forwards_plan(node) == previous_graph.forwards_plan(node)
-
-
-@pytest.fixture
-def released_baseline_migration(runtime_migration_probe):
-    materializer, addon, source_path, runtime_dir, _ = runtime_migration_probe
-    output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
-    # Literal output of the retired fresh-history writer, independent of the
-    # compatibility renderer used to validate it.
-    output.write_text(
-        '''\
-"""Fresh-history baseline for one released addon migration."""
-
-from django.db import migrations
-
-
-class Migration(migrations.Migration):
-    dependencies = [
-        ("resources", "0001_legacy")
-    ]
-    operations = []
-# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT
-Migration.angee_origin = "example.demo:rename_legacy"
-'''
-        f'Migration.angee_source_sha256 = "{hashlib.sha256(source_path.read_bytes()).hexdigest()}"\n'
-        "Migration.angee_fresh_baseline = True\n",
-        encoding="utf-8",
-    )
-    importlib.invalidate_caches()
-    return materializer, addon, source_path, output
-
-
-@pytest.mark.parametrize("retained_declaration", [True, False])
-def test_released_fresh_baseline_is_loaded_without_rewriting(released_baseline_migration, retained_declaration) -> None:
-    materializer, addon, source_path, output = released_baseline_migration
-    body = output.read_bytes()
-    if not retained_declaration:
-        write_addon_manifest(addon)
-        source_path.unlink()
-
-    assert materializer.materialize(apps=apps) == ()
-    materializer.check()
-
-    assert output.read_bytes() == body
-    loader = MigrationLoader(None, ignore_no_migrations=True)
-    migration = loader.disk_migrations["resources", "0002_rename_legacy"]
-    assert migration.dependencies == [("resources", "0001_legacy")]
-    assert migration.operations == []
-
-
-@pytest.mark.parametrize("alteration", [
-    "    operations = [migrations.RunPython(migrations.RunPython.noop)]\n",
-    "    operations = []  # edited\n",
-])
-def test_released_fresh_baseline_body_is_frozen(released_baseline_migration, alteration: str) -> None:
-    materializer, _, _, output = released_baseline_migration
-    output.write_text(output.read_text(encoding="utf-8").replace("    operations = []\n", alteration), encoding="utf-8")
-
-    with pytest.raises(RuntimeError, match="materialized body digest changed"):
-        materializer.materialize(apps=apps)
-
-
 def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
 
@@ -844,7 +847,7 @@ def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
     assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
 
 
-def test_changed_released_source_fails_instead_of_rewriting(runtime_migration_probe) -> None:
+def test_changed_materialized_source_fails_instead_of_rewriting(runtime_migration_probe) -> None:
     materializer, _, source_path, _, _ = runtime_migration_probe
     materializer.materialize(apps=apps)
     source_path.write_text(
@@ -853,56 +856,6 @@ def test_changed_released_source_fails_instead_of_rewriting(runtime_migration_pr
     )
 
     with pytest.raises(RuntimeError, match="source digest changed"):
-        materializer.materialize(apps=apps)
-
-
-def test_declared_compatible_released_source_remains_immutable(runtime_migration_probe) -> None:
-    """An exact historical source digest may coexist with its current declaration."""
-
-    materializer, addon, source_path, _, _ = runtime_migration_probe
-    (output,) = materializer.materialize(apps=apps)
-    released_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
-    source_path.write_text(source_path.read_text(encoding="utf-8") + "# current source\n", encoding="utf-8")
-    write_addon_manifest(
-        addon,
-        migrations=(
-            dict(
-                name="rename_legacy",
-                app_label="resources",
-                module="runtime_migrations.rename_legacy",
-                compatible_source_sha256=[released_digest],
-            ),
-        ),
-    )
-
-    assert materializer.materialize(apps=apps) == ()
-    output.write_text(
-        output.read_text(encoding="utf-8").replace("def forwards", "def edited_forwards", 1),
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="materialized body digest changed"):
-        materializer.materialize(apps=apps)
-
-
-@pytest.mark.parametrize("digest", ["not-a-digest", "A" * 64, 7])
-def test_compatible_source_digest_requires_exact_lowercase_sha256(
-    runtime_migration_probe,
-    digest: object,
-) -> None:
-    materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(
-        addon,
-        migrations=(
-            dict(
-                name="rename_legacy",
-                app_label="resources",
-                module="runtime_migrations.rename_legacy",
-                compatible_source_sha256=[digest],
-            ),
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="compatible_source_sha256"):
         materializer.materialize(apps=apps)
 
 
@@ -1198,371 +1151,3 @@ def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration
     rendered = materializer._render(plan)
     assert rendered.startswith(expected)
     assert not rendered.startswith("changed after planning")
-
-
-def _upgrade_states(label):
-    """Freeze affected field/constraint shapes from the 0a55a6fb upgrade floor.
-
-    Legacy declarations use that revision's field classes, choices and defaults,
-    independently of live models. Unrelated columns are omitted; relation targets
-    outside the affected tables use scalar stand-ins for this isolated database.
-    """
-    declarations = ((Folder, ("smart_kind",), ("uniq_storage_folder_owner_smart_kind",)),)
-    extras = {"folder": {"owner": models.IntegerField(null=True), "is_virtual": models.BooleanField(default=False)}}
-    legacy_fields = {"folder": {"smart_kind": StateField(
-        choices=[("trash", "Trash")], blank=True, default="", editable=False,
-    )}}
-    legacy_constraints = {"folder": [models.UniqueConstraint(
-        fields=("owner", "smart_kind"), condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
-        name="uniq_storage_folder_owner_smart_kind",
-    )]}
-
-    old = ProjectState()
-    current = ProjectState()
-    for model, names, constraints in declarations:
-        name = model._meta.model_name
-        fields = {"id": models.AutoField(primary_key=True), **extras.get(name, {})}
-        old_fields = {key: field.clone() for key, field in fields.items()}
-        for field_name in names:
-            field = model._meta.get_field(field_name)
-            fields[field_name] = field.clone()
-            old_fields[field_name] = legacy_fields[name][field_name]
-        old.add_model(ModelState(label, model.__name__, old_fields, options={
-            "constraints": legacy_constraints.get(name, []),
-        }))
-        current.add_model(ModelState(label, model.__name__, fields, options={
-            "constraints": [
-                constraint.clone() for constraint in model._meta.constraints if constraint.name in constraints
-            ],
-        }))
-    return old, current
-
-
-@contextmanager
-def _default_database(name: str, wrapper: type[BaseDatabaseWrapper] = DatabaseWrapper) -> Iterator[None]:
-    """Swap the default alias to a separate SQLite (or dummy) database."""
-    original = connections["default"]
-    database = wrapper({
-        **original.settings_dict,
-        "ENGINE": wrapper.__module__.rpartition(".")[0],
-        "NAME": name,
-        "OPTIONS": {},
-        "TIME_ZONE": None,
-    }, alias="default")
-    connections["default"] = database
-    try:
-        yield
-    finally:
-        database.close()
-        connections["default"] = original
-
-
-@pytest.fixture
-def isolated_upgrade_database():
-    """Replay real constraint names without colliding with the source test apps."""
-    with _default_database(":memory:"):
-        yield
-
-
-@pytest.fixture
-def retired_social_history(tmp_path, monkeypatch, settings):
-    """Pre-July Feed/Post history, adopted into posts without creating tables."""
-
-    runtime = tmp_path / f"runtime_{tmp_path.name}"
-    _write_module(runtime / "__init__.py")
-    for label in ("social", "posts"):
-        _write_module(runtime / label / "__init__.py")
-        _write_module(runtime / label / "migrations" / "__init__.py")
-        _write_module(runtime / label / "models.py", 'raise AssertionError("stale models imported")\n')
-        initial = migrations.Migration("0001_initial", label)
-        operations = [
-            migrations.CreateModel("Feed", [
-                ("id", models.AutoField(primary_key=True)),
-                ("slug", models.CharField(max_length=30)),
-            ]),
-            migrations.CreateModel("Post", [
-                ("id", models.AutoField(primary_key=True)),
-                ("title", models.CharField(max_length=30)),
-                ("feed", models.ForeignKey(f"{label}.Feed", models.SET_NULL, null=True)),
-                ("feeds", models.ManyToManyField(f"{label}.Feed")),
-            ], options={
-                "unique_together": {("feed", "title")},
-                "indexes": [models.Index(fields=["title"], name=f"{label}_title")],
-                "constraints": [models.CheckConstraint(condition=~models.Q(title=""), name=f"{label}_title_set")],
-            }),
-        ]
-        if label == "posts":
-            initial.dependencies = [("social", "0001_initial")]
-            operations = [migrations.SeparateDatabaseAndState(state_operations=operations)]
-        initial.operations = operations
-        _write_module(runtime / label / "migrations" / "0001_initial.py", MigrationWriter(initial).as_string())
-    monkeypatch.syspath_prepend(str(tmp_path))
-    registry = Apps([HistoricalRuntimeConfig(runtime, runtime.name, label) for label in ("social", "posts")])
-    monkeypatch.setattr("django.db.migrations.loader.apps", registry)
-    monkeypatch.setattr("angee.compose.migrations.apps", registry)
-    settings.MIGRATION_MODULES = {label: f"{runtime.name}.{label}.migrations" for label in ("social", "posts")}
-    importlib.invalidate_caches()
-    return runtime, registry
-
-
-@pytest.mark.parametrize("tables,faked", [
-    ("absent", False), ("renamed", False), ("partial", False), ("through-absent", False), ("present", False),
-    ("absent", True), ("renamed", True),
-])
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("isolated_upgrade_database")
-def test_retired_label_skips_missing_tables_and_preserves_recorded_retirement(retired_social_history, tables, faked):
-    runtime, _ = retired_social_history
-    executor = MigrationExecutor(connection)
-    executor.migrate([("posts", "0001_initial")])
-    before = executor.loader.project_state()
-    feed = before.apps.get_model("social", "Feed")
-    post = before.apps.get_model("social", "Post")
-    through = post._meta.get_field("feeds").remote_field.through
-    if tables == "renamed":
-        row = feed._base_manager.create(slug="retained")
-        article = post._base_manager.create(title="retained", feed=row)
-        article.feeds.add(row)
-    with connection.schema_editor() as editor:
-        if tables == "absent":
-            editor.delete_model(post)
-            editor.delete_model(feed)
-        elif tables == "partial":
-            editor.delete_model(feed)
-        elif tables == "through-absent":
-            editor.delete_model(through)
-        elif tables == "renamed":
-            for model in (feed, post, through):
-                table = model._meta.db_table
-                editor.alter_db_table(model, table, table.replace("social_", "posts_", 1))
-
-    current = before.clone()
-    current.remove_model("social", "post")
-    current.remove_model("social", "feed")
-    (retirement,) = DropGuardAutodetector(before, current).changes(graph=executor.loader.graph)["social"]
-    assert retirement.name.startswith("0002_")
-    assert all(isinstance(operation, RetiredTableOperation) for operation in retirement.operations)
-    assert any(isinstance(operation.operation, migrations.RemoveField) for operation in retirement.operations)
-    assert any(isinstance(operation.operation, migrations.DeleteModel) for operation in retirement.operations)
-    if faked:
-        # The previously emitted, unguarded 0002 was recorded by the operator.
-        retirement.operations = [operation.operation for operation in retirement.operations]
-    path = runtime / "social" / "migrations" / f"{retirement.name}.py"
-    _write_module(path, MigrationWriter(retirement).as_string())
-    importlib.invalidate_caches()
-    files = {path: path.read_bytes() for path in runtime.rglob("*.py")}
-
-    executor = MigrationExecutor(connection)
-    target = [("social", retirement.name), ("posts", "0001_initial")]
-    executor.migrate(target, fake=faked)
-    executor = MigrationExecutor(connection)
-    assert executor.migration_plan(target) == []
-    assert ("social", retirement.name) in executor.recorder.applied_migrations()
-    after = executor.loader.project_state()
-    assert not any(label == "social" for label, _ in after.models)
-    assert DropGuardAutodetector(after, current).changes(graph=executor.loader.graph) == {}
-    assert RuntimeMigrations((), runtime_dir=runtime, labels=("social", "posts")).materialize(apps=current.apps) == ()
-    assert files == {path: path.read_bytes() for path in runtime.rglob("*.py")}
-    remaining = set(connection.introspection.table_names())
-    assert not any(table.startswith("social_") for table in remaining)
-    if tables == "renamed":
-        for table in ("posts_feed", "posts_post", "posts_post_feeds"):
-            assert table in remaining
-            with connection.cursor() as cursor:
-                cursor.execute(f"SELECT COUNT(*) FROM {connection.ops.quote_name(table)}")
-                assert cursor.fetchone() == (1,)
-
-
-@pytest.mark.django_db
-@pytest.mark.usefixtures("isolated_upgrade_database")
-def test_current_label_retains_native_table_operations(retired_social_history, monkeypatch):
-    _, registry = retired_social_history
-    config = registry.get_app_config("social")
-    monkeypatch.setitem(registry.app_configs, "social", AppConfig(config.name, config.module))
-    loader = MigrationLoader(None)
-    before = loader.project_state()
-    current = before.clone()
-    current.remove_model("social", "post")
-    current.remove_model("social", "feed")
-    (retirement,) = DropGuardAutodetector(before, current).changes(graph=loader.graph)["social"]
-    assert not any(isinstance(operation, RetiredTableOperation) for operation in retirement.operations)
-
-
-@pytest.mark.parametrize("label,schema_nullable", [
-    ("storage", False), ("storage", True),
-])
-@pytest.mark.django_db(transaction=True)
-def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
-    runtime_migration_probe, settings, monkeypatch, isolated_upgrade_database, label, schema_nullable,
-):
-    """Replay retained declarations and preserve floor rows without live source imports."""
-    _, _, _, runtime_dir, _ = runtime_migration_probe
-    legacy, current = _upgrade_states(label)
-    if schema_nullable:
-        for key, model in legacy.models.items():
-            for name, field in model.fields.items():
-                if current.models[key].fields[name].null:
-                    field.null = True
-    package = runtime_dir / label / "migrations"
-    _write_module(package.parent / "__init__.py")
-    _write_module(package / "__init__.py")
-    initial = migrations.Migration("0001_legacy", label)
-    initial.operations = [
-        migrations.CreateModel(model.name, list(model.fields.items()), options=model.options)
-        for model in legacy.models.values()
-    ]
-    _write_module(package / "0001_legacy.py", MigrationWriter(initial).as_string())
-    monkeypatch.setitem(settings.MIGRATION_MODULES, label, f"{runtime_dir.name}.{label}.migrations")
-    importlib.invalidate_caches()
-    addon = apps.get_app_config(label)
-    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=(label,))
-    if schema_nullable:
-        # Recompiling a legacy '' constraint through an already-nullable
-        # StateField changes its meaning. Reject this partial graph before writes.
-        with pytest.raises(RuntimeError, match=r"applies\(project_state\) failed") as caught:
-            materializer.materialize(apps=apps)
-        assert isinstance(caught.value.__cause__, ValueError)
-        assert "partial nullable transition" in str(caught.value.__cause__)
-        assert sorted(path.name for path in package.glob("[0-9]*.py")) == ["0001_legacy.py"]
-        return
-    (plan,) = materializer.plan()
-    source = importlib.import_module(f"angee.{label}.runtime_migrations.{plan.origin.split(':')[1]}")
-    assert not source.applies(ProjectState())
-    assert not source.applies(current)
-    assert materializer.materialize(apps=apps) == (plan.output_path,)
-    assert materializer.materialize(apps=apps) == ()
-
-    loader = MigrationLoader(None, ignore_no_migrations=True)
-    before = loader.project_state([(label, "0001_legacy")])
-    after = loader.project_state([(label, plan.name)])
-    expected = before.clone()
-    for key, model in current.models.items():
-        expected.models[key] = model.clone()
-        for name, field in model.fields.items():
-            assert after.models[key].fields[name].deconstruct()[1:] == field.deconstruct()[1:], (key, name)
-    questioner = Mock(spec=MigrationQuestioner)
-    questioner.ask_rename.side_effect = AssertionError("unexpected rename prompt")
-    questioner.ask_not_null_addition.side_effect = AssertionError("unexpected default prompt")
-    assert MigrationAutodetector(after, expected, questioner).changes(graph=loader.graph) == {}
-    assert not questioner.mock_calls
-
-    with connection.schema_editor() as editor:
-        for key in legacy.models:
-            editor.create_model(before.apps.get_model(*key))
-    try:
-        folder = before.apps.get_model(label, "Folder")
-        folder._base_manager.create(owner=1, is_virtual=True)
-        folder._base_manager.create(owner=1, is_virtual=True)
-        folder._base_manager.create(owner=1, is_virtual=True, smart_kind="trash")
-
-        def snapshot(state):
-            # Raw SQL verifies storage without modern StateField coercing '' to None.
-            with connection.cursor() as cursor:
-                result = {}
-                for key in legacy.models:
-                    table = state.apps.get_model(*key)._meta.db_table
-                    cursor.execute(f"SELECT * FROM {connection.ops.quote_name(table)} ORDER BY id")
-                    names = [column[0] for column in cursor.description]
-                    result[key] = [dict(zip(names, row)) for row in cursor.fetchall()]
-                return result
-
-        original = snapshot(before)
-        migration = loader.disk_migrations[label, plan.name]
-        with connection.schema_editor() as editor:
-            migration.apply(before, editor)
-            source.forwards(after.apps, editor)  # Data conversion is idempotent.
-        upgraded = snapshot(after)
-        assert upgraded == {
-            key: [{name: None if value == "" and name in current.models[key].fields
-                   and current.models[key].fields[name].null else value for name, value in row.items()}
-                  for row in rows]
-            for key, rows in original.items()
-        }
-        with connection.schema_editor() as editor:
-            migration.unapply(
-                loader.project_state([(label, "0001_legacy")]), editor,
-            )
-        assert snapshot(before) == original
-    finally:
-        with connection.schema_editor() as editor:
-            for key in reversed(legacy.models):
-                editor.delete_model(before.apps.get_model(*key))
-
-
-@pytest.mark.parametrize("label,name", [
-    ("storage", "smart_kind_nullable"),
-])
-@pytest.mark.parametrize("change", ["condition", "name", "remove"])
-def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, change):
-    source = importlib.import_module(f"angee.{label}.runtime_migrations.{name}")
-    _, current = _upgrade_states(label)
-    for key, model in current.models.items():
-        for index in range(len(model.options.get("constraints", []))):
-            evolved = current.clone()
-            constraints = [constraint.clone() for constraint in model.options["constraints"]]
-            evolved.models[key].options["constraints"] = constraints
-            if change == "condition":
-                constraints[index].condition &= models.Q(pk__gt=0)
-            elif change == "name":
-                constraints[index].name += "_revised"
-            else:
-                del constraints[index]
-            assert not source.applies(evolved), (key, index, change)
-
-
-def test_participant_thread_identity_applies_until_its_constraint_exists() -> None:
-    """The declaration owns the thread-participation constraint and collapses repeats before adding it."""
-
-    from django.db.migrations.state import ProjectState
-
-    from angee.messaging.runtime_migrations import participant_thread_identity as declaration
-
-    state = ProjectState.from_apps(apps)
-    assert not declaration.applies(state)
-    model = state.models["messaging", "participant"]
-    model.options["constraints"] = [
-        constraint for constraint in model.options.get("constraints", ()) if constraint.name != declaration.CONSTRAINT
-    ]
-    assert declaration.applies(state)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_participant_thread_identity_collapses_only_the_repeats_its_constraint_covers(composed_tables: None) -> None:
-    """Repeated thread participations keep their oldest row; thread-less rows are outside the constraint and stay."""
-
-    from django.db import connection
-    from rebac import system_context
-
-    from angee.messaging.runtime_migrations import participant_thread_identity as declaration
-    from angee.messaging.testing.models import Handle, Participant, Thread
-    from tests.conftest import create_user
-
-    del composed_tables
-    constraint = next(c for c in Participant._meta.constraints if c.name == declaration.CONSTRAINT)
-    with system_context(reason="test participant thread identity"):
-        owner = create_user("participant-identity-owner")
-        thread = Thread.objects.create(owner=owner)
-        handle, other = (
-            Handle._base_manager.create(platform="email", value=value, created_by=owner)
-            for value in ("ada@example.test", "bob@example.test")
-        )
-        with connection.schema_editor() as editor:
-            editor.remove_constraint(Participant, constraint)
-        try:
-            rows = [
-                Participant._base_manager.create(thread=thread, handle=handle, role="to", created_by=owner),
-                Participant._base_manager.create(thread=thread, handle=handle, role="to", created_by=owner),
-                Participant._base_manager.create(thread=thread, handle=handle, role="cc", created_by=owner),
-                Participant._base_manager.create(thread=thread, handle=other, role="to", created_by=owner),
-                Participant._base_manager.create(thread=None, handle=handle, role="to", created_by=owner),
-                Participant._base_manager.create(thread=None, handle=handle, role="to", created_by=owner),
-            ]
-            with connection.schema_editor() as editor:
-                declaration.collapse_repeated_facts(apps, editor)
-            survivors = set(Participant._base_manager.filter(handle__in=(handle, other)).values_list("pk", flat=True))
-        finally:
-            Participant._base_manager.filter(pk=rows[1].pk).delete()
-            with connection.schema_editor() as editor:
-                editor.add_constraint(Participant, constraint)
-
-    assert survivors == {rows[0].pk, rows[2].pk, rows[3].pk, rows[4].pk, rows[5].pk}

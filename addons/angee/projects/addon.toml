@@ -24,28 +24,3 @@ demo = [
   { path = "resources/demo/030_projects.task.yaml", depends_on = ["resources/demo/010_projects.project.yaml", "resources/demo/020_projects.milestone.yaml", "work:resources/demo/012_work.stage.yaml"] },
   { path = "resources/demo/031_projects.task.yaml", depends_on = "resources/demo/030_projects.task.yaml" },
 ]
-
-[[migrations]]
-name = "history_changeset"
-app_label = "projects"
-module = "runtime_migrations.history_changeset"
-
-[[migrations]]
-name = "record_tasks"
-app_label = "projects"
-module = "runtime_migrations.record_tasks"
-
-[[migrations]]
-name = "task_subject"
-app_label = "projects"
-module = "runtime_migrations.task_subject"
-
-[[migrations]]
-name = "task_hierarchy"
-app_label = "projects"
-module = "runtime_migrations.task_hierarchy"
-
-[[migrations]]
-name = "task_identity"
-app_label = "projects"
-module = "runtime_migrations.task_identity"

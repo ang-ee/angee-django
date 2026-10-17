@@ -23,7 +23,6 @@ from itertools import chain, combinations, groupby, islice
 from typing import Any, NamedTuple, Self
 
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import IntegrityError, models, transaction
@@ -46,11 +45,10 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset, current_changeset
 from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, Statement
+from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind
 from angee.base.models import AngeeManager, AngeeQuerySet, StatementSubjectQuerySet
 from angee.base.querysets import MergeableQuerySet, StatementQuerySet
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
@@ -60,24 +58,6 @@ from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 logger = logging.getLogger(__name__)
-
-RESOLVE_FOLDED = "parties.resolve_folded_statements"
-"""The change reason recording that the fold families' shared statement groups were ranked."""
-
-STATEMENT_FOLDS = "ANGEE_PARTIES_STATEMENT_FOLDS"
-"""The hook setting a fold family that writes parties statements in migrations joins."""
-
-
-def statement_fold_reasons() -> tuple[str, ...]:
-    """The parties upgrade's fold family: the change reasons its two folds record their statements under.
-
-    The fold declarations are self-contained migration history with their own copy of
-    these reasons, so this family names them literally and keeps them when those
-    declarations retire at an upgrade floor; a test pins that the two agree.
-    """
-
-    return ("fold.party_handle", "fold.party_aspects")
-
 
 _DISPLAY_OWN_AVATAR = "_display_own_avatar"
 """Where a page's prefetch parks each party's own avatar the actor can read."""
@@ -620,10 +600,9 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
     def merge(self, source: Any, *, into: Any) -> Any | None:
         """Compatibility entry for bridge alias resolution; Handle owns the fold.
 
-        Removed in 0.4.0: the bridges then call ``into.fold([source])`` under their
-        own identity locks. A repeated fold of the same retained alias returns ``None``, as the
-        former delete-based entry did after its alias had gone. Alias keys stay
-        reserved so a later sync still lands on the operational survivor.
+        A repeated fold of the same retained alias returns ``None``, as the former
+        delete-based entry did after its alias had gone. Alias keys stay reserved so
+        a later sync still lands on the operational survivor.
         """
 
         if source.pk is None or into.pk is None:
@@ -980,97 +959,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 "handles", queryset=self._display_avatar_handles(actor, avatars), to_attr=_DISPLAY_AVATAR_HANDLES
             ),
         )
-
-    def resolve_folded_statements(self) -> int:
-        """Rank the statement groups each fold family's statements share with another writer, once per fold.
-
-        A fold records retained facts without ranking them, so in a group two writers
-        meet (the upgrade's folds and a consumer's own, which may land in a later
-        migrate), the applied statement is whichever came first. Every family declared
-        in ``ANGEE_PARTIES_STATEMENT_FOLDS`` with a fold changeset newer than the global
-        high-water mark (the last successful resolution's changeset) is re-ranked in
-        full: all of its shared groups are resolved through the statement owner
-        (``resolve_shared``), under a system changeset this records even when nothing
-        changed, which raises the mark. A later call with no newer fold is one query per
-        family; a failure records no success and the next call ranks again.
-
-        One global mark is safe because folds write only during a migrate, this runs
-        after the whole plan in the same process (``post_migrate``), and provision runs
-        one migrate at a time, so every fold changeset of a migrate is committed before
-        the mark is read. The contract it puts on a fold family: declare its hook no
-        later than the release that ships its fold. A family declared after its fold ran
-        has only changesets older than the mark and is never ranked.
-        Returns how many groups were resolved.
-        """
-
-        changesets = apps.get_model(settings.ANGEE_CHANGESET_MODEL)._base_manager.using(self.db)
-        resolved_up_to = changesets.filter(change_reason=RESOLVE_FOLDED, outcome="success").aggregate(
-            mark=models.Max("pk")
-        )["mark"]
-        newer = {} if resolved_up_to is None else {"pk__gt": resolved_up_to}
-        families = [changesets.filter(change_reason__in=reasons()) for reasons in resolve_hooks(STATEMENT_FOLDS)]
-        pending = [family for family in families if family.filter(**newer).exists()]
-        if not pending:
-            return 0
-        statement_models = [
-            model
-            for model in sorted(apps.get_models(), key=lambda model: model._meta.label)
-            if issubclass(model, Statement) and model._meta.app_label == self.model._meta.app_label
-        ]
-        with (
-            changeset(fresh=True, activity="system", change_reason=RESOLVE_FOLDED),
-            system_context(reason=RESOLVE_FOLDED),
-        ):
-            resolved = sum(
-                model.objects.db_manager(self.db).resolve_shared(family)
-                for family in pending
-                for model in statement_models
-            )
-            current_changeset(required=True, record=True)
-        return resolved
-
-    def rehome_avatars(self) -> int:
-        """Move party avatars stored before storage's image drive onto it; return how many moved.
-
-        A contact photo used to be stored with a file's ordinary deduplication, so
-        it could land on a user's own file, which only that file's readers can read.
-        Each such avatar's bytes are re-ingested as an image and its party
-        re-pointed; the old row stays untouched, since it may be someone's own file.
-        Idempotent and isolated per party: an avatar that cannot move (storage
-        refuses it as an image, its bytes cannot be read, storage is down) keeps its
-        pointer (clearing a synced person's avatar would strip the photo from their
-        card on the next push) and is counted in a warning. It provisions the image
-        drive first (storage's ``Drive.objects.image_drive``, which writes its grant),
-        so each run leaves the drive readable to every signed-in user, and returns at
-        once without one (a fresh database before resources load, or a refused drive
-        of that name) or with nothing to move.
-        """
-
-        files = apps.get_model("storage", "File").objects
-        with system_context(reason="parties.rehome_avatars"):
-            # Provisioned first, so each run leaves the image drive with its grant, avatars to move or not.
-            if apps.get_model("storage", "Drive").objects.image_drive() is None:
-                return 0
-            legacy = self.model._base_manager.exclude(avatar=None).exclude(avatar__in=files.images().values("pk"))
-            if not legacy.exists():
-                return 0
-            moved = 0
-            for party in legacy.select_related("avatar").iterator():
-                try:
-                    image = files.ingest_image(party.avatar.read_image())
-                except Exception:
-                    # Any failure, a storage outage included, leaves this party for the next run.
-                    logger.warning(
-                        "Party %s keeps an avatar that cannot move onto the image drive.", party.pk, exc_info=True
-                    )
-                    continue
-                moved += self.model._base_manager.filter(pk=party.pk, avatar_id=party.avatar_id).update(avatar=image)
-            remaining = legacy.count()
-        if remaining:
-            logger.warning(
-                "%s party avatars remain off the image drive, shown only to their files' readers.", remaining
-            )
-        return moved
 
     @staticmethod
     def _display_avatar_handles(actor: Any, avatars: Any) -> Any:

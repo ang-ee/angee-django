@@ -12,57 +12,6 @@ dependencies = [
   "pycountry>=26,<27",
 ]
 
-[[migrations]]
-name = "directory_sync_status"
-app_label = "parties"
-module = "runtime_migrations.directory_sync_status"
-
-# The statement cutover chain. Manifest order is the in-app order; the guards
-# decide the composer round, which orders the chain across addons: the preflight
-# first, then schema, folds, and the retirements last.
-[[migrations]]
-name = "preflight_party_folds"
-app_label = "parties"
-module = "runtime_migrations.preflight_party_folds"
-
-[[migrations]]
-name = "party_statement_schema"
-app_label = "parties"
-module = "runtime_migrations.party_statement_schema"
-
-[[migrations]]
-name = "party_aspect_schema"
-app_label = "parties"
-module = "runtime_migrations.party_aspect_schema"
-
-[[migrations]]
-name = "fold_party_handle_statements"
-app_label = "parties"
-module = "runtime_migrations.fold_party_handle_statements"
-# The first applied body refused a producer link a person had dismissed, where this one
-# folds it; a stack that body completed on held none, so its copies stay valid.
-compatible_source_sha256 = ["3ae0a2699c3a52481b2c3938a323a1cbb9abc391cd510b4639455f2a7debd891"]
-
-[[migrations]]
-name = "fold_party_aspects"
-app_label = "parties"
-module = "runtime_migrations.fold_party_aspects"
-
-[[migrations]]
-name = "circle_member_decisions"
-app_label = "parties"
-module = "runtime_migrations.circle_member_decisions"
-
-[[migrations]]
-name = "retire_party_handle"
-app_label = "parties"
-module = "runtime_migrations.retire_party_handle"
-
-[[migrations]]
-name = "retire_party_carriers"
-app_label = "parties"
-module = "runtime_migrations.retire_party_carriers"
-
 [resources]
 install = [
   { path = "resources/install/010_provenance.rule.yaml", adopt = "key" },

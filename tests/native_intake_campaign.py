@@ -1,11 +1,9 @@
 """Additional intake scenarios on the shared emitted-host fixtures."""
 
-from io import StringIO
 from unittest.mock import patch
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -175,20 +173,6 @@ class IntakeCampaign(IntakeAccessCase):
         self.assertFalse(self.Party.objects.as_user(self.reader).filter(pk=second.party_id).exists())
         with actor_context(self.reader), self.assertRaises(PermissionDenied):
             first.task.with_actor(self.reader).message_post("Unusable comment arm")
-
-    def test_reconciliation_dry_run_and_apply_clear_only_untouched_unconfirmed_party(self):
-        eligible = self.legacy_need()
-        confirmed = self.legacy_need(confirmed=True)
-        edited = self.legacy_need(touched=True)
-        output = StringIO()
-        call_command("intake_reconcile_parties", stdout=output)
-        eligible.refresh_from_db()
-        self.assertIsNotNone(eligible.party_id)
-        call_command("intake_reconcile_parties", "--apply", stdout=StringIO())
-        for row in (eligible, confirmed, edited):
-            row.refresh_from_db()
-            self.assertEqual(row.party_id is None, row.pk == eligible.pk)
-
 
 class IntakeDenormalizedCampaign(IntakeCampaign):
     storage = "denormalized"

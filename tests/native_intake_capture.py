@@ -15,7 +15,7 @@ from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, get_named_type, parse, validate
 from rebac import PermissionDenied, actor_context, system_context
-from rebac.actors import is_sudo, to_subject_ref
+from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base.errors import RecordAccessSubjectRefused
@@ -301,46 +301,6 @@ class IntakeAccessCase(TransactionTestCase):
             self.assertEqual([error.extensions.get("code") for error in result.errors or ()], [error_code])
         return result.data
 
-    def legacy_need(self, *, confirmed=False, touched=False):
-        """Reproduce a pre-transition copied sender party without live hooks."""
-
-        with system_context(reason="test legacy capture"):
-            apps.get_model("integrate", "Vendor").objects.get_or_create(
-                slug="manual",
-                defaults={"display_name": "Manual"},
-            )
-            channel = apps.get_model("messaging", "Channel").objects.create_disconnected(
-                self.owner,
-                name="Legacy source",
-                backend_class="manual",
-            )
-            (message,) = apps.get_model("messaging", "Message").objects.ingest(
-                [
-                    ParsedMessage(
-                        external_id=f"legacy-{channel.pk}",
-                        platform="email",
-                        sender=ParsedHandle(platform="email", value=f"legacy-{channel.pk}@example.com"),
-                        body=ParsedPart(type="text/plain", role="body", text="Legacy request"),
-                    ),
-                ],
-                channel=channel,
-            )
-            party = self.party(self.reader)
-            models.QuerySet.update(
-                type(message.sender)._base_manager.filter(pk=message.sender_id),
-                party_id=party.pk,
-                party_link_confirmed=confirmed,
-            )
-            need = self.need(email="", party=party)
-            models.QuerySet.update(
-                self.Need._base_manager.filter(pk=need.pk),
-                source_message_id=message.pk,
-                updated_by_id=self.writer.pk if touched else message.updated_by_id,
-            )
-            need.refresh_from_db()
-            return need
-
-
 class NeedAccessDecisionTests(IntakeAccessCase):
     def test_inbox_answers_use_the_same_account_owner_and_write_no_grants(self):
         need = self.need(email="", party=self.party(self.reader))
@@ -520,31 +480,6 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, ["intake.approve"])
         self.assertEqual(need.party_id, self.party(self.reader).pk)
-
-    def test_reconcile_never_yields_system_context_and_clears_old_decision(self):
-        need = self.legacy_need()
-        apps.get_model("decisions", "Decision").objects.decide(
-            need.access_decision_id,
-            actor=self.owner,
-            revision=need.access_decision.revision,
-            chosen=["intake.deny"],
-        )
-        self.assertFalse(is_sudo())
-        # The historical fixture predates owner application on every answer.
-        with system_context(reason="test historical untouched request"):
-            self.Need._base_manager.filter(pk=need.pk).update(updated_by_id=None)
-        reports = self.Need.objects.reconcile_parties()
-        self.assertTrue(next(reports)["eligible"])
-        self.assertFalse(is_sudo())
-        reports.close()
-        self.assertIsNotNone(self.Need._base_manager.get(pk=need.pk).party_id)
-        reports = self.Need.objects.reconcile_parties(apply=True)
-        self.assertTrue(next(reports)["applied"])
-        self.assertFalse(is_sudo())
-        reports.close()
-        need.refresh_from_db()
-        self.assertIsNone(need.party_id)
-        self.assertEqual(need.access_verdict, None)
 
     def test_deciding_writes_neither_relationship_store(self):
         need = self.as_user(self.need(email="", party=self.party(self.reader)))

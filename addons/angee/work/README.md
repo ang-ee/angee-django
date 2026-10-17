@@ -47,10 +47,7 @@ validates and projects the duplicate stage; each reference owner moves its rows.
 A task its `remove` blockers refuse (promoted, or in a reserved stage) refuses
 the fold through `merge_blockers` before anything moves.
 `merged_into` is the operational identity, while the duplicate stage and dropped
-reason remain lifecycle facts. The projects-owned frozen [`task_identity` upgrade](../projects/runtime_migrations/task_identity.py) converts old
-duplicate relation rows without deleting old task history. Work’s
-[`task_removal`](runtime_migrations/task_removal.py) then moves existing concealed
-tasks into shared trash, preserving their stage.
+reason remain lifecycle facts.
 
 A queue's triage, board and cycles pages are the record pages of the Triage,
 Boards and Cycles hubs, under their paths and anchors, so they render in Work

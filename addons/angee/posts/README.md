@@ -34,12 +34,7 @@ contact its comments name, is that feed's assertion, ranked below a person's.
 committed `discovery_finished(sender=type(bridge), instance=bridge)` signal. Each
 record is historical when its sent timestamp is absent, precedes the horizon, or
 the feed has no horizon yet. History and activity streams therefore classify
-their records independently. The addon-owned `feed_live_since` migration adds the
-field and stamps existing bound feeds in the same upgrade provision. The following
-`feed_live_since_ready` migration removes horizons from pending/failed discovery
-generations and stamps only ready connections, preserving the original migration
-body. Connections predating discovery fields become established generation zero.
-Landing repairs
+their records independently. Landing repairs
 a bound, discovery-ready feed's missing horizon before classifying its next record,
 using the completed discovery time when available. NULL never means everything live.
 
@@ -113,15 +108,6 @@ row; the ledger's legacy `quota_limit` is historical data. Each debit opens the 
 once; historical NULL-scope ledgers are never reopened. Retry-After parsing belongs
 to `FeedBackend.retry_after(response)`.
 
-The scoped-ledger upgrade starts new scope rows; legacy NULL-scope rows do not
-contain the provider budget identity needed for a reliable runtime backfill.
-On upgrade day, usage already charged to those legacy rows does not reduce the
-new scoped allowance, so that day's configured budget can be spent twice. Upgrade
-at the provider's reset boundary or account for that overlap operationally.
-The nullable integration anchor is irreversible after an anchor has been deleted:
-a schema rollback to the old non-nullable FK cannot preserve a NULL-anchor row.
-Use a forward deployment or restore the pre-upgrade database when reverting;
-do not drop the shared usage ledger to make a reverse migration succeed.
 Deleting the original integration authorization anchor preserves a shared scope's
 ledger and usage; remaining spenders continue against that same budget.
 
