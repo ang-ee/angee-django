@@ -8,6 +8,8 @@ from pathlib import Path
 
 from django.db import connection
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_composed_workflows_posts(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
@@ -24,7 +26,7 @@ def test_composed_workflows_posts(tmp_path: Path) -> None:
             "--action", "tests", "--test-label", "tests.native_workflows_posts",
             "--output", str(report), *(["--test-postgresql"] if postgresql else []),
         ],
-        cwd=root, env=env, capture_output=True, text=True, timeout=600, check=False,
+        cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"composed comment replies failed:\n{result.stdout}\n{result.stderr}"
     assert json.loads(report.read_text()) == {"failures": 0, "vendor": "postgresql" if postgresql else "sqlite"}
