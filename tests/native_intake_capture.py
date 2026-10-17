@@ -397,7 +397,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         need = self.as_user(self.need(email="reader@example.com"), self.owner)
         # A deployment may let this decider create accounts (a role extension)
         # without party write; the account gate is not what this test is about.
-        with patch.object(type(self.User.objects), "check_create"):
+        with patch("angee.intake.models.check_new", return_value=SimpleNamespace(allowed=True)):
             self.assertEqual(need.decide_access("intake.approve").pk, self.reader.pk)
         with system_context(reason="test claimed address"):
             link = apps.get_model("parties", "Party").statements.get(
@@ -936,7 +936,6 @@ class NeedAccessTests(IntakeAccessCase):
         self.assertEqual(result, {"ok": False, "validation_errors": {"canonical": ["RECORD_ACCESS_SUBJECT_REFUSED"]}})
         source.refresh_from_db()
         self.assertNotEqual(source.task_id, canonical.task_id)
-        self.assertIsNone(source.original_task_id)
         self.assertEqual(self.Task._base_manager.get(pk=source.task_id).stage_id, before_stage)
         self.assertFalse(
             apps.get_model("projects", "TaskRelation")._base_manager.filter(task_id=source.task_id).exists()

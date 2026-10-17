@@ -83,8 +83,7 @@ class WorkStageType(AngeeNode):
     position: auto
     category: auto
     rule_owned: auto
-    conceals: auto
-    on_path: bool = strawberry_django.field(only=["conceals", "category"])
+    on_path: bool = strawberry_django.field(only=["category"])
     created_at: auto
     updated_at: auto
 
@@ -248,7 +247,7 @@ def decline_task(
 def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int, reason: str = "") -> ActionResult:
     """Trash a removable task, recording its native removal reason."""
 
-    target = authorized_permission_target(info, Task, task, "remove")
+    target = authorized_permission_target(info, Task, task, "delete")
     target.remove(reason=reason, expected_revision=expected_revision)
     return ActionResult(ok=True, message="Task removed.", id=target.sqid)
 
@@ -501,7 +500,7 @@ _STAGE_LINES = HasuraLines(
     field="stages",
     model=Stage,
     node=WorkStageType,
-    writable=("name", "category", "tone", "position", "rule_owned", "conceals"),
+    writable=("name", "category", "tone", "position", "rule_owned"),
     position_field="position",
     defaults={"category": "unstarted", "tone": "neutral"},
 )
@@ -602,15 +601,14 @@ _STAGE_RESOURCE = hasura_model_resource(
         "position",
         "category",
         "rule_owned",
-        "conceals",
         "created_at",
         "updated_at",
     ],
     sortable=["queue", "position", "name", "created_at", "updated_at"],
     aggregatable=["id", "position"],
     groupable=["queue", "tone", "category"],
-    insertable=["queue", "name", "tone", "position", "category", "rule_owned", "conceals"],
-    updatable=["name", "tone", "position", "category", "rule_owned", "conceals"],
+    insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
+    updatable=["name", "tone", "position", "category", "rule_owned"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
     write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )

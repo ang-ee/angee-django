@@ -35,8 +35,8 @@ from rebac.memberships import containers_of
 
 from angee.agents import signals as agent_signals
 from angee.agents.context import render_view_context
-from angee.agents.grants import RESOURCE_READER_ROLE
 from angee.agents.models import MCPPlacement
+from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.testing.models import (
     Agent,
     AgentSession,

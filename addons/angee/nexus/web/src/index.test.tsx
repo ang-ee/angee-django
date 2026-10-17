@@ -54,10 +54,10 @@ describe("nexus addon manifest", () => {
     const containers = (nexus.containers ?? {}) as Record<string, Record<string, ContainerChild<ChatterTabContent>>>;
     const chatter = ["parties.Party#aside", "parties.Circle#aside"].flatMap((address) =>
       Object.entries(containers[address] ?? {}).map(([id, child]) => ({ id, address, ...child })));
-    expect(chatter.map(({ id, sequence, address, content }) => ({ id, sequence, address, aliases: content.aliases }))).toEqual([
-      { id: "nexus.timeline", sequence: 30, address: "parties.Party#aside", aliases: ["timeline"] },
-      { id: "nexus.network", sequence: 31, address: "parties.Party#aside", aliases: ["network"] },
-      { id: "nexus.feed", sequence: 32, address: "parties.Circle#aside", aliases: ["feed"] },
+    expect(chatter.map(({ id, sequence, address }) => ({ id, sequence, address }))).toEqual([
+      { id: "nexus.timeline", sequence: 30, address: "parties.Party#aside" },
+      { id: "nexus.network", sequence: 31, address: "parties.Party#aside" },
+      { id: "nexus.feed", sequence: 32, address: "parties.Circle#aside" },
     ]);
     const recordContext = {
       pathname: "/parties/people/abc",

@@ -33,12 +33,13 @@ export const recordRunsTab: ContainerChild<ChatterTabContent> = {
   sequence: 30,
   content: {
     icon: "versions", label: <RunsLabel />,
-    aliases: ["workflows.timeline"],
     useCount: ({ view, route }) => {
       const record = useMemo(() => ({ model: route!.canonicalLabel!, id: view.sqid! }), [route?.canonicalLabel, view.sqid]);
       return useRecordTimelineAttention(record);
     },
-    when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && view.sqid !== REFINE_CREATE_ID,
+    when: ({ view, route }) => view.kind === "record" && Boolean(
+      view.sqid && route?.canonicalLabel && route.resourceType != null,
+    ) && view.sqid !== REFINE_CREATE_ID,
     render: ({ view, route }) => view.sqid && route?.canonicalLabel
       ? <RecordTimeline record={{ model: route.canonicalLabel, id: view.sqid }} /> : null,
   },

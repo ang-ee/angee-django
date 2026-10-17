@@ -100,7 +100,6 @@ from angee.base.models import (
     role_anchor,
 )
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -252,7 +251,7 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
         permissions and attribution.
         """
 
-        default = system_queryset(self.model).filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE).first()
+        default = self.model.system_queryset().filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE).first()
         if default is None:
             raise ValidationError({"drive": "Configure an existing default drive before creating a volume."})
         drive = self.model(
@@ -292,13 +291,13 @@ class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: 
         slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
         everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
         with system_context(reason="storage.drive.image_drive"):
-            drive = system_queryset(self.model).filter(slug=slug).first()
+            drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:
                 try:
                     drive = self.create_on_default_backend(slug=slug, name="Images")
                 except ValidationError:
                     # A concurrent first use created it, or no default drive exists yet.
-                    drive = system_queryset(self.model).filter(slug=slug).first()
+                    drive = self.model.system_queryset().filter(slug=slug).first()
             if drive is None:
                 return None
             grants = set(drive.direct_record_access())
@@ -1275,7 +1274,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """Grant a dedup-hit file read reach to the requested ingest owner."""
 
         with transaction.atomic():
-            locked = system_queryset(type(row), lock=("self",)).get(pk=row.pk)
+            locked = type(row).system_queryset(lock=("self",)).get(pk=row.pk)
             if locked.visibility != FileVisibility.INHERITED:
                 raise exceptions.UploadConflict("identical bytes already exist")
             if owner_id is None or str(locked.owner_id or "") == str(owner_id):
@@ -1384,7 +1383,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         if actor is None:
             raise PermissionDenied("File visibility requires an acting user.")
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).select_related("drive").get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).select_related("drive").get(pk=self.pk)
             resource = locked.drive if visibility == FileVisibility.INHERITED else locked
             permission = "share" if visibility == FileVisibility.INHERITED else "write"
             if not resource.with_actor(actor).has_access(permission):
@@ -1713,7 +1712,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         self._fail(reason="duplicate")
         raise exceptions.UploadConflict("identical bytes already exist")
 
-    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
+    def delete(self, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Move into the Trash smart folder; backend bytes stay.
 
         :meth:`purge` (or the ``storage_prune`` command after the trash TTL)
@@ -1727,7 +1726,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
             return (0, {})
         if not self.has_access("delete"):
             raise PermissionDenied(f"Denied: cannot delete {self._meta.label} {self.public_id}")
-        self.trash(using=using)
+        self.trash()
         return (1, {self._meta.label: 1})
 
     def purge(self) -> None:
@@ -1743,7 +1742,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         storage = self.storage
         key = self.storage_path
         super().delete()
-        if not system_queryset(type(self)).filter(drive_id=self.drive_id, storage_path=key).exists():
+        if not type(self).system_queryset().filter(drive_id=self.drive_id, storage_path=key).exists():
             storage.discard(key, context="purge")
 
     def _fail(self, *, reason: str) -> None:
@@ -1800,7 +1799,7 @@ class FileAttachmentManager(AngeeManager):
         target = generic_target(record)
         with transaction.atomic():
             self._lock_target(target)
-            file = system_queryset(type(file), lock=("self",)).get(pk=file.pk)
+            file = type(file).system_queryset(lock=("self",)).get(pk=file.pk)
             return self._attach(file, target, label=label)
 
     def for_record(self, record: models.Model) -> models.QuerySet[Any]:
@@ -1856,7 +1855,7 @@ class FileAttachmentManager(AngeeManager):
         target_model = target.content_type.model_class()
         if target_model is None:
             raise ValueError("File attachment target model is unavailable.")
-        system_queryset(target_model, lock=("self",)).get(pk=target.object_id)
+        target_model.system_queryset(lock=("self",)).get(pk=target.object_id)
 
     def _attach(self, file: Any, target: GenericTarget, *, label: str = "") -> Any:
         """Get or insert one edge under the ambient actor, after its verb locked the target.

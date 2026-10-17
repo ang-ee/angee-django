@@ -50,8 +50,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 test("role configuration filters one shared query and opens the bound page inline", () => {
-  const tab = recordPagesTab({ label: "References", role: "reference", sequence: 45, when: () => true, aliases: ["references"] });
-  expect(tab).toMatchObject({ sequence: 45, content: { label: "References", icon: "knowledge", aliases: ["references"] } });
+  const tab = recordPagesTab({ label: "References", role: "reference", sequence: 45, when: () => true });
+  expect(tab).toMatchObject({ sequence: 45, content: { label: "References", icon: "knowledge" } });
   const contribution = tab.content;
   expect(contribution.when?.(context)).toBe(true);
   // A type whose schema declares no binding arm, and a list view, offer no Pages tab.

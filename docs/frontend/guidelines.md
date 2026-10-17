@@ -898,7 +898,7 @@ Comments and Conversations tabs it implements:
 
 ```tsx
 "record#aside": {
-  "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
+  "messaging.comments": recordCommentsTab({ submitKey }),
   // messaging.related …
 },
 ```
@@ -1026,11 +1026,9 @@ The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
 `record#aside` tab shows on record views; a model-level tab shows on that
 model's pages and may narrow itself further with its content's `when`. A
 `ChatterTabContent` carries `label`, `icon` and `render`, and optionally
-`when`, `count`/`useCount`, `panelClassName` and `aliases`. The framework
+`when`, `count`/`useCount` and `panelClassName`. The framework
 declares the container without placeholder tabs. Addons contribute only implemented
-capabilities. Tab ids are
-namespaced like every child; `aliases` keeps a tab's former id working in
-`?chatterTab=` links for one release.
+capabilities. Tab ids are namespaced like every child.
 
 The record's own state and history belong in its `#sections`; attached work,
 files, pages and conversations belong in its `#aside`. The default order is
