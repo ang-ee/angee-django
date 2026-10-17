@@ -6,13 +6,3 @@ description = "Composable resource, addon, and personal dashboards"
 keywords = ["dashboards", "analytics", "widgets"]
 category = "Data"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql", "angee.provenance"]
-
-[[migrations]]
-name = "personal_trash"
-app_label = "dashboards"
-module = "runtime_migrations.personal_trash"
-
-[[migrations]]
-name = "baseline_role"
-app_label = "dashboards"
-module = "runtime_migrations.baseline_role"

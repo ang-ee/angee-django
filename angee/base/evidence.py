@@ -17,11 +17,8 @@ from rebac.resources import model_resource_type
 from angee.base.identity import instances_from_public_ids, public_id_for
 from angee.base.mixins import AppendOnlyModel
 from angee.base.models import AngeeDataModel
-from angee.base.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
+from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
 from angee.base.scoping import read_scoped_queryset
-
-DerivedFromRelation = RetainedGenericRelation
-"""The relation's released name, kept as an import until angee 0.4.0."""
 
 
 class FactAuthority(StrEnum):

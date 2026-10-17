@@ -343,39 +343,6 @@ class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type
                     expected_revision=subject.statement_revision,
                 )
 
-    def resolve_shared(self, changesets: Any) -> int:
-        """Resolve each group where a statement written under ``changesets`` meets another writer's.
-
-        A data migration folding retained facts into statements cannot rank them: it
-        applies its own winner, or records its statement beside one another fold
-        already applied, so where two writers meet in one group the applied statement
-        is whichever ran first. Resolving those groups once afterwards leaves the
-        published values the ranking decides. Groups only ``changesets`` wrote, or only
-        others wrote, are left as they are. Returns the number of groups resolved.
-        """
-
-        rows = self.model._base_manager.using(self.db).filter(superseded__isnull=True)
-        names = sorted({name for declaration in self.model.statement_aspects.values() for name in declaration.members})
-        columns = [self.model._meta.get_field(name).attname for name in names]
-
-        def groups(queryset: models.QuerySet[Any]) -> set[tuple[Any, ...]]:
-            found = set()
-            for subject_id, aspect, *values in queryset.values_list("subject_id", "aspect", *columns).iterator():
-                declared = self.model.statement_aspects[aspect].members
-                members = tuple((name, value) for name, value in zip(names, values, strict=True) if name in declared)
-                found.add((subject_id, aspect, members))
-            return found
-
-        written = rows.filter(changeset__in=changesets)
-        # A shared group has rows of both kinds on one subject: other writers matter only there.
-        others = rows.exclude(changeset__in=changesets).filter(subject_id__in=written.values("subject_id"))
-        shared = groups(written) & groups(others)
-        subjects = self.model.statement_subject_model._base_manager.using(self.db)
-        with system_context(reason="statements.resolve_shared"):
-            for subject_id, aspect, members in sorted(shared, key=repr):
-                self.resolve(subject=subjects.get(pk=subject_id), aspect=aspect, members=dict(members))
-        return len(shared)
-
     def merge(self, reference: Any, rows: models.QuerySet[Any], *, survivor: Any) -> None:
         """Retain both assertions on key collisions, then resolve the moved subject.
 

@@ -41,10 +41,9 @@ highest standard.
   name or wrapper does not make duplication legitimate. Extend the owner through
   its contract. When replacing an implementation, migrate its callers and remove
   the superseded path and guidance; leaving both behind is unfinished work.
-  Preserve required historical imports through narrow compatibility aliases to
-  the canonical implementation, and preserve released migration bodies under the
-  [migration policy](docs/backend/guidelines.md#migrations-and-runtime). These
-  required contracts do not authorize a competing active implementation.
+  Preserve required historical Python imports of live code through narrow
+  compatibility aliases to the canonical implementation. These required contracts
+  do not authorize a competing active implementation.
 - **Less code is more. Prefer deletion to abstraction.** Remove dead paths,
   redundant wrappers, speculative options, and unnecessary indirection before
   adding machinery. A new abstraction must remove real duplication or own a

@@ -16,7 +16,6 @@ from angee.base.mixins import (
     AppendOnlyModel,
     AppendOnlyQuerySet,
     AuditMixin,
-    audit_set_null,
     retained_set_null,
 )
 from angee.base.models import AngeeQuerySet
@@ -60,7 +59,7 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
 
     for name in ("created_by", "updated_by"):
         on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
-        assert on_delete is retained_set_null is audit_set_null
+        assert on_delete is retained_set_null
         serialized, imports = MigrationWriter.serialize(on_delete)
         assert serialized == "angee.base.mixins.retained_set_null"
         assert imports == {"import angee.base.mixins"}

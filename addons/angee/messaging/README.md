@@ -5,9 +5,7 @@ through core `MergeableMixin`: the retired thread redirects to its survivor,
 while its messages, follower occurrences and history stay on their physical rows.
 The current record owns read and post admission. Comments includes a single
 bounded timeline of comments and native provenance history; History remains a
-record tab provided by provenance. `TrackingValue` and save-time chatter tracking
-are retired. The upgrade preserves every old tracking column in the retained
-notification's `legacy_tracking` metadata and writes an ordinary readable body.
+record tab provided by provenance.
 
 Source threads and messages remain channel occurrences. A native `same_as` pair
 statement is the identity fact, and applying it folds the newer copy into the
@@ -23,15 +21,6 @@ are never compared); people confirm or keep copies separate through the same
 statement, and a kept-separate decision splits the redirect and refuses a later
 fold. The pair rule principal is granted read and write on threads and messages
 like the parties statement sources.
-
-The channel-thread upgrade preserves message ids and source payloads, separates
-old shared physical containers, redirects each copied container to its original
-and each email's newer copies to its oldest row, and rebases every original and
-copied follow to its own channel at the old chronological cutoff. Retained pair
-evidence protects its endpoints from destructive channel purge (statements are
-never deleted, so purge reports the evidence as a blocker; disconnect the
-channel to stop synchronization). A redirect without evidence, such as one the
-upgrade wrote, releases its copy when the survivor's channel is purged.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
@@ -88,11 +77,6 @@ as a trashed SENT audit row, with `delivery_conflict` pointing to the provider i
 its creation key and provenance survive without a second visible row or count.
 Advisory task locks reduce contention; the row claim is authoritative. This is
 at-most-once recovery of an uncertain effect, not an exactly-once provider guarantee.
-
-Drain workers before migrating this delivery contract. A pre-upgrade worker's
-in-flight send has no persisted claim, so the upgraded sweep can re-dispatch it
-and publish a duplicate. Stop new dispatch, drain active workers, migrate, then
-start workers on the upgraded code.
 
 Email uses the provider's definite refusal evidence: SMTP 4xx retries and SMTP
 5xx fails; connection failure before SMTP sending retries. Once sending begins,

@@ -109,7 +109,7 @@ Use these owners instead of maintaining another contract in an addon:
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
 | Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own manifest section and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
-| Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration pitfalls](#migrations-and-runtime) distinguish generated sources from durable history. |
+| Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration policy](#migrations-and-runtime) distinguish generated sources from disposable composed history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../addons/angee/workflows/resources.py), [chatter](../../addons/angee/messaging/resources.py)). |
 
 - **Compose addon discovery through its native owners.** Follow the
@@ -257,7 +257,7 @@ Use these owners instead of maintaining another contract in an addon:
 - When restructuring or lifting existing code, reconstruct each module from its
   contract, tests, and these guidelines rather than mechanically porting the old
   shape. Remove obsolete modules unless a named compatibility promise requires
-  an import path; historical migration imports are one such promise.
+  an import path.
 - Source models are abstract. Concrete apps are emitted by the composer.
 - Keep Django `Meta` for Django and library-owned options such as
   `rebac_resource_type`; Angee extension facts live on the owning model class.
@@ -335,8 +335,7 @@ Use these owners instead of maintaining another contract in an addon:
   never has).
   Optional states declare `null=True, blank=True`; absence is `None` in Python
   and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
-  Do not add blank-string sentinels or per-field GraphQL coercion. The legacy
-  non-null blank constructor remains available for historical migration fields;
+  Do not add blank-string sentinels or per-field GraphQL coercion;
   [`StateField.check()`](../../angee/base/fields.py) rejects that declaration on
   concrete models, and `tests/test_layering.py` guards active source declarations.
 - **Reference codes with upstream labels remain string fields.** A country code
@@ -567,24 +566,6 @@ data through REBAC, never a queryset bypass.
   never name a permission such as `#effective_member` in a relation's allowed
   subject types. Usersets backed by relations, such as `auth/group#member`,
   remain valid stored subjects.
-- **Reset stored grants for the primary-key identity and relation-schema cutover.**
-  This upgrade deliberately does not preserve existing REBAC grants. Stop
-  application traffic and take a recoverable database backup. Before applying
-  the remaining Django migrations, run `manage.py reset_rebac_grants` to preview
-  the rows in both local relationship stores and their resource registry, then
-  run `manage.py reset_rebac_grants --apply`. The reset command deliberately
-  runs without system checks so stale grants cannot block this maintenance step.
-  Apply the schema-bearing Django migrations, repeat
-  `manage.py reset_rebac_grants --apply`, then run `manage.py rebac sync`,
-  `manage.py bootstrap_admin`, and `manage.py resources load` before resuming
-  traffic. `bootstrap_admin` idempotently restores the configured user's
-  `angee/role:admin#member` grant; changing `User.is_superuser` never writes
-  authorization tuples.
-  The reset is atomic and leaves application rows, schema rows, and permission
-  audit history intact. It removes record shares, group memberships, role
-  assignments, and every other stored grant; declarative resource grants are
-  recreated by the final resource load. Include `--include-demo` only when that
-  deployment normally loads demo resources.
 - **Membership has one store and one writer.** Use `rebac.memberships` for
   direct memberships in groups and role containers. IAM's model and hub own
   authorization and subject-existence policy; the library owns tuple
@@ -626,15 +607,6 @@ data through REBAC, never a queryset bypass.
   command. Human-only proposal evaluation intersects
   authority with `iam/kind:person#active_member`, including admin authority;
   ordinary read/share grants and service requesters remain valid.
-- **Rebuild derived grants after the reset.** After the primary-key reset and
-  schema sync above, run `uv run manage.py resync_tool_grants` to reconcile the
-  current built-in tool catalogue, its seeded grants and every agent's resource-reader
-  membership from its current policy, readiness and runtime, then
-  `uv run manage.py resync_project_access` to recreate project-container
-  bindings from their application-owned rows. Run these through the stack host
-  described in [Checks](../checks.md#composition-and-schema); each command
-  delegates to its addon owner and is idempotent. No legacy tuple evidence is
-  preserved or interpreted during this upgrade.
 - **Visibility and access are REBAC-native, always.** Put relations and
   permission arms on the model's zed and let the store scope reads; never stand
   authorization up with a Python provider, `visible_to` projection, or queryset
@@ -894,12 +866,10 @@ and current contracts before applying a historical example to a new deployment.
   A source workspace inside one stack does not itself imply a second running
   stack. Resolve the lifecycle owner through the workspace workflow before
   changing stack or service templates.
-- **Addon moves can change the workspace dependency graph and historical imports.**
+- **Addon moves can change the workspace dependency graph and live imports.**
   Use [checks and dependency preparation](../checks.md) to select the owning
   environment. In a materialized workspace, run a needed `pnpm install` only at
-  the owning stack root, never in this source slot. Preserve migration imports
-  using the [migration rules](#migrations-and-runtime); a gitignore entry does not
-  make a migration disposable.
+  the owning stack root, never in this source slot.
 - **Never name an addon module after a third-party top-level package it imports.**
   `unittest` discovery inserts the discovery-root directory onto `sys.path`, so an
   addon's `mcp.py` that does `from mcp.server… import …` becomes an importable
@@ -940,13 +910,6 @@ and current contracts before applying a historical example to a new deployment.
   a planned transition to `posts/*`; verify their actual data and migration state
   before selecting the migration and `reconcile_permissions` steps. A fresh
   installation does not inherit an old deployment's repair procedure.
-- **Convert optional-state sentinels when upgrading existing databases.**
-  The declared [storage transition](../../addons/angee/storage/runtime_migrations/smart_kind_nullable.py)
-  removes affected checks, makes the column nullable, converts empty strings to
-  NULL, and restores the frozen target constraints. Build materializes this guarded,
-  reversible migration before downstream schema autodetection. Preserve retained
-  rows and historical migration bodies; a generated schema alteration alone does
-  not perform the data conversion. Regenerate SDL and client types after migration.
 - **Row updates followed by DDL on the same tables need immediate constraints.**
   PostgreSQL queues deferred foreign-key checks for rows a migration updates and
   refuses a later `ALTER TABLE` or index build in the same atomic migration.
@@ -961,44 +924,6 @@ and current contracts before applying a historical example to a new deployment.
   returns 200; check `runtime/schemas/` before chasing app/test regressions. (The
   dev server regenerates it for you — see the `runserver` pitfall — but a manual
   `angee build` outside `angee dev` still needs the explicit `schema` step.)
-- **Moving a custom field between modules changes its migration `deconstruct()` path.**
-  Search source and consumer migration histories before moving it. Preserve
-  released/applied migration imports with a narrow compatibility alias where
-  needed; [`angee.base.fields`](../../angee/base/fields.py) preserves the historical
-  `ImplClassField` path this way. New migrations use the new canonical path.
-  [`angee.base.historical_relationships`](../../angee/base/historical_relationships.py)
-  is frozen compatibility code for materialized historical migrations only;
-  production callers must use current owners.
-  Only unreleased, unapplied migrations whose consumers are known may be edited
-  as part of the move. Rebuilding generated model sources does not authorize
-  rewriting or deleting a deployment's migration history.
-- **Framework runtime-migration history is carried forward.** Existing stacks
-  must first build and migrate at the upgrade floor: django-angee source revision
-  [`0a55a6fb6c249106d2f5d1407cd82865bb3175f8`](https://github.com/ang-ee/angee-django/commit/0a55a6fb6c249106d2f5d1407cd82865bb3175f8),
-  which still carries the 42 retired addon migration declarations. This ensures
-  applicable declarations have been materialized and applied before upgrading.
-  Preserve those files and generate incremental migrations after the next build;
-  [`RuntimeMigrations`](../../angee/compose/migrations.py) preserves existing
-  materialized bodies when their declarations are removed.
-  The composer now registers retained migration-only labels even when their source
-  addon is absent, including `workflows_ocr`. This keeps dependencies loadable but
-  does not restore historical Python imports or authorize data retirement. Verify
-  those imports and the owner's declared forward cutover against the recorded graph.
-- **Never empty `runtime/*/migrations` on a stack whose database is carried forward.**
-  Gitignored migrations can still be applied history; recreating their names or
-  numbering can cause Django to apply existing schema again. Durable deployments
-  retain and version runtime migration history with their deployment artifacts.
-  Investigate the recorded graph before recovery; blanket migration deletion and
-  `--fake` must not hide a mismatch. A consumer repository must explicitly
-  authorize any reset of its own labels on a rebuilt database; framework upgrades
-  do not authorize a reset.
-- **Fresh-stack reset debt (Decision 29).**
-  [`Runtime.clean_configured`](../../angee/compose/runtime.py) preserves migration
-  history by policy. There is no owner for resetting generated migration history
-  together with a throwaway stack, so those stacks currently delete generated
-  runtime migrations by hand. The fix needs a stack-owned reset operation that
-  proves the stack and its database are disposable before removing that history;
-  the preservation policy blocks using `angee clean` for this purpose.
 - **Data migrations access REBAC-scoped models through `_base_manager`, and
   backfills need a rows-present proof.** A manager with `use_in_migrations = True`
   (iam's `UserManager`, inherited from Django's) rides into the historical model,
@@ -1007,41 +932,14 @@ and current contracts before applying a historical example to a new deployment.
   `model._base_manager.using(db)`. And a fresh-DB `migrate` never executes a
   row-dependent backfill body: prove backfills against a database that has rows
   (the agents service-user backfill failed only on live dev DBs for this reason).
-- **Addon-owned runtime migrations are append-only, self-contained history.**
-  [The composer migration owner](../composer.md#addon-owned-runtime-migrations)
-  defines declaration and materialization behavior. Guards select the exact old
-  state, skip complete new or absent states, and reject recognized partial states.
-  A transition whose old state is data the project state cannot show (stored
-  tuples, tables of an app that left the app set) has no schema to select: its
-  guard holds whenever its models exist, materialization bounds it to one run, and
-  its body is a no-op where that data is absent, so a fresh stack materializes it
-  once without effect (spaces'
-  [`drop_stored_roster`](../../addons/angee/spaces/runtime_migrations/drop_stored_roster.py),
-  provenance's
-  [`retire_reversion`](../../addons/angee/provenance/runtime_migrations/retire_reversion.py)).
-  Copy-local `RunPython` functions use historical models from `apps` and
-  `_base_manager`; clear ordering on every query that can carry it (a write, or a
-  sliced `[:1]` subquery) when it can name live-model alias fields such as `sqid`.
-  Ship a new declaration for a new transition and preserve
-  materialized bodies. Source compatibility exceptions require the owner's
-  explicit historical-digest mechanism and verification of both old and new
-  histories; they are not permission to rewrite copies. Keep formatter exclusions
-  for `**/runtime_migrations` because formatting also changes the pinned digest.
-- **A guard waits for a pending predecessor; a fold chain preflights before it
-  drops.** `applies` is evaluated against the state at the start of each composer
-  round, so the state an earlier declaration of the same build produces is not a
-  partial history: return `False` for it (integrate's
-  [`record_link_failure_status`](../../addons/angee/integrate/runtime_migrations/record_link_failure_status.py)
-  waits for the history table) and raise only for a shape no declaration produces.
-  Folds that can refuse rows collect every blocker before writing and name each
-  row; one first-round preflight declaration evaluates the folds' predicates on the
-  pre-upgrade state so the operator sees the complete list before provenance's
-  reversion drop or any store retirement runs (the
-  [parties chain](../../addons/angee/parties/README.md#upgrading-from-partyhandle-carriers)).
-  Migration bodies read historical models only and carry authoring-time identity
-  facts (sqid prefixes, principal id attributes) rather than importing live owners.
-  The reversion drop loses every revision by ruling: back up first, then
-  `remove_stale_contenttypes` afterwards.
+- **A stack's composed migration history is disposable.** After every upgrade,
+  [`reset_migration_history`](../../angee/compose/management/commands/reset_migration_history.py)
+  is the sole owner that verifies the composed graph is fully applied and matches
+  live models, replaces its files with fresh initial migrations, and fake-records
+  them without touching non-composed apps. A data transition that `makemigrations`
+  cannot express uses an addon `[[migrations]]` declaration as a write → apply on
+  every stack → delete in the next change vehicle; no declaration is released
+  history and no migration import earns a compatibility alias.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
@@ -1050,12 +948,6 @@ and current contracts before applying a historical example to a new deployment.
   nothing, and neither does a table holding only rows its own resource files
   seeded once the addon names the model under `retired_models` in its
   `addon.toml` `[resources]`.
-- **Record-sync hash bases retire through the declared cutover.**
-  [`retire_record_sync_hash_bases`](../../addons/angee/integrate/runtime_migrations/retire_record_sync_hash_bases.py)
-  removes the superseded live and historical hash columns after the applied-history
-  transition; `RecordLink.applied_base` is the comparison owner. Reverse restores
-  empty columns, not the retired hash values. Keep this declaration in the upgrade
-  chain so the composer's drop guard never encounters an undeclared data loss.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its
@@ -1343,11 +1235,10 @@ and current contracts before applying a historical example to a new deployment.
   Django loads models, then add only their fixture implementations. An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
-  (`local`), never a dotted path. The one bounded exception is a deconstructed
-  historical migration field: migrations intentionally omit `base_class`, so it
-  may reconstruct its declared default after the registry has been removed. This
-  exists only to replay and remove old columns; active model fields still require
-  a typed base and a non-empty registry.
+  (`local`), never a dotted path. A deconstructed migration-state field omits
+  `base_class` and may reconstruct its declared default after the registry has
+  been removed; active model fields still require a typed base and a non-empty
+  registry.
 - **Implementation subclasses must replace every inherited semantic default that changes.**
   See `ImplBase.effective_defaults()` for the merge contract. An OpenAI-compatible
   backend that omits its own `name` and `vendor` silently creates an OpenAI provider row.

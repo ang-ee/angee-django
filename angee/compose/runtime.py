@@ -10,9 +10,14 @@ from pathlib import Path
 from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management import call_command
+from django.db import DEFAULT_DB_ALIAS, connections, transaction
+from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.recorder import MigrationRecorder
+from django.db.migrations.state import ProjectState
 
 from angee.compose.dependencies import AddonDependencyGroup, AddonDependencyGroupResult
-from angee.compose.history import historical_labels
 from angee.compose.migrations import RuntimeMigrations
 from angee.compose.model_composition import ModelComposition
 from angee.compose.permissions import apply_schema_paths, extension_source_map
@@ -69,7 +74,7 @@ class Runtime:
 
     ``discover`` imports and validates source declarations explicitly. Each write
     or drift operation renders one source map. Boot repairs sources without
-    pruning; explicit build retains the guarded reset policy. Neither construction
+    pruning; explicit build uses the guarded generated-tree policy. Neither construction
     nor discovery changes Django settings or writes files.
     """
 
@@ -121,7 +126,7 @@ class Runtime:
 
     @classmethod
     def clean_configured(cls) -> None:
-        """Clean all generated packages without discovery; retain and report history."""
+        """Clean generated packages without discovery, leaving migrations for explicit reset."""
 
         runtime_module = str(getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime"))
         runtime = sys.modules.get(runtime_module)
@@ -132,12 +137,6 @@ class Runtime:
         """Return app labels owned by the native model composition."""
 
         return self.composition.labels
-
-    @property
-    def migration_labels(self) -> tuple[str, ...]:
-        """Keep retired labels loadable until their retained graph retires the state."""
-
-        return tuple(sorted(set(self.labels) | set(historical_labels(self.runtime_dir))))
 
     def render_sources(self) -> dict[Path, str]:
         """Render one coherent model/web/permission source map before any write."""
@@ -172,8 +171,96 @@ class Runtime:
         return RuntimeMigrations(
             self.addons,
             runtime_dir=self.runtime_dir,
-            labels=self.migration_labels,
+            labels=self.labels,
         )
+
+    def reset_migration_history(
+        self,
+        *,
+        database: str = DEFAULT_DB_ALIAS,
+    ) -> tuple[tuple[str, ...], int, int]:
+        """Replace composed apps' fully applied, model-clean history with fresh initials."""
+
+        labels = tuple(sorted(self.labels))
+        if not labels:
+            return labels, 0, 0
+        connection = connections[database]
+        executor = MigrationExecutor(connection)
+        targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
+        if executor.migration_plan(targets):
+            raise RuntimeError(
+                "migration history reset requires a fully applied migration graph. "
+                f"Run `manage.py migrate --database {database}` first."
+            )
+        changes = MigrationAutodetector(
+            executor.loader.project_state(),
+            ProjectState.from_apps(apps),
+        ).changes(
+            graph=executor.loader.graph,
+            trim_to_apps=set(labels),
+            convert_apps=set(labels),
+        )
+        if changes:
+            rendered = " ".join(labels)
+            raise RuntimeError(
+                "migration history reset requires the recorded graph to match the live composed models. "
+                f"Run `manage.py makemigrations {rendered}` and "
+                f"`manage.py migrate --database {database}` first."
+            )
+
+        _generated_tree(self.runtime_dir, {}).reconcile(prune=False)
+        migration_files = tuple(sorted(
+            path
+            for label in labels
+            for path in (self.runtime_dir / label / "migrations").glob("*.py")
+            if path.name != "__init__.py"
+        ))
+        for path in migration_files:
+            path.unlink()
+
+        migration_prefixes = tuple(f"{self.runtime_module}.{label}.migrations" for label in labels)
+
+        def forget_migration_modules() -> None:
+            for module_name in tuple(sys.modules):
+                if any(
+                    module_name == prefix or module_name.startswith(f"{prefix}.")
+                    for prefix in migration_prefixes
+                ):
+                    sys.modules.pop(module_name)
+            importlib.invalidate_caches()
+
+        forget_migration_modules()
+        call_command(
+            "makemigrations",
+            *labels,
+            interactive=False,
+            include_header=False,
+            verbosity=0,
+        )
+        forget_migration_modules()
+
+        fresh_executor = MigrationExecutor(connection)
+        fresh_targets = tuple(
+            node
+            for label in labels
+            for node in fresh_executor.loader.graph.leaf_nodes(label)
+        )
+        recorder = MigrationRecorder(connection)
+        with transaction.atomic(using=database):
+            recorder.migration_qs.filter(app__in=labels).delete()
+            for app_label, migration_name in fresh_targets:
+                call_command(
+                    "migrate",
+                    app_label,
+                    migration_name,
+                    database=database,
+                    fake=True,
+                    interactive=False,
+                    skip_checks=True,
+                    verbosity=0,
+                )
+            recorded = recorder.migration_qs.filter(app__in=labels).count()
+        return labels, len(migration_files), recorded
 
     @property
     def addon_dependency_group(self) -> AddonDependencyGroup:
@@ -222,7 +309,7 @@ class Runtime:
         """
 
         migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
-        for label in self.migration_labels:
+        for label in self.labels:
             module = f"{self.runtime_module}.{label}.migrations"
             if label in migration_modules and migration_modules[label] != module:
                 raise ImproperlyConfigured(f"Project settings define Runtime-owned MIGRATION_MODULES[{label!r}]")
