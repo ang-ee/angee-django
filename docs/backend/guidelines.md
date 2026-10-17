@@ -1931,7 +1931,8 @@ Ordinary person saves on aspect-backed fields assert normal statements on aspect
 whose precedence admits a person, including separate MTI child tables; parent
 declarations keep their shared-pk owner. An aspect whose precedence leaves PERSON
 out belongs to its native owner: a person's save writes those fields as an ordinary
-save, and confirm or dismiss stay explicit.
+save. A person's create states no group whose values are all empty; clearing a
+field later is an edit and is stated. Confirm or dismiss stay explicit.
 Consumers contribute domain aspects through the descriptor's abstract donors: the
 subject source's own declaration finalizes the one statement table (bases, prefix,
 queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
