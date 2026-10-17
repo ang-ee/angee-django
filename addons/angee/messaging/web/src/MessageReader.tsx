@@ -16,6 +16,7 @@ import {
 
 import { SetMessageStarredDocument, type MessageReaderData } from "./documents";
 import { useMessagingT } from "./i18n";
+import { MessageSourceCopies } from "./MessageSourceCopies";
 
 // The envelope roles listed under the sender, in header order.
 const RECIPIENT_ROLES = ["TO", "CC", "BCC"] as const;
@@ -62,6 +63,7 @@ export function MessageReader({
   return (
     <div className={cn("grid min-w-0 gap-6", previewUrl && "lg:grid-cols-2")}>
       <article aria-label={message.title || t("message.label")} className="min-w-0 space-y-5">
+        <MessageSourceCopies messageId={message.id} channelName={message.channel?.display_name} />
         <header className="flex flex-wrap items-start gap-3">
           <Avatar src={senderAvatarUrl(message.sender)} initials={avatarInitials(sender)} />
           <div className="min-w-40 flex-1 space-y-0.5">

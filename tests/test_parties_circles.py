@@ -108,6 +108,23 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) -> None:
+    del composed_tables
+    owner = _user("manual-contact-redirect-owner")
+    with system_context(reason="test manual contact redirect"):
+        party = Party._base_manager.create(display_name="Contact", created_by=owner)
+        alias = Handle.objects.upsert(platform="email", value="old@example.test", created_by_id=owner.pk)
+        survivor = Handle.objects.upsert(platform="email", value="new@example.test", created_by_id=owner.pk)
+        Handle.objects.merge(alias, into=survivor)
+    with actor_context(owner):
+        stance = Party.objects.propose_manual_contact(
+            party, platform="email", value=alias.value, actor=owner,
+        )
+    assert stance.handle_id == survivor.pk
+    assert not Party.statements.filter(handle=alias).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle(
     composed_tables: None,
 ) -> None:
@@ -390,7 +407,7 @@ def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(com
         alias.refresh_from_db()
         assert alias.party_id == confirmed.pk
 
-        Party.objects.move_handle_statements(alias, phone)
+        Handle.objects.merge(alias, into=phone)
 
         current = {
             row.subject_id: (row.confidence, row.is_confirmed, row.is_dismissed)
@@ -425,7 +442,7 @@ def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         Party.objects.assert_handle(party, alias, asserted_by=owner)
 
-        Party.objects.move_handle_statements(alias, phone)
+        Handle.objects.merge(alias, into=phone)
 
         for row in (alias, phone, party):
             row.refresh_from_db()
@@ -445,7 +462,7 @@ def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: Non
         weaker = Party.objects.assert_handle(party, alias, asserted_by=owner, confidence=0.9)
         stronger = Party.objects.assert_handle(party, phone, asserted_by=owner, confidence=1.0)
 
-        Party.objects.move_handle_statements(alias, phone)
+        Handle.objects.merge(alias, into=phone)
 
         weaker.refresh_from_db()
         stronger.refresh_from_db()
@@ -467,7 +484,7 @@ def test_moving_statements_from_a_handle_already_gone_moves_nothing(composed_tab
         Party.objects.assert_handle(party, phone, asserted_by=owner)
         Handle._base_manager.filter(pk=alias.pk).delete()
 
-        Party.objects.move_handle_statements(alias, phone)
+        Handle.objects.merge(alias, into=phone)
 
         phone.refresh_from_db()
     assert phone.party_id == party.pk
@@ -507,7 +524,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         )
         Party.statements.resolve(subject=party, aspect="handle")
 
-        Party.objects.move_handle_statements(alias, phone)
+        Handle.objects.merge(alias, into=phone)
 
         for row in (imported, carded, phone):
             row.refresh_from_db()
@@ -544,7 +561,7 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
 
         stance.refresh_from_db()
     assert kept.pk == phone.pk
-    assert not Handle._base_manager.filter(pk=alias.pk).exists()
+    assert Handle._base_manager.get(pk=alias.pk).merged_into_id == phone.pk
     assert (kept.owner_id, kept.label, kept.display_name, kept.is_verified) == (owner.pk, "work", "Bob", True)
     assert kept.metadata == {"jid": "p", "lid": "b"}
     assert (stance.handle_id, stance.is_confirmed, kept.party_id, kept.party_link_confirmed) == (
@@ -612,7 +629,7 @@ def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_h
 
 
 @pytest.mark.django_db(transaction=True)
-def test_merging_a_handle_a_concurrent_fold_removed_does_nothing(composed_tables: None) -> None:
+def test_merging_a_handle_a_concurrent_fold_redirected_does_nothing(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="test handle merge vanished"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-vanished", "1943")
@@ -621,6 +638,8 @@ def test_merging_a_handle_a_concurrent_fold_removed_does_nothing(composed_tables
 
         assert Handle.objects.merge(alias, into=phone).pk == phone.pk
         assert Handle.objects.merge(alias, into=phone) is None
+        assert Handle.objects.upsert(platform=alias.platform, value=alias.value).pk == phone.pk
+        assert Handle.objects.canonical().filter(pk=alias.pk).exists() is False
 
         phone.refresh_from_db()
     assert phone.party_id == party.pk
@@ -1243,7 +1262,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
         )
         rows = list(Address._base_manager.filter(party=person).order_by("pk"))
         asserted = set(
-            Address.statements.filter(subject__in=rows, link=link).canonical().values_list("subject_id", flat=True)
+            Address.statements.filter(subject__in=rows, link=link).applied().values_list("subject_id", flat=True)
         )
 
     kept = next(row for row in rows if row.pk == located.pk)

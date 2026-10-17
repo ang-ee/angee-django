@@ -120,10 +120,28 @@ class RecordTaskGraphQLTests(WorkCase):
         self.assertEqual(hidden.data["record_tasks"], [])
 
 
-    def test_a_record_type_without_chatter_is_refused_with_its_code(self):
-        person = {"model": "parties.Person", "id": self.Person._base_manager.get(user=self.owner).sqid}
+    def test_a_person_takes_tasks_as_the_party_it_is(self):
+        row = self.Person._base_manager.get(user=self.owner)
+        self.share(row.party_ptr, self.owner, "editor")
+        person = {"model": "parties.Person", "id": row.sqid}
+        scheduled = self.raw(SCHEDULE, {**person, "title": "Call back"}, self.owner)
+        self.assertFalse(scheduled.errors, scheduled.errors)
+        self.assertTrue(scheduled.data["schedule_record_task"]["ok"], scheduled.data["schedule_record_task"]["message"])
+        listed = self.raw(LIST, person, self.owner)
+        self.assertFalse(listed.errors, listed.errors)
+        self.assertEqual(
+            [(task["title"], task["subject"]["model_label"]) for task in listed.data["record_tasks"]],
+            [("Call back", "parties.Party")],
+        )
+
+    def test_a_record_type_that_takes_no_tasks_is_refused_naming_those_that_do(self):
+        queue = {"model": "work.Queue", "id": self.queue.sqid}
         with self.assertNoLogs("angee.graphql.schema", level="ERROR"):
-            listed = self.raw(LIST, person, self.owner)
-            scheduled = self.raw(SCHEDULE, {**person, "title": "No"}, self.owner)
-        for result in (listed, scheduled):
-            self.assertEqual([error.extensions.get("code") for error in result.errors], ["BAD_RECORD"])
+            listed = self.raw(LIST, queue, self.owner)
+            scheduled = self.raw(SCHEDULE, {**queue, "title": "No"}, self.owner)
+        # A task's subject edge declares which record types take tasks; chatter is not the gate.
+        self.assertEqual([error.extensions.get("code") for error in listed.errors], ["VALIDATION"])
+        self.assertIn("Task may target only", listed.errors[0].message)
+        self.assertFalse(scheduled.errors, scheduled.errors)
+        self.assertFalse(scheduled.data["schedule_record_task"]["ok"])
+        self.assertIn("Task may target only", scheduled.data["schedule_record_task"]["message"])

@@ -7,7 +7,7 @@ import { createRouteHref, type ChatterViewContext } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
 
-import { DecisionRunOrigin, decisionRunOrigin, recordTimelineTab } from "./contributions";
+import { DecisionRunOrigin, decisionRunOrigin, recordRunsTab } from "./contributions";
 import { DecisionWaitingRunsDocument } from "./documents.console";
 
 vi.mock("@angee/decisions", async (importOriginal) => ({
@@ -74,7 +74,7 @@ test("failed origin reads show the shared error surface", async () => {
   expect(await screen.findByText("Waiting runs are unavailable.")).toBeTruthy();
 });
 
-const runsTab = recordTimelineTab.content;
+const runsTab = recordRunsTab.content;
 
 test("the record contribution only mounts for identified records", () => {
   const context: ChatterViewContext = { pathname: "/notes/nte_7", params: { id: "nte_7" },
@@ -85,16 +85,16 @@ test("the record contribution only mounts for identified records", () => {
   expect(runsTab.when?.({ ...context, view: { kind: "list", type: "notes/note" } })).toBe(false);
   expect(runsTab.when?.({ ...context, route: undefined })).toBe(false);
   for (const model of ["Workflow", "WorkflowVersion", "WorkflowRun", "StepRun", "StepAttempt", "StepRecord", "Trigger", "TriggerEvent"]) {
-    expect(runsTab.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(false);
+    expect(runsTab.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(true);
   }
   expect(runsTab.render?.({ ...context, route: undefined })).toBeNull();
 });
 
-test("the contextual contribution is labeled as Timeline through the record aside", () => {
+test("the contextual contribution is labeled as Runs through the record aside", () => {
   render(<>{runsTab.label}</>);
-  expect(screen.getByText("Timeline")).toBeTruthy();
-  expect(runsTab.aliases).toBeUndefined();
-  expect(recordTimelineTab.sequence).toBe(40);
+  expect(screen.getByText("Runs")).toBeTruthy();
+  expect(runsTab.aliases).toEqual(["workflows.timeline"]);
+  expect(recordRunsTab.sequence).toBe(30);
 });
 
 test("the decision origin child renders the waiting-run origin", () => {

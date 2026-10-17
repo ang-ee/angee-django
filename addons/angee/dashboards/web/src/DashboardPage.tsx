@@ -20,7 +20,9 @@ import {
   useRouteParam,
   useRouteHref,
   useRuntimeUserPreferences,
+  useTrashRecord,
 } from "@angee/ui";
+import { useModelMetadata } from "@angee/metadata";
 import type { DashboardTarget } from "@angee/ui/dashboard/headless";
 import { visibleDashboardSnapshot } from "@angee/ui/dashboard/surface";
 import { useDashboardsT } from "./i18n";
@@ -57,6 +59,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const t = useDashboardsT();
+  const trashRecord = useTrashRecord(useModelMetadata("dashboards.Dashboard")?.resource);
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
   const [pending, setPending] = React.useState(false);
@@ -116,12 +119,13 @@ function StoredDashboardPage({ target, registry, store }: {
     }
   };
 
-  const archive = async () => {
+  const trash = async () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
     setPending(true);
     setError(null);
     try {
-      await binding.archive(target.id, state.revision, true);
+      // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
+      if (!(await trashRecord.trash(target.id, state.name))) return;
       await preferences.patchPreferences((current) => ({
         ...current,
         [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
@@ -188,11 +192,11 @@ function StoredDashboardPage({ target, registry, store }: {
                     <ActionTrigger glyph="copy" onClick={() => void duplicate()}>
                       {t("common.duplicate")}
                     </ActionTrigger>
-                    {target.scope === "personal" && state.capabilities.canArchive ? (
+                    {target.scope === "personal" && state.capabilities.canTrash ? (
                       <>
                         <DropdownMenu.Separator />
-                        <ActionTrigger variant="danger" glyph="archive" onClick={() => void archive()}>
-                          {t("common.archive")}
+                        <ActionTrigger variant="danger" glyph="trash" onClick={() => void trash()}>
+                          {t("common.trash")}
                         </ActionTrigger>
                       </>
                     ) : null}

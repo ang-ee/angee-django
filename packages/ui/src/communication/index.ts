@@ -1,4 +1,4 @@
-export { Chatter, type ChatterProps } from "./Chatter";
+export { Chatter, useActiveChatterView, type ChatterProps } from "./Chatter";
 export { StepList, type StepListItem } from "./StepList";
 // Retired with django-reversion; the export stays so consumer imports compile until angee 0.4.0.
 export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";

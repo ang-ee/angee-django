@@ -230,7 +230,7 @@ export interface HostedResourceViewProps {
 export interface DashboardCapabilities {
   canEdit: boolean;
   canReset: boolean;
-  canArchive: boolean;
+  canTrash: boolean;
 }
 
 export type DashboardLoadState = { capabilities: DashboardCapabilities } & (
@@ -287,7 +287,6 @@ export interface DashboardStoreBinding {
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
   createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
   duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
-  archive: (id: string, expectedRevision: number, archived: boolean) => Promise<DashboardSaveResult>;
 }
 
 export interface DashboardCatalogueBinding {

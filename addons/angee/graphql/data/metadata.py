@@ -685,12 +685,19 @@ def _record_edges(
     """Project the edge models whose schema declares this resource's canonical type a target.
 
     A record carries only these edges, so a surface listing one (a record's files,
-    pages or source conversations) applies to the record types that name it.
+    pages or source conversations) applies to the record types that name it. An
+    edge with roles adds ``<label>:<role>`` for each role the type carries
+    (:meth:`~angee.base.refs.RecordRefMixin.record_edge_roles`), so a surface
+    serving one role (Comments on the chatter role) gates on that entry.
     """
 
     if model is None:
         return ()
-    return tuple(edge._meta.label for edge in edges_by_target.get(generic_pointer_model(model), ()))
+    entries: list[str] = []
+    for edge in edges_by_target.get(generic_pointer_model(model), ()):
+        entries.append(edge._meta.label)
+        entries.extend(f"{edge._meta.label}:{role}" for role in edge.record_edge_roles(model))
+    return tuple(entries)
 
 
 def _grantable_relations(

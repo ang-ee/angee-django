@@ -57,7 +57,7 @@ export const KnowledgeUpdatePageBody = graphql(`
 
 export const KnowledgeVaults = graphql(`
   query KnowledgeVaults($limit: Int, $offset: Int) {
-    vaults(limit: $limit, offset: $offset) {
+    vaults(where: { is_trashed: { _eq: false } }, limit: $limit, offset: $offset) {
       id
       name
       description
@@ -76,7 +76,7 @@ export const KnowledgeVault = graphql(`
 /** A vault by its declared name, for a host whose vault id differs per stack. */
 export const KnowledgeVaultByName = graphql(`
   query KnowledgeVaultByName($name: String!) {
-    vaults(where: { name: { _eq: $name } }, limit: 1) { id permissions }
+    vaults(where: { name: { _eq: $name }, is_trashed: { _eq: false } }, limit: 1) { id permissions }
   }
 `);
 

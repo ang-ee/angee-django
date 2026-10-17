@@ -128,8 +128,10 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables
     """The vocabulary uses authenticated membership without a row-level policy."""
 
     del composed_tables
+    # Audit stamps and the merge redirect are identity, not a row-level policy.
     tag_relation_fields = {
-        field.name for field in Tag._meta.fields if field.is_relation and field.name not in {"created_by", "updated_by"}
+        field.name for field in Tag._meta.fields
+        if field.is_relation and field.name not in {"created_by", "updated_by", "merged_into"}
     }
     assert tag_relation_fields == set()
     with system_context(reason="tags vocabulary setup"):

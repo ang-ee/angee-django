@@ -201,10 +201,11 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             for action in ("read", "read_private") if model != Tie else ("read",):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
                 # Each fresh scope reads the schema revision and expands the actor's
-                # memberships (2). Read then prepares 14 arrow sources (a filed task's
-                # record type adds one); Tie prepares one Party source. Private reads
-                # need only the final row SELECT.
-                expected_queries = 4 if model == Tie else 17 if action == "read" else 3
+                # memberships (2). Read then prepares 23 arrow sources (a filed task
+                # reaches each of its declared subject types' direct holders, its
+                # removal authority's project write and its subject task's owner);
+                # Tie prepares one Party source. Private reads need only the final row SELECT.
+                expected_queries = 4 if model == Tie else 26 if action == "read" else 3
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
@@ -221,12 +222,14 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         result = set(query)
                     counts.append(len(captured))
                     assert len(captured) == expected_queries, captured.captured_queries
+                    # The application row SELECT, and, for a party read, the arrow source of a
+                    # record task about a party.
                     assert (
                         sum(
                             query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
                             for query in captured.captured_queries
                         )
-                        == 1
+                        == (2 if model is Party and action == "read" else 1)
                     )
                     assert result == (set(ids) if action == "read" and model != Tie else set())
                 assert counts[0] == counts[1]
@@ -598,8 +601,8 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
     f = followers
     with system_context(reason="tests.follower_identity.record"):
         ticket = ThreadedTicket.objects.create(title="Followed record")
-        thread = ticket.message_thread(create=False)
-        assert thread is not None
+        # An elevated insert posts no creation message, so the record's thread starts here.
+        thread = ticket.message_thread()
         _grant(thread, f.reader)
         ticket.message_subscribe(party=f.person)
         ticket.message_subscribe(party=f.accountless)

@@ -1,14 +1,9 @@
-"""Messaging-owned signal receivers wired when the addon is installed.
+"""Delegate threaded-record deletion to the attachment owner's cleanup.
 
-A record's chatter thread is private to that record, so a hard delete of the record
-must tear down the whole thread graph — on the instance ``delete()`` path and the bulk
-``QuerySet.delete()`` path alike. ``ThreadAttachment`` binds the record through a
-``GenericForeignKey`` the delete collector cannot cascade *up* from: the attachment's FK
-points at the ``Thread``, so collecting the attachment never reaches the private thread
-or its messages. This connects a ``pre_delete`` receiver to every concrete
-``ThreadedModelMixin`` model, now and as new ones are prepared; the receiver runs the
-``ThreadAttachment`` owner's teardown inside the collector's own transaction, keeping the
-teardown atomic with the row delete on both paths.
+The retained reverse relation avoids collecting attachments before cleanup can
+rebind a retired host's followers and notifications. The existing ``pre_delete``
+receiver runs for instance and queryset deletion inside Django's transaction;
+the owner removes the edge and any unshared, unmerged private thread graph.
 """
 
 from __future__ import annotations
@@ -31,7 +26,7 @@ def connect() -> None:
 
 
 def teardown_record_thread(sender: Any, instance: Any, **kwargs: Any) -> None:
-    """Delete a record's private chatter thread graph before the row itself is deleted."""
+    """Preserve retained chatter bookkeeping and tear down the deleted host's edge."""
 
     del sender, kwargs
     apps.get_model("messaging", "ThreadAttachment").objects.teardown_for_record(instance)
