@@ -11,7 +11,6 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import connection, models
-from django.db.migrations.state import ModelState, ProjectState
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.test.utils import isolate_apps
@@ -495,31 +494,6 @@ def test_state_field_check_requires_null_for_concrete_optional_states(
         assert errors[0].obj is field
         assert "migrate stored empty strings to NULL" in errors[0].hint
         assert any(error.id == "angee.E019" for error in CheckedState.check())
-
-
-@pytest.mark.django_db(transaction=True)
-def test_historical_state_field_supports_blank_string_rows() -> None:
-    """Retained migration states can still reconstruct and read legacy rows."""
-
-    state = ProjectState()
-    state.add_model(
-        ModelState(
-            "auth",
-            "FieldBlankState",
-            fields=[
-                ("id", models.AutoField(primary_key=True)),
-                ("state", StateField(choices=[("enabled", "Enabled")], default="", blank=True)),
-            ],
-        )
-    )
-    FieldBlankState = state.apps.get_model("auth", "FieldBlankState")
-
-    with model_tables((FieldBlankState,)):
-        blank = FieldBlankState.objects.create()
-        enabled = FieldBlankState.objects.create(state="enabled")
-
-        assert FieldBlankState.objects.get(pk=blank.pk).state == ""
-        assert FieldBlankState.objects.get(pk=enabled.pk).state == "enabled"
 
 
 @pytest.mark.django_db(transaction=True)

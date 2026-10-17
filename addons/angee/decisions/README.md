@@ -73,9 +73,3 @@ The [web fragment](web/README.md) exports `DecisionCard`,
 changes, select radio buttons or checkboxes, and display the chosen verdict and
 answer attribution after closure. The `decisions#origin` seam is supplied by
 askers.
-
-Schema-only migrations drop and recreate the old decision tables. Existing
-decisions and workflow execution rows, including steps waiting on them, are
-discarded. Incoming legacy links retire first; `StepRun.decision` belongs to the
-workflow owner. There is no data conversion or compatibility layer. Fresh hosts
-generate initial migrations from the current models.

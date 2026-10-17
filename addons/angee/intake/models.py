@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from types import NotImplementedType
 from typing import Any, ClassVar, Self, cast
 
@@ -308,41 +308,6 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             party_model.objects.suggest_for(sender)
             sender.refresh_from_db(fields=("party", "party_link_confirmed"))
         return sender.party_id if sender.party_link_confirmed else None
-
-    def reconcile_parties(self, *, apply: bool = False) -> Iterator[dict[str, Any]]:
-        """Report legacy source matches; clear only untouched, unconfirmed copies."""
-
-        candidates = (
-            self.sudo(reason="intake.reconcile_parties.candidates")
-            .filter(
-                source_message__isnull=False,
-                party__isnull=False,
-            )
-            .order_by("pk")
-        )
-        for pk in candidates.values_list("pk", flat=True).iterator():
-            with system_context(reason="intake.reconcile_parties"), transaction.atomic():
-                need = self.lock_if_supported().select_related("source_message__sender", "party").get(pk=pk)
-                source = need.source_message
-                sender = source.sender
-                eligible = (
-                    sender is not None
-                    and not sender.party_link_confirmed
-                    and need.party_id == sender.party_id
-                    and need.updated_by_id == source.updated_by_id
-                )
-                user = apps.get_model("parties", "Party").objects.user_for(need.party)
-                report = {
-                    "need": need.sqid,
-                    "account": user.sqid if user is not None else None,
-                    "eligible": eligible,
-                    "applied": apply and eligible,
-                }
-                if apply and eligible:
-                    need.party = None
-                    need.save(update_fields=("party",))
-            yield report
-
 
 class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
     """One external or manually-authored request attached to one semantic target."""

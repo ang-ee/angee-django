@@ -106,9 +106,7 @@ Relation-marked step configuration fields accept resource references such as
 An administrator sets the responding agent's persistent `resource_reader: false` to opt out of
 the default generated reader bundle. Agent writes revoke that membership in the
 same transaction; enabling it grants membership only to a provisioned in-process
-agent. Catalogue synchronization updates tools and bundle contents. On upgrade,
-run `manage.py resync_tool_grants` through the stack host to reconcile all agent
-memberships, including old deprovisioned agents and agents moved to container runtimes.
+agent. Catalogue synchronization updates tools and bundle contents.
 
 Native contracts live in `tests/native_workflows_posts.py`.
 `tests/test_workflows_posts.py` composes the messaging trigger, agent runtime,

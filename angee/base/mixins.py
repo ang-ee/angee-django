@@ -103,10 +103,6 @@ def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Mode
 setattr(retained_set_null, "lazy_sub_objs", True)
 
 
-audit_set_null = retained_set_null
-"""Historical import for released migration bodies."""
-
-
 class TimestampMixin(models.Model):
     """Add conventional creation and update timestamps to a model."""
 
@@ -290,7 +286,7 @@ class OwnerMixin(AuditMixin):
         null=True,
         blank=True,
         editable=False,
-        on_delete=audit_set_null,
+        on_delete=retained_set_null,
         related_name="+",
     )
 

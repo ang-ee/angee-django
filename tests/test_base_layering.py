@@ -79,20 +79,20 @@ def _tree_imports(root: Path) -> set[str]:
     [
         (
             "angee/base/models.py",
-            "from . import historical_relationships",
-            {"angee.base", "angee.base.historical_relationships"},
+            "from . import mixins",
+            {"angee.base", "angee.base.mixins"},
         ),
         (
             "addons/angee/example/models.py",
-            "from ..base import historical_relationships as history",
-            {"angee.base", "angee.base.historical_relationships"},
+            "from ..base import mixins as base_mixins",
+            {"angee.base", "angee.base.mixins"},
         ),
         (
             "addons/angee/example/__init__.py",
-            "from ..base.historical_relationships import ensure_historical_relationships",
+            "from ..base.mixins import retained_set_null",
             {
-                "angee.base.historical_relationships",
-                "angee.base.historical_relationships.ensure_historical_relationships",
+                "angee.base.mixins",
+                "angee.base.mixins.retained_set_null",
             },
         ),
     ],

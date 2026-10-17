@@ -303,19 +303,15 @@ class StateField(TextChoicesField):
         status_display: Literal["pill", "dot", "text"] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Index state columns and accept legacy blank-string migration state.
-
-        New optional state declarations use NULL; the blank-string spelling is
-        retained only so historical migration fields can still be reconstructed.
-        """
+        """Index state columns and leave invalid optional declarations to checks."""
 
         self.angee_status_display = status_display
-        self._angee_blank_string = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
-        if self._angee_blank_string:
+        invalid_optional = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
+        if invalid_optional:
             kwargs["blank"] = False
         kwargs.setdefault("db_index", True)
         super().__init__(**kwargs)
-        if self._angee_blank_string:
+        if invalid_optional:
             self.blank = True
 
     def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
@@ -360,8 +356,6 @@ class StateField(TextChoicesField):
         if member is not None:
             return member
         raw = getattr(value, "value", value)
-        if self._angee_blank_string and raw in self.empty_values:
-            return ""
         return super().to_python(raw)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> Any:
@@ -792,26 +786,6 @@ class EncryptedField(models.TextField):
         if self._angee_fernet is None:
             self._angee_fernet = _derive_fernet(self._angee_fernet_label)
         return self._angee_fernet
-
-
-# ``ImplClassField`` moved to ``angee.base.impl`` ("one impl owner"); historical
-# migrations (a preserved artifact) still import it from here. A lazy re-export
-# keeps them loadable without a top-level import cycle (``impl`` imports
-# ``enum_member_for`` from this module). New migrations deconstruct through the
-# live class, so they carry the canonical ``angee.base.impl`` path and no drift
-# appears — this alias serves only the frozen files.
-_RELOCATED = {"ImplClassField": "angee.base.impl"}
-
-
-def __getattr__(name: str) -> Any:
-    """Resolve a field class that moved to another base module (PEP 562)."""
-
-    module_path = _RELOCATED.get(name)
-    if module_path is not None:
-        from importlib import import_module
-
-        return getattr(import_module(module_path), name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def enum_member_for(choices_enum: Any, value: Any) -> Any | None:

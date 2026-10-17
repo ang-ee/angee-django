@@ -241,6 +241,111 @@ def model_snapshot() -> dict[str, Any]:
     return snapshot
 
 
+def reset_migration_history_report() -> dict[str, Any]:
+    """Exercise a disposable composed history against an unchanged schema."""
+
+    from io import StringIO
+
+    from django.apps import apps
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from django.db import connection
+    from django.db.migrations.autodetector import MigrationAutodetector
+    from django.db.migrations.executor import MigrationExecutor
+    from django.db.migrations.recorder import MigrationRecorder
+    from django.db.migrations.state import ProjectState
+
+    from angee.compose.runtime import Runtime
+
+    runtime = Runtime.from_django()
+    labels = tuple(sorted(runtime.labels))
+    call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
+
+    try:
+        call_command("reset_migration_history", skip_checks=True, verbosity=0)
+    except CommandError as error:
+        pending_error = str(error)
+    else:
+        raise AssertionError("reset accepted unapplied composed migrations")
+
+    call_command("migrate", interactive=False, skip_checks=True, verbosity=0)
+    field = apps.get_model("alpha", "Source")._meta.get_field("name")
+    original_length = field.max_length
+    field.max_length = original_length + 1
+    try:
+        try:
+            call_command("reset_migration_history", skip_checks=True, verbosity=0)
+        except CommandError as error:
+            drift_error = str(error)
+        else:
+            raise AssertionError("reset accepted model drift")
+    finally:
+        field.max_length = original_length
+
+    call_command(
+        "makemigrations",
+        labels[0],
+        empty=True,
+        name="history_probe",
+        interactive=False,
+        include_header=False,
+        verbosity=0,
+    )
+    call_command("migrate", interactive=False, skip_checks=True, verbosity=0)
+    recorder = MigrationRecorder(connection)
+    old_rows = sorted(recorder.migration_qs.filter(app__in=labels).values_list("app", "name"))
+    noncomposed_before = sorted(recorder.migration_qs.exclude(app__in=labels).values_list("app", "name"))
+
+    output = StringIO()
+    call_command(
+        "reset_migration_history",
+        skip_checks=True,
+        verbosity=0,
+        stdout=output,
+    )
+
+    new_rows = sorted(recorder.migration_qs.filter(app__in=labels).values_list("app", "name"))
+    noncomposed_after = sorted(recorder.migration_qs.exclude(app__in=labels).values_list("app", "name"))
+    files = {
+        label: sorted(
+            path.name
+            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+            if path.name != "__init__.py"
+        )
+        for label in labels
+    }
+    executor = MigrationExecutor(connection)
+    targets = tuple(node for label in labels for node in executor.loader.graph.leaf_nodes(label))
+    changes = MigrationAutodetector(
+        executor.loader.project_state(),
+        ProjectState.from_apps(apps),
+    ).changes(
+        graph=executor.loader.graph,
+        trim_to_apps=set(labels),
+        convert_apps=set(labels),
+    )
+    # This temporary host has no dependency-group document; isolate the migration
+    # check from the source checkout's unrelated project contract.
+    runtime.project_dir = runtime.runtime_dir.parent
+    runtime.check()
+    alpha = executor.loader.disk_migrations["alpha", "0001_initial"]
+    return {
+        "labels": labels,
+        "pending_error": pending_error,
+        "drift_error": drift_error,
+        "old_rows": old_rows,
+        "new_rows": new_rows,
+        "noncomposed_unchanged": noncomposed_before == noncomposed_after,
+        "files": files,
+        "plan_empty": executor.migration_plan(targets) == [],
+        "changes_empty": changes == {},
+        "runtime_check": True,
+        "declarations": len(runtime.runtime_migrations().plan()),
+        "alpha_dependencies": alpha.dependencies,
+        "command_output": output.getvalue().splitlines(),
+    }
+
+
 def main() -> None:
     """Write one JSON report after the fresh host has completed Django startup."""
 
@@ -259,7 +364,11 @@ def main() -> None:
         action="store_true",
         help="Exclude showcase addons from the composed host profile.",
     )
-    parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests", "schemas"), default="resources")
+    parser.add_argument(
+        "--action",
+        choices=("resources", "snapshot", "state", "tests", "schemas", "reset-migrations"),
+        default="resources",
+    )
     parser.add_argument("--test-label", action="append", default=[])
     parser.add_argument("--test-postgresql", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -270,7 +379,7 @@ def main() -> None:
 
     boundary = (
         nullcontext()
-        if args.action == "tests"
+        if args.action in {"tests", "reset-migrations"}
         else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
     )
     with boundary:
@@ -370,6 +479,9 @@ def run(args: argparse.Namespace) -> None:
             + serialized
             + ").items()})\n"
         )
+        return
+    if args.action == "reset-migrations":
+        args.output.write_text(json.dumps(reset_migration_history_report(), indent=2, sort_keys=True) + "\n")
         return
     if args.action == "schemas":
         from angee.graphql.schema import GraphQLSchemas

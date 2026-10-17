@@ -38,7 +38,6 @@ from angee.agents.context import record_view_context
 from angee.agents.grants import (
     RESOURCE_READER_ROLE,
     builtin_mcp_server,
-    resync_tool_grants,
     sync_builtin_tool_catalogue,
 )
 from angee.agents.provisioning import provision_agent
@@ -742,36 +741,6 @@ class CommentReplyTests(TransactionTestCase):
             self.assertFalse(any(call.args[0] == "agents.run_session" for call in self.tasks.call_args_list))
             first_expiry = expiry
             now = expiry + timedelta(seconds=1)
-
-    def test_resync_tool_grants_reconciles_every_agents_reader_membership(self):
-        agents = []
-        with system_context(reason="legacy reader memberships"):
-            for index, (lifecycle, runtime, enabled) in enumerate(
-                (
-                    ("ready", "pydantic", True),
-                    ("deprovisioned", "pydantic", True),
-                    ("ready", "claude_code", True),
-                    ("ready", "pydantic", False),
-                )
-            ):
-                agent = Agent.objects.create(
-                    name=f"Legacy reader {index}", owner=self.owner, runtime_class=runtime, resource_reader=enabled
-                )
-                Agent.objects.filter(pk=agent.pk).update(lifecycle=lifecycle)
-                agent.refresh_from_db()
-                if index == 0:
-                    # Reset grants loses the ready agent's membership.
-                    revoke_role(actor=agent.user, role=RESOURCE_READER_ROLE)
-                else:
-                    grant_role(actor=agent.user, role=RESOURCE_READER_ROLE)
-                agents.append(agent)
-        resync_tool_grants()
-        resync_tool_grants()
-        with system_context(reason="reconciled reader memberships"):
-            self.assertEqual(
-                [RESOURCE_READER_ROLE in set(containers_of(agent.user)) for agent in agents],
-                [True, False, False, False],
-            )
 
     def test_catalogue_sync_errors_leave_provisioning_state_unchanged(self):
         ledger = apps.get_model("resources", "Resource")

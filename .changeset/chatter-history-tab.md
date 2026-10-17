@@ -8,5 +8,5 @@ The record change-history chatter tab is History. The framework placeholder is
 `messaging.history`, and the placeholder's messages are `chatter.tabHistory`,
 `chatter.noHistory` and `chatter.historyHint`. "Activity" now names only the
 kind of a record task. The former ids `activity`, `chatter.activity` and
-`messaging.activity` stay as `?chatterTab=` aliases until angee 0.4.0, which
-removes them; aside `only`, `except` and `hide` rules must name the new ids now.
+`messaging.activity` stay as `?chatterTab=` aliases; aside `only`, `except` and
+`hide` rules must name the new ids now.
