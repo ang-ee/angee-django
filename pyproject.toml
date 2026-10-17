@@ -113,7 +113,7 @@ addons = [
     "django-axes>=8.0",
     "django-countries>=9,<10",
     "django-import-export>=4.4",
-    "django-zed-rebac[strawberry-django]==0.27.3",
+    "django-zed-rebac[strawberry-django]>=0.27.0",
     "fastmcp>=3.4.2,<4",
     "httpcore2>=2.10,<3",
     "httpx2>=2.10,<3",
