@@ -14,7 +14,10 @@ import {
 
 export const inputVariants = tv({
   extend: widgetControlSurfaceVariants,
-  base: "w-full text-fg placeholder:text-fg-subtle",
+  // py-0 resets the browser's asymmetric user-agent padding-block on <input>.
+  // macOS Chrome adds ~1 px top / 2 px bottom by default, which shifts the
+  // placeholder and typed text above the vertical centre of the control.
+  base: "w-full py-0 text-fg placeholder:text-fg-subtle",
   variants: {
     size: {
       sm: "h-btn-sm px-2 text-xs",
