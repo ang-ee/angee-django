@@ -16,6 +16,7 @@ from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.models import Bridge
+from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import StreamPhase, SyncFailureKind
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.context import StepContext
@@ -83,7 +84,7 @@ class CoverageInput(BaseModel):
 
 
 class RescanConfig(BaseModel):
-    """Bounded work and the polling interval for externally resolved failures."""
+    """Bounded work and the interval within which a due retry keeps the rescan waiting."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     reconcile_seconds: int = Field(default=60, ge=1)
@@ -134,11 +135,15 @@ class StreamStage(Step[StreamStageInput, StreamStageOutput, None]):
 
 
 class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
-    """Rescan one partition per attempt and wait while coverage remains open.
+    """Rescan one partition per attempt and wait while a retry falls due.
 
     The driver owns due-identity selection, conflict exclusion and baseline
-    fallback. A baseline's persisted phase survives lost workflow settlement;
-    continuation carries the partition index and progress digest, never a cursor.
+    fallback. The step waits only while some failure the rescan retries is due
+    within ``reconcile_seconds``. One that backs off further, or waits on a
+    conflict, stays on its link for a later cycle and the step finishes reporting
+    it, so a permanent refusal never holds the bridge's one cycle open. A
+    baseline's persisted phase survives lost workflow settlement; continuation
+    carries the partition index and progress digest, never a cursor.
     """
 
     key = "integrate_rescan"
@@ -168,13 +173,11 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
                 return ctx.next_page({"rescan_index": index, "progress": progress, "resets": resets})
         if index + 1 < len(streams):
             return ctx.next_page({"rescan_index": index + 1})
-        output = StreamStageOutput.for_streams(
-            ctx.input.current_streams(bridge),
-            counts={"streams": len(streams)},
-        )
-        if output.failure_ids:
-            return ctx.wait(until=ctx.now + timedelta(seconds=ctx.config.reconcile_seconds), state={"rescan_index": 0})
-        return ctx.done(output)
+        current = ctx.input.current_streams(bridge)
+        wake = ctx.now + timedelta(seconds=ctx.config.reconcile_seconds)
+        if any(row.links.rescan(limit=1, due_by=wake) for row in current):
+            return ctx.wait(until=wake, state={"rescan_index": 0})
+        return ctx.done(StreamStageOutput.for_streams(current, counts={"streams": len(streams)}))
 
 
 class ConflictReview(DecisionStep[CoverageInput, StreamStageOutput, None]):
@@ -249,12 +252,19 @@ def _bridge_subject(ctx: StepContext) -> Bridge:
 
 @contextmanager
 def _stream_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl]:
-    """Fence transport and classify infrastructure failures for native retries."""
+    """Fence transport and classify infrastructure failures for native retries.
+
+    A host that does not resolve is retried too: a resolver that is briefly offline
+    answers "no such host" on some platforms (macOS), and a host that truly has no
+    address still fails once the step's attempts run out.
+    """
     ctx.heartbeat()
     ctx.begin_effect()
     try:
         with closing(bridge.backend) as adapter:
             yield adapter
+    except AddressResolutionError as error:
+        raise Retryable("The bridge host could not be resolved.") from error
     except (
         AdapterContractError,
         ImproperlyConfigured,
