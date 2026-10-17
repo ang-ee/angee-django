@@ -18,7 +18,9 @@ Dependency changes must update this file in the same change.
   manifest owns its Strawberry stack, Channels Redis adapter, and the exact
   Strawberry fork reference. strawberry-django, REBAC, Hasura and aggregates use
   published release floors in their owning manifests and registry artifacts in
-  `uv.lock`. The Strawberry fork remains necessary for native input/object
+  `uv.lock`. A distribution the core wheel requires has one exact pin, the
+  core's: a manifest adds only extras and a floor, so a core bump never
+  contradicts a host's generated group. The Strawberry fork remains necessary for native input/object
   extensions; every other Python dependency tracks its PyPI release.
   Use `uv add` / `uv lock`; do not use `pip install` by hand.
 - Package `package.json` files own scripts and declared JavaScript dependencies.
