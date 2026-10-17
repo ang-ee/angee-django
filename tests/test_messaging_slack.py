@@ -26,14 +26,14 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.http import HttpClient
 from angee.integrate.live import PairingState
 from angee.integrate.streams import StreamPage, advance_stream
-from angee.integrate.testing.models import RecordLink, SyncStream
+from angee.integrate.testing.models import RecordLink
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
 from angee.messaging.session import LiveChannelSession
 from angee.messaging.testing.models import Message, Part, Thread
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from angee.messaging_integrate_slack.backend import SlackChannelBackend, SlackRateLimitError
 from angee.messaging_integrate_slack.identity import parsed_message
-from tests.conftest import Credential, Vendor, make_integration
+from tests.conftest import Credential, Vendor, current_stream, make_integration
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging_graphql import Channel, _platform_admin
 
@@ -275,8 +275,8 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
         "threads": {"99.000001": "101.000001"},
     }
     with system_context(reason="test slack invalid page cursor"):
-        stream = SyncStream.objects.current(channel, "messages", "C1", cursor=cursor)
-        other = SyncStream.objects.current(
+        stream = current_stream(channel, "messages", "C1", cursor=cursor)
+        other = current_stream(
             channel,
             "messages",
             "D1",
@@ -850,7 +850,7 @@ def test_legacy_slack_position_seeds_only_an_empty_stream(
         channel.cursor = {"conversations": {"C1": {"last_ts": "1784700000.000001"}}, "threads": {}}
         channel.save(update_fields=["cursor"])
         if existing_stream:
-            SyncStream.objects.current(
+            current_stream(
                 channel,
                 "messages",
                 "C1",
@@ -910,7 +910,7 @@ def test_late_reply_below_history_watermark_lands_on_the_next_poll(
     assert set(Message._base_manager.values_list("message_type", flat=True)) == {Message.MessageKind.CHAT}
     assert Part._base_manager.filter(role=Part.PartRole.BODY).count() == 4
     channel.refresh_from_db()
-    assert SyncStream.objects.current(channel, "messages", "C1").cursor == {
+    assert current_stream(channel, "messages", "C1").cursor == {
         "conversation": {"last_ts": "1784700002.000001"},
         "threads": {"1784700000.000001": "1784700003.000001"},
     }

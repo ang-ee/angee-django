@@ -35,7 +35,8 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
-from angee.integrate.streams import StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
 from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
@@ -355,6 +356,14 @@ def make_integration(
         if backend_class is not None:
             values["backend_class"] = backend_class
         return model.objects.create(**values)
+
+
+def current_stream(bridge: Any, key: str, partition: str = "", **facts: Any) -> Any:
+    """Open a test stream through its declaration-owned manager contract."""
+
+    from angee.integrate.testing.models import SyncStream
+
+    return SyncStream.objects.current(bridge, StreamDefinition(key, partition, **facts))
 
 
 class StubVCSBackend(VCSBackend):

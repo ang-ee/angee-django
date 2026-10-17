@@ -345,7 +345,7 @@ def test_merging_two_handles_that_follow_a_feed_keeps_one_follow_spanning_both(p
         earliest = kept.started_at - timedelta(days=30)
         FeedFollow._base_manager.filter(pk=moved.pk).update(started_at=earliest)
 
-        Handle.objects.merge(alias, into=kept_handle)
+        kept_handle.fold([alias])
 
         follows = list(FeedFollow._base_manager.filter(feed=feed))
     assert [(row.pk, row.handle_id, row.started_at, row.ended_at) for row in follows] == [

@@ -25,7 +25,8 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
-from rebac import MissingActorError, PermissionDenied, system_context
+from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
@@ -131,9 +132,12 @@ class ConsoleIntegrationCapabilitiesQuery:
             mode = model.integration_create_mode
             if mode is None:
                 continue
-            try:
-                model.objects.check_create()
-            except MissingActorError, PermissionDenied:
+            resource_type = model_resource_type(model)
+            if resource_type is None or not check_new(
+                subject=to_subject_ref(_session_user(info)),
+                action="create",
+                resource_type=resource_type,
+            ).allowed:
                 continue
             capabilities.append(
                 IntegrationCapability(
