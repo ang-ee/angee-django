@@ -978,7 +978,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     @staticmethod
     def rule_source(key: str) -> Any:
         with system_context(reason="parties.rule"):
-            return apps.get_model("provenance", "Rule").objects.for_key(f"parties.{key}")
+            return apps.get_model("provenance", "Rule").objects.get(key=f"parties.{key}")
 
     @transaction.atomic
     def assert_handle(

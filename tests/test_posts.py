@@ -30,7 +30,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.mixins import SourceKind, StatementSourceMixin
+from angee.base.models import SourceKind, StatementSourceMixin
 from angee.integrate import scheduler
 from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart

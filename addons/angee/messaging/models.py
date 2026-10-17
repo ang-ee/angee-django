@@ -62,7 +62,8 @@ from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
     AuditMixin,
     CreationKeyMixin,
     HistoryMixin,
@@ -72,9 +73,7 @@ from angee.base.mixins import (
     SourceKind,
     TrashMixin,
 )
-from angee.base.models import AngeeDataModel
 from angee.base.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
@@ -226,8 +225,7 @@ class ThreadedModelMixin(models.Model):
 
     **Placement across MTI.** The chatter edge keys on the record's canonical target —
     its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.generic_pointer_target`)
-    — while the retained reverse :attr:`thread_attachments` relation and ``pre_delete``
-    teardown filter at the model that composes this mixin. Compose the mixin on that same
+    — while target-delete policy discovers edges through that same type. Compose the mixin on that same
     topmost REBAC-typed ancestor (``parties.Party``, not ``parties.Person``), so the write
     content type and the teardown content type match; ``ensure_for_record`` fails fast on a
     child-composed / ancestor-uncomposed split (the placement invariant in
@@ -259,17 +257,22 @@ class ThreadedModelMixin(models.Model):
             app_label=owner._meta.app_label,
             model=owner._meta.model_name,
         ).values("pk")[:1]
-        direct = models.Q(
-            thread__attachments__content_type_id=models.Subquery(content_type),
-            thread__attachments__object_id=record_id,
-            thread__attachments__role=cls.thread_attachment_role,
+        message_model = apps.get_model("messaging", "Message")
+        thread_model = apps.get_model("messaging", "Thread")
+        record_ref = record_id if hasattr(record_id, "resolve_expression") else models.Value(record_id)
+        rows = message_model.system_queryset().annotate(_record_id=record_ref)
+        survivor = thread_model(
+            pk=Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id")),
         )
-        redirected = models.Q(
-            thread__merged_into__attachments__content_type_id=models.Subquery(content_type),
-            thread__merged_into__attachments__object_id=record_id,
-            thread__merged_into__attachments__role=cls.thread_attachment_role,
+        attached = thread_model.system_queryset().redirect_group(survivor).filter(
+            attachments__content_type_id=models.Subquery(content_type),
+            attachments__object_id=models.OuterRef("_record_id"),
+            attachments__role=cls.thread_attachment_role,
         )
-        return system_queryset(apps.get_model("messaging", "Message")).filter(direct | redirected).distinct()
+        return rows.alias(_record_attached=models.Exists(attached)).filter(
+            thread_id__isnull=False,
+            _record_attached=True,
+        )
 
     thread_post_access: ClassVar[str] = "write"
     """Record permission required to post a chatter message."""
@@ -308,12 +311,9 @@ class ThreadedModelMixin(models.Model):
     )
     """Reverse edge to this row's chatter attachments.
 
-    This retained reverse relation supplies queries without scheduling attachment
-    cascades before the owner's cleanup. The ``pre_delete`` receiver on every
-    threaded model delegates to ``ThreadAttachmentManager.teardown_for_record``
-    inside Django's delete transaction, on instance and queryset deletion alike.
-    It rebinds retained chatter bookkeeping before deleting the old attachment;
-    an unshared, unmerged private thread and its messages still cascade normally.
+    This retained reverse relation supplies queries without Django collecting the
+    edge itself. ``RecordRefMixin.on_target_delete`` deletes the edge for instance
+    and queryset deletion alike.
 
     Record owners contribute read access in their ``permissions.extends.zed``:
     declare a relation on ``messaging/thread`` backed by
@@ -353,17 +353,6 @@ class ThreadedModelMixin(models.Model):
         if actor is not None and actor != current_actor():
             return actor_context(actor)
         return nullcontext()
-
-    def revert_removal(self, *, using: str, reason: str = "") -> None:
-        """An undone creation takes the record's own chatter with it, as its deletion does.
-
-        The chatter edge is the record's bookkeeping, not a reference that keeps it
-        alive; every other live reference or grant still refuses the removal.
-        """
-
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        attachment_model.objects.db_manager(using).teardown_for_record(self)
-        super().revert_removal(using=using, reason=reason)
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Delete this row after authorizing the record, then elevate its cascade.
@@ -868,7 +857,12 @@ class ThreadedModelMixin(models.Model):
         user_model = get_user_model()
         active = user_model._base_manager.filter(pk__in=[item["user"].pk for item in suggestions], is_active=True)
         viewer = user if user is not None else current_actor()
-        readable = read_scoped_queryset(user_model, viewer).in_bulk(list(active.values_list("pk", flat=True)))
+        readable_rows = (
+            user_model.objects.none()
+            if viewer is None
+            else user_model.objects.with_actor(viewer).with_action("read")
+        )
+        readable = readable_rows.in_bulk(list(active.values_list("pk", flat=True)))
         return tuple(
             {**item, "user": readable[item["user"].pk]} for item in suggestions if item["user"].pk in readable
         )
@@ -1344,9 +1338,7 @@ class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataMo
         """Physical chatter containers under the current, flattened survivor."""
 
         survivor = self.canonical()
-        return type(self)._base_manager.using(survivor._state.db).filter(
-            models.Q(pk=survivor.pk) | models.Q(merged_into=survivor),
-        )
+        return type(self).system_queryset().using(survivor._state.db).redirect_group(survivor)
 
     def chatter_totals(self) -> dict[str, Any]:
         """Current record summary over retained physical message containers."""
@@ -1460,7 +1452,7 @@ class Thread(SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataMo
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         return attachment_model._base_manager.filter(
-            thread_id__in=(self.pk, self.merged_into_id),
+            thread_id__in=self.member_threads().values("pk"),
             role=attachment_model.AttachmentRole.CHATTER,
         ).exists()
 
@@ -1501,6 +1493,7 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel)
 
     history = ChatterHistory(inherit=True)
     merge_policy = MergePolicy.MOVE
+    on_target_delete = models.CASCADE
     merge_identity = (("thread", "content_type", "object_id", "role"),)
     runtime = True
 
@@ -1614,6 +1607,7 @@ class FileSourceThreads(models.Model):
         content_type_field="content_type",
         object_id_field="object_id",
     )
+    """Reverse relation collecting the File's retained source-conversation edges."""
 
     class Meta:
         abstract = True

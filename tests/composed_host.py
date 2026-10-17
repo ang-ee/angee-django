@@ -406,8 +406,7 @@ def run(args: argparse.Namespace) -> None:
         from django.test.runner import DiscoverRunner
 
         from angee.base.changesets import changeset
-        from angee.messaging.testing.fixtures import load_source_identity
-        from angee.parties.testing.fixtures import load_statement_sources
+        from angee.provenance.testing import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
@@ -440,8 +439,8 @@ def run(args: argparse.Namespace) -> None:
                                 # schema its flush emptied, so the principal bootstrap finds it synced
                                 # and only loads the Rule/Seed rows instead of syncing a second time.
                                 if isinstance(test, TransactionTestCase):
-                                    load_statement_sources()
-                                    load_source_identity()
+                                    load_statement_sources("parties")
+                                    load_statement_sources("messaging")
 
                             setattr(test, "setUp", set_up)
 

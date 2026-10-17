@@ -91,12 +91,11 @@ export function recordCarriesThreads(context: ChatterViewContext): boolean {
 }
 
 /** The shared Comments tab, for an addon's `record#aside` or `<model>#aside`, configurable without another addon. */
-export function recordCommentsTab({ submitKey = "enter", aliases }: MessagingAddonOptions & { aliases?: readonly string[] } = {}): ContainerChild<ChatterTabContent> {
+export function recordCommentsTab({ submitKey = "enter" }: MessagingAddonOptions = {}): ContainerChild<ChatterTabContent> {
   return {
     sequence: 10,
     content: {
       label: "Comments", icon: "comments",
-      ...(aliases ? { aliases } : {}),
       // Per role, not per edge: a file is a thread attachment target only for its source conversations.
       when: recordKeepsChatter,
       useCount: useRecordCommentsUnread,
@@ -144,12 +143,11 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     },
     // Messaging contributes record comments and retained source conversations.
     "record#aside": {
-      "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-      // `messaging.sources` is the one-release alias of the renamed tab.
+      "messaging.comments": recordCommentsTab({ submitKey }),
       "messaging.related": {
         sequence: 60,
         content: {
-          label: "Conversations", icon: "inbox", aliases: ["messaging.sources", "sources"],
+          label: "Conversations", icon: "inbox",
           // Only on types whose schema lets a record retain source conversations.
           when: recordCarriesThreads,
           render: (context) => <RecordSourceThreadsPane context={context} />,

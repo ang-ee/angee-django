@@ -41,8 +41,7 @@ from rebac.actors import current_sudo_reason, is_sudo
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
-from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, SqidMixin, StatementSourceMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin, StatementSourceMixin
 from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
@@ -868,9 +867,8 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
 
     The ``GenericForeignKey`` the attachment binds through points *at* the thread, so the
     delete collector can never cascade from a deleted record up to its private ``Thread``
-    or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
-    row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message or follower behind.
+    or that thread's messages. The generic target-delete owner must remove the edge and
+    its private graph on both instance and queryset paths.
     """
 
     del composed_tables
@@ -905,8 +903,8 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
     ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
-    chatter edge, the reverse ``thread_attachments`` GenericRelation, and the ``pre_delete``
-    teardown must all agree on the child's canonical content type. A leftover attachment on
+    chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
+    agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
     invariant in ``angee.base.refs``).
     """
