@@ -31,7 +31,11 @@ export const WIDGET_CONTROL_DATA_READONLY_CLASS =
  * dimming mechanism (native `:disabled` pseudo vs base-ui `data-[disabled]`).
  */
 export const interactiveSurfaceVariants = tv({
-  base: "outline-none transition-colors",
+  // cursor-pointer is the correct default for every interactive element.
+  // The disabled variants override it with cursor-not-allowed via specificity.
+  // Input and Textarea intentionally inherit this — they are interactive.
+  // Read-only controls get cursor-default via WIDGET_CONTROL_READONLY_CLASS.
+  base: "cursor-pointer outline-none transition-colors",
   variants: {
     focus: {
       self: "focus:focus-ring",
@@ -77,7 +81,10 @@ export function interactiveSurface(
  */
 export const widgetControlSurfaceVariants = tv({
   extend: interactiveSurfaceVariants,
-  base: "rounded-6 border",
+  // cursor-text overrides the cursor-pointer from interactiveSurfaceVariants
+  // for text-entry controls (Input, Textarea, SearchInput). The read-only
+  // constant overrides this again with cursor-default.
+  base: "cursor-text rounded-6 border",
   variants: {
     surface: {
       sheet: "border-border bg-sheet",
