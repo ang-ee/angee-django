@@ -1544,7 +1544,15 @@ class StatementsMixin(models.Model):
         return [self]
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Ordinary person edits assert normal statements; resolved saves stay ordinary."""
+        """Ordinary person edits assert normal statements; resolved saves stay ordinary.
+
+        An aspect whose declared precedence leaves PERSON out is not a person's to
+        state: its fields belong to the native owner, so a person's save writes them
+        as an ordinary save and records no statement that later resolution could
+        restore over the owner's writes. A create states no group whose values are
+        all empty: an empty field on insert is the absence of a fact, so it never
+        outranks a later source. Explicit confirm and dismiss stay available.
+        """
 
         if is_sudo():
             super().save(*args, **kwargs)
@@ -1574,6 +1582,7 @@ class StatementsMixin(models.Model):
                     if (
                         declaration.members
                         or not fields
+                        or (declaration.precedence and SourceKind.PERSON not in declaration.precedence)
                         or not any(
                             (saved_fields is None or name in saved_fields)
                             and (previous is None or getattr(previous, name) != getattr(self, name))
@@ -1581,14 +1590,14 @@ class StatementsMixin(models.Model):
                         )
                     ):
                         continue
-                    manager.set(
-                        aspect=aspect,
-                        values={
-                            name: getattr(self if saved_fields is None or name in saved_fields else previous, name)
-                            for name in fields
-                        },
-                        asserted_by=actor,
-                    )
+                    values = {
+                        name: getattr(self if saved_fields is None or name in saved_fields else previous, name)
+                        for name in fields
+                    }
+                    if previous is None and all(value in (None, "") for value in values.values()):
+                        # A field left empty on create is no fact; a later edit that clears one is.
+                        continue
+                    manager.set(aspect=aspect, values=values, asserted_by=actor)
                     resolved_fields.update(fields if saved_fields is None else set(fields) & saved_fields)
             if resolved_fields:
                 self.refresh_from_db(using=using, fields=sorted(resolved_fields))

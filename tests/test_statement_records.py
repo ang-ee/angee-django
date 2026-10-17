@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from tests.conftest import create_user
+from tests.conftest import create_platform_admin, create_user
 from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
 
 
@@ -13,7 +13,7 @@ def test_the_source_declaration_finalizes_one_table_carrying_every_donor_aspect(
     """Donors precede the source in composed bases; the source's options still own the table."""
 
     statement_model = Claimed.statements.model
-    assert set(statement_model.statement_aspects) == {"identity", "tax"}
+    assert set(statement_model.statement_aspects) == {"identity", "tax", "registry"}
     assert {field.name for field in statement_model._meta.fields} >= {"subject", "name", "vat"}
     assert statement_model.sqid_prefix == "xcs_"
     assert isinstance(Claimed.statements.all(), ClaimedStatementQuerySet)
@@ -41,6 +41,48 @@ def test_a_donor_aspect_asserts_and_resolves_through_the_subject(composed_tables
     assert record.vat == "PL1234567890"
     with system_context(reason="test donor aspect read"):
         assert list(record.statements.provenance("vat")) == [statement]
+
+
+def test_a_person_save_states_only_the_aspects_that_admit_a_person(composed_tables: None) -> None:
+    """An aspect whose precedence leaves PERSON out is written by the save, not stated."""
+
+    del composed_tables
+    writer = create_user("person-save-writer")
+    with system_context(reason="test person save fixture"):
+        record = Claimed.objects.create(name="Acme")
+        write_relationships([RelationshipTuple(to_object_ref(record), "writer", to_subject_ref(writer))])
+    with actor_context(writer):
+        row = Claimed.objects.get(pk=record.pk)
+        row.vat = "PL1234567890"
+        row.registry = "KRS 0000123456"
+        row.save()
+    record.refresh_from_db()
+    assert (record.vat, record.registry) == ("PL1234567890", "KRS 0000123456")
+    with system_context(reason="test person save read"):
+        assert [statement.aspect for statement in record.statements.all()] == ["tax"]
+
+
+def test_a_person_create_states_no_group_left_empty(composed_tables: None) -> None:
+    """An empty field on create is no fact; clearing it later is an edit and is stated."""
+
+    del composed_tables
+    admin = create_platform_admin("person-create-admin")
+    with actor_context(admin):
+        record = Claimed.objects.create(name="Acme")
+    with system_context(reason="test person create read"):
+        assert [statement.aspect for statement in record.statements.all()] == ["identity"]
+    with actor_context(admin):
+        row = Claimed.objects.get(pk=record.pk)
+        row.vat = "PL1234567890"
+        row.save()
+        row.vat = ""
+        row.save()
+    record.refresh_from_db()
+    assert record.vat == ""
+    with system_context(reason="test person clear read"):
+        assert [(statement.aspect, statement.vat) for statement in record.statements.filter(aspect="tax")] == [
+            ("tax", "")
+        ]
 
 
 def test_a_declaration_names_its_model_and_copies_money_without_its_currency() -> None:
