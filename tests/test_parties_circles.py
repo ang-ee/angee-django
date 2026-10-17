@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import replace
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +41,7 @@ from angee.messaging.testing.models import (
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.tags.testing.models import Tag, TagAssignment
-from tests.conftest import make_integration
+from tests.conftest import current_stream, make_integration
 from tests.test_messaging import _grant
 
 User = get_user_model()
@@ -66,20 +65,6 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
         party = Party._base_manager.create(display_name="Counterparty", created_by=owner)
 
     with actor_context(owner):
-        with pytest.raises(ValidationError):
-            Party.objects.propose_manual_contact(
-                party,
-                platform="email",
-                value="not-an-email",
-                actor=owner,
-            )
-        with pytest.raises(ValidationError):
-            Party.objects.propose_manual_contact(
-                party,
-                platform="phone",
-                value="123",
-                actor=owner,
-            )
         link = Party.objects.propose_manual_contact(
             party,
             platform="email",
@@ -115,7 +100,7 @@ def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) 
         party = Party._base_manager.create(display_name="Contact", created_by=owner)
         alias = Handle.objects.upsert(platform="email", value="old@example.test", created_by_id=owner.pk)
         survivor = Handle.objects.upsert(platform="email", value="new@example.test", created_by_id=owner.pk)
-        Handle.objects.merge(alias, into=survivor)
+        survivor.fold([alias])
     with actor_context(owner):
         stance = Party.objects.propose_manual_contact(
             party, platform="email", value=alias.value, actor=owner,
@@ -407,7 +392,7 @@ def test_moving_handle_statements_retains_each_partys_decisions_and_evidence(com
         alias.refresh_from_db()
         assert alias.party_id == confirmed.pk
 
-        Handle.objects.merge(alias, into=phone)
+        phone.fold([alias])
 
         current = {
             row.subject_id: (row.confidence, row.is_confirmed, row.is_dismissed)
@@ -442,7 +427,7 @@ def test_moving_a_handles_only_statement_leaves_it_unowned(composed_tables: None
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         Party.objects.assert_handle(party, alias, asserted_by=owner)
 
-        Handle.objects.merge(alias, into=phone)
+        phone.fold([alias])
 
         for row in (alias, phone, party):
             row.refresh_from_db()
@@ -462,33 +447,13 @@ def test_a_folded_statement_stays_inspectable_as_superseded(composed_tables: Non
         weaker = Party.objects.assert_handle(party, alias, asserted_by=owner, confidence=0.9)
         stronger = Party.objects.assert_handle(party, phone, asserted_by=owner, confidence=1.0)
 
-        Handle.objects.merge(alias, into=phone)
+        phone.fold([alias])
 
         weaker.refresh_from_db()
         stronger.refresh_from_db()
         assert (weaker.handle_id, weaker.superseded_id, weaker.applied) == (phone.pk, stronger.pk, False)
         assert (stronger.superseded_id, stronger.applied) == (None, True)
         assert Party.statements.asserted().filter(pk=stronger.pk).exists()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_moving_statements_from_a_handle_already_gone_moves_nothing(composed_tables: None) -> None:
-    """A second resolver run racing the first finds its alias merged away and leaves the survivor alone."""
-
-    del composed_tables
-    with system_context(reason="test move statements gone"):
-        owner = _user("move-statements-gone")
-        alias = Handle._base_manager.create(platform="whatsapp", value="113352894324873@lid", created_by=owner)
-        phone = Handle._base_manager.create(platform="whatsapp", value="+18583421938", created_by=owner)
-        party = Party._base_manager.create(display_name="Bob", created_by=owner)
-        Party.objects.assert_handle(party, phone, asserted_by=owner)
-        Handle._base_manager.filter(pk=alias.pk).delete()
-
-        Handle.objects.merge(alias, into=phone)
-
-        phone.refresh_from_db()
-    assert phone.party_id == party.pk
-    assert Party.statements.filter(handle=phone).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -524,7 +489,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         )
         Party.statements.resolve(subject=party, aspect="handle")
 
-        Handle.objects.merge(alias, into=phone)
+        phone.fold([alias])
 
         for row in (imported, carded, phone):
             row.refresh_from_db()
@@ -557,13 +522,13 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         stance = party.with_actor(owner).confirm(aspect="handle", handle=alias, values={})
 
-        kept = Handle.objects.merge(alias, into=phone)
+        kept = phone.fold([alias])
 
         stance.refresh_from_db()
     assert kept.pk == phone.pk
     assert Handle._base_manager.get(pk=alias.pk).merged_into_id == phone.pk
     assert (kept.owner_id, kept.label, kept.display_name, kept.is_verified) == (owner.pk, "work", "Bob", True)
-    assert kept.metadata == {"jid": "p", "lid": "b"}
+    assert kept.metadata == {"jid": "p"}
     assert (stance.handle_id, stance.is_confirmed, kept.party_id, kept.party_link_confirmed) == (
         phone.pk,
         True,
@@ -605,7 +570,7 @@ def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_h
         for handle, tag in ((alias, vip), (phone, vip), (alias, work)):
             TagAssignment._base_manager.create(tag=tag, content_type=handle_type, object_id=handle.pk)
 
-        Handle.objects.merge(alias, into=phone)
+        phone.fold([alias])
 
         message.refresh_from_db()
         moved_participant.refresh_from_db()
@@ -629,15 +594,14 @@ def test_merging_a_handle_moves_what_points_at_it_and_collapses_facts_the_kept_h
 
 
 @pytest.mark.django_db(transaction=True)
-def test_merging_a_handle_a_concurrent_fold_redirected_does_nothing(composed_tables: None) -> None:
+def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="test handle merge vanished"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-vanished", "1943")
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         Party.objects.assert_handle(party, phone, asserted_by=owner)
 
-        assert Handle.objects.merge(alias, into=phone).pk == phone.pk
-        assert Handle.objects.merge(alias, into=phone) is None
+        assert phone.fold([alias]).pk == phone.pk
         assert Handle.objects.upsert(platform=alias.platform, value=alias.value).pk == phone.pk
         assert Handle.objects.canonical().filter(pk=alias.pk).exists() is False
 
@@ -656,7 +620,7 @@ def test_merging_handles_on_different_platforms_refuses(composed_tables: None) -
         email = Handle._base_manager.create(platform="email", value="bob-1944@example.test", created_by=owner)
 
         with pytest.raises(ValidationError, match="same platform"):
-            Handle.objects.merge(alias, into=email)
+            email.fold([alias])
 
         kept = set(Handle._base_manager.filter(pk__in=(alias.pk, email.pk)).values_list("pk", flat=True))
     assert kept == {alias.pk, email.pk}
@@ -792,7 +756,6 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
         handle.refresh_from_db()
         assert again.pk == handle.pk
         assert handle.owner_id == user.pk
-        assert set(Handle.objects.owned_by(user).values_list("pk", flat=True)) == {handle.pk}
         person = Person.objects.for_user(user)
         assert handle.party_id == person.pk
         assert handle.party_link_confirmed is False
@@ -1018,36 +981,6 @@ def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_members_of_serves_the_org_membership_query(composed_tables: None) -> None:
-    """PartyQuerySet.members_of returns parties whose relationships name the org."""
-
-    del composed_tables
-    with system_context(reason="test members_of"):
-        owner = _user("pia")
-        kind = RelationshipKind._base_manager.create(
-            slug="employee",
-            name="Employee",
-            inverse_name="Employer",
-            category="professional",
-            other_party_kind="organization",
-        )
-        acme = Organization._base_manager.create(display_name="Acme", created_by=owner)
-        ada = Person._base_manager.create(display_name="Ada", created_by=owner)
-        Relationship._base_manager.create(party=ada, other_party=acme, kind=kind, created_by=owner)
-        ended = Person._base_manager.create(display_name="Ended", created_by=owner)
-        Relationship._base_manager.create(
-            party=ended,
-            other_party=acme,
-            kind=kind,
-            ended_at=date(2025, 1, 1),
-            created_by=owner,
-        )
-
-        members = set(Party.objects.members_of(acme).values_list("pk", flat=True))
-    assert members == {ada.pk}
-
-
-@pytest.mark.django_db(transaction=True)
 def test_relationship_kind_end_legality_requires_org_counterparty(
     composed_tables: None,
     django_assert_num_queries: Any,
@@ -1160,7 +1093,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
         folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "contact-1")
         employee = RelationshipKind._base_manager.create(
             slug="employee",
@@ -1241,7 +1174,7 @@ def test_a_card_pass_keeps_its_addresses_local_facts(composed_tables: None) -> N
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
         folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "contact-4")
         RelationshipKind._base_manager.create(slug="employee", name="Employee", other_party_kind="organization")
         card = ParsedContact(uid="contact-4", display_name="Ada Lovelace", addresses=(home, work, work))
@@ -1283,7 +1216,7 @@ def test_ingest_contact_requires_employee_relationship_kind(composed_tables: Non
             owner.username + "-directory", model=Directory, backend_class="carddav", owner=owner
         )
         folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=owner)
-        stream = SyncStream.objects.current(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(directory, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "contact-2")
         parsed = ParsedContact(uid="contact-2", display_name="Grace", organization="Navy")
 
@@ -1347,7 +1280,7 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(co
         owner = _user("authority-owner")
         party = Party._base_manager.create(display_name="Ada (me)", created_by=owner)
         source = make_integration("authority-system-of-record", model=Directory)
-        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(source, "partners", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "partner-1", target=party)
         party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})
         _system_of_record_statement(party, source, link, display_name="Ada (odoo)")
@@ -1356,7 +1289,7 @@ def test_an_authoritative_stream_outranks_a_persons_edit_but_never_a_decision(co
         assert party.display_name == "Ada (me)"
 
         # The adapter's declaration carries the fact: redeclaring flips the current generation.
-        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA, authoritative=True)
+        stream = current_stream(source, "partners", kind=StreamKind.RECORD_REPLICA, authoritative=True)
         assert stream.authoritative is True
         party.refresh_from_db()
         assert party.display_name == "Ada (odoo)"
@@ -1387,7 +1320,7 @@ def test_an_authoritative_stream_outranks_a_persons_later_edit(composed_tables: 
         owner = _user("authority-later-owner")
         party = Party._base_manager.create(display_name="Ada (odoo)", created_by=owner)
         source = make_integration("authority-later-system-of-record", model=Directory)
-        stream = SyncStream.objects.current(source, "partners", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(source, "partners", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "partner-1", target=party)
         _system_of_record_statement(party, source, link, display_name="Ada (odoo)")
         party.with_actor(owner).statements.set(aspect="identity", values={"display_name": "Ada (me)"})

@@ -1,0 +1,1 @@
+"""Parties maintenance command package."""

@@ -690,10 +690,7 @@ data through REBAC, never a queryset bypass.
     `merged_from` row stays visible as such.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
     the system entry [`MergeableMixin.fold`](../../angee/base/merge.py), which
-    joins the open changeset and runs the same hooks under a system boundary, as
-    a `merge_contract` redirecting chatter threads and
-    [`Handle.objects.merge`](../../addons/angee/parties/managers.py), the bridge
-    compatibility entry, do.
+    joins the open changeset and runs the same hooks under a system boundary.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
@@ -1472,8 +1469,8 @@ projection through their existing write-back policies and remote preconditions.
   adapter locks and revalidates its local projection before applying. Identical
   edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
-  on its next pull. Separate JSON Patch `test` operations check each retained reflection
-  precondition; they do not replace the remote transport version fence.
+  on its next pull. The link checks its complete retained reflection precondition;
+  that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload, mapping version and dependency digest in `ApplyResult`; the driver
   alone promotes the primary link and pins the history row written for that
@@ -1502,7 +1499,7 @@ projection through their existing write-back policies and remote preconditions.
   evidence but does no transport work and ignores cursor expiry; an explicit
   resync creates a new generation.
   Recurring event feeds without reconciliation remain open. Declare the source
-  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/streams.py),
+  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/states.py),
   mirrored on `SyncStream.snapshot`; backend-private `config` does not own cadence.
   Do not interpret a missing interval alone as read-once.
 - **Inventory is a resumable import.** `reconcile_stream` consumes one bounded

@@ -17,11 +17,11 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
 
 if TYPE_CHECKING:
+    from angee.integrate.states import StreamDefinition
     from angee.integrate.streams import (
         ApplyResult,
         LocalChange,
         RecordChange,
-        StreamDefinition,
         StreamPage,
         WriteBackResult,
     )

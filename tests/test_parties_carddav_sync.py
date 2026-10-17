@@ -74,7 +74,7 @@ from angee.parties_integrate_carddav.backend import (
 )
 from angee.storage.exceptions import UploadTargetNotFound, UploadTooLarge
 from angee.storage.models import UploadState
-from tests.conftest import Backend, Drive, File, MimeType, make_integration
+from tests.conftest import Backend, Drive, File, MimeType, current_stream, make_integration
 from tests.stream_adapters import applied_history, failure_state
 from tests.test_storage import PNG_BYTES
 
@@ -318,7 +318,7 @@ def replica(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[
             StreamKind.RECORD_REPLICA,
             StreamDirection.BIDIRECTIONAL,
         )
-        stream = SyncStream.objects.current(directory, **asdict(definition))
+        stream = current_stream(directory, **asdict(definition))
         yield Replica(directory, backend, server, stream)
         backend.close()
 
@@ -1081,7 +1081,7 @@ def test_a_tombstone_keeps_the_assertions_another_link_of_the_source_still_obser
 
     person, link = replica.baseline()
     with system_context(reason="test second observation"):
-        other = SyncStream.objects.current(
+        other = current_stream(
             replica.directory,
             key="contacts",
             partition="/books/other/",

@@ -6,7 +6,9 @@ cycling back through model discovery.
 
 from __future__ import annotations
 
-from datetime import datetime
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
@@ -94,6 +96,34 @@ class ConflictKeep(models.TextChoices, StrEnum):
     LOCAL = "local", "Local"
 
 
+@dataclass(frozen=True, slots=True)
+class StreamDefinition:
+    """The declaration-owned facts for one independently ordered partition."""
+
+    key: str
+    partition: str = ""
+    kind: StreamKind = StreamKind.EVENT_FEED
+    direction: StreamDirection = StreamDirection.PULL
+    cursor: dict[str, Any] = field(default_factory=dict)
+    reconcile_interval: timedelta | None = None
+    absence_threshold: int = 2
+    tombstone_retention: timedelta | None = None
+    config: dict[str, Any] = field(default_factory=dict)
+    snapshot: bool = False
+    authoritative: bool = False
+
+    @classmethod
+    def from_stream(cls, stream: SyncStream) -> StreamDefinition:
+        """Read declaration facts from a persisted generation without another field inventory."""
+
+        return cls(**{item.name: deepcopy(getattr(stream, item.name)) for item in fields(cls)})
+
+    def stream_fields(self) -> dict[str, Any]:
+        """Return independent values suitable for creating a stream generation."""
+
+        return {item.name: deepcopy(getattr(self, item.name)) for item in fields(self)}
+
+
 class SyncFailure(BaseModel):
     """A state projection whose reads and transitions inherit its row's policy.
 
@@ -168,4 +198,6 @@ class SyncFailure(BaseModel):
     def resolve_conflict(self, *, keep: ConflictKeep) -> SyncFailure:
         if self.link is None:
             raise ValidationError("Conflict resolution requires a linked conflict.")
-        return self.link.resolve_conflict(self._slot, keep=keep)
+        from angee.integrate.streams import resolve_conflict
+
+        return resolve_conflict(self.link, self._slot, keep)

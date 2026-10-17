@@ -44,7 +44,8 @@ from slack_sdk.http_retry import (
     default_retry_handlers,
 )
 
-from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
 from angee.messaging_integrate_slack.identity import parsed_message, response_data
 

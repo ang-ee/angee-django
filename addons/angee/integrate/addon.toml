@@ -16,7 +16,6 @@ dependencies = [
   # httpcore2's API. httpx2 is bounded to the verified range for the same reason.
   "httpcore2>=2.10,<3",
   "httpx2>=2.10,<3",
-  "jsonpatch>=1.34",
   "qrcode[pil]>=8.2",
 ]
 

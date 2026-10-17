@@ -41,7 +41,8 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError
 from angee.integrate.signals import discovery_finished
-from angee.integrate.streams import StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import StreamPage
 from angee.jobs.enqueue import celery_app
 from angee.messaging import delivery
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedHandle, ParsedMessage, ParsedPart
