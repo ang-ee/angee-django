@@ -48,6 +48,7 @@ from tests.conftest import (
     VcsBridge,
     Vendor,
     WebhookSubscription,
+    current_stream,
     execute_schema,
     make_integration,
 )
@@ -121,7 +122,7 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
         }
     """
     with system_context(reason="test sync identity labels"):
-        stream = SyncStream.objects.current(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
         RecordLink.objects.observe(stream, "person:1")
     with CaptureQueriesContext(connection) as one:
         rows = _data(_execute(schema, query, user=admin))
@@ -131,7 +132,7 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     }
     with system_context(reason="test additional sync labels"):
         for index in range(4):
-            extra = SyncStream.objects.current(bridge, f"contacts-{index}", kind=StreamKind.RECORD_REPLICA)
+            extra = current_stream(bridge, f"contacts-{index}", kind=StreamKind.RECORD_REPLICA)
             RecordLink.objects.observe(extra, f"person:{index + 2}")
     with CaptureQueriesContext(connection) as many:
         rows = _data(_execute(schema, query, user=admin))
@@ -151,8 +152,8 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
     bridge = make_integration("stream-relation", model=Channel)
     other = make_integration("stream-relation-other", model=Channel)
     with system_context(reason="test stream relation projection"):
-        SyncStream.objects.current(bridge, "messages", "first")
-        SyncStream.objects.current(other, "messages", "hidden")
+        current_stream(bridge, "messages", "first")
+        current_stream(other, "messages", "hidden")
     schema = _schema()
     query = """
         query StreamOwner($id: String!) {
@@ -169,7 +170,7 @@ def test_sync_stream_filter_and_batched_integration_projection(composed_tables: 
 
     with system_context(reason="test additional stream partitions"):
         for index in range(4):
-            SyncStream.objects.current(bridge, "messages", f"partition-{index}")
+            current_stream(bridge, "messages", f"partition-{index}")
     with CaptureQueriesContext(connection) as many:
         rows = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
     assert len(rows) == 5
@@ -198,7 +199,7 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     with system_context(reason="test sync data-view graph"):
         owner, outsider = bridge.owner, other.owner
         for item in (bridge, other):
-            stream = SyncStream.objects.current(item, "contacts", kind=StreamKind.RECORD_REPLICA)
+            stream = current_stream(item, "contacts", kind=StreamKind.RECORD_REPLICA)
             link = RecordLink.objects.observe(stream, "person:1")
             link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
     schema = _schema()
@@ -245,7 +246,7 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
     bridge = make_integration("stream-counts", model=Channel)
     with system_context(reason="test stream count fixtures"):
         owner = bridge.owner
-        stream = SyncStream.objects.current(bridge, "contacts", "one", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", "one", kind=StreamKind.RECORD_REPLICA)
         for index in range(3):
             RecordLink.objects.observe(stream, f"person:{index}")
         for index in range(3):
@@ -269,7 +270,7 @@ def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_
     assert initial == [{"open_failure_count": 2, "link_count": 3}]
     with system_context(reason="test extra zero-count streams"):
         for index in range(5):
-            SyncStream.objects.current(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
+            current_stream(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
     with TestCase().assertNumQueries(len(one)):
         many = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
     assert many == [*initial, *[{"open_failure_count": 0, "link_count": 0}] * 5]
@@ -283,8 +284,8 @@ def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tab
     bridge = make_integration("stream-tab-count", model=VcsBridge)
     empty = make_integration("stream-tab-empty", model=VcsBridge)
     with system_context(reason="test inherited stream count"):
-        SyncStream.objects.current(bridge, "repository", "one")
-        SyncStream.objects.current(bridge, "repository", "two")
+        current_stream(bridge, "repository", "one")
+        current_stream(bridge, "repository", "two")
     rows = _data(
         _execute(_schema(), "{ integrations { id stream_count } vcs_bridges { id stream_count } }", user=admin)
     )
@@ -300,7 +301,7 @@ def test_record_link_target_uses_shared_public_reference(composed_tables: None) 
     bridge = make_integration("link-target", model=Channel)
     with system_context(reason="test record link target"):
         owner = bridge.owner
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "bound", target=stream)
         empty = RecordLink.objects.observe(stream, "unbound")
     rows = _data(_execute(_schema(), "{ record_links { id model_label record_id } }", user=owner))["record_links"]
@@ -333,7 +334,7 @@ def test_sync_actions_dispatch_managers_and_refuse_non_admins(
     outsider = User.objects.create_user(username="sync-action-outsider")
     with system_context(reason="test sync action fixtures"):
         owner = bridge.owner
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         failure = stream.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
     target = stream if model is SyncStream else failure
     method_owner = type(model.objects) if model is SyncStream else SyncFailure
@@ -1819,7 +1820,7 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     admin = _platform_admin(f"conflict-choice-{keep}-admin")
     bridge = make_integration(f"conflict-choice-{keep}", model=Channel)
     with system_context(reason="test explicit conflict action"):
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "one")
         failure = link.record_failure(kind=SyncFailureKind.CONFLICT, code="both_changed")
     calls: list[tuple[str, str]] = []

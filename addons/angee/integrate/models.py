@@ -21,8 +21,10 @@ import logging
 import secrets
 from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta
 from enum import StrEnum
+from itertools import batched
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -105,9 +107,9 @@ from angee.integrate.oauth.registrations import oauth_client_is_ready
 from angee.integrate.signals import discovery_finished
 from angee.integrate.states import (
     UNSET,
-    ConflictKeep,
     LinkStatus,
     OutboxState,
+    StreamDefinition,
     StreamDirection,
     StreamKind,
     StreamPhase,
@@ -116,7 +118,7 @@ from angee.integrate.states import (
     SyncFailureKind,
     SyncFailureStatus,
 )
-from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
+from angee.integrate.streams import sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 from angee.jobs.enqueue import enqueue_task
@@ -3647,7 +3649,7 @@ class WebhookSubscription(AuditMixin, AngeeDataModel):
 class SyncStreamManager(AngeeManager):
     """Serialize stream discovery and epoch changes on the integration row."""
 
-    def lock_current(self, stream: Any) -> Any:
+    def lock_current(self, stream: Any, *, fenced_to: Any = None) -> Any:
         """Fence one page against epoch changes inside the caller's transaction.
 
         The stream row lock is shared with epoch retirement. A stale extracted
@@ -3665,6 +3667,8 @@ class SyncStreamManager(AngeeManager):
                 generation__gt=locked.generation,
             ).exists():
                 raise RuntimeError("The extracted page belongs to a retired stream generation.")
+            if fenced_to is not None and locked.operation_fence != fenced_to.operation_fence:
+                raise RuntimeError("Stream state changed during external work; retry the operation.")
             return locked
 
     def current_for_bridge(self, bridge: models.Model, key: str | None = None) -> Any:
@@ -3687,18 +3691,7 @@ class SyncStreamManager(AngeeManager):
     def current(
         self,
         bridge: models.Model,
-        key: str,
-        partition: str = "",
-        *,
-        kind: StreamKind = StreamKind.EVENT_FEED,
-        direction: StreamDirection = StreamDirection.PULL,
-        snapshot: bool = False,
-        authoritative: bool = False,
-        cursor: Any = None,
-        reconcile_interval: timedelta | None = None,
-        absence_threshold: int = 2,
-        tombstone_retention: timedelta | None = None,
-        config: Mapping[str, Any] | None = None,
+        definition: StreamDefinition,
     ) -> Any:
         """Return the latest epoch, creating its baseline once per partition.
 
@@ -3710,35 +3703,31 @@ class SyncStreamManager(AngeeManager):
         flips it from inside a page.
         """
 
-        if absence_threshold < 1:
+        if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
-        integration = apps.get_model("integrate", "Integration")
-        if bridge._meta.proxy or integration not in bridge._meta.get_parent_list():
+        integration_model = self.model._meta.get_field("integration").remote_field.model
+        if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
         with system_context(reason="integrate.stream.current"), transaction.atomic():
             cast(Any, bridge).lock_capability()
-            identity = {"integration_id": bridge.pk, "key": key, "partition": partition}
+            identity = {
+                "integration_id": bridge.pk,
+                "key": definition.key,
+                "partition": definition.partition,
+            }
             stream = self.filter(**identity).order_by("-generation").first()
             if stream is None:
-                return self.create(
-                    **identity,
-                    kind=kind,
-                    direction=direction,
-                    snapshot=snapshot,
-                    authoritative=authoritative,
-                    cursor={} if cursor is None else cursor,
-                    reconcile_interval=reconcile_interval,
-                    absence_threshold=absence_threshold,
-                    tombstone_retention=tombstone_retention,
-                    config=dict(config or {}),
-                )
-            if stream.kind != kind:
+                return self.create(integration_id=bridge.pk, **definition.stream_fields())
+            if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
-            if stream.direction != direction or stream.snapshot != snapshot:
-                stream = self.bump_generation(stream, direction=direction, snapshot=snapshot)
-            if stream.authoritative != authoritative:
-                stream = self.set_authoritative(stream, authoritative)
-            return stream
+            if stream.direction != definition.direction or stream.snapshot != definition.snapshot:
+                stream = self.bump_generation(
+                    stream,
+                    direction=definition.direction,
+                    snapshot=definition.snapshot,
+                )
+            change_authority = stream.authoritative != definition.authoritative
+        return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
 
     def bump_generation(
         self,
@@ -3758,24 +3747,20 @@ class SyncStreamManager(AngeeManager):
             latest = self._lock_latest(stream)
             if latest.pk != stream.pk:
                 return latest
-            successor = self.create(
-                integration_id=latest.integration_id,
-                key=latest.key,
-                partition=latest.partition,
-                kind=latest.kind,
+            definition = replace(
+                StreamDefinition.from_stream(latest),
+                cursor={} if cursor is None else cursor,
                 direction=latest.direction if direction is None else direction,
                 snapshot=latest.snapshot if snapshot is None else snapshot,
-                authoritative=latest.authoritative,
+            )
+            successor = self.create(
+                integration_id=latest.integration_id,
+                **definition.stream_fields(),
                 generation=latest.generation + 1,
-                cursor={} if cursor is None else cursor,
                 last_advanced_at=timezone.now() if cursor else None,
-                reconcile_interval=latest.reconcile_interval,
-                absence_threshold=latest.absence_threshold,
-                tombstone_retention=latest.tombstone_retention,
-                config=deepcopy(latest.config),
                 inbound=deepcopy(latest.inbound),
             )
-            apps.get_model("integrate", "RecordLink").objects.filter(stream=latest).update(stream=successor)
+            latest.links.model.objects.filter(stream=latest).update(stream=successor)
             latest.state = StreamState.CLOSED
             latest.inbound = []
             latest.save(update_fields=["state", "inbound", "updated_at"])
@@ -3804,22 +3789,28 @@ class SyncStreamManager(AngeeManager):
         The caller authorizes the flip on the stream's integration.
         """
 
-        with system_context(reason="integrate.stream.set_authoritative"), transaction.atomic():
-            latest = self._lock_latest(stream)
-            if latest.authoritative != authoritative:
+        derivations = []
+        with system_context(reason="integrate.stream.set_authoritative"):
+            with transaction.atomic():
+                latest = self._lock_latest(stream)
+                if latest.authoritative == authoritative:
+                    return latest
+                for reference in references(latest.links.model):
+                    if not issubclass(reference.model, Statement):
+                        continue
+                    linked = reference.model._base_manager.filter(
+                        **{f"{reference.name}__stream": latest}, superseded__isnull=True
+                    )
+                    subject_ids = tuple(
+                        linked.order_by("subject_id").values_list("subject_id", flat=True).distinct()
+                    )
+                    derivations.append((reference.model, reference.model.statement_subject_model, subject_ids))
                 latest.authoritative = authoritative
                 latest.save(update_fields=["authoritative", "updated_at"])
-            for reference in references(apps.get_model("integrate", "RecordLink")):
-                if not issubclass(reference.model, Statement):
-                    continue
-                linked = reference.model._base_manager.filter(
-                    **{f"{reference.name}__stream": latest}, superseded__isnull=True
-                )
-                subjects = reference.model.statement_subject_model._base_manager.filter(
-                    pk__in=linked.values("subject_id")
-                )
-                for subject in subjects.order_by("pk").iterator():
-                    reference.model.objects.resolve(subject=subject)
+            for statement_model, subject_model, subject_ids in derivations:
+                for chunk in batched(subject_ids, 500):
+                    for subject in subject_model._base_manager.filter(pk__in=chunk).order_by("pk"):
+                        statement_model.objects.resolve(subject=subject)
             return latest
 
     def _lock_latest(self, stream: Any) -> Any:
@@ -3906,6 +3897,30 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
         """Label this stream by its adapter key and optional partition."""
 
         return f"{self.key} ({self.partition})" if self.partition else self.key
+
+    @property
+    def operation_fence(self) -> tuple[Any, ...]:
+        """Return all mutable stream facts that external work must fence."""
+
+        return self.state, self.phase, self.cursor, self.reconcile_state, self.resync_required
+
+    def accepts_pull(self) -> bool:
+        """Whether this generation accepts another inbound page."""
+
+        return (
+            self.state == StreamState.OPEN
+            and not self.resync_required
+            and (self.cursor_expires_at is None or self.cursor_expires_at > timezone.now())
+        )
+
+    def accepts_rescan(self) -> bool:
+        """Whether this generation accepts repair and reconciliation work."""
+
+        return (
+            self.state == StreamState.OPEN
+            and self.direction != StreamDirection.PUSH
+            and self.kind == StreamKind.RECORD_REPLICA
+        )
 
     @property
     def writes_back(self) -> bool:
@@ -3997,26 +4012,22 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
         if limit < 1:
             raise ValueError("A failure rescan limit must be positive.")
         links = self.with_open_failures().select_related("stream")
-        conflicts = {
-            link.parent_id or link.pk
-            for link in links.iterator(chunk_size=500)
-            if any(row.kind == SyncFailureKind.CONFLICT for row in link.failures(open_only=True))
-        }
         due_by = due_by or timezone.now()
-        due = []
+        conflicts = set()
+        candidates = []
         for link in links.iterator(chunk_size=500):
-            if (link.parent_id or link.pk) in conflicts:
-                continue
-            for row in link.failures(open_only=True):
+            aggregate = link.parent_id or link.pk
+            failures = link.failures(open_only=True)
+            if any(row.kind == SyncFailureKind.CONFLICT for row in failures):
+                conflicts.add(aggregate)
+            for row in failures:
                 if (
                     row.slot is not None
                     and row.kind != SyncFailureKind.REMOTE_REJECTED
                     and (row.retry_at is None or row.retry_at <= due_by)
                 ):
-                    due.append(row)
-                    if len(due) == limit:
-                        return tuple(due)
-        return tuple(due)
+                    candidates.append((aggregate, row))
+        return tuple(row for aggregate, row in candidates if aggregate not in conflicts)[:limit]
 
 
 class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type: ignore[misc]
@@ -4499,79 +4510,10 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
             "remote_version": self.remote_version,
         }
 
-    def resolve_conflict(self, slot: int | None, *, keep: ConflictKeep) -> SyncFailure:
-        """Fresh-read the chosen side, retaining transport's version fence."""
-        if keep not in ConflictKeep.values:
-            raise ValidationError("Choose remote or local changes.")
-        if connection.in_atomic_block:
-            raise RuntimeError("Conflict resolution must run outside a database transaction.")
-        with system_context(reason="integrate.record.resolve_conflict"):
-            link = type(self).objects.with_sync_evidence().get(pk=self.pk)
-            row = next(row for row in link.failures() if row.slot == slot)
-            if row.kind != SyncFailureKind.CONFLICT:
-                raise ValidationError("Conflict resolution requires a linked conflict.")
-            if not row.is_open:
-                return row
-            stream = link.stream
-            if stream.state == StreamState.CLOSED:
-                raise ValidationError("Resync the closed stream before resolving its conflict.")
-            owner = link.parent if link.parent is not None else link
-            adapter = stream.integration.concrete_capability().backend
-            keys = frozenset((owner.external_key,))
-            resolved = False
-            try:
-                if not adapter.supports_identity_reads:
-                    raise ValidationError("Conflict resolution requires an adapter with identity reads.")
-                if stream.resync_required:
-                    raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                if keep == ConflictKeep.LOCAL and (not stream.writes_back or not stream.has_completed_baseline()):
-                    raise ValidationError("Keeping local changes requires a completed writable baseline.")
-                base = owner.sync_precondition
-                remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
-                with transaction.atomic():
-                    type(stream).objects.lock_current(stream)
-                    locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
-                    current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
-                    current = next(row for row in current_link.failures() if row.slot == slot)
-                    if not current.is_open:
-                        return current
-                    if locked.sync_precondition != base:
-                        raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
-                    if remote is not None:
-                        type(locked).objects.observe(
-                            stream,
-                            locked.external_key,
-                            source_payload=remote.source_payload,
-                            source_hash=remote.source_hash,
-                            remote_version=remote.remote_version,
-                        )
-                    current_link.resolve_failure(slot, conflict=True)
-                resolved = True
-                if keep == ConflictKeep.REMOTE:
-                    prepared = begin_stream_cycle(stream, adapter, force_apply=keys)
-                    if prepared.resync_required:
-                        raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                elif not push_stream(stream, adapter, external_keys=keys).count:
-                    raise ValidationError("The selected local record could not be written; its failure remains open.")
-                if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                    raise ValidationError("The record could not be synchronized; its failure remains open.")
-                fresh = type(link).objects.get(pk=link.pk)
-                return next(row for row in fresh.failures() if row.slot == slot)
-            except Exception:
-                if resolved:
-                    fresh = type(link).objects.get(pk=link.pk)
-                    if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
-                        fresh.record_failure(
-                            kind=row.kind,
-                            code=row.code,
-                            source_hash=row.source_hash,
-                            mapping_version=row.mapping_version,
-                            details=row.details,
-                            outbox=slot is None,
-                        )
-                raise
-            finally:
-                adapter.close()
+    def sync_precondition_matches(self, expected: Mapping[str, Any]) -> bool:
+        """Compare the complete owner-defined conditional-write fence."""
+
+        return self.sync_precondition == expected
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Retain the integration's native SubjectRef when the identity is saved."""

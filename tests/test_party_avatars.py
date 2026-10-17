@@ -257,14 +257,14 @@ def test_a_handle_merge_gives_the_kept_handle_the_alias_avatar_only_when_it_has_
     alias_avatar, own_avatar = _avatar(PNG_BYTES), _avatar(GIF_BYTES)
     Handle.objects.set_avatar(alias, alias_avatar)
     with system_context(reason="test handle merge avatar fill"):
-        kept = Handle.objects.merge(alias, into=phone)
+        kept = phone.fold([alias])
     assert kept.pk == phone.pk and kept.avatar_id == alias_avatar.pk
 
     with system_context(reason="test handle merge avatar keep"):
         second_alias = Handle.objects.upsert(platform="whatsapp", value="113352894324898@lid", created_by_id=owner.pk)
     Handle.objects.set_avatar(second_alias, own_avatar)
     with system_context(reason="test handle merge avatar keep merge"):
-        kept = Handle.objects.merge(second_alias, into=phone)
+        kept = phone.fold([second_alias])
     assert kept.avatar_id == alias_avatar.pk
     assert set(
         Handle._base_manager.filter(pk__in=(alias.pk, second_alias.pk)).values_list("merged_into_id", flat=True)
