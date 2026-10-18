@@ -194,3 +194,12 @@ Generic patches resolve credential references through the caller's native write
 queryset, so hidden credentials are refused as not found. Authored console
 patches retain their administrator gate. Both dispatch attachment to the model
 owner.
+
+`Integration`, `WebhookSubscription` and `ExternalAccount` compose `OwnerMixin`:
+`owner` is a column, never a stored tuple. Authored integration patches change it
+through `transfer_ownership`; generic Hasura resources never write the column. A
+platform-managed integration is inserted with `save(ownerless=True)`. An external
+account takes only the owner its linking verb names; that verb claims an unowned
+account, and disconnect releases only the caller's ownership. Its transfer is
+admin-only because sign-in resolves an identity to its owner. A credential's
+`user` relation names whose authority it carries; it is not ownership.

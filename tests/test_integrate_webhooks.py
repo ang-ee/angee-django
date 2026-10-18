@@ -16,8 +16,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import transaction
 from django.test.utils import isolate_apps
-from rebac import system_context, to_object_ref, to_subject_ref
-from rebac.models import active_relationship_model
+from rebac import system_context
 
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
@@ -77,7 +76,7 @@ def dispatch_bridge(transactional_db: None) -> Iterator[Bridge]:
 
 @pytest.mark.django_db(transaction=True)
 def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> None:
-    """WebhookSubscription owner access comes from the owner field."""
+    """WebhookSubscription owner access comes from the owner field and moves by transfer."""
 
     del transactional_db
     call_command("rebac", "sync", verbosity=0)
@@ -95,9 +94,13 @@ def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> N
             event_kinds=[EventKind.BRIDGE_SYNCED.value],
         )
 
-    assert not _owner_tuple_exists(user, subscription)
+    assert subscription.owner_id == user.pk
     assert WebhookSubscription.objects.with_actor(user).filter(pk=subscription.pk).exists()
     assert not WebhookSubscription.objects.with_actor(other_user).filter(pk=subscription.pk).exists()
+
+    subscription.with_actor(user).transfer_ownership(other_user)
+    assert not WebhookSubscription.objects.with_actor(user).filter(pk=subscription.pk).exists()
+    assert WebhookSubscription.objects.with_actor(other_user).filter(pk=subscription.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -575,25 +578,6 @@ def _signature(secret: str, body: bytes) -> str:
     """Return the expected Angee webhook signature for a test request body."""
 
     return f"sha256={hmac.new(secret.encode(), body, 'sha256').hexdigest()}"
-
-
-def _owner_tuple_exists(owner: Any, resource: Any) -> bool:
-    """Return whether ``owner`` has the stored owner relation on ``resource``."""
-
-    owner_ref = to_subject_ref(owner)
-    resource_ref = to_object_ref(resource)
-    return (
-        active_relationship_model()
-        .objects.filter(
-            resource_type=resource_ref.resource_type,
-            resource_id=resource_ref.resource_id,
-            relation="owner",
-            subject_type=owner_ref.subject_type,
-            subject_id=owner_ref.subject_id,
-            optional_subject_relation=owner_ref.optional_relation,
-        )
-        .exists()
-    )
 
 
 @pytest.mark.django_db(transaction=True)

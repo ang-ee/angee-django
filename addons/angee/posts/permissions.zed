@@ -11,12 +11,15 @@
 
 definition posts/feed {
     relation channel: messaging/channel // rebac:field=channel_ptr
+    // The integration grandparent owns the feed's transferable ownership.
+    relation integration: integrate/integration // rebac:field=channel_ptr__integration_ptr
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
     permission read   = channel->read + admin->member
     permission write  = channel->write + admin->member
     permission delete = channel->write + admin->member
+    permission write__owner = integration->transfer
 }
 
 definition posts/feed_follow {

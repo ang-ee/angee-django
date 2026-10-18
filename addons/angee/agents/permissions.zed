@@ -69,6 +69,7 @@ definition agents/inference_provider {
     permission read = integration->read + admin->member
     permission write = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
 }
 
 definition agents/inference_model {

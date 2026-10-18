@@ -48,7 +48,7 @@ class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     vendor: VendorType
     credential: CredentialType | None
     account: ExternalAccountType | None
-    owner: UserType
+    owner: UserType | None
     backend_class: auto
     lifecycle: auto
     runtime_status: auto
