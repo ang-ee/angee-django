@@ -31,6 +31,7 @@ from angee.base.models import (
     AngeeModel,
     AppendOnlyModel,
     AppendOnlyQuerySet,
+    AuditMixin,
     HierarchyQuerySet,
     OwnerMixin,
     TrashMixin,
@@ -343,3 +344,82 @@ definition tests/owned_child {
         assert error.id == "angee.E027" and error.obj is OwnedChild
         assert "contenttypes.OwnedChild" in error.msg and "tests/owned_child" in error.msg
         assert "->reassign" in error.msg
+
+
+def test_a_child_sharing_its_owners_definition_takes_its_transfer_gate(tmp_path, monkeypatch):
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class SharedParent(OwnerMixin, AngeeModel):
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/shared_parent"
+
+        class SharedChild(SharedParent):
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/shared_parent"
+
+        path = tmp_path / "ownership.zed"
+        path.write_text(
+            "definition tests/shared_parent {\n    relation owner: auth/user // rebac:field=owner\n"
+            "    permission transfer = owner\n    permission write__owner = transfer\n}\n"
+        )
+        monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
+        assert check_ownership([isolated.get_app_config("contenttypes")]) == []
+
+
+@pytest.mark.parametrize(
+    ("owned", "relation", "flagged"),
+    [
+        (True, "relation owner: auth/user // rebac:field=owner", False),
+        (True, "relation owner: auth/user // rebac:field=created_by", True),
+        (False, "relation owner: auth/user // rebac:field=created_by", True),
+        (False, "relation owner: auth/user", True),
+        (False, "relation creator: auth/user // rebac:field=created_by", False),
+    ],
+)
+def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, relation, flagged):
+    """A relation named owner is OwnerMixin's column; attribution and roles take their own words."""
+
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        if owned:
+
+            class OwnedRow(OwnerMixin, AngeeModel):
+                class Meta:
+                    app_label = "contenttypes"
+                    rebac_resource_type = "tests/row"
+
+            row = OwnedRow
+        else:
+
+            class AttributedRow(AuditMixin, AngeeModel):
+                class Meta:
+                    app_label = "contenttypes"
+                    rebac_resource_type = "tests/row"
+
+            row = AttributedRow
+        name = relation.split()[1].rstrip(":")
+        path = tmp_path / "ownership.zed"
+        path.write_text(
+            f"definition tests/row {{\n    {relation}\n    permission transfer = {name}\n"
+            "    permission write__owner = transfer\n}\n"
+        )
+        monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
+        errors = check_ownership([isolated.get_app_config("contenttypes")])
+
+    spelling = [error for error in errors if error.id == "angee.E045"]
+    if flagged:
+        [error] = spelling
+        assert error.obj is row and "tests/row" in error.msg
+    else:
+        assert errors == []
+
+
+@pytest.mark.django_db
+def test_installed_models_spell_ownership_one_way() -> None:
+    """No installed definition names a relation owner other than OwnerMixin's column.
+
+    Test modules register their own models in the shared registry, so this
+    asserts the spelling rule alone; E022 and E027 have their focused tests.
+    """
+
+    assert [error.msg for error in check_ownership() if error.id == "angee.E045"] == []

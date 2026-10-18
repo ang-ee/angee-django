@@ -170,8 +170,8 @@ def test_a_deleted_record_takes_its_tasks_with_it(bulk: bool) -> None:
 
     writer = _user("record-deleter")
     doc, other = _doc("Doomed record"), _doc("Surviving record")
-    _grant(doc, "owner", writer)
-    _grant(other, "owner", writer)
+    _grant(doc, "manager", writer)
+    _grant(other, "manager", writer)
     with actor_context(writer):
         task = Task.objects.schedule(_as(writer, doc), title="Goes with the record")
         kept = Task.objects.schedule(_as(writer, other), title="Stays with its record")
