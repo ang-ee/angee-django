@@ -1544,11 +1544,11 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
     assert captured["email"] == "id-token@example.com"
     assert captured["claims"] == expected_claims
 
-    # First login establishes the user's own party: an owned handle + confirmed self-link.
+    # First login establishes the user's own party: a controlled handle + confirmed self-link.
     with system_context(reason="test verify login claim"):
         own_handle = PartiesHandle.objects.get(value="id-token@example.com")
         person = PartiesPerson.objects.for_user(link_user)
-        assert own_handle.owner_id == link_user.pk
+        assert own_handle.controller_id == link_user.pk
         assert own_handle.party_id == person.pk
 
     link_state, _link_record = oauth_state.issue(
