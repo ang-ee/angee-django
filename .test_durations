@@ -1422,7 +1422,7 @@
     "tests/test_extraction_models.py::test_source_and_target_reader_cannot_share_an_extraction_onward": 1.2690383330918849,
     "tests/test_extraction_models.py::test_target_access_uses_protected_field_relation": 1.341286791022867,
     "tests/test_extraction_models.py::test_target_reader_can_read_bound_parts_but_cannot_share": 1.4684804580174387,
-    "tests/test_extraction_models.py::test_target_reader_inherits_evidence_access_without_receiving_ownership": 1.6153034162707627,
+    "tests/test_extraction_models.py::test_target_reader_inherits_evidence_access_without_becoming_its_creator": 1.6153034162707627,
     "tests/test_extraction_models.py::test_unknown_correspondence_cannot_create_arbitrary_identities": 1.3469803757034242,
     "tests/test_extraction_schema.py::test_evidence_reader_cannot_expand_access_to_source_files": 2.5857815416529775,
     "tests/test_extraction_schema.py::test_evidence_resources_expose_reads_without_generic_mutations": 0.00928341643884778,
