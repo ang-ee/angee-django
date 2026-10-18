@@ -44,6 +44,12 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
+from angee.base.changesets import (
+    changeset,
+    changeset_model,
+    creation_fingerprint,
+    current_changeset,
+)
 from angee.base.identity import (
     instance_from_public_id,
     instances_from_public_ids,
@@ -51,14 +57,8 @@ from angee.base.identity import (
     public_id_for,
 )
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import CreationKeyMixin, OptimisticLockMixin, RowLockMixin
+from angee.base.models import AngeeModel, OptimisticLockMixin, RowLockMixin
 from angee.base.refs import RecordRefMixin
-from angee.base.scoping import (
-    aggregate_scoped_queryset,
-    lock_if_supported,
-    read_scoped_queryset,
-    system_queryset,
-)
 from angee.data.field_classification import (
     is_to_one_relation,
 )
@@ -100,7 +100,6 @@ from angee.graphql.introspection import (
     require_field_for_path,
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
-from angee.graphql.writes import write_queryset
 
 
 @dataclass(frozen=True)
@@ -129,7 +128,7 @@ class HasuraLines:
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.base.mixins.RowLockMixin` has each row checked
+    child composing :class:`~angee.base.models.RowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as
@@ -155,6 +154,67 @@ class HasuraLines:
     public_id_fields: Sequence[str] = ()
     position_field: str = "position"
     defaults: Mapping[str, str | int | float | bool | None] = dataclasses.field(default_factory=dict)
+
+
+def _claimed_create(
+    model: type[models.Model],
+    idempotency_key: str | None,
+    *,
+    fingerprint: str,
+    insert: Callable[[], Any],
+) -> Any:
+    """Insert once for one actor-scoped resource and replay its claimed row."""
+
+    if idempotency_key is None:
+        with transaction.atomic():
+            return insert()
+    with changeset(fresh=True), transaction.atomic():
+        actor = current_actor()
+        if not model_resource_type(model) or actor is None:
+            raise ImproperlyConfigured("Idempotent resources require an actor-scoped queryset.")
+        replay = changeset_model().objects.claim(
+            f"graphql.create:{model._meta.label_lower}:{actor}",
+            idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if replay is not None:
+            created = replay.created_row
+            if not isinstance(created, model):
+                raise ValidationError({"idempotency_key": "The claimed creation result is unavailable."})
+            instance = model.objects.with_actor(actor).filter(pk=created.pk).first()
+            if instance is None:
+                raise PermissionDenied("The claimed creation result is not readable.")
+            return instance
+        instance = insert()
+        cast(Any, current_changeset(required=True)).record_created(instance)
+        return instance
+
+
+class _ClaimingWriteBackend:
+    """Add the framework claim contract to an upstream-compatible custom backend."""
+
+    def __init__(self, model: type[models.Model], backend: WriteBackend) -> None:
+        self.model = model
+        self.backend = backend
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.backend, name)
+
+    def create(
+        self,
+        info: strawberry.Info,
+        data: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> Any:
+        """Create through the custom backend under the shared claim owner."""
+
+        return _claimed_create(
+            self.model,
+            idempotency_key,
+            fingerprint=creation_fingerprint(data),
+            insert=lambda: self.backend.create(info, data),
+        )
 
 
 def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
@@ -210,48 +270,37 @@ class AngeeHasuraWriteBackend:
         who lost record access delete the thread through ``delete_<res>_by_pk``.
         """
 
-        return write_queryset(self.model)
+        return self.model.objects.for_write()
 
-    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, idempotency_key: str | None = None) -> Any:
         """Create one row, its declared nested child lines and input extensions atomically."""
 
-        with transaction.atomic():
-            data = dict(data)
-            line_rows = self._pop_line_rows(data) if self.lines is not None else None
-            extensions = _pop_input_extensions(self.model, data)
+        data = dict(data)
+        line_rows = self._pop_line_rows(data) if self.lines is not None else None
+        extensions = _pop_input_extensions(self.model, data)
 
-            def insert() -> Any:
-                instance = self._create_row(info, data)
-                if line_rows is not None:
-                    self._apply_line_diff(info, instance, line_rows, replace=False)
-                if extensions:
-                    instance.apply_input_extensions(**extensions)
-                return instance
-
-            if client_creation_key is None:
-                return insert()
-            if not issubclass(self.model, CreationKeyMixin):
-                raise ValidationError({"client_creation_key": "This resource does not support creation keys."})
-            decoded = self._decode_public_id_fields(data)
-            scope = self.model.creation_key_actor_scope(current_actor(), decoded)
-            fingerprint = self._creation_fingerprint({**decoded, **extensions}, line_rows)
-            scope_field = self.model._meta.get_field(self.model.creation_key_scope)
-            data.update({
-                scope_field.attname: scope,
-                "client_creation_key": client_creation_key,
-                "creation_fingerprint": fingerprint,
-            })
-            if not model_resource_type(self.model) or current_actor() is None:
-                raise ImproperlyConfigured("Creation-key resources require an actor-scoped queryset.")
-            replays = read_scoped_queryset(self.model, current_actor())
-            instance, _created = replays.replay_or_insert(scope, client_creation_key, fingerprint, insert)
+        def insert() -> Any:
+            instance = self._create_row(info, data)
+            if line_rows is not None:
+                self._apply_line_diff(info, instance, line_rows, replace=False)
+            if extensions:
+                instance.apply_input_extensions(**extensions)
             return instance
+
+        decoded = self._decode_public_id_fields(data)
+        fingerprint = self._creation_fingerprint({**decoded, **extensions}, line_rows)
+        return _claimed_create(
+            self.model,
+            idempotency_key,
+            fingerprint=fingerprint,
+            insert=insert,
+        )
 
     def _creation_fingerprint(self, data: dict[str, Any], line_rows: list[dict[str, Any]] | None) -> str:
         """Fingerprint decoded write inputs, including the declared line envelope."""
 
         content = {"object": data, "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None}
-        return self.model.creation_fingerprint_for(content)
+        return creation_fingerprint(content)
 
     def save(
         self,
@@ -284,7 +333,7 @@ class AngeeHasuraWriteBackend:
             instance = require_instance_for_id(
                 self.model,
                 pk,
-                queryset=lock_if_supported(self.write_target_queryset()),
+                queryset=self.write_target_queryset().lock_if_supported(),
             )
             if not instance.has_access("write"):
                 raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
@@ -440,7 +489,7 @@ class AngeeHasuraWriteBackend:
             instance = require_instance_for_id(
                 self.model,
                 pk,
-                queryset=lock_if_supported(self.write_target_queryset()),
+                queryset=self.write_target_queryset().lock_if_supported(),
             )
             if expected_revision is not None:
                 instance.require_revision(expected_revision)
@@ -664,7 +713,7 @@ class _RelationIDDecoder:
         return value.value
 
     def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
-        queryset = read_scoped_queryset(self.model, actor)
+        queryset = self.model.objects.with_actor(actor).with_action("read")
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
             value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)
@@ -864,7 +913,7 @@ def aggregate_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
     User-authored joins retain their normal Django aggregate cardinality.
     """
 
-    return aggregate_scoped_queryset(queryset)
+    return queryset.scoped_for_aggregate()
 
 
 def _model_queryset(
@@ -1150,8 +1199,16 @@ def with_filter_aliases(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
 def _scalar_alias_expression(queryset: models.QuerySet[Any], expression: Combinable) -> models.Subquery:
     """Keep an unused alias's related joins out of its containing row query."""
 
-    source = system_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
+    source = _composition_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
     return models.Subquery(source.annotate(_angee_scalar=expression).values("_angee_scalar")[:1])
+
+
+def _composition_queryset(model: type[models.Model]) -> models.QuerySet[Any]:
+    """Return an elevated declaration-time queryset for framework or upstream models."""
+
+    if issubclass(model, AngeeModel):
+        return model.system_queryset()
+    return model._base_manager.all()
 
 
 def _public_pk(model: type[models.Model], value: Any) -> Any:
@@ -1160,7 +1217,7 @@ def _public_pk(model: type[models.Model], value: Any) -> Any:
     field = public_data_id_field(model)
     if field is not None:
         return field.public_id_to_value(value)
-    instance = instance_from_public_id(model, str(value), queryset=system_queryset(model, lock=None))
+    instance = instance_from_public_id(model, str(value), queryset=_composition_queryset(model))
     return None if instance is None else instance.pk
 
 
@@ -1172,7 +1229,7 @@ def _write_public_instance(model: type[models.Model], value: Any) -> Any:
     return require_instance_for_id(
         model,
         str(value),
-        queryset=write_queryset(model),
+        queryset=model.objects.for_write(),
     )
 
 
@@ -1290,7 +1347,7 @@ def _resource_filter_projection(
     definition = get_object_definition(node, strict=True)
     if collisions := {field.python_name for field in definition.fields} & dict(expressions).keys():
         raise ImproperlyConfigured(f"{definition.name} shadows contributed resource fields: {sorted(collisions)}.")
-    empty = model._default_manager.none()
+    empty = _composition_queryset(model).none()
     outputs = {
         name: field_type_map[type((expression(empty) if callable(expression) else expression).output_field)]
         for name, expression in expressions
@@ -1519,6 +1576,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
     active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
+    resource_write_backend = (
+        active_write_backend
+        if isinstance(active_write_backend, AngeeHasuraWriteBackend)
+        else _ClaimingWriteBackend(model, active_write_backend)
+    )
     declared_writable = [seq for seq in (writable, insertable, updatable) if seq is not None]
     _check_writable_relations_decoded(
         model,
@@ -1574,16 +1636,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         insert=insert,
         update=update,
         delete=delete,
-        insert_arguments={"client_creation_key": str | None}
-        if insert and issubclass(model, CreationKeyMixin)
-        else None,
+        insert_arguments={"idempotency_key": str | None} if insert else None,
         update_arguments={"expected_revision": int | None}
         if update and issubclass(model, OptimisticLockMixin)
         else None,
         field_id_decode=field_id_decode,
         get_queryset=read_queryset,
         get_aggregate_queryset=aggregate_source,
-        write_backend=active_write_backend,
+        write_backend=resource_write_backend,
         id_decode=id_decode,
         id_column=id_column,
     )
@@ -1603,7 +1663,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         assert resource.filter_type is not None
         filter_name = get_object_definition(resource.filter_type, strict=True).name
         # Only the expressions' output fields are read; a gated field needs a scope to build one.
-        empty = system_queryset(model).none()
+        empty = _composition_queryset(model).none()
         output_fields = {
             key: (expression(empty) if callable(expression) else expression).output_field
             for key, expression in expressions.items()
@@ -1694,7 +1754,7 @@ def _check_writable_relations_decoded(
     """Reject an *explicitly* writable relation column that declares no public-id decode.
 
     A relation column (FK / M2M) written raw bypasses the actor-scoped public-id
-    decode (``_write_public_instance`` → ``write_queryset``), so a caller could set
+    decode (``_write_public_instance`` → ``objects.for_write()``), so a caller could set
     the relation to a target it cannot read — an escalation the §3.4 child-lines
     elevation would then persist under the parent's authority. Every relation a
     surface declares writable must name a decode (the parent's ``field_id_decode`` /

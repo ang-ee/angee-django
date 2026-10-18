@@ -18,8 +18,8 @@ def register(server: FastMCP) -> None:
                 name="create_task",
                 fields=_TASK_RESULT,
                 flatten="object",
-                args=("client_creation_key",),
-                description="Create a task. Reuse client_creation_key to replay the same creation safely.",
+                args=("idempotency_key",),
+                description="Create a task. Reuse idempotency_key to replay the same creation safely.",
             ),
             GraphQLTool(
                 operation="update_project_tasks_by_pk",

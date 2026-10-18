@@ -86,7 +86,7 @@ function StoredDashboardPage({ target, registry, store }: {
     try {
       const result = await binding.duplicate(target, {
         name: `${state.name} copy`,
-        clientCreationKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
+        idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
         snapshot: visibleDashboardSnapshot(registry, target, state),
       });
       await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });

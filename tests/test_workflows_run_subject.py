@@ -6,7 +6,6 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import system_context
 
-from angee.base.scoping import system_queryset
 from angee.workflows import subjects
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.testing.drivers import load_workflow, run_until
@@ -61,22 +60,22 @@ def test_request_replay_admits_once_and_settlement_reads_terminal_output(executi
 def test_admission_refusal_rolls_back_run_evidence_and_dispatch(execution, subject):
     actor, sent = execution
     workflow = workflow_for(actor)
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).update(refuse_admission=True)
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_admission=True)
     sent.clear()
 
     with pytest.raises(ValidationError, match="refuses admission"):
         WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
 
-    assert not system_queryset(WorkflowRun).exists()
-    assert not system_queryset(StepRecord).exists()
-    assert not system_queryset(StepRun).exists()
+    assert not WorkflowRun.system_queryset().exists()
+    assert not StepRecord.system_queryset().exists()
+    assert not StepRun.system_queryset().exists()
     assert sent == []
 
 
 def test_cancel_settles_once_and_rolls_back_when_subject_raises(execution, subject):
     actor, _ = execution
     run = WorkflowRun.objects.start(workflow_for(actor), actor=actor, subject=subject)
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).update(refuse_settlement=True)
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_settlement=True)
 
     with pytest.raises(ValidationError, match="refuses settlement"):
         WorkflowRun.objects.cancel(run, actor=actor)
@@ -84,8 +83,8 @@ def test_cancel_settles_once_and_rolls_back_when_subject_raises(execution, subje
     run.refresh_from_db()
     subject.refresh_from_db()
     assert run.status == RunStatus.RUNNING and subject.settlements == []
-    assert system_queryset(StepRun).get(run=run).status == StepRunStatus.READY
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).update(refuse_settlement=False)
+    assert StepRun.system_queryset().get(run=run).status == StepRunStatus.READY
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_settlement=False)
     assert WorkflowRun.objects.cancel(run, actor=actor).canceled
     assert not WorkflowRun.objects.cancel(run, actor=actor).canceled
     subject.refresh_from_db()
@@ -96,8 +95,8 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
     actor, _ = execution
     run = WorkflowRun.objects.start(workflow_for(actor, step="reject"), actor=actor, subject=subject)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).update(refuse_admission=True)
+    step = StepRun.system_queryset().get(run=run)
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_admission=True)
 
     with pytest.raises(ValidationError, match="refuses admission"):
         StepRun.objects.retry_step(step, actor=actor)
@@ -105,7 +104,7 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
     run.refresh_from_db()
     step.refresh_from_db()
     assert run.status == RunStatus.FAILED and step.status == StepRunStatus.FAILED
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).update(refuse_admission=False)
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).update(refuse_admission=False)
     StepRun.objects.retry_step(step, actor=actor)
     run_until(run)
     subject.refresh_from_db()
@@ -116,7 +115,7 @@ def test_retry_readmits_and_refusal_keeps_run_and_step_failed(execution, subject
 def test_deleted_subject_stops_its_run(execution, subject):
     actor, sent = execution
     run = WorkflowRun.objects.start(workflow_for(actor), actor=actor, subject=subject)
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).delete()
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).delete()
     from angee.workflows.tasks import cancel
 
     payload = next(payload for name, payload in sent if name == "workflows.cancel")
@@ -132,8 +131,8 @@ def test_deleted_subject_prevents_reopen(execution, subject):
     actor, _ = execution
     run = WorkflowRun.objects.start(workflow_for(actor, step="reject"), actor=actor, subject=subject)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
-    system_queryset(RunSubjectRecord).filter(pk=subject.pk).delete()
+    step = StepRun.system_queryset().get(run=run)
+    RunSubjectRecord.system_queryset().filter(pk=subject.pk).delete()
 
     with pytest.raises(ValidationError, match="cannot be retried|subject no longer exists"):
         StepRun.objects.retry_step(step, actor=actor)
@@ -161,7 +160,7 @@ def test_child_runs_do_not_admit_or_settle_parent_subject(execution, subject, re
     parent_workflow = load_workflow(document("entry", step=StartChild.key), key="parent", actor=actor)
     parent = WorkflowRun.objects.start(parent_workflow, actor=actor)
     run_until(parent)
-    child = system_queryset(WorkflowRun).get(parent_step__run=parent)
+    child = WorkflowRun.system_queryset().get(parent_step__run=parent)
     if not child.is_terminal:
         run_until(child)
     subject.refresh_from_db()

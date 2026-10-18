@@ -43,8 +43,15 @@ from rebac.roles import ROLE_RELATION
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.mixins import OptimisticLockMixin, SourceKind, StatementSourceMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    OptimisticLockMixin,
+    SourceKind,
+    StatementSourceMixin,
+    role_anchor,
+)
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders

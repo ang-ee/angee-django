@@ -28,8 +28,7 @@ from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
-from angee.base.mixins import AppendOnlyQuerySet, StaleRevisionError, require_revision
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet, StaleRevisionError, require_revision
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.events import ChangeRelatedRecord

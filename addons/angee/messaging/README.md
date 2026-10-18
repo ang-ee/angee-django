@@ -74,7 +74,7 @@ workers cannot enforce the worker time limits on which the lease depends.
 If sync has already ingested a reconciled provider identity in the same channel,
 that provider row remains visible. `record_delivery` retains the local attempt
 as a trashed SENT audit row, with `delivery_conflict` pointing to the provider id;
-its creation key and provenance survive without a second visible row or count.
+its idempotency key and provenance survive without a second visible row or count.
 Advisory task locks reduce contention; the row claim is authoritative. This is
 at-most-once recovery of an uncertain effect, not an exactly-once provider guarantee.
 

@@ -8,7 +8,6 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel
 
-from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
@@ -80,7 +79,7 @@ def test_fork_join_graph_keeps_pinned_labels_ports_and_taken_edges(schema, execu
     register_step(CurrentRoute)
     saved = Workflow.objects.save_draft(workflow, draft=changed, expected_revision=workflow.draft_revision, actor=actor)
     Workflow.objects.publish(workflow, expected_revision=saved.revision, actor=actor)
-    runner.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
+    runner.execute(StepRun.system_queryset().get(run=run, node_key="entry").pk)
     projected = read_graph(schema, run, actor)["graph"]
     entry = next(node for node in projected["nodes"] if node["key"] == "entry")
     assert entry["label"] == "Frozen entry"
@@ -106,7 +105,7 @@ def test_run_reader_gets_graph_without_workflow_or_version_read(schema, executio
     node = visible["graph"]["nodes"][0]
     assert node["label"] == "Retained failure"
     assert node["step_run"]["failure_reason"] == "Rejected by the fixture."
-    assert system_queryset(StepRun).get(run=run).failure_reason == run.failure_reason
+    assert StepRun.system_queryset().get(run=run).failure_reason == run.failure_reason
     assert read_graph(schema, run, outsider) is None
     assert result_data(execute_schema(schema, "{ workflow { id } workflowversion { id } }", user=reader)) == {
         "workflow": [], "workflowversion": [],
@@ -132,7 +131,7 @@ def test_map_graph_counts_all_items_and_attempts_at_constant_query_cost(schema, 
         assert len(nodes) == node_count
         for node in nodes:
             assert node["label"] == f"Items {node['key'].rsplit('_', 1)[1]}"
-            assert node["label"] == system_queryset(StepRun).get(run=run, node_key=node["key"]).node_label
+            assert node["label"] == StepRun.system_queryset().get(run=run, node_key=node["key"]).node_label
             assert node["body_key"] == node["key"] + ".body"
             assert node["item_counts"] == [{"status": "SUCCEEDED", "count": size}]
             assert node["item_attempts"] == size
@@ -200,7 +199,7 @@ def test_run_failure_reason_prefers_output_then_first_retained_failed_error(exec
     }}, actor=actor)
     run = start_run(workflow, actor=actor)
     run_until(run)
-    assert system_queryset(StepRun).filter(run=run, status="failed").count() == 3
+    assert StepRun.system_queryset().filter(run=run, status="failed").count() == 3
     assert run.outcome == "error"
     run.output = {"error": "Run failure"}
     assert run.failure_reason == "Run failure"
@@ -236,8 +235,8 @@ def test_map_graph_summarizes_partial_progress_without_a_page_sample(schema, exe
                   "input": {"items": {"from": "input", "path": ["items"]}}},
     }}, actor=actor)
     run = start_run(workflow, actor=actor, input={"items": [{"value": 1}, {"value": 2}]})
-    runner.execute(system_queryset(StepRun).get(run=run, node_key="items").pk)
-    runner.execute(system_queryset(StepRun).get(run=run, node_key="items.body", map_index=0).pk)
+    runner.execute(StepRun.system_queryset().get(run=run, node_key="items").pk)
+    runner.execute(StepRun.system_queryset().get(run=run, node_key="items.body", map_index=0).pk)
     node = read_graph(schema, run, actor)["graph"]["nodes"][0]
     assert node["step_run"]["status"] == "WAITING"
     assert (node["step_run"]["map_total"], node["step_run"]["map_settled"]) == (2, 1)

@@ -7,6 +7,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.changesets import changeset_model
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.knowledge.schema import schemas
@@ -27,7 +28,7 @@ from tests.test_knowledge import _grant
 
 CLONE = """
 mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
-  create_vault_from(template: $template, name: $name, owned: $owned, client_creation_key: $key) {
+  create_vault_from(template: $template, name: $name, owned: $owned, idempotency_key: $key) {
     ok id message validation_errors
   }
 }
@@ -225,7 +226,9 @@ def test_graphql_clone_replays_after_template_access_is_lost(clone_template, una
     assert first["ok"] is True
     if owned:
         with actor_context(fixture.actor):
-            clone = Vault.objects.get(client_creation_key="api")
+            clone = changeset_model()._base_manager.get(
+                scope=f"knowledge.vault.clone:{fixture.actor.pk}", key="api",
+            ).created_row
             clone.transfer_ownership(fixture.reader)
         with actor_context(fixture.reader):
             clone.as_user(fixture.reader).transfer_ownership(None)
@@ -242,10 +245,12 @@ def test_graphql_clone_replays_after_template_access_is_lost(clone_template, una
     replay = result_data(execute_schema(schema, CLONE, variables, user=fixture.actor))["create_vault_from"]
     assert replay == first
     with system_context(reason="test.api.replay_count"):
-        assert Vault.objects.filter(client_creation_key="api").count() == 1
+        assert changeset_model()._base_manager.filter(
+            scope=f"knowledge.vault.clone:{fixture.actor.pk}", key="api",
+        ).count() == 1
 
 
-def test_graphql_changed_clone_request_has_creation_key_conflict_code(clone_template):
+def test_graphql_changed_clone_request_has_idempotency_conflict_code(clone_template):
     fixture = clone_template
     schema = addon_schema(schemas, "public")
     variables = {"template": str(fixture.source.sqid), "name": "API clone", "owned": False, "key": "api"}
@@ -275,4 +280,6 @@ def test_graphql_clone_rejects_unauthorized_or_malformed_requests_without_creati
         assert outcome["id"] is None
         assert outcome["message"]
     with system_context(reason="test.api.denied_count"):
-        assert not Vault.objects.filter(client_creation_key="denied").exists()
+        assert not changeset_model()._base_manager.filter(
+            scope=f"knowledge.vault.clone:{fixture.actor.pk}", key="denied",
+        ).exists()

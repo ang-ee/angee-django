@@ -20,8 +20,7 @@ from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.base.errors import DomainError
-from angee.base.scoping import read_scoped_queryset
-from angee.base.transitions import TransitionNotAllowed
+from angee.base.models import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
 from graphql import GraphQLError
@@ -291,7 +290,7 @@ def authorized_permission_target(
     user = getattr(info.context.request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
-    scoped = read_scoped_queryset(model, user, action=permission)
+    scoped = model.objects.with_actor(user).with_action(permission)
     if narrow is not None:
         scoped = narrow(scoped)
     instance = instance_for_id(model, id, queryset=scoped)

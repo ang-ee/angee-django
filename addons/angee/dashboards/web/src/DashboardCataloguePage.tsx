@@ -114,7 +114,7 @@ function DashboardCatalogue({ store, registry }: {
     try {
       const result = await catalogue.createPersonal({
         name: name.trim(),
-        clientCreationKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
+        idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
       });
       await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
     } catch (cause) {

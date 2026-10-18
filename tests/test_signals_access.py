@@ -26,7 +26,7 @@ from rebac import actor_context, anonymous_actor
 from strawberry import auto
 from strawberry_django.fields.types import field_type_map
 
-from angee.base.mixins import AuditMixin, TimestampMixin
+from angee.base.models import AuditMixin, TimestampMixin
 from angee.base.serialization import json_safe
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate

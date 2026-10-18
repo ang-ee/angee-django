@@ -69,7 +69,7 @@ class WorkCampaignTests(TransactionTestCase):
             "title": "Prepare a checklist",
             "queue": queue.sqid,
             "stage": ready.sqid,
-            "client_creation_key": "checklist",
+            "idempotency_key": "checklist",
         }
         created = run_tool(tools["create_task"], **inputs)
         self.assertEqual(run_tool(tools["create_task"], **inputs), created)

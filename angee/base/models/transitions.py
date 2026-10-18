@@ -39,9 +39,6 @@ the target write. The primitive owns the state write and then calls
 ``on_success``. It does not save the model; transition methods remain ordinary
 model methods and own any persistence of non-state fields. Illegal transitions
 raise ``TransitionNotAllowed`` with the field, source, and target in the message.
-Callers may pass ``persist=callback`` to a declared transition to compose its
-final save. The existing success hook must explicitly accept and forward that
-keyword to ``save_state``; the callback applies only to that invocation.
 The body, target write and success hook share one ``transaction.atomic``, so a
 hook failure rolls back the body's database writes too. Existing outer
 transactions compose through Django savepoints; commit callbacks wait for the
@@ -83,7 +80,6 @@ from django.db.models.query_utils import DeferredAttribute
 from django.db.models.signals import class_prepared
 
 from angee.base.fields import StateField, enum_member_for
-from angee.base.scoping import system_queryset
 
 Condition = Callable[[models.Model], bool]
 SuccessHook = Callable[..., None]
@@ -311,9 +307,6 @@ class StateTransitions:
     ) -> Any:
         """Execute the body, target write and success hook atomically."""
 
-        persist = kwargs.pop("persist", None)
-        if persist is not None and spec.on_success is None:
-            raise ImproperlyConfigured("A composed transition save requires an explicit success hook.")
         source = self.field.to_python(getattr(instance, self.field.attname))
         target = self.field.to_python(spec.target)
         source_key = self._state_key(source)
@@ -331,10 +324,7 @@ class StateTransitions:
             self._write_target(instance, target)
             if spec.on_success is not None:
                 with _transition_save_context(instance, self.field.attname):
-                    if persist is None:
-                        spec.on_success(instance, source, target)
-                    else:
-                        spec.on_success(instance, source, target, persist=persist)
+                    spec.on_success(instance, source, target)
         return result
 
     def force_state(self, instance: models.Model, target: Any, *, reason: str) -> None:
@@ -608,8 +598,6 @@ def save_state(
     instance: models.Model,
     source: Any,
     target: Any,
-    *,
-    persist: Callable[..., None] | None = None,
 ) -> None:
     """Persist a transition-owned state change plus method-touched fields.
 
@@ -622,10 +610,6 @@ def save_state(
     target`` column write, so ``post_save`` receivers, audit stamping, ``changes``
     publishers, and pre-save change trackers observe the real old->new transition.
 
-    ``persist(instance, *, update_fields)`` composes this final save while
-    retaining the concurrency guard when a cooperative ``save`` override requires
-    invocation-local arguments. Custom success hooks must forward it explicitly;
-    no persistence callback is installed as ambient state.
     """
 
     field_name = get_transition_save_field(instance)
@@ -635,10 +619,7 @@ def save_state(
     try:
         with transaction.atomic():
             _verify_uncontended_source(instance, field_name, source, target)
-            if persist is None:
-                instance.save(update_fields=fields)
-            else:
-                persist(instance, update_fields=fields)
+            instance.save(update_fields=fields)
     finally:
         if hasattr(instance, "_transition_fields"):
             delattr(instance, "_transition_fields")
@@ -649,7 +630,7 @@ def _verify_uncontended_source(
 ) -> None:
     """Lock the row and reject a committed state that already left ``source``."""
 
-    reader = system_queryset(type(instance), lock=("self",))
+    reader = type(instance).system_queryset(lock=("self",))
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):
@@ -684,7 +665,7 @@ def _guard_transition_fields(sender: type[models.Model], **kwargs: Any) -> None:
         declaration._guard_for(sender)
 
 
-class_prepared.connect(_guard_transition_fields, dispatch_uid="angee.base.transitions.guards")
+class_prepared.connect(_guard_transition_fields, dispatch_uid="angee.base.models.transitions.guards")
 
 
 def _state_key(field: StateField, value: Any) -> str:

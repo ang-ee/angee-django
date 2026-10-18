@@ -16,7 +16,7 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.base.models import CreationKeyConflict, StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -625,12 +625,12 @@ class ProposalActionMutation:
         audience: QuestionAudience = QuestionAudience("default"),
         recipient: PublicID | None = None,
         responders: bool = False,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ActionResult:
         """Return only the question id, including replays after surrender."""
         row = authorized_permission_target(info, Round, round, "ask")
         task = row.ask(
-            title, body, audience, _clarification_recipient(info, recipient, responders), client_creation_key
+            title, body, audience, _clarification_recipient(info, recipient, responders), idempotency_key
         )
         return ActionResult(ok=True, message="Question asked.", id=task.sqid)
 

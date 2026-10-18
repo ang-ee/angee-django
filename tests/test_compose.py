@@ -21,8 +21,7 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
-from angee.base.mixins import HistoryMixin
-from angee.base.models import AngeeModel, role_anchor
+from angee.base.models import AngeeModel, HistoryMixin, role_anchor
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.dependencies import AddonDependencyGroupResult

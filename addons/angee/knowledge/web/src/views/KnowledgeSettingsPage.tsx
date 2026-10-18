@@ -38,7 +38,7 @@ export function KnowledgeSettingsPage(): ReactElement {
         pendingClone.current = { template, name, key: createClientKey() };
       }
       const data = await createFrom({
-        template, name, owned: true, client_creation_key: pendingClone.current.key,
+        template, name, owned: true, idempotency_key: pendingClone.current.key,
       });
       const outcome = extractActionOutcome(data, "create_vault_from");
       if (outcome?.ok) pendingClone.current = null;

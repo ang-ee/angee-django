@@ -6,7 +6,6 @@ from django.db import transaction
 from rebac import to_subject_ref
 
 from angee.base.identity import public_subject_ref
-from angee.base.scoping import system_queryset
 from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
@@ -72,7 +71,7 @@ def test_workflow_operator_reads_only_its_workflow_and_operates_without_editing(
 def test_workflow_operator_retries_and_reprocesses_another_users_run(operator_run):
     _workflow, run, _author, starter, operator, other = operator_run
     run_until(run)
-    step = system_queryset(StepRun).get(run=run)
+    step = StepRun.system_queryset().get(run=run)
     assert run.status == "failed" and step.can_retry(operator)
     assert not step.can_retry(other)
     with pytest.raises(PermissionDenied):

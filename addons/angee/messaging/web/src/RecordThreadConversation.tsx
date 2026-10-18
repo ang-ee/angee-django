@@ -208,7 +208,7 @@ export function RecordThreadConversation({
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const postAttempt = React.useRef<{ intent: string; clientCreationKey: string } | null>(null);
+  const postAttempt = React.useRef<{ intent: string; idempotencyKey: string } | null>(null);
 
   const recipientOptions = React.useMemo(
     () =>
@@ -377,10 +377,10 @@ export function RecordThreadConversation({
         // Retain identity after a failed response; an edited submission starts a new request.
         const intent = JSON.stringify(input);
         if (postAttempt.current?.intent !== intent) {
-          postAttempt.current = { intent, clientCreationKey: createClientKey("message") };
+          postAttempt.current = { intent, idempotencyKey: createClientKey("message") };
         }
         const attempt = postAttempt.current;
-        await postMessage({ ...input, clientCreationKey: attempt.clientCreationKey });
+        await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
         if (postAttempt.current === attempt) postAttempt.current = null;
         setReplyToMessage(null);
         // The new entry lands on the newest page.

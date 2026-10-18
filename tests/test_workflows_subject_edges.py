@@ -7,7 +7,6 @@ import strawberry_django
 from django.db.models.functions import Now
 from rebac import actor_context, generic_target, system_context
 
-from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
@@ -61,21 +60,21 @@ def test_trigger_and_manual_mti_subjects_share_identity_through_retention(execut
     Trigger.objects.enable(trigger, actor=actor)
     RecordChanged.dispatch(MtiChild, subject)
     assert Trigger.objects.drain() == 1
-    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    event = TriggerEvent.system_queryset().get(trigger=trigger)
     triggered = event.started_run
     for run in (manual, triggered):
         assert (run.subject_content_type_id, run.subject_object_id) == (target.content_type.pk, target.object_id)
-    for record in (subject, system_queryset(MtiParent).get(pk=subject.pk)):
+    for record in (subject, MtiParent.system_queryset().get(pk=subject.pk)):
         assert set(WorkflowRun.objects.with_actor(actor).for_subject(record).values_list("pk", flat=True)) == {
             manual.pk, triggered.pk,
         }
     run_until(triggered)
     assert triggered.status == "succeeded"
     settings.ANGEE_WORKFLOW_RETENTION_DAYS = 1
-    system_queryset(WorkflowRun).filter(pk=triggered.pk).update(finished_at=Now() - timedelta(days=2))
+    WorkflowRun.system_queryset().filter(pk=triggered.pk).update(finished_at=Now() - timedelta(days=2))
     assert WorkflowRun.objects.prune() == 1
     event.refresh_from_db()
-    assert event.admitted_at and not system_queryset(WorkflowRun).filter(trigger_event=event).exists()
+    assert event.admitted_at and not WorkflowRun.system_queryset().filter(trigger_event=event).exists()
     RecordChanged.dispatch(MtiChild, subject)
     assert Trigger.objects.drain() == 0
     assert list(WorkflowRun.objects.with_actor(actor).for_subject(subject).values_list("pk", flat=True)) == [manual.pk]
@@ -91,7 +90,7 @@ def test_awaited_child_run_keeps_its_canonical_subject(child_graph):
     child = admitted[0]
     target = generic_target(subject)
     assert (child.subject_content_type_id, child.subject_object_id) == (target.content_type.pk, target.object_id)
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert waiter.waiting_kind == "run" and waiter.awaited_run_id == child.pk
     assert WorkflowRun.objects.with_actor(actor).for_subject(subject).get().pk == child.pk
     run_until(child)

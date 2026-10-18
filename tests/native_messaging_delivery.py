@@ -34,7 +34,8 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, ReadTimeout
 from urllib3.exceptions import MaxRetryError, NameResolutionError, NewConnectionError, ProtocolError
 
-from angee.base.mixins import StaleRevisionError
+from angee.base.changesets import changeset_model
+from angee.base.models import StaleRevisionError
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
@@ -198,8 +199,8 @@ class DeliveryContracts(DeliveryFixtures):
             comment.thread.refresh_from_db()
             published_count = comment.thread.message_count
         with actor_context(self.agent):
-            reply = comment.reply_to_comment(body="A reply", actor=self.agent, creation_key="turn")
-            replay = comment.reply_to_comment(body="A reply", actor=self.agent, creation_key="turn")
+            reply = comment.reply_to_comment(body="A reply", actor=self.agent, idempotency_key="turn")
+            replay = comment.reply_to_comment(body="A reply", actor=self.agent, idempotency_key="turn")
             self.assertEqual(reply.pk, replay.pk)
             self.assertEqual(reply.status, "draft")
             self.assertIsNone(reply.scheduled_at)
@@ -226,7 +227,9 @@ class DeliveryContracts(DeliveryFixtures):
                 self.feed.reply_hold = hours
                 self.feed.save(update_fields=("reply_hold", "updated_at"))
             with actor_context(self.agent):
-                reply = comment.reply_to_comment(body=f"Reply {hours}", actor=self.agent, creation_key=f"turn-{hours}")
+                reply = comment.reply_to_comment(
+                    body=f"Reply {hours}", actor=self.agent, idempotency_key=f"turn-{hours}"
+                )
             self.assertEqual(reply.status, status)
             self.assertEqual(reply.scheduled_at is not None, hours > 0)
             with system_context(reason="next independent hold case"):
@@ -748,21 +751,22 @@ class DeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.status, expected)
                 self.assertEqual(row.acknowledged_by_id, self.operator.pk)
 
-    def test_discarded_reply_creation_key_does_not_reinsert(self):
+    def test_discarded_reply_idempotency_claim_does_not_reinsert(self):
         comment = self.comment()
         with actor_context(self.agent):
-            reply = comment.reply_to_comment(body="Discard me", actor=self.agent, creation_key="discarded-turn")
+            reply = comment.reply_to_comment(body="Discard me", actor=self.agent, idempotency_key="discarded-turn")
         with actor_context(self.operator):
             Message.objects.discard_held_drafts(self.selection(reply), actor=self.operator)
         with actor_context(self.agent):
             try:
-                replay = comment.reply_to_comment(body="Discard me", actor=self.agent, creation_key="discarded-turn")
+                replay = comment.reply_to_comment(body="Discard me", actor=self.agent, idempotency_key="discarded-turn")
             except ValidationError:
                 pass
             else:
                 self.assertEqual(replay.pk, reply.pk)
         with system_context(reason="discarded receipt result"):
-            self.assertEqual(Message.objects.filter(client_creation_key="discarded-turn").count(), 1)
+            claim = changeset_model()._base_manager.get(key="discarded-turn")
+            self.assertEqual(claim.created_row.pk, reply.pk)
 
     @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
     def test_email_explicit_refusals_and_lost_acknowledgements_settle_distinctly(self):
@@ -879,9 +883,9 @@ class DeliveryContracts(DeliveryFixtures):
 
         with system_context(reason="trusted caller with explicit reply actor"):
             first = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                   creation_key="admitted", admit=admit)
+                                                   idempotency_key="admitted", admit=admit)
             replay = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                    creation_key="admitted", admit=admit)
+                                                    idempotency_key="admitted", admit=admit)
         self.assertEqual(first.pk, replay.pk)
         self.assertEqual(seen, [comment.pk])
 
@@ -891,8 +895,8 @@ class DeliveryContracts(DeliveryFixtures):
             stranger = get_user_model().objects.create_user(username="unprivileged-replier")
             with self.assertRaises(PermissionDenied):
                 Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=stranger,
-                                              creation_key="denied")
-            self.assertFalse(Message.objects.filter(client_creation_key="denied").exists())
+                                              idempotency_key="denied")
+            self.assertFalse(changeset_model()._base_manager.filter(key="denied").exists())
 
     def test_failed_discovery_receiver_is_repaired_before_classifying_the_next_record(self):
         seen = []

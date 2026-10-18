@@ -1,81 +1,97 @@
-"""Stored creation identities are unique within their declared scope."""
+"""Changesets own idempotency claims independently of created product rows."""
+
+from __future__ import annotations
+
+from typing import Any
 
 import pytest
+from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import transaction
 
-from angee.base.mixins import CreationKeyConflict
-from tests.conftest import create_user
-from tests.core_persistence import CreationRow
+from angee.base.changesets import (
+    changeset,
+    changeset_model_label,
+    creation_fingerprint,
+    current_changeset,
+)
+from angee.base.models import CreationKeyConflict
 
-pytestmark = pytest.mark.django_db
-
-
-def test_matching_fingerprint_replays_the_original_row(django_assert_num_queries):
-    owner = create_user("owner")
-    row = CreationRow.objects.create(created_by=owner, client_creation_key="request", creation_fingerprint="a" * 64)
-    with django_assert_num_queries(1):
-        assert CreationRow.objects.for_creation_key(owner, "request", "a" * 64) == row
-    assert CreationRow.objects.count() == 1
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_changed_fingerprint_raises_conflict_without_modifying_original():
-    owner = create_user("owner")
-    row = CreationRow.objects.create(created_by=owner, client_creation_key="request", creation_fingerprint="a" * 64)
+def _model() -> Any:
+    return apps.get_model(changeset_model_label())
+
+
+def _claim(scope: str, key: str, fingerprint: str, *, created_row: Any = None) -> Any | None:
+    with changeset(fresh=True):
+        with transaction.atomic():
+            replay = _model().objects.claim(scope, key, fingerprint=fingerprint)
+            if replay is None and created_row is not None:
+                current_changeset(required=True).record_created(created_row)
+            return replay
+
+
+def test_matching_claim_replays_the_boundary_and_created_row() -> None:
+    target = ContentType.objects.order_by("pk").first()
+    assert target is not None
+    assert _claim("tests.create", "request", "a" * 64, created_row=target) is None
+
+    replay = _claim("tests.create", "request", "a" * 64)
+
+    assert replay is not None
+    assert replay.created_row == target
+    assert _model()._base_manager.filter(scope="tests.create", key="request").count() == 1
+
+
+def test_changed_fingerprint_conflicts_without_modifying_the_claim() -> None:
+    _claim("tests.create", "request", "a" * 64)
+
     with pytest.raises(CreationKeyConflict):
-        CreationRow.objects.for_creation_key(owner, "request", "b" * 64)
-    row.refresh_from_db()
-    assert row.creation_fingerprint == "a" * 64
+        _claim("tests.create", "request", "b" * 64)
+
+    stored = _model()._base_manager.get(scope="tests.create", key="request")
+    assert stored.fingerprint == "a" * 64
 
 
-def test_empty_legacy_fingerprint_allows_replay_without_claiming_new_content():
-    owner = create_user("owner")
-    row = CreationRow.objects.create(created_by=owner, client_creation_key="request")
-    assert CreationRow.objects.for_creation_key(owner, "request", "new") == row
-    row.refresh_from_db()
-    assert row.creation_fingerprint == ""
+def test_same_key_in_another_scope_is_an_independent_claim() -> None:
+    assert _claim("tests.first", "request", "a") is None
+    assert _claim("tests.second", "request", "b") is None
+    assert _claim("tests.first", "request", "a") is not None
+    assert _claim("tests.second", "request", "b") is not None
 
 
-def test_same_key_in_another_scope_is_an_independent_creation():
-    first, second = create_user("first"), create_user("second")
-    a = CreationRow.objects.create(created_by=first, client_creation_key="request", creation_fingerprint="a")
-    b = CreationRow.objects.create(created_by=second, client_creation_key="request", creation_fingerprint="b")
-    assert CreationRow.objects.for_creation_key(first.pk, "request", "a") == a
-    assert CreationRow.objects.for_creation_key(second, "request", "b") == b
-    assert CreationRow.objects.for_creation_key(second, "absent", "b") is None
+@pytest.mark.parametrize(
+    ("scope", "key", "fingerprint"),
+    [
+        ("", "request", "a"),
+        ("tests.create", "", "a"),
+        ("tests.create", "  ", "a"),
+        ("x" * 256, "request", "a"),
+        ("tests.create", "x" * 256, "a"),
+        ("tests.create", "request", "x" * 65),
+    ],
+)
+def test_claim_validates_its_complete_identity(scope: str, key: str, fingerprint: str) -> None:
+    with pytest.raises(ValidationError):
+        _claim(scope, key, fingerprint)
 
 
-def test_creation_lookup_preserves_existing_queryset_filters():
-    owner = create_user("owner")
-    CreationRow.objects.create(created_by=owner, client_creation_key="request", title="hidden")
-    assert CreationRow.objects.filter(title="visible").for_creation_key(owner, "request", "a") is None
+def test_claim_requires_an_outer_transaction_and_precedes_boundary_writes() -> None:
+    with changeset(fresh=True):
+        with pytest.raises(RuntimeError, match="transaction.atomic"):
+            _model().objects.claim("tests.create", "request", fingerprint="a")
+        with transaction.atomic():
+            current_changeset(required=True, record=True)
+            with pytest.raises(RuntimeError, match="before the boundary records any writes"):
+                _model().objects.claim("tests.create", "request", fingerprint="a")
 
 
-@pytest.mark.parametrize("scope,key", [(None, "request"), (1, None), (None, None)])
-def test_missing_identity_does_not_query(scope, key, django_assert_num_queries):
-    with django_assert_num_queries(0):
-        assert CreationRow.objects.for_creation_key(scope, key, "a") is None
-
-
-def test_database_refuses_duplicate_key_but_allows_multiple_null_keys():
-    owner = create_user("owner")
-    CreationRow.objects.create(created_by=owner, client_creation_key="request")
-    with pytest.raises(IntegrityError), transaction.atomic():
-        CreationRow.objects.create(created_by=owner, client_creation_key="request")
-    CreationRow.objects.create(created_by=owner)
-    CreationRow.objects.create(created_by=owner)
-    assert CreationRow.objects.count() == 3
-
-
-def test_fingerprints_use_canonical_values_and_native_reference_identity():
-    owner = create_user("fingerprint-owner")
-    first = CreationRow.creation_fingerprint_for({"when": "2026-01-01", "owner": owner, "values": [1, 2]})
-    owner.username = "A later display value"
-    assert CreationRow.creation_fingerprint_for({"values": [1, 2], "owner": owner, "when": "2026-01-01"}) == first
-    assert CreationRow.creation_fingerprint_for({"values": [2, 1], "owner": owner, "when": "2026-01-01"}) != first
-
-
-def test_creation_keys_reject_blank_and_overlong_values():
-    for key in ("", "  ", "x" * 129):
-        with pytest.raises(ValidationError):
-            CreationRow.objects.for_creation_key(1, key, "fingerprint")
+def test_fingerprints_use_canonical_values_and_model_identity() -> None:
+    target = ContentType.objects.order_by("pk").first()
+    assert target is not None
+    first = creation_fingerprint({"when": "2026-01-01", "target": target, "values": [1, 2]})
+    assert creation_fingerprint({"values": [1, 2], "target": target, "when": "2026-01-01"}) == first
+    assert creation_fingerprint({"values": [2, 1], "target": target, "when": "2026-01-01"}) != first

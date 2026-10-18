@@ -48,9 +48,16 @@ from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind
-from angee.base.models import AngeeManager, AngeeQuerySet, StatementSubjectQuerySet
-from angee.base.querysets import MergeableQuerySet, StatementQuerySet
+from angee.base.models import (
+    AngeeManager,
+    AngeeQuerySet,
+    ArchiveQuerySet,
+    HierarchyQuerySet,
+    MergeableQuerySet,
+    SourceKind,
+    StatementQuerySet,
+    StatementSubjectQuerySet,
+)
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto

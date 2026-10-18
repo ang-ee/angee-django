@@ -8,7 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
-from angee.base.merge import references
+from angee.base.models import references
 from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
 from angee.projects.testing.models import Link, Project, Queue, Stage, Task
 from angee.spaces.testing.models import Membership

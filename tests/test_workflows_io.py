@@ -11,7 +11,6 @@ from django.db.models.functions import Now
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.base.scoping import system_queryset
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
 from angee.workflows.runner import runner
@@ -27,7 +26,7 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 
 def step_row(run):
     """Fetch the retained row without imposing a requester on the step body."""
-    return system_queryset(StepRun).get(run=run)
+    return StepRun.system_queryset().get(run=run)
 
 
 @pytest.mark.parametrize("mode, expected", [(StepMode.IO, ["running", "succeeded"]),
@@ -113,7 +112,7 @@ def test_io_body_is_outside_transactions_and_scoped_to_its_actor(execution, regi
     workflow.grant_record_access("starter", actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(step_row(run).pk)
-    assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 1}
+    assert WorkflowRun.system_queryset().get(pk=run.pk).output == {"value": 1}
 
 
 def test_io_refuses_an_enclosing_transaction(execution, register_step):
@@ -135,7 +134,7 @@ def test_io_refuses_an_enclosing_transaction(execution, register_step):
         runner.execute(step_row(run).pk)
     assert called == []
     assert step_row(run).status == StepRunStatus.READY
-    assert not system_queryset(StepAttempt).filter(step_run__run=run).exists()
+    assert not StepAttempt.system_queryset().filter(step_run__run=run).exists()
 
 
 def test_heartbeat_extends_deadline_and_effect_marker_is_written_once(execution, register_step):
@@ -152,10 +151,10 @@ def test_heartbeat_extends_deadline_and_effect_marker_is_written_once(execution,
             ctx.heartbeat()
             assert ctx.step_run.deadline_at >= old_deadline
             ctx.begin_effect()
-            first = system_queryset(StepAttempt).get(pk=ctx.attempt.pk).effect_started_at
+            first = StepAttempt.system_queryset().get(pk=ctx.attempt.pk).effect_started_at
             assert first is not None
             ctx.begin_effect()
-            assert system_queryset(StepAttempt).get(pk=ctx.attempt.pk).effect_started_at == first
+            assert StepAttempt.system_queryset().get(pk=ctx.attempt.pk).effect_started_at == first
             ctx.raise_if_canceled()
             assert not connection.in_atomic_block and not is_sudo()
             return ctx.done(ctx.input)
@@ -188,9 +187,9 @@ def test_cancel_fences_every_io_context_write(execution, register_step):
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(step_row(run).pk) is False
     assert len(stopped) == 3
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.CANCELED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.CANCELED
     assert step_row(run).output == {}
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     assert attempt.effect_started_at is None and attempt.result == "superseded"
 
 
@@ -235,7 +234,7 @@ def test_paging_retains_each_pages_random_idempotency_key_across_retries(executi
         f"{retained.idempotency_token}:1", f"{retained.idempotency_token}:1",
     ]
     assert retained.page_index == 1
-    assert list(system_queryset(StepAttempt).filter(step_run=retained).order_by("number").values_list(
+    assert list(StepAttempt.system_queryset().filter(step_run=retained).order_by("number").values_list(
         "page_index", flat=True,
     )) == [0, 0, 1, 1]
     assert observed[2][3] == {"page": 2}
@@ -294,9 +293,9 @@ def test_io_retry_exhaustion_is_owned_by_the_failed_attempt(execution, register_
     assert runner.execute(step_row(run).pk)
     assert step_row(run).status == StepRunStatus.FAILED
     assert step_row(run).retries == 2
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.FAILED and retained.error == ""
-    assert system_queryset(StepAttempt).filter(step_run__run=run, result="failed").count() == 2
+    assert StepAttempt.system_queryset().filter(step_run__run=run, result="failed").count() == 2
 
 
 class WorkerLost(BaseException):
@@ -340,10 +339,10 @@ def test_operator_retry_records_duplicate_acceptance_on_only_the_new_attempt(exe
     with actor_context(actor):
         ready = StepRun.objects.retry_step(waiting, actor=actor if explicit_actor else None, accept_duplicate=True)
     assert ready.status == StepRunStatus.READY and ready.wait_reason == ""
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.RUNNING and retained.finished_at is None and retained.error == ""
     assert runner.execute(step_run.pk)
-    first, second = list(system_queryset(StepAttempt).filter(step_run=step_run).order_by("number"))
+    first, second = list(StepAttempt.system_queryset().filter(step_run=step_run).order_by("number"))
     assert first.acknowledged_by_id is None and second.acknowledged_by_id == actor.pk
     assert acknowledgements == [False, True]
     assert step_row(run).retry_acknowledged_by_id is None
@@ -367,11 +366,11 @@ def test_operator_retry_keeps_successful_predecessors(execution, register_step):
     workflow = load_workflow(document("first", "last"), key="retain_predecessor", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 7})
     run_until(run)
-    failed = system_queryset(StepRun).get(run=run, node_key="last")
+    failed = StepRun.system_queryset().get(run=run, node_key="last")
     StepRun.objects.retry_step(failed, actor=actor)
     assert runner.execute(failed.pk)
     assert calls == ["first", "last", "last"]
-    assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 7}
+    assert WorkflowRun.system_queryset().get(pk=run.pk).output == {"value": 7}
 
 
 def test_operator_cannot_retry_a_routed_failure(execution, register_step):
@@ -407,8 +406,8 @@ def test_operator_wait_can_retry_even_when_the_node_declares_an_error_edge(execu
 
     assert ready.status == StepRunStatus.READY and ready.wait_reason == ""
     assert runner.execute(row.pk)
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
-    assert not system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="recover").exists()
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert not StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="recover").exists()
 
 
 @pytest.mark.parametrize("readable", [False, True])
@@ -439,7 +438,7 @@ def test_artifact_requires_record_read_access_and_retains_shared_reference(execu
     else:
         assert not artifacts.exists()
         assert step_row(run).status == StepRunStatus.FAILED
-        assert "Read access" in system_queryset(StepAttempt).get(step_run__run=run).error
+        assert "Read access" in StepAttempt.system_queryset().get(step_run__run=run).error
 
 
 def test_reprocess_retains_lineage_and_uses_the_current_publication(execution):
@@ -456,7 +455,7 @@ def test_reprocess_retains_lineage_and_uses_the_current_publication(execution):
     )
     current = Workflow.objects.publish(
         workflow,
-        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=workflow.pk),
         actor=actor,
     ).version
     replacement = WorkflowRun.objects.reprocess(original, actor=actor)
@@ -492,8 +491,8 @@ def test_io_settlement_retries_database_failure_without_repeating_body(execution
     assert runner.execute(step_row(run).pk)
     assert bodies == [1] and settlements == [1, 1]
     assert len(delays) == 1 and delays[0] > 0
-    assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 42}
-    assert system_queryset(StepAttempt).filter(step_run__run=run).count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).output == {"value": 42}
+    assert StepAttempt.system_queryset().filter(step_run__run=run).count() == 1
 
 
 def test_io_soft_limit_records_a_timed_out_attempt(execution, register_step):
@@ -510,9 +509,9 @@ def test_io_soft_limit_records_a_timed_out_attempt(execution, register_step):
     workflow = load_workflow(document("entry"), key="io_soft_limit", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert runner.execute(step_row(run).pk)
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     assert attempt.result == "timed_out" and "SoftTimeLimitExceeded" in attempt.stacktrace
-    assert system_queryset(WorkflowRun).get(pk=run.pk).error == ""
+    assert WorkflowRun.system_queryset().get(pk=run.pk).error == ""
 
 
 def test_reaper_retains_missing_implementation_cause_and_requests_operator_help(execution):
@@ -540,10 +539,10 @@ def test_reaper_retains_missing_implementation_cause_and_requests_operator_help(
     waiting = step_row(run)
     assert waiting.status == StepRunStatus.WAITING and waiting.waiting_kind == "error"
     assert "registration" in waiting.wait_reason
-    attempt = system_queryset(StepAttempt).get(step_run=step_run)
+    attempt = StepAttempt.system_queryset().get(step_run=step_run)
     assert attempt.result == "timed_out" and RemovedIO.key in attempt.error
     assert attempt.error != waiting.wait_reason
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.WAITING and retained.error == ""
 
 
@@ -584,7 +583,7 @@ def test_soft_limit_during_settlement_lock_wait_is_recorded_as_timeout(execution
     assert runner.execute(step_row(run).pk)
 
     assert bodies == [1] and len(settlements) == 2
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     assert attempt.result == "timed_out" and "SoftTimeLimitExceeded" in attempt.stacktrace
     assert step_row(run).status == StepRunStatus.FAILED
 
@@ -598,7 +597,7 @@ def test_cancel_accepts_a_pinned_requester_without_ambient_scope(execution):
 
     WorkflowRun.objects.cancel(pinned)
 
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.CANCELED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.CANCELED
 
 
 class RecoverableBranch(Echo):
@@ -637,8 +636,8 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
         key="preserved_fork", actor=actor,
     )
     run = run_factory(workflow, actor=actor).at("failed", input={"value": 17})
-    failed = system_queryset(StepRun).get(run=run, node_key="failed")
-    sibling = system_queryset(StepRun).get(run=run, node_key="sibling")
+    failed = StepRun.system_queryset().get(run=run, node_key="failed")
+    sibling = StepRun.system_queryset().get(run=run, node_key="sibling")
     if sibling_status == StepRunStatus.WAITING:
         assert runner.execute(sibling.pk)
     sibling.refresh_from_db()
@@ -647,7 +646,7 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
 
     assert runner.execute(failed.pk)
 
-    terminal = system_queryset(WorkflowRun).get(pk=run.pk)
+    terminal = WorkflowRun.system_queryset().get(pk=run.pk)
     assert terminal.status == RunStatus.FAILED
     assert sent[deliveries_before_failure:] == [
         ("workflows.wake_run", {"kwargs": {"run_id": run.pk}, "queue": None, "expires": None}),
@@ -659,20 +658,20 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     }
     sibling.refresh_from_db()
     assert (sibling.status, sibling.state, sibling.wake_at, sibling.attempt, sibling.retries) == preserved
-    assert not system_queryset(StepRun).filter(run=run, node_key="join").exists()
+    assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()
 
     StepRun.objects.retry_step(failed, actor=actor)
 
-    resumed = system_queryset(WorkflowRun).get(pk=run.pk)
+    resumed = WorkflowRun.system_queryset().get(pk=run.pk)
     assert resumed.status == RunStatus.RUNNING
     assert resumed.finished_at is None and resumed.outcome == "" and resumed.error == ""
     if sibling_status == StepRunStatus.WAITING:
         assert runner.wake() == 1
     run_until(run)
-    completed = system_queryset(WorkflowRun).get(pk=run.pk)
+    completed = WorkflowRun.system_queryset().get(pk=run.pk)
     assert completed.status == RunStatus.SUCCEEDED and completed.output == {"value": 17}
-    assert system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="join").count() == 1
-    assert system_queryset(StepAttempt).filter(step_run=sibling).count() == (
+    assert StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="join").count() == 1
+    assert StepAttempt.system_queryset().filter(step_run=sibling).count() == (
         2 if sibling_status == StepRunStatus.WAITING else 1
     )
 
@@ -696,9 +695,9 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
 
         def run(self, ctx):
             assert not connection.in_atomic_block
-            failed = system_queryset(StepRun).get(run=ctx.run, node_key="failed")
+            failed = StepRun.system_queryset().get(run=ctx.run, node_key="failed")
             assert runner.execute(failed.pk)
-            observed["terminal"] = system_queryset(WorkflowRun).filter(pk=ctx.run.pk).values(
+            observed["terminal"] = WorkflowRun.system_queryset().filter(pk=ctx.run.pk).values(
                 "status", "finished_at", "outcome", "output", "error",
             ).get()
             observed["deliveries"] = len(sent)
@@ -714,28 +713,28 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     register_step(FinishingSibling)
     workflow = load_workflow(recovery_fork(FinishingSibling.key), key="finishing_fork", actor=actor)
     run = run_factory(workflow, actor=actor).at("sibling")
-    sibling = system_queryset(StepRun).get(run=run, node_key="sibling")
+    sibling = StepRun.system_queryset().get(run=run, node_key="sibling")
 
     assert runner.execute(sibling.pk)
 
     sibling.refresh_from_db()
     assert sibling.status == StepRunStatus.SUCCEEDED and sibling.output == {"value": 41}
-    attempt = system_queryset(StepAttempt).get(step_run=sibling)
+    attempt = StepAttempt.system_queryset().get(step_run=sibling)
     assert attempt.result == "succeeded" and attempt.finished_at is not None
     assert attempt.effect_started_at is not None
-    assert system_queryset(WorkflowRun).filter(pk=run.pk).values(*observed["terminal"]).get() == observed["terminal"]
+    assert WorkflowRun.system_queryset().filter(pk=run.pk).values(*observed["terminal"]).get() == observed["terminal"]
     assert len(sent) == observed["deliveries"]
-    assert not system_queryset(StepRun).filter(run=run, node_key="join").exists()
+    assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()
 
     monkeypatch.setattr(runner_module, "publish_change", original_publish)
-    failed = system_queryset(StepRun).get(run=run, node_key="failed")
+    failed = StepRun.system_queryset().get(run=run, node_key="failed")
     StepRun.objects.retry_step(failed, actor=actor)
     run_until(run)
 
-    completed = system_queryset(WorkflowRun).get(pk=run.pk)
+    completed = WorkflowRun.system_queryset().get(pk=run.pk)
     assert completed.status == RunStatus.SUCCEEDED and completed.output == {"value": 41}
-    assert system_queryset(StepAttempt).filter(step_run=sibling).count() == 1
-    assert system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="join").count() == 1
+    assert StepAttempt.system_queryset().filter(step_run=sibling).count() == 1
+    assert StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="join").count() == 1
 
 
 def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step, run_factory, monkeypatch):
@@ -750,9 +749,9 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
         mode = StepMode.IO
 
         def run(self, ctx):
-            failed = system_queryset(StepRun).get(run=ctx.run, node_key="failed")
+            failed = StepRun.system_queryset().get(run=ctx.run, node_key="failed")
             assert runner.execute(failed.pk)
-            observed.update(system_queryset(WorkflowRun).filter(pk=ctx.run.pk).values(
+            observed.update(WorkflowRun.system_queryset().filter(pk=ctx.run.pk).values(
                 "status", "finished_at", "outcome", "output", "error",
             ).get())
             return ctx.done({"value": 23})
@@ -768,7 +767,7 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
     register_step(RejectedResult)
     workflow = load_workflow(recovery_fork(RejectedResult.key), key="late_result_error", actor=actor)
     run = run_factory(workflow, actor=actor).at("sibling")
-    sibling = system_queryset(StepRun).get(run=run, node_key="sibling")
+    sibling = StepRun.system_queryset().get(run=run, node_key="sibling")
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result_once)
 
     assert runner.execute(sibling.pk)
@@ -777,10 +776,10 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
     assert settlements == ["done", "fail"]
     assert sibling.status == StepRunStatus.FAILED and sibling.outcome == "error"
     assert sibling.output == {"error": "Result contains an invalid JSON value"}
-    attempt = system_queryset(StepAttempt).get(step_run=sibling)
+    attempt = StepAttempt.system_queryset().get(step_run=sibling)
     assert attempt.result == "failed" and attempt.finished_at is not None
     assert attempt.error == "DataError: Result contains an invalid JSON value"
     assert "DataError" in attempt.stacktrace
     assert observed["status"] == RunStatus.FAILED
-    assert system_queryset(WorkflowRun).filter(pk=run.pk).values(*observed).get() == observed
-    assert not system_queryset(StepRun).filter(run=run, node_key="join").exists()
+    assert WorkflowRun.system_queryset().filter(pk=run.pk).values(*observed).get() == observed
+    assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()

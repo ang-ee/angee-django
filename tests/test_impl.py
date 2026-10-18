@@ -22,12 +22,12 @@ from angee.base.impl import (
     check_impl_registry,
     impl_choices,
     impl_choices_enum,
-    model_config_form_spec,
     resolve_all_impl_classes,
     resolve_hook,
     resolve_hooks,
     resolve_impl_class,
 )
+from angee.data.form_specs import model_config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
@@ -1209,7 +1209,7 @@ def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, mon
         assert [error.id for error in check_impl_registry(_BaseImpl)] == ["angee.E005"]
 
 def test_relation_annotation_errors_retain_the_native_location():
-    from angee.base.impl import check_form_annotations
+    from angee.data.form_specs import check_form_annotations
 
     relation = {"resource": "demo.Target", "create": {"resource": 0}}
     with pytest.raises(ValidationError, match="invalid relation at create.resource"):

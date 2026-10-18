@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pyexpat
 from collections.abc import Sequence
 
 from django.apps import AppConfig, apps
@@ -26,7 +25,7 @@ from angee.base.impl import (
     declared_hooks,
     declared_impl_registries,
 )
-from angee.base.mixins import CreationKeyMixin, HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
+from angee.base.models import HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
 from angee.base.permissions import effective_rebac_definition, effective_rebac_schema
 
 
@@ -51,25 +50,6 @@ def check_changeset_middleware(
             "Strict changeset attribution requires one ChangesetMiddleware after REBAC's ActorMiddleware.",
             hint=f"Add '{boundary}' after '{actor}' in MIDDLEWARE.",
             id="angee.E038",
-        )
-    ]
-
-
-def check_expat_version(
-    app_configs: Sequence[AppConfig] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Require Expat's amplification and large-token protections for untrusted XML."""
-
-    del app_configs, kwargs
-    if pyexpat.version_info >= (2, 7, 2):
-        return []
-    version = ".".join(str(part) for part in pyexpat.version_info)
-    return [
-        checks.Error(
-            f"Expat 2.7.2 or later is required to parse untrusted XML; Python is linked against {version}.",
-            hint="Upgrade Python or its linked Expat library.",
-            id="angee.E035",
         )
     ]
 
@@ -187,34 +167,6 @@ def check_ownership(
                     "multi-table children delegate through their field-backed parent relation.",
                     obj=model,
                     id="angee.E027",
-                )
-            )
-    return errors
-
-
-def check_creation_key_constraints(
-    app_configs: Sequence[AppConfig] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Require every creation-key adopter to declare its scope's unique constraint."""
-
-    del kwargs
-    models = (
-        apps.get_models() if app_configs is None else (model for config in app_configs for model in config.get_models())
-    )
-    errors: list[checks.CheckMessage] = []
-    for model in models:
-        if not issubclass(model, CreationKeyMixin):
-            continue
-        if not any(
-            constraint == model.creation_key_constraint(name=constraint.name) for constraint in model._meta.constraints
-        ):
-            errors.append(
-                checks.Error(
-                    f"{model._meta.label} must declare its creation-key uniqueness constraint.",
-                    hint="Include CreationKeyMixin.creation_key_constraint() with the declared creation_key_scope.",
-                    obj=model,
-                    id="angee.E023",
                 )
             )
     return errors

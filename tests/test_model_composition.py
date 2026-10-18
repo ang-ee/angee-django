@@ -14,7 +14,7 @@ from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
-from angee.base.mixins import HistoryMixin, SqidMixin
+from angee.base.models import HistoryMixin, SqidMixin
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
 from tests.tables import model_tables
@@ -275,7 +275,7 @@ def test_final_composed_transition_metadata_is_validated(modules):
 from django.db import models
 from angee.base.fields import StateField
 from angee.base.models import AngeeModel
-from angee.base.transitions import StateTransitions, transition, save_state
+from angee.base.models import StateTransitions, transition, save_state
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"
@@ -561,7 +561,7 @@ def test_final_composition_rejects_a_donor_transition_outside_the_owner_graph(mo
 from django.db import models
 from angee.base.fields import StateField
 from angee.base.models import AngeeModel
-from angee.base.transitions import StateTransitions, transition
+from angee.base.models import StateTransitions, transition
 class Status(models.TextChoices):
     DRAFT = "draft", "Draft"
     DONE = "done", "Done"

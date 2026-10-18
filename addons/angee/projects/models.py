@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from typing import Any, ClassVar, cast
 
+from angee.base.scoping import bind_actor, candidate_relationships, system_queryset
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -26,28 +27,28 @@ from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
 from angee.base.actors import actor_user_id
+from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.merge import MergeableMixin
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
     AuditMixin,
-    CreationKeyMixin,
-    CreationKeyQuerySet,
     HierarchyMixin,
     HierarchyQuerySet,
     HistoryMixin,
     ImmutableFieldsMixin,
     ItemOwnershipMixin,
+    MergeableMixin,
+    MergeableQuerySet,
     OptimisticLockMixin,
     OwnerMixin,
     OwnerQuerySet,
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import bind_actor, candidate_relationships, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
@@ -100,23 +101,22 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
     """Own the idempotent Task-to-Project maturation write."""
 
     def setup_from_task(
-        self, task: Any, *, configuration: Mapping[str, Any], client_creation_key: str,
+        self, task: Any, *, configuration: Mapping[str, Any], idempotency_key: str,
         expected_revision: int | None = None,
     ) -> Any:
         """Apply all setup acts atomically; replay never overwrites subsequent edits.
 
-        Receipts belong to the actor, task and client key, independently of
-        ordinary Project inserts. Existing partial projects can be completed;
-        failed invocations leave neither partial acts nor a receipt.
+        The ambient changeset owns replay independently of ordinary Project
+        inserts. Existing partial projects can be completed; failed invocations
+        leave neither partial acts nor an idempotency claim.
         """
 
         actor, bypass = task.effective_actor(strict=True)
         actor_id = actor_user_id(actor)
         if actor_id is None:
-            raise ValidationError({"client_creation_key": "Setup requires a user actor."})
-        receipt_model = apps.get_model("projects", "ProjectSetupReceipt")
-        fingerprint = receipt_model.creation_fingerprint_for(configuration)
-        with transaction.atomic():
+            raise ValidationError({"idempotency_key": "Setup requires a user actor."})
+        fingerprint = creation_fingerprint(configuration)
+        with changeset(fresh=True), transaction.atomic():
             locked = system_queryset(type(task), lock=("self",)).get(pk=task.pk)
             bind_actor(locked, actor)
             if not bypass and not locked.has_access("write"):
@@ -127,23 +127,26 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
                 if not bypass and not project.has_access("write"):
                     raise PermissionDenied("Project write access is required for setup.")
 
-            def insert() -> Any:
-                if expected_revision is not None:
-                    locked.require_revision(expected_revision)
-                target = project if project is not None else self.from_task(locked)
-                target.apply_setup(**configuration)
-                return receipt_model.objects.create(
-                    actor_id=actor_id, task=locked, project=target,
-                    client_creation_key=client_creation_key, creation_fingerprint=fingerprint,
-                )
-
-            receipt, _created = receipt_model.objects.replay_or_insert(
-                (actor_id, locked.pk), client_creation_key, fingerprint, insert,
+            replay = changeset_model().objects.claim(
+                f"projects.setup:{actor_id}:{locked.pk}",
+                idempotency_key,
+                fingerprint=fingerprint,
             )
-            result = receipt.project
+            if replay is not None:
+                result = replay.created_row
+                if not isinstance(result, self.model):
+                    raise ValidationError({"idempotency_key": "The claimed setup result is unavailable."})
+                bind_actor(result, actor)
+                if not bypass and not result.has_access("write"):
+                    raise PermissionDenied("Project write access is required for setup replay.")
+                return result
+
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            result = project if project is not None else self.from_task(locked)
+            result.apply_setup(**configuration)
+            current_changeset(required=True).record_created(result)
             bind_actor(result, actor)
-            if not bypass and not result.has_access("write"):
-                raise PermissionDenied("Project write access is required for setup replay.")
             return result
 
     def from_task(self, task: Any, *, expected_revision: int | None = None) -> models.Model:
@@ -191,21 +194,6 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             return project
 
 
-class ProjectSetupReceipt(CreationKeyMixin, models.Model):
-    """Internal receipt for one actor/task/key; only the setup owner writes it."""
-
-    runtime = True
-    creation_key_scope = ("actor", "task")
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
-    task = models.ForeignKey("projects.Task", on_delete=models.CASCADE, related_name="+")
-    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="+")
-    objects = models.Manager.from_queryset(CreationKeyQuerySet)()
-
-    class Meta:
-        abstract = True
-        constraints = (CreationKeyMixin.creation_key_constraint(scope=("actor", "task")),)
-
-
 class TaskVisibilityQuerySet(models.QuerySet[Any]):
     """Keep visibility transitions on the authorized instance verb.
 
@@ -230,9 +218,9 @@ class TaskVisibilityQuerySet(models.QuerySet[Any]):
 
 class TaskQuerySet(
     HierarchyQuerySet[Any], TaskVisibilityQuerySet, MergeableQuerySet[Any], TrashQuerySet[Any],
-    CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any],
+    OwnerQuerySet[Any], AngeeQuerySet[Any],
 ):
-    """Task rows with shared creation replay and ownership release contracts."""
+    """Task rows with hierarchy, merge, trash, and ownership contracts."""
 
     def for_record(self, record: Any, *, include_done: bool = True) -> Any:
         """Return ``record``'s tasks this queryset reads: open first, then by due date and title.
@@ -572,7 +560,7 @@ class Project(
             if vault_template is None:
                 raise ValidationError({"vault_template": "Choose a vault template."})
             vault = vault_model.objects.create_from(
-                vault_template, name=self.title, client_creation_key=f"project:{self.pk}",
+                vault_template, name=self.title, idempotency_key=f"project:{self.pk}",
             )
             binding_model.objects.bind(project=self, target=vault)
 
@@ -727,8 +715,8 @@ class Project(
         return self
 
 
-class MilestoneQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
-    """Milestone rows with the shared creation replay contract."""
+class MilestoneQuerySet(AngeeQuerySet[Any]):
+    """Milestone rows with project scheduling helpers."""
 
     def overdue(self) -> Any:
         """Unfinished milestones past their target on open projects."""
@@ -736,13 +724,12 @@ class MilestoneQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
         return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
 
 
-class Milestone(HistoryMixin, CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     """A named marker reached within one project."""
 
     runtime = True
     sqid_prefix = "mls_"
     immutable_fields = ("reached_at", "reached_by_id")
-    creation_key_scope = "project"
 
     objects = AngeeManager.from_queryset(MilestoneQuerySet)()
 
@@ -790,7 +777,6 @@ class Milestone(HistoryMixin, CreationKeyMixin, OptimisticLockMixin, ImmutableFi
         ordering = ("project", "sort_order", "sqid")
         rebac_resource_type = "projects/milestone"
         constraints = (
-            CreationKeyMixin.creation_key_constraint(scope="project"),
             models.CheckConstraint(
                 condition=Q(start_date__isnull=True)
                 | Q(target_date__isnull=True)
@@ -884,7 +870,6 @@ class Task(
     TrashMixin,
     RecordRefMixin,
     TaggedModel,
-    CreationKeyMixin,
     ImmutableFieldsMixin,
     OwnerMixin,
     OptimisticLockMixin,
@@ -1036,7 +1021,6 @@ class Task(
                 name="uq_projects_task_parent_sub_rank",
                 nulls_distinct=False,
             ),
-            CreationKeyMixin.creation_key_constraint(),
         )
         indexes = (
             *HierarchyMixin.Meta.indexes,
@@ -1276,7 +1260,6 @@ class Task(
             body=f"{body}\n\n{feedback}" if feedback else body,
             message_type=apps.get_model("messaging", "Message").MessageKind.NOTIFICATION,
             subtype_key="activity_done",
-            creation_actor=current_actor(),
         )
 
     def _message_after_create(self) -> None:

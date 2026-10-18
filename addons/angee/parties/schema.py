@@ -225,6 +225,7 @@ class StatementEvidenceType:
 
     model: str
     id: strawberry.ID
+    pointer: str
 
 
 @strawberry_django.type(PartyStatement)
@@ -270,7 +271,7 @@ class PartyStatementType(AngeeNode):
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence(self, info: strawberry.Info) -> list[StatementEvidenceType]:
         refs = cast(Any, self).readable_evidence(session_user(info))
-        return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id)) for ref in refs]
+        return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id), pointer=ref.pointer) for ref in refs]
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence_truncated(self, info: strawberry.Info) -> bool:

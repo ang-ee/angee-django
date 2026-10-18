@@ -27,11 +27,17 @@ from rebac.field_visibility import gated_read_fields
 from rebac.resources import model_for_subject_type
 from strawberry.scalars import JSON
 
+from angee.base.actors import source_kind_for
 from angee.base.autoconfig import SETTINGS
 from angee.base.identity import public_id_for, public_id_of
-from angee.base.mixins import HistoryMixin, SourceKind, StatementsMixin, StatementSourceMixin
-from angee.base.querysets import model_history, record_history
-from angee.base.refs import concrete_lineage
+from angee.base.lineage import concrete_lineage
+from angee.base.models import (
+    HistoryMixin,
+    SourceKind,
+    StatementsMixin,
+    model_history,
+    record_history,
+)
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -180,7 +186,7 @@ class _Actors:
 
     def kind(self, actor: str) -> SourceKind | None:
         if actor not in self.kinds:
-            self.kinds[actor] = StatementSourceMixin.kind_for(SubjectRef.parse(actor), using=self.using)
+            self.kinds[actor] = source_kind_for(SubjectRef.parse(actor))
         return self.kinds[actor]
 
 

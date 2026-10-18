@@ -9,7 +9,7 @@ from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from rebac import PermissionDenied
 from rebac.resources import model_for_resource_type
 
-from angee.base.merge import MergeableMixin
+from angee.base.models import MergeableMixin
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID, public_id_value
 

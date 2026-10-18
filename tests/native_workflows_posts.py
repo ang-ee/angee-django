@@ -46,8 +46,8 @@ from angee.agents.sessions import run_next_turn
 from angee.agents.testing.drivers import FakeRunner, update_chunk
 from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.agents_runtime_pydantic.toolsets import AngeeToolset, ToolGrantAccess
+from angee.base.changesets import changeset_model
 from angee.base.identity import instance_from_public_id
-from angee.base.scoping import system_queryset
 from angee.base.tiers import ResourceTier
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
@@ -206,11 +206,11 @@ class CommentReplyTests(TransactionTestCase):
         return workflow
 
     def step(self, run, node="converse"):
-        return system_queryset(StepRun).get(run=run, node_key=node)
+        return StepRun.system_queryset().get(run=run, node_key=node)
 
     def waiting_run(self):
         self.assertEqual(Trigger.objects.drain(), 1)
-        run = system_queryset(WorkflowRun).get(subject_object_id=self.comment.pk)
+        run = WorkflowRun.system_queryset().get(subject_object_id=self.comment.pk)
         run_until(run)
         step = self.step(run)
         self.assertEqual(
@@ -220,8 +220,8 @@ class CommentReplyTests(TransactionTestCase):
         )
         self.assertIsNotNone(step.wake_at)
         self.assertEqual(step.attempt, 1)
-        session = instance_from_public_id(AgentSession, step.state["session"], queryset=system_queryset(AgentSession))
-        self.assertEqual(system_queryset(AgentTurn).filter(session=session).count(), 1)
+        session = instance_from_public_id(AgentSession, step.state["session"], queryset=AgentSession.system_queryset())
+        self.assertEqual(AgentTurn.system_queryset().filter(session=session).count(), 1)
         return run, session
 
     def complete(self, run, session, *, node=None):
@@ -232,7 +232,7 @@ class CommentReplyTests(TransactionTestCase):
     def expire(self, run):
         step = self.step(run)
         past = timezone.now() - timedelta(seconds=1)
-        system_queryset(StepRun).filter(pk=step.pk).update(
+        StepRun.system_queryset().filter(pk=step.pk).update(
             state={**step.state, "deadline": past.isoformat()},
             wake_at=past,
         )
@@ -240,25 +240,28 @@ class CommentReplyTests(TransactionTestCase):
         return run_until(run)
 
     def replies(self):
-        return system_queryset(Message).filter(parent=self.comment, direction="outbound")
+        return Message.system_queryset().filter(parent=self.comment, direction="outbound")
 
     def test_open_comment_runs_a_turn_then_prepares_an_approval_only_reply(self):
         run, session = self.waiting_run()
         self.complete(run, session)
         self.assertEqual((run.run_as_id, run.status, run.outcome), (self.workflow.user_id, "succeeded", "scheduled"))
-        turn = system_queryset(AgentTurn).get(session=session)
+        turn = AgentTurn.system_queryset().get(session=session)
         self.assertEqual(self.step(run).output["text"], turn.text)
         reply = self.replies().get()
         self.assertEqual(reply.metadata["local"]["agent_turn"], turn.sqid)
         self.assertEqual((run.output["message_id"], run.output["status"]), (reply.sqid, "draft"))
         self.assertIsNone(reply.scheduled_at)
-        self.assertEqual(reply.client_creation_key, f"workflow-reply:{run.sqid}")
-        self.assertEqual(reply.creation_actor, str(to_subject_ref(self.workflow.user)))
+        claim = changeset_model()._base_manager.get(
+            scope=f"messaging.reply:{to_subject_ref(self.workflow.user)}",
+            key=f"workflow-reply:{run.sqid}",
+        )
+        self.assertEqual(claim.created_row.pk, reply.pk)
         self.assertIn("approval", self.step(run, "schedule").notes[0]["message"])
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
-        self.assertFalse(system_queryset(StepWatch).filter(step_run__run=run).exists())
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
+        self.assertFalse(StepWatch.system_queryset().filter(step_run__run=run).exists())
         self.assertTrue(
-            system_queryset(apps.get_model("workflows", "StepRecord"))
+            apps.get_model("workflows", "StepRecord").system_queryset()
             .filter(
                 run=run,
                 label="Reply",
@@ -319,9 +322,9 @@ class CommentReplyTests(TransactionTestCase):
         run_until(run)
         self.assertEqual(self.step(run).status, "waiting", self.step(run).failure_reason)
         session = instance_from_public_id(
-            AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
         )
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "pending")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "pending")
         self.complete(run, session)
         self.assertEqual((run.status, run.outcome), ("succeeded", "scheduled"))
 
@@ -360,8 +363,8 @@ class CommentReplyTests(TransactionTestCase):
         WorkflowRun.objects.cancel(run, actor=self.admin)
         run.refresh_from_db()
         self.assertEqual(run.status, "canceled")
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "canceled")
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "canceled")
         run_next_turn(session.pk)
         self.assertEqual(self.fake.prompts, [])
 
@@ -383,7 +386,7 @@ class CommentReplyTests(TransactionTestCase):
 
         with ThreadPoolExecutor(max_workers=1) as pool:
             with transaction.atomic():
-                system_queryset(AgentSession, lock=("self",)).get(pk=session.pk)
+                AgentSession.system_queryset(lock=("self",)).get(pk=session.pk)
                 contender = pool.submit(copy_context().run, cancel)
                 pid = started.get(timeout=10)
                 deadline = monotonic() + 10
@@ -404,7 +407,7 @@ class CommentReplyTests(TransactionTestCase):
         turn.refresh_from_db()
         session.refresh_from_db()
         self.assertEqual((run.status, session.status, turn.status), ("canceled", "closed", "completed"))
-        self.assertFalse(system_queryset(StepWatch).filter(step_run__run=run).exists())
+        self.assertFalse(StepWatch.system_queryset().filter(step_run__run=run).exists())
 
     def test_cancellation_of_a_continued_session_stops_only_the_runs_turn(self):
         session = AgentSession.objects.start(
@@ -431,7 +434,7 @@ class CommentReplyTests(TransactionTestCase):
         for model, record in ((AgentSession, session), (AgentTurn, turn)):
             with self.subTest(model=model), system_context(reason="active workflow record deletion guard"):
                 with self.assertRaisesMessage(ValidationError, "stop it first"):
-                    system_queryset(model).filter(pk=record.pk).delete()
+                    model.system_queryset().filter(pk=record.pk).delete()
                 session.refresh_from_db()
                 turn.refresh_from_db()
                 run.refresh_from_db()
@@ -442,14 +445,14 @@ class CommentReplyTests(TransactionTestCase):
         run, session = self.waiting_run()
         self.tasks.reset_mock()
         with system_context(reason="deleted reply subject"):
-            system_queryset(Message).filter(pk=self.comment.pk).delete()
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "idle")
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "pending")
+            Message.system_queryset().filter(pk=self.comment.pk).delete()
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "idle")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "pending")
         deliveries = [call.kwargs["kwargs"] for call in self.tasks.call_args_list if call.args[0] == "workflows.cancel"]
         self.assertEqual(len(deliveries), 1)
         cancel_workflow(**deliveries[0])
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "canceled")
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "canceled")
         run_next_turn(session.pk)
         self.assertEqual(self.fake.prompts, [])
 
@@ -458,15 +461,15 @@ class CommentReplyTests(TransactionTestCase):
             existing = self.comment.reply_to_comment(
                 body="Already answered.",
                 actor=self.owner,
-                creation_key="existing",
+                idempotency_key="existing",
             )
         self.assertEqual(Trigger.objects.drain(), 1)
-        run = system_queryset(WorkflowRun).get(subject_object_id=self.comment.pk)
+        run = WorkflowRun.system_queryset().get(subject_object_id=self.comment.pk)
         run_until(run)
         self.assertEqual((run.status, run.outcome), ("succeeded", "replied"))
         self.assertIn("already answered", self.step(run, "check").notes[0]["message"])
         self.assertEqual(self.replies().get().pk, existing.pk)
-        self.assertFalse(system_queryset(AgentSession).exists())
+        self.assertFalse(AgentSession.system_queryset().exists())
         self.assertEqual(self.fake.prompts, [])
 
     def test_reprocessing_an_answered_comment_ends_without_another_turn(self):
@@ -476,7 +479,7 @@ class CommentReplyTests(TransactionTestCase):
         run_until(again)
         self.assertEqual(again.outcome, "replied")
         self.assertEqual(self.replies().count(), 1)
-        self.assertEqual(system_queryset(AgentTurn).count(), 1)
+        self.assertEqual(AgentTurn.system_queryset().count(), 1)
 
     def native_answer(self):
         with system_context(reason="native channel answer"):
@@ -504,17 +507,17 @@ class CommentReplyTests(TransactionTestCase):
         self.assertEqual((run.status, run.outcome, run.output), ("succeeded", "replied", {}))
         self.assertEqual(self.step(run, "schedule").output, {})
         self.assertFalse(self.replies().exists())
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
 
     def test_schedule_replay_precedes_answer_admission(self):
         run, session = self.waiting_run()
         self.complete(run, session, node="schedule")
-        turn = system_queryset(AgentTurn).get(session=session)
+        turn = AgentTurn.system_queryset().get(session=session)
         existing = self.comment.reply_to_comment(
             body=turn.text,
             actor=self.workflow.user,
             local={"agent_turn": turn.sqid},
-            creation_key=f"workflow-reply:{run.sqid}",
+            idempotency_key=f"workflow-reply:{run.sqid}",
         )
         self.native_answer()
         with patch.object(Message, "reply_state", side_effect=AssertionError("Replay must precede admission")):
@@ -530,16 +533,16 @@ class CommentReplyTests(TransactionTestCase):
                 run = start_run(workflow, actor=workflow.user, subject=self.comment)
                 run_until(run)
                 session = instance_from_public_id(
-                    AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+                    AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
                 )
                 self.fake.outcome = TurnOutcome(kind="completed", text=text)
                 self.complete(run, session)
                 self.assertEqual((run.status, run.outcome, run.output["text"]), ("succeeded", "no_reply", text))
                 self.assertEqual(self.step(run, "schedule").status, "skipped")
-                self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
+                self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
         self.assertFalse(self.replies().exists())
 
-    def test_schedule_redelivery_and_creation_key_replay_keep_one_reply(self):
+    def test_schedule_redelivery_and_idempotency_replay_keep_one_reply(self):
         run, session = self.waiting_run()
         self.complete(run, session, node="schedule")
         schedule = self.step(run, "schedule")
@@ -547,7 +550,7 @@ class CommentReplyTests(TransactionTestCase):
         runner.execute(schedule.pk)
         run_until(run)
         reply = self.replies().get()
-        turn = system_queryset(AgentTurn).get(session=session)
+        turn = AgentTurn.system_queryset().get(session=session)
         with actor_context(self.owner):
             self.feed.reply_hold = 0
             self.feed.save(update_fields=["reply_hold"])
@@ -556,7 +559,7 @@ class CommentReplyTests(TransactionTestCase):
                 body=turn.text,
                 actor=self.workflow.user,
                 local={"agent_turn": turn.sqid},
-                creation_key=reply.client_creation_key,
+                idempotency_key=f"workflow-reply:{run.sqid}",
             )
         self.assertEqual((replay.pk, replay.status, replay.scheduled_at), (reply.pk, "draft", None))
         self.assertEqual(self.replies().count(), 1)
@@ -593,7 +596,7 @@ class CommentReplyTests(TransactionTestCase):
         keys = []
 
         def prepare(comment, **kwargs):
-            keys.append(kwargs["creation_key"])
+            keys.append(kwargs["idempotency_key"])
             reply = original(comment, **kwargs)
             if len(keys) == 1:
                 raise ValidationError("Interrupted before workflow settlement.")
@@ -615,11 +618,11 @@ class CommentReplyTests(TransactionTestCase):
         self.assertFalse(self.replies().exists())
         StepRun.objects.retry_step(self.step(run), actor=self.admin)
         run_until(run)
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
-        self.assertEqual(system_queryset(AgentTurn).filter(session=session).count(), 1)
-        self.assertEqual(system_queryset(AgentSession).count(), 2)
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
+        self.assertEqual(AgentTurn.system_queryset().filter(session=session).count(), 1)
+        self.assertEqual(AgentSession.system_queryset().count(), 2)
         session = instance_from_public_id(
-            AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
         )
         self.fake.outcome = TurnOutcome(kind="completed", text="Recovered answer.")
         self.complete(run, session)
@@ -650,11 +653,11 @@ class CommentReplyTests(TransactionTestCase):
         for expected in range(1, MAX_PENDING_REDISPATCHES + 1):
             self.expire(run)
             self.assertEqual(self.step(run).state["redispatches"], expected)
-            self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "pending")
+            self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "pending")
         self.expire(run)
         self.assertEqual(run.status, "failed")
         self.assertIn("deadline", self.step(run).failure_reason)
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "canceled")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "canceled")
         self.assertEqual(
             sum(call.args[0] == "agents.run_session" for call in self.tasks.call_args_list), MAX_PENDING_REDISPATCHES
         )
@@ -666,7 +669,7 @@ class CommentReplyTests(TransactionTestCase):
         run_until(run)
         self.expire(run)
         self.assertEqual(run.status, "failed")
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "canceled")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "canceled")
 
     def test_claim_after_queue_backlog_starts_a_fresh_execution_deadline(self):
         run, session = self.waiting_run()
@@ -678,7 +681,7 @@ class CommentReplyTests(TransactionTestCase):
         self.expire(run)
         state = self.step(run).state
         self.assertEqual(self.step(run).status, "waiting")
-        self.assertEqual(system_queryset(AgentTurn).get(session=session).status, "running")
+        self.assertEqual(AgentTurn.system_queryset().get(session=session).status, "running")
         self.assertIsNotNone(state["running_since"])
         self.assertGreater(datetime.fromisoformat(state["deadline"]), timezone.now())
         before = state["deadline"]
@@ -691,7 +694,7 @@ class CommentReplyTests(TransactionTestCase):
         run, session = self.waiting_run()
         turn = session.claim_turn()
         with system_context(reason="coalesced running and approval wakes"), transaction.atomic():
-            system_queryset(AgentSession, lock=("self",)).get(pk=session.pk)
+            AgentSession.system_queryset(lock=("self",)).get(pk=session.pk)
             turn.mark_awaiting_approval()
             session.mark_awaiting_approval()
         self.expire(run)
@@ -720,7 +723,7 @@ class CommentReplyTests(TransactionTestCase):
         for _ in range(MAX_PENDING_REDISPATCHES):
             self.tasks.reset_mock()
             with system_context(reason="repeat pending turn observation"):
-                turn = system_queryset(AgentTurn).get(session=session)
+                turn = AgentTurn.system_queryset().get(session=session)
                 turn.save(update_fields=["status"])
             self.assertEqual(runner.wake_records(), 1)
             with patch.object(StartConversation, "run", after_delivery_expiry):
@@ -746,7 +749,7 @@ class CommentReplyTests(TransactionTestCase):
         ledger = apps.get_model("resources", "Resource")
         for failure in ("external_server", "stale_ledger"):
             with self.subTest(failure=failure), system_context(reason="catalogue sync failure fixture"):
-                before = system_queryset(Agent).get(pk=self.agent.pk)
+                before = Agent.system_queryset().get(pk=self.agent.pk)
                 if failure == "external_server":
                     self.server.config = {}
                     self.server.save(update_fields=["config"])
@@ -757,7 +760,7 @@ class CommentReplyTests(TransactionTestCase):
                     result = provision_agent(self.agent.sqid)
                 self.assertFalse(result.ok)
                 self.assertIn("external server" if failure == "external_server" else "another record", result.message)
-                after = system_queryset(Agent).get(pk=self.agent.pk)
+                after = Agent.system_queryset().get(pk=self.agent.pk)
                 self.assertEqual(
                     (after.lifecycle, after.runtime_status, after.last_error, after.updated_at),
                     (before.lifecycle, before.runtime_status, before.last_error, before.updated_at),
@@ -773,7 +776,7 @@ class CommentReplyTests(TransactionTestCase):
         self.assertFalse(self.feed.with_actor(self.agent.user).has_access("write"))
         self.assertFalse(self.vault.with_actor(self.agent.user).has_access("write"))
         with actor_context(self.agent.user), self.assertRaises(PermissionDenied):
-            self.comment.reply_to_comment(body="Unauthorized", actor=self.agent.user, creation_key="agent-reply")
+            self.comment.reply_to_comment(body="Unauthorized", actor=self.agent.user, idempotency_key="agent-reply")
         run, session = self.waiting_run()
 
         def inspect_tools(current, turn, emit):
@@ -791,12 +794,12 @@ class CommentReplyTests(TransactionTestCase):
         run = start_run(workflow, actor=workflow.user, subject=self.comment)
         run_until(run)
         session = instance_from_public_id(
-            AgentSession, self.step(run).state["session"], queryset=system_queryset(AgentSession)
+            AgentSession, self.step(run).state["session"], queryset=AgentSession.system_queryset()
         )
         self.complete(run, session)
         self.assertEqual(run.status, "failed")
         self.assertFalse(self.replies().exists())
-        self.assertEqual(system_queryset(AgentSession).get(pk=session.pk).status, "closed")
+        self.assertEqual(AgentSession.system_queryset().get(pk=session.pk).status, "closed")
 
     def test_publisher_losing_call_authority_fails_readably(self):
         run, session = self.waiting_run()
@@ -885,16 +888,16 @@ class CommentReplyTests(TransactionTestCase):
             self.assertTrue(self.agent.mcp_servers.filter(pk=server.pk).exists())
 
     def test_catalogue_sync_provisions_and_adopts_without_demo_rows(self):
-        self.assertEqual(system_queryset(MCPServer).count(), 1)
+        self.assertEqual(MCPServer.system_queryset().count(), 1)
         sync_builtin_tool_catalogue()
         self.assertEqual(builtin_mcp_server().pk, self.server.pk)
         self.assertEqual(
             set(
-                system_queryset(MCPTool).filter(server=self.server, name__in=READ_TOOLS).values_list("name", flat=True)
+                MCPTool.system_queryset().filter(server=self.server, name__in=READ_TOOLS).values_list("name", flat=True)
             ),
             READ_TOOLS,
         )
-        self.assertFalse(system_queryset(MCPTool).filter(name="reply_to_comment").exists())
+        self.assertFalse(MCPTool.system_queryset().filter(name="reply_to_comment").exists())
 
     def test_resource_document_publishes_an_agent_xref_without_rewriting_its_draft(self):
         with actor_context(self.admin):

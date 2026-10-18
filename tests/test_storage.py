@@ -37,8 +37,7 @@ from rebac.roles import grant
 from strawberry.django.views import GraphQLView
 
 from angee.base.identity import public_id_of
-from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
-from angee.base.models import DirectRecordAccess
+from angee.base.models import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet, DirectRecordAccess
 from angee.data.field_classification import is_archive_field, is_trash_field
 from angee.graphql import records
 from angee.graphql.views import graphql_endpoint
@@ -1805,8 +1804,3 @@ def test_storage_preview_does_not_mint_download_urls(
         assert "errors" not in data
         assert data["data"]["files_by_pk"]["url"].startswith("/storage/download/")
         mint.assert_called_once()
-
-
-def test_folder_create_refuses_unsupported_creation_keys() -> None:
-    with pytest.raises(ValidationError, match="does not support creation keys"):
-        storage_schema.FolderWriteBackend(Folder).create(None, {}, client_creation_key="request")

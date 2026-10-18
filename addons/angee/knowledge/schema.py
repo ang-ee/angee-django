@@ -9,7 +9,6 @@ from typing import Annotated, Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.db.models import F
 from rebac import system_context
 from rebac.resources import model_resource_type
@@ -353,12 +352,10 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
 class PageWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a page in a vault the requesting user can write."""
 
         del info
-        if client_creation_key is not None:
-            raise ValidationError({"client_creation_key": "Page creation does not support creation keys."})
         vault = require_instance_for_id(Vault, data["vault"])
         parent = None
         if data.get("parent") is not None:
@@ -538,7 +535,7 @@ class KnowledgeMutation:
         template: PublicID,
         name: str,
         owned: bool = True,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ActionResult:
         """Clone a readable template, optionally ownerless and replay-safe."""
 
@@ -547,7 +544,7 @@ class KnowledgeMutation:
         field = cast(SqidField, Vault._meta.get_field("sqid"))
         source = Vault(pk=field.public_id_to_value(template))
         vault = Vault._default_manager.create_from(
-            source, name=name, owned=owned, client_creation_key=client_creation_key,
+            source, name=name, owned=owned, idempotency_key=idempotency_key,
         )
         return ActionResult(ok=True, message="Vault created.", id=require_public_id(Vault, vault.pk))
 

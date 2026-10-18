@@ -428,7 +428,7 @@ describe("RecordThreadConversation", () => {
     expect(post?.vars.modelLabel).toBe("discuss/room");
     expect(post?.vars.recordId).toBe("rom_1");
     expect(post?.vars.body).toBe("Hello room");
-    expect(post?.vars.clientCreationKey).toEqual(expect.any(String));
+    expect(post?.vars.idempotencyKey).toEqual(expect.any(String));
   });
 
   test("defaults to Enter to submit and keeps Shift+Enter for a newline", () => {
@@ -565,7 +565,7 @@ describe("RecordThreadConversation", () => {
     await screen.findByRole("alert");
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
-    expect(posts[1]?.vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
+    expect(posts[1]?.vars.idempotencyKey).toBe(first?.vars.idempotencyKey);
   });
 
   test("only a moderator's comment carries the remove control", () => {

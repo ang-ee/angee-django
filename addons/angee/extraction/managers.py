@@ -16,8 +16,7 @@ from angee.base.actors import actor_user_id
 from angee.base.evidence import EvidenceReference, readable_records
 from angee.base.identity import public_id_of
 from angee.base.jsonschema import validate
-from angee.base.mixins import AppendOnlyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
 from angee.base.refs import record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes

@@ -17,7 +17,6 @@ from rebac.schema.walker import field_gated_actions
 
 from angee.base.identity import instance_from_public_id
 from angee.base.permissions import effective_rebac_definition
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.events import ChangeEvent, ChangePayload
 
 
@@ -169,7 +168,7 @@ class ChangeReadGate:
                 model = apps.get_model(reference.model)
             except (LookupError, ValueError):
                 continue
-            scope = read_scoped_queryset(model, self.actor)
+            scope = model.objects.with_actor(self.actor).with_action("read")
             if instance_from_public_id(model, reference.id, queryset=scope) is not None:
                 readable.append(reference)
         return replace(change, related_records=tuple(readable))
