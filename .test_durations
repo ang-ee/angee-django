@@ -5817,7 +5817,7 @@
     "tests/test_stack.py::test_stack_names_celery_not_procrastinate": 0.0010038763284683228,
     "tests/test_stack_templates.py::test_both_stacks_render_from_one_shared_body": 0.04036625102162361,
     "tests/test_stack_templates.py::test_both_stacks_render_shared_root_agent_instructions": 0.01497354218736291,
-    "tests/test_stack_templates.py::test_celery_queue_workers_render_in_both_modes": 0.06476812437176704,
+    "tests/test_stack_templates.py::test_celery_queues_share_one_queue_worker_in_both_modes": 0.06476812437176704,
     "tests/test_stack_templates.py::test_dev_stack_bundled_postgres_custom_role_and_database_agree[docker]": 0.011944875586777925,
     "tests/test_stack_templates.py::test_dev_stack_bundled_postgres_custom_role_and_database_agree[process]": 0.008832248859107494,
     "tests/test_stack_templates.py::test_dev_stack_bundled_redis_custom_databases[docker]": 0.015889290254563093,
