@@ -22,3 +22,9 @@ condition = "AND"
 paths = ['''^tests/''']
 regexTarget = "line"
 regexes = ['''Session\(session_key="[a-z0-9]{32}"\)''']
+[[rules.allowlists]]
+description = "A fixture name ending in key, then an empty idempotency key, reads as a key and its value."
+condition = "AND"
+paths = ['''^tests/''']
+regexTarget = "line"
+regexes = ['''name="Empty key", idempotency_key=""''']
