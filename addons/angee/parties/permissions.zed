@@ -1,7 +1,7 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 13
+// @rebac_schema_revision: 14
 
 // A party and its related rows (handles, links, addresses, relationships) are
 // each owned by the user that created them, with platform admins reaching every
@@ -21,7 +21,6 @@ definition parties/party {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
-    relation carrier_reader: auth/user | auth/group#member
     // Admission follows retained source links and registered principal roles.
     relation directory: integrate/integration // rebac:field=record_links__stream__integration
     relation statement_role: provenance/role // rebac:const=parties_statement_source
@@ -30,7 +29,7 @@ definition parties/party {
 
     permission create = authenticated
     permission read_granted = owner + editor + reader + statement_source + admin->member
-    permission read = read_granted + carrier_reader
+    permission read = read_granted
     // What a party lends the record tasks about it: its direct holders only, so
     // task access never recurses through a thread the party follows (rebac.E016).
     permission read_as_subject = owner + editor + reader + statement_source + admin->member

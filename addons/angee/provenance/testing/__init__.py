@@ -31,16 +31,24 @@ def load_statement_sources(addon_label: str) -> None:
         target_model__in=principal_models,
     ).exists():
         return
-    masters = tuple(
+    manifest = resource_manifest_for(addon)
+    excluded = [
         ":".join(ResourceEntry.from_declaration(addon, "master", declaration).key)
-        for declaration in resource_manifest_for(addon)["master"]
-    )
+        for declaration in manifest["master"]
+    ]
+    # Only the principals and their grants load: the addon's other install rows
+    # (and whatever other addons they depend on) are not statement sources.
+    principal_labels = {label.lower() for label in principal_models}
+    for declaration in manifest["install"]:
+        entry = ResourceEntry.from_declaration(addon, "install", declaration)
+        if entry.kind != "grants" and (entry.model or entry.infer_model_label()).lower() not in principal_labels:
+            excluded.append(":".join(entry.key))
     with (
         system_context(reason=f"{addon_label}.testing.statement_sources"),
         override_settings(
             ANGEE_RESOURCE_EXCLUDED_ENTRIES=(
                 *getattr(settings, "ANGEE_RESOURCE_EXCLUDED_ENTRIES", ()),
-                *masters,
+                *excluded,
             ),
         ),
     ):

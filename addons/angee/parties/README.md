@@ -47,7 +47,7 @@ retained statements protect their subjects and Handle evidence from deletion.
 Circle and spaces memberships keep plain acceptance/rejection decisions.
 
 Source admission follows RecordLinks and seeded Rule/Seed role membership.
-Sources and migrated carrier readers gain no private reads. Imports supply their
+Sources gain no private reads. Imports supply their
 Integration and observed links; parties binds targets in the application transaction.
 
 Identity matching writes normal RULE same_as statements on the ordered Party
