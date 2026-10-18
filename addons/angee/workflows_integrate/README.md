@@ -38,13 +38,15 @@ steps refuse a partition that writes back instead of waiting on a refusal that
 nothing would retry. A two-way stream syncs through integrate's own runner.
 
 Coverage uses two steps with the same explicit partition set. `integrate_rescan`
-performs bounded rescan/baseline recovery per partition and waits on a deadline
-while failures remain. `integrate_conflicts` asks one decision per conflict;
-its continuation checks current failure truth. Unresolved failures fail
-the step; after a direct domain resolution, operator retry consumes the retained
-answers without asking again. Resolving a conflict belongs to the failure owner; a
-review answer only asks to recheck it. Put conflict review before the rescan wait
-or on a parallel graph branch so an unresolved conflict can reach review.
+performs bounded rescan/baseline recovery per partition and waits, one
+`reconcile_seconds` interval at a time, while a failure it retries is due within
+that interval. A failure that backs off further, or waits on a conflict, stays on
+its link for a later cycle: the step finishes and reports it, so a permanent
+refusal never holds the bridge's one active cycle. `integrate_conflicts` asks one
+decision per conflict; its continuation checks current failure truth. Unresolved
+failures fail the step; after a direct domain resolution, operator retry consumes
+the retained answers without asking again. Resolving a conflict belongs to the
+failure owner; a review answer only asks to recheck it.
 
 Counts describe acknowledged page results. A page committed just before a worker
 loses its lease is not replayed, but its unacknowledged count is absent from the
