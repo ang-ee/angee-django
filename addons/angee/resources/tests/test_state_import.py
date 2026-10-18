@@ -251,7 +251,7 @@ def test_adopted_target_preserves_state_and_updates_other_fields(tmp_path: Path)
     with system_context(reason="test resources adopted state"):
         user = get_user_model().objects.create_user(username="state-owner")
         agent = Agent.objects.create(name="Test agent", owner=user)
-        session = AgentSession.objects.create(agent=agent, owner=user)
+        session = AgentSession.objects.create(agent=agent, user=user)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Original")
         turn.mark_running()
         Resource.objects.create(

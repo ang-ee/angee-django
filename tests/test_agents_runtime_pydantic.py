@@ -339,7 +339,7 @@ def test_view_context_persists_in_native_history_at_its_turn(
     with actor_context(owner):
         session = AgentSession.objects.start(
             agent,
-            owner=owner,
+            user=owner,
             context={"kind": "list", "type": "agents/agent", "params": {"search": "Session origin"}},
         )
         expected: list[str | list[str]] = []
@@ -411,7 +411,7 @@ def test_view_context_uses_the_poster_read_scope_and_tools_stay_agent_scoped(
     with actor_context(owner):
         if poster_kind == "admin":
             assert not Agent.objects.filter(pk=record.pk).exists()
-        session = AgentSession.objects.start(agent, owner=owner, context={})
+        session = AgentSession.objects.start(agent, user=owner, context={})
         turn = session.post(
             "Read the attached record.",
             context={"kind": "record", "type": "agents/agent", "sqid": str(record.sqid)},
@@ -523,7 +523,7 @@ def test_unsupported_approval_does_not_poison_native_model_history(
     )
     monkeypatch.setattr(Agent, "inference_model", lambda selected: TestModel(call_tools=["read_document"]))
     with actor_context(owner):
-        session = AgentSession.objects.start(agent, owner=owner, context={})
+        session = AgentSession.objects.start(agent, user=owner, context={})
         prior_replay = session.replay_state
         approval = session.post("Read the document")
         run_session.run(session.pk)

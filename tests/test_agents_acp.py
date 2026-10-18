@@ -518,7 +518,7 @@ def test_connection_actor_survives_sdk_tasks_and_sync_verbs_and_hides_other_sess
     other = create_platform_admin("acp-other")
     cookie, other_cookie = _cookie(owner), _cookie(other)
     with actor_context(owner):
-        private = AgentSession.objects.start(agent, owner=owner, context={})
+        private = AgentSession.objects.start(agent, user=owner, context={})
         private.post("Private")
     actors: list[Any] = []
     start = AgentSessionManager.start
@@ -749,7 +749,7 @@ def test_model_config_and_list_are_agent_scoped(chat: Any, version: int) -> None
             name="Other", owner=owner, runtime_class="pydantic", runtime_status="running"
         )
     with actor_context(owner):
-        other_session = AgentSession.objects.start(other_agent, owner=owner, context={})
+        other_session = AgentSession.objects.start(other_agent, user=owner, context={})
     cookie = _cookie(owner)
 
     async def scenario() -> None:
@@ -1389,7 +1389,7 @@ def test_v2_segments_keep_arrival_order_and_ids_across_flushes_snapshot_and_repl
 def test_v2_replays_pre_rebuild_thought_and_message_chunks_with_full_bracket(chat: Any) -> None:
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
-    session = AgentSession.objects.start(agent, owner=owner, context={})
+    session = AgentSession.objects.start(agent, user=owner, context={})
     session.post("Historical")
     turn = session.claim_turn()
     stored = [_chunk("Think", thought=True), _chunk(" more", thought=True), _chunk("Hello"), _chunk("!")]
@@ -1636,8 +1636,8 @@ def test_follower_query_budget_is_independent_of_history_and_unrelated_turns(
 ) -> None:
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
-    session = AgentSession.objects.start(agent, owner=owner, context={})
-    other = AgentSession.objects.start(agent, owner=owner, context={})
+    session = AgentSession.objects.start(agent, user=owner, context={})
+    other = AgentSession.objects.start(agent, user=owner, context={})
     with system_context(reason="test transcript query budget"):
         AgentTurn.objects.bulk_create(
             [
@@ -1751,7 +1751,7 @@ def test_refusals_share_the_graphql_classifier_without_internal_details(
 def test_resume_awaiting_approval_is_idle_without_a_stop_reason(chat: Any, replay: bool) -> None:
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
-    session = AgentSession.objects.start(agent, owner=owner, context={})
+    session = AgentSession.objects.start(agent, user=owner, context={})
     session.post("Suspended")
     turn = session.claim_turn()
     with system_context(reason="test future approval state"):
