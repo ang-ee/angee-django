@@ -21,6 +21,7 @@ from angee.base.models.base import (
     AngeeModel,
     DerivedFrom,
     DirectRecordAccess,
+    SystemQuerysetMixin,
     record_display_label,
     role_anchor,
 )

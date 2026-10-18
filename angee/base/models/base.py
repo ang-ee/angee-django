@@ -60,7 +60,34 @@ class DirectRecordAccess:
 
 
 
-class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin):
+class SystemQuerysetMixin:
+    """Elevated unscoped reads for a model whose default manager composes an Angee queryset.
+
+    Composed by :class:`AngeeModel` and by plain membership models whose rows are
+    read and locked outside an actor's scope.
+    """
+
+    @classmethod
+    def system_queryset(
+        cls,
+        *,
+        lock: tuple[str, ...] | None = None,
+    ) -> AngeeQuerySet[Self]:
+        """Return an elevated unscoped queryset with backend-gated locks; SQLite stays unlocked.
+
+        Locking was previously dead at these call sites and is now real. A model
+        whose default manager is already permission-naive (``AngeeUnscopedQuerySet``)
+        returns that queryset as it is.
+        """
+
+        model = cast(type[models.Model], cls)
+        queryset = cast(AngeeQuerySet[Self], model._default_manager.get_queryset())
+        if isinstance(queryset, RebacQuerySet):
+            queryset = queryset.system_context(reason=f"{model._meta.label_lower}.system_queryset")
+        return queryset.lock_if_supported(of=lock) if lock is not None else queryset
+
+
+class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin):
     """Abstract base model for Angee source and runtime models."""
 
     objects = AngeeManager()
@@ -203,24 +230,6 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
         """Return the record label used by generic GraphQL and record references."""
 
         return str(self)
-
-    @classmethod
-    def system_queryset(
-        cls,
-        *,
-        lock: tuple[str, ...] | None = None,
-    ) -> AngeeQuerySet[Self]:
-        """Return an elevated unscoped queryset with backend-gated locks; SQLite stays unlocked.
-
-        Locking was previously dead at these call sites and is now real. A model
-        whose default manager is already permission-naive (``AngeeUnscopedQuerySet``)
-        returns that queryset as it is.
-        """
-
-        queryset = cast(AngeeQuerySet[Self], cls._default_manager.get_queryset())
-        if isinstance(queryset, RebacQuerySet):
-            queryset = queryset.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
-        return queryset.lock_if_supported(of=lock) if lock is not None else queryset
 
     def full_clean(
         self,
