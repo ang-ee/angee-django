@@ -163,11 +163,14 @@ def _claimed_create(
     fingerprint: str,
     insert: Callable[[], Any],
 ) -> Any:
-    """Insert once for one actor-scoped resource and replay its claimed row."""
+    """Insert once for one actor-scoped resource and replay its claimed row.
+
+    Without a key the insert runs as the backend wrote it: a custom backend owns
+    its own transaction, as upstream calls it.
+    """
 
     if idempotency_key is None:
-        with transaction.atomic():
-            return insert()
+        return insert()
     with changeset(fresh=True), transaction.atomic():
         actor = current_actor()
         if not model_resource_type(model) or actor is None:
@@ -273,33 +276,44 @@ class AngeeHasuraWriteBackend:
         return self.model.objects.for_write()
 
     def create(self, info: strawberry.Info, data: dict[str, Any], *, idempotency_key: str | None = None) -> Any:
-        """Create one row, its declared nested child lines and input extensions atomically."""
+        """Create one row under the changeset claim; :meth:`insert` owns the row itself.
+
+        A subclass that routes creation through its own factory overrides
+        :meth:`insert`, never this method: the replay token and its fingerprint
+        belong to every insertable resource.
+        """
+
+        return _claimed_create(
+            self.model,
+            idempotency_key,
+            fingerprint=self._creation_fingerprint(data),
+            insert=lambda: self.insert(info, data),
+        )
+
+    def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Insert one row, its declared nested child lines and input extensions atomically."""
 
         data = dict(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
         extensions = _pop_input_extensions(self.model, data)
-
-        def insert() -> Any:
+        with transaction.atomic():
             instance = self._create_row(info, data)
             if line_rows is not None:
                 self._apply_line_diff(info, instance, line_rows, replace=False)
             if extensions:
                 instance.apply_input_extensions(**extensions)
-            return instance
+        return instance
 
-        decoded = self._decode_public_id_fields(data)
-        fingerprint = self._creation_fingerprint({**decoded, **extensions}, line_rows)
-        return _claimed_create(
-            self.model,
-            idempotency_key,
-            fingerprint=fingerprint,
-            insert=insert,
-        )
+    def _creation_fingerprint(self, data: dict[str, Any]) -> str:
+        """Fingerprint the decoded write inputs, their extensions and the declared line envelope."""
 
-    def _creation_fingerprint(self, data: dict[str, Any], line_rows: list[dict[str, Any]] | None) -> str:
-        """Fingerprint decoded write inputs, including the declared line envelope."""
-
-        content = {"object": data, "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None}
+        data = dict(data)
+        line_rows = self._pop_line_rows(data) if self.lines is not None else None
+        extensions = _pop_input_extensions(self.model, data)
+        content = {
+            "object": {**self._decode_public_id_fields(data), **extensions},
+            "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None,
+        }
         return creation_fingerprint(content)
 
     def save(
