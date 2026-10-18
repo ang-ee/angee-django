@@ -33,7 +33,7 @@ export type PageBodyProps = React.HTMLAttributes<HTMLElement> &
 
 export const PageBody = React.forwardRef<HTMLElement, PageBodyProps>(
   function PageBody(
-    { as = "main", className, gutter = "comfortable", scroll = "auto", ...props },
+    { as = "div", className, gutter = "comfortable", scroll = "auto", ...props },
     ref,
   ) {
     return React.createElement(as, {
