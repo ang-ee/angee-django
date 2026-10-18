@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_composed_addon_query_budgets(tmp_path: Path) -> None:
     """Keep actual HTTP/model query regressions in the normal pytest gate."""
@@ -35,7 +37,7 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
         env=env,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
     assert result.returncode == 0, f"composed query budgets failed:\n{result.stdout}\n{result.stderr}"

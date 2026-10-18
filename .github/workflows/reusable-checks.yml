@@ -62,10 +62,41 @@ permissions:
   contents: read
 
 jobs:
-  uv:
+  # The suite runs as six contiguous shards of equal stored time
+  # (.test_durations, pytest-split); a test missing from it still runs in one.
+  # loadfile keeps a file on one worker, so the heaviest files set a floor near
+  # 25 minutes on CI: three campaign files of about 700 stored seconds each, whose
+  # cost is per-test fixture setup (a rebac sync per test). Lowering that setup is
+  # how this limit comes down; 40 minutes keeps that shard from being flaky.
+  uv-shard:
+    name: uv ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      - run: >-
+          uv run pytest -q -n auto --dist loadfile --durations=25
+          --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}
+
+  # The PostgreSQL selection is split the same way: every worker flushes the
+  # whole schema between transactional tests, so one job no longer fits.
+  uv-postgres:
+    name: uv postgres ${{ matrix.group }}/3
+    if: ${{ inputs.uv-enabled }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3]
     services:
       postgres:
         image: postgres:17
@@ -85,10 +116,15 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      - run: uv run pytest -q -n auto --dist loadfile --durations=25 ${{ inputs.pytest-extra-args }}
+      - name: Size the lock table for one-pass schema creation
+        # Each worker creates every table in one transaction, which the default
+        # lock table (64 per transaction x 100 connections) no longer holds.
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
       - name: Verify workflow, decision and agent session contracts execute on PostgreSQL
-        # Run this independent database proof even if the preceding suite fails.
-        if: ${{ !cancelled() }}
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         # Review concurrency includes simultaneous all seats, a requester-less
@@ -96,7 +132,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
-          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --junitxml=workflow-concurrency.xml \
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=workflow-concurrency.xml \
+            --splits 3 --group ${{ matrix.group }} \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
@@ -126,6 +163,19 @@ jobs:
             tests/test_framework_integration.py \
             tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+
+  # One verdict under the check name pull requests and callers already know:
+  # a failed, cancelled or timed-out shard fails it.
+  uv:
+    if: ${{ always() && inputs.uv-enabled }}
+    needs: [uv-shard, uv-postgres]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
+          test "${{ needs.uv-shard.result }}" = success
+          test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}

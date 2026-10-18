@@ -158,7 +158,13 @@ class BridgeImpl(IntegrationImpl):
         """Withdraw native projection visibility when absence changes link status."""
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
-        """Finish domain batch relationships before the page cursor commits."""
+        """Finish domain batch relationships before the page cursor commits.
+
+        Runs once per page inside the page transaction, after the driver has decided
+        every record of the page; each applied record's link is already promoted.
+        ``outcomes`` are the applied records' results in page order. The cursor has
+        not advanced yet, so a raise here rolls the whole page back.
+        """
 
     def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
         """Project only selected local identities, or all candidates when keys is None."""

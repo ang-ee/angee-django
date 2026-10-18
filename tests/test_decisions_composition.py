@@ -10,6 +10,8 @@ from pathlib import Path
 
 from graphql import build_schema, get_named_type
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Path) -> None:
     """Compile only the decisions dependency closure in a fresh Django process."""
@@ -40,7 +42,7 @@ def test_decisions_compose_independently_with_inbox_read_resources(tmp_path: Pat
             env=environment,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=COMPOSED_TEST_TIMEOUT,
             check=False,
         )
         assert result.returncode == 0, f"Decision composition failed:\n{result.stdout}\n{result.stderr}"
