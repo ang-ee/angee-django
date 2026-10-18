@@ -1,4 +1,6 @@
-import type { Row } from "@angee/metadata";
+import * as React from "react";
+import { useInvalidate } from "@refinedev/core";
+import { refineResourceName, useModelMetadata, type Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Skeleton,
@@ -31,16 +33,32 @@ function RunStatusLabel() {
 function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
   const resource = useResourceViewMaybe()?.resource ?? "";
   const id = typeof row?.id === "string" ? row.id : "";
-  const records = resource && id ? [{ model: resource, id }] : [];
+  const records = React.useMemo(() => (resource && id ? [{ model: resource, id }] : []), [resource, id]);
   const query = useAuthoredQuery(RecordRunStatusDocument, { records }, {
     models: RUN_MODELS,
     records,
     relatedModels: RUN_MODELS,
     enabled: records.length === 1,
   });
+  const run = query.data?.record_timeline.records[0]?.runs[0];
+  // The row projects facts its run produces (a bill import's imported bill, an archive
+  // import's results): when the run moves, the row the list holds is stale, so the live
+  // run change refetches the list and detail the same way a row mutation would.
+  const invalidate = useInvalidate();
+  const listResource = useModelMetadata(resource)?.resource ?? null;
+  const transition = run ? `${run.id}:${run.status}` : "";
+  const seen = React.useRef(transition);
+  React.useEffect(() => {
+    if (!listResource || transition === seen.current) return;
+    seen.current = transition;
+    void invalidate({
+      resource: refineResourceName(listResource),
+      dataProviderName: listResource.schemaName,
+      invalidates: ["list", "many", "detail"],
+    });
+  }, [invalidate, listResource, transition]);
   if (!records.length) return null;
   if (query.isLoading) return <Skeleton shape="text" size="sm" className="w-16" />;
-  const run = query.data?.record_timeline.records[0]?.runs[0];
   if (!run) return <span aria-label={query.error ? "Run status unavailable" : undefined}>—</span>;
   const Status = defaultWidgets.statusBadge.read;
   return <Status value={run.status} />;
