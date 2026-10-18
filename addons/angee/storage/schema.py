@@ -29,6 +29,7 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
+from angee.graphql.capabilities import permissions_field
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.identity import instance_from_public_id
 from angee.storage import exceptions
@@ -105,6 +106,10 @@ class FolderType(AngeeNode):
 @strawberry_django.type(File)
 class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
+
+    permissions = permissions_field(("read", "write", "share", "delete"))
+    """The verbs record chrome gates on (``holdsPermission``), e.g. a contributed
+    ``storage.File#actions`` child declaring ``permission: "read"``."""
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name,
