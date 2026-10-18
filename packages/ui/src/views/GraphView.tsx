@@ -46,6 +46,8 @@ export interface GraphViewNode<
   selected?: boolean;
   /** Emphasize this node's border and background independently of selection. */
   highlighted?: boolean;
+  /** Keep this node visible and selectable while disabling graph mutations. */
+  readOnly?: boolean;
   position?: GraphViewPosition;
   /** Named output handles; omitted preserves the default unnamed output. */
   ports?: readonly GraphViewPort[];
@@ -638,6 +640,8 @@ function toReactFlowNode<
     id: node.id,
     domAttributes: { "data-graph-node-id": node.id } as RenderNode<TKind, TMeta>["domAttributes"],
     selected,
+    draggable: node.readOnly ? false : undefined,
+    connectable: node.readOnly ? false : undefined,
     ariaLabel: node.ariaLabel,
     type: "angee",
     position: { x: 0, y: 0 },
@@ -775,6 +779,7 @@ function sameNodeContent(left: GraphViewNode, right: GraphViewNode): boolean {
   return left.kind === right.kind && left.kindLabel === right.kindLabel
     && left.title === right.title && left.code === right.code && left.detail === right.detail
     && left.ariaLabel === right.ariaLabel && left.highlighted === right.highlighted
+    && left.readOnly === right.readOnly
     && left.meta === right.meta && (left.ports === right.ports || (left.ports?.length === right.ports?.length
       && Boolean(left.ports?.every((port, index) => port.id === right.ports?.[index]?.id && port.label === right.ports?.[index]?.label))))
     && left.selected === right.selected && left.position?.x === right.position?.x && left.position?.y === right.position?.y;

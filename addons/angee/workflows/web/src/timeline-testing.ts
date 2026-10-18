@@ -1,7 +1,7 @@
 import { decisionFixture } from "@angee/decisions/testing";
 import type { TimelineData, TimelineSelection } from "./RecordTimeline";
 
-export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "set" | "empty" | "unknown";
+export type TimelineState = "decision" | "clean" | "error" | "run" | "stopped" | "interrupted" | "set" | "empty" | "unknown";
 type Run = TimelineData[number]["runs"][number];
 type Node = Run["graph"]["nodes"][number];
 const at = "2026-10-03T10:00:00Z";
@@ -46,8 +46,10 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
     review.decision = null; review.hold = state;
     if (state === "error") { review.status = "FAILED"; review.failure_reason = "The operation could not finish."; review.can_retry = true; run.status = "FAILED"; run.failure_reason = "A parallel branch failed."; }
     else review.awaited_run = { id: "wfr_child", display_name: "Related record check", status: "WAITING" };
-  } else if (state === "stopped") {
-    run.status = "CANCELED"; run.can_cancel = false; run.finished_at = at; run.stopped_at = at;
+  } else if (state === "stopped" || state === "interrupted") {
+    if (state === "stopped") run.status = "CANCELED";
+    else (run as { status: string }).status = "INTERRUPTED";
+    run.can_cancel = false; run.finished_at = at; run.stopped_at = state === "stopped" ? at : null;
     review.status = "CANCELED"; review.hold = null; nodes[7]!.plan = "done"; nodes[8]!.plan = nodes[9]!.plan = "not_run";
     decision.is_open = false; decision.verdict = []; decision.answered_by = { display_name: "River" }; decision.answered_at = at;
   }

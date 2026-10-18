@@ -813,10 +813,11 @@ class WorkflowDraftAcknowledgement:
 
 @strawberry.type
 class WorkflowPublication:
-    """Publication number and readable dependents returned by its owner."""
+    """Published version facts needed to refresh the authoring projection."""
 
     number: int
     dependents: list[str]
+    document: JSON
 
 
 @strawberry.type
@@ -857,7 +858,11 @@ class WorkflowStudioMutation:
             expected_revision=expected_revision,
             actor=request_from_info(info).user,
         )
-        return WorkflowPublication(number=published.version.number, dependents=list(published.dependents))
+        return WorkflowPublication(
+            number=published.version.number,
+            dependents=list(published.dependents),
+            document=published.version.document,
+        )
 
 
 _RESOURCES = (

@@ -26,6 +26,7 @@ from angee.base.refs import RecordRefMixin
 from angee.base.serialization import json_safe
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.kinds import ResourceKindDeclarations
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.widgets import (
     ContentTypeForeignKeyWidget,
@@ -68,12 +69,14 @@ class AngeeResource(resources.ModelResource):
         entry: ResourceEntry,
         ledger_model: type[models.Model],
         addon_aliases: Mapping[str, str],
+        kind_declarations: ResourceKindDeclarations | None = None,
     ) -> None:
         """Bind one resource entry and concrete ledger model."""
 
         self.entry = entry
         self.ledger_model = ledger_model
         self.addon_aliases = addon_aliases
+        self.kind_declarations = kind_declarations
         self._existing_ledgers: dict[str, Resource | None] = {}
         self._instances: dict[str, models.Model | None] = {}
         self._row_hashes: dict[str, str] = {}
@@ -829,6 +832,7 @@ def build_resource(
     *,
     ledger_model: type[models.Model],
     addon_aliases: Mapping[str, str],
+    kind_declarations: ResourceKindDeclarations | None = None,
 ) -> AngeeResource:
     """Compose the model's ``resource_class`` with native xref import options.
 
@@ -868,5 +872,6 @@ def build_resource(
             entry=entry,
             ledger_model=ledger_model,
             addon_aliases=addon_aliases,
+            kind_declarations=kind_declarations,
         ),
     )

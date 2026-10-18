@@ -475,12 +475,15 @@ explicit `None` disabling migrations for an emitted label, fail clearly.
 - `addon.toml` owns addon declarations; native AppConfig owns Django identity and lifecycle.
 - Capability conventions are defaults, with explicit manifest declarations taking precedence.
 - Generated `runtime/` is output; edit addon source, not emitted files.
-- Workflow graphs are complete documents in declared resource files, as in the
+- Base workflow graphs are complete documents in declared resource files, as in the
   [notes workflow](../examples/addons/example/notes/resources/demo/100_workflows.workflow.yaml).
   [`WorkflowDefinitionResource`](../addons/angee/workflows/resources.py) delegates
   identity, draft validation and publication to `WorkflowManager.install_definition`.
-  Publication freezes the normalized child contracts in each version. Edit the
-  source document and republish affected parents when a child contract changes.
+  Addons may contribute fragments only through declared definition points and the
+  `workflows.workflowextension` install kind; the resource loader composes those
+  fragments for publication without modifying the base draft. Publication freezes
+  the normalized child contracts in each version. Edit the source declaration and
+  republish affected parents when a child contract changes.
 - Runtime cleanup may delete only the configured generated runtime directory,
   only after verifying Angee's generated sentinel, and must preserve migrations.
   `reset_migration_history` owns the separately guarded history replacement.

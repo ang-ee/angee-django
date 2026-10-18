@@ -5,6 +5,9 @@ SETTINGS = {
         "angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource",
     ],
     "ANGEE_MERGE_GUARDS:append": ["angee.workflows.managers.unfinished_run_merge_guard"],
+    "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": {
+        "workflows.workflowextension": "angee.workflows.resources.WorkflowExtensionResourceKind",
+    },
     "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES": {
         "record_changed": "angee.workflows.triggers.RecordChanged",
     },

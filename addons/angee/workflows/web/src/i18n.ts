@@ -78,6 +78,9 @@ export const enWorkflowsMessages = {
   "studio.overwrite": "Overwrite with mine",
   "studio.discard": "Discard mine and load latest",
   "studio.dependents": "Republish these dependent workflows: {names}",
+  "studio.extensionPoints": "Extension points: {names}",
+  "studio.contributedBy": "Contributed by {addon}",
+  "studio.contributedAt": "Extension point: {point}",
 
   "runs.empty": "No runs in this view.",
   "run.graph": "Graph",

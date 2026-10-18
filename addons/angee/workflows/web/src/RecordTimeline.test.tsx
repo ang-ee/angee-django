@@ -21,7 +21,7 @@ test("a completed run shows its outcome, workflow name, local time and run link"
 
 test.each([
   ["decision", "Waiting for decisions"], ["clean", "Plan complete"], ["error", "Stopped on an error"],
-  ["run", "Waiting for another run"], ["stopped", "Withdrawn: stopped by River"],
+  ["run", "Waiting for another run"], ["stopped", "Withdrawn: stopped by River"], ["interrupted", "Stopped"],
 ] as const)("renders the %s timeline state", async (state, label) => {
   render(<TimelineStory state={state} />);
   expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);

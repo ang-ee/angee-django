@@ -17,10 +17,12 @@ from rebac import system_context
 from angee.base.changesets import changeset, current_changeset
 from angee.base.fields import ModelLabelField
 from angee.base.identity import SqidPublicIdentity, public_id_of
+from angee.base.impl import resolve_impl_class
 from angee.base.jsonschema import relation_positions
 from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
 from angee.resources.entries import (
     GRANT_KIND,
+    ROW_KIND,
     EntryGraph,
     EntryKey,
     GrantGroup,
@@ -33,6 +35,7 @@ from angee.resources.entries import (
 )
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import materialize_grant_groups
+from angee.resources.kinds import ResourceEntryKind, ResourceKindDeclarations
 from angee.resources.loader import (
     DryRunRollback,
     build_resource,
@@ -177,19 +180,23 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         """Validate selected addon resource files without saving rows."""
 
         selected_addons = tuple(addons)
-        entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=tiers)
+        entries, row_groups, grant_groups, kind_declarations = self._groups_for(
+            selected_addons, tiers=tiers,
+        )
         self._check_xref_collisions(row_groups)
         self._import_groups(
             entries,
             row_groups,
             grant_groups,
+            kind_declarations,
             dry_run=True,
             addon_aliases=self._addon_aliases(selected_addons),
         )
         return ValidationResult(
-            checked_files=len({group.entry.key for group in row_groups} | {group.entry.key for group in grant_groups}),
+            checked_files=len(entries),
             checked_rows=(
                 sum(len(group.dataset) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+                + sum(len(rows) for rows in kind_declarations.values())
             ),
         )
 
@@ -207,12 +214,15 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         self._check_load_tiers(active_tiers, allow_non_dev=allow_non_dev)
 
         selected_addons = tuple(addons)
-        entries, row_groups, grant_groups = self._groups_for(selected_addons, tiers=active_tiers)
+        entries, row_groups, grant_groups, kind_declarations = self._groups_for(
+            selected_addons, tiers=active_tiers,
+        )
         self._check_xref_collisions(row_groups)
         return self._import_groups(
             entries,
             row_groups,
             grant_groups,
+            kind_declarations,
             dry_run=dry_run,
             addon_aliases=self._addon_aliases(selected_addons),
         )
@@ -240,7 +250,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         groups = tuple(
             group
             for entry in self._declared_entries_for((addon,), tiers=None)
-            if entry.kind != GRANT_KIND
+            if entry.kind == ROW_KIND
             for group in entry.read_groups()
         )
         self._check_xref_collisions(groups)
@@ -270,6 +280,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                         (group.entry,),
                         (selected,),
                         (),
+                        None,
                         dry_run=False,
                         addon_aliases=aliases,
                         actor=actor,
@@ -293,6 +304,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         entries: tuple[ResourceEntry, ...],
         row_groups: tuple[ResourceGroup, ...],
         grant_groups: tuple[GrantGroup, ...],
+        kind_declarations: ResourceKindDeclarations | None,
         *,
         dry_run: bool,
         addon_aliases: Mapping[str, str],
@@ -314,6 +326,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                     group.entry,
                     ledger_model=self.model,
                     addon_aliases=addon_aliases,
+                    kind_declarations=kind_declarations,
                 ),
             )
             for group in row_groups
@@ -351,6 +364,8 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                             skipped=load_result.skipped + skipped,
                         )
                         continue
+                    if entry.kind != ROW_KIND:
+                        continue
                     for group, resource in rows_by_entry[entry.key]:
                         try:
                             result = resource.import_data(
@@ -370,6 +385,12 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                         load_result = load_result.with_result(result)
                 if not dry_run:
                     self._run_post_load_hooks(loaded_groups)
+                for kind, declarations in (kind_declarations or {}).items():
+                    resolve_impl_class(ResourceEntryKind, kind).after_load(
+                        declarations,
+                        loaded_groups=loaded_groups,
+                        dry_run=dry_run,
+                    )
                 if dry_run:
                     raise DryRunRollback()
         except DryRunRollback:
@@ -422,7 +443,9 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                 entry.display,
                 len(entry.read_grant_rows())
                 if entry.kind == GRANT_KIND
-                else sum(len(group.dataset) for group in entry.read_groups()),
+                else sum(len(group.dataset) for group in entry.read_groups())
+                if entry.kind == ROW_KIND
+                else len(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry)),
             )
             for entry in self._entries_for(addons, tiers=tiers)
         )
@@ -432,18 +455,28 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         addons: Iterable[Any],
         *,
         tiers: Iterable[object] | None,
-    ) -> tuple[tuple[ResourceEntry, ...], tuple[ResourceGroup, ...], tuple[GrantGroup, ...]]:
-        """Return selected entries and their model-row/grant groups, including empty entries."""
+    ) -> tuple[
+        tuple[ResourceEntry, ...],
+        tuple[ResourceGroup, ...],
+        tuple[GrantGroup, ...],
+        ResourceKindDeclarations,
+    ]:
+        """Return selected entries with parsed native and owner-defined groups."""
 
         groups: list[ResourceGroup] = []
         grant_groups: list[GrantGroup] = []
+        declarations: dict[str, list[Any]] = defaultdict(list)
         entries = self._entries_for(addons, tiers=tiers)
         for entry in entries:
             if entry.kind == GRANT_KIND:
                 grant_groups.append(GrantGroup(entry=entry, rows=entry.read_grant_rows()))
-            else:
+            elif entry.kind == ROW_KIND:
                 groups.extend(entry.read_groups())
-        return entries, tuple(groups), tuple(grant_groups)
+            else:
+                declarations[entry.kind].extend(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry))
+        return entries, tuple(groups), tuple(grant_groups), {
+            kind: tuple(rows) for kind, rows in declarations.items()
+        }
 
     def _entries_for(
         self,

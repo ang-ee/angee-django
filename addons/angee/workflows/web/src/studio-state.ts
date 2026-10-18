@@ -12,12 +12,20 @@ const NodeProjection = v.looseObject({
   next: v.optional(v.record(v.string(), v.union([v.string(), v.array(v.string())])), {}),
 });
 const DocumentProjection = v.looseObject({ nodes: v.record(v.string(), NodeProjection) });
+const PublicationProjection = v.looseObject({
+  nodes: v.record(v.string(), NodeProjection),
+  contributions: v.optional(v.array(v.looseObject({
+    addon: v.string(), at: v.string(), nodes: v.array(v.string()),
+  })), []),
+});
 const LayoutProjection = v.record(v.string(), v.tuple([v.number(), v.number()]));
 export const OutcomesProjection = v.record(v.string(), v.string());
 const DiagnosticsProjection = v.array(v.object({
   node: v.nullable(v.string()), path: v.array(v.union([v.string(), v.number()])), code: v.string(), message: v.string(),
 }));
 export type StudioNode = v.InferOutput<typeof NodeProjection>;
+export type StudioContribution = { key: string; value: StudioNode; sourceAddon: string; point: string };
+export type StudioPublication = { nodes: Record<string, StudioNode>; contributions: readonly StudioContribution[] };
 export type StudioValues = {
   entries: KeyedCollection<StudioNode>;
   layout: GraphEditorLayout;
@@ -33,6 +41,25 @@ export function studioValues(draft: unknown, layout: unknown): StudioValues {
   return { entries: keyedCollectionFromRecord(nodes), document,
     layout: Object.fromEntries(Object.entries(v.parse(LayoutProjection, layout ?? {}))
       .map(([id, [x, y]]) => [id, { x, y }])) };
+}
+
+/** Project immutable contributed nodes and provenance without adding them to the authored form. */
+export function studioPublication(document: unknown): StudioPublication {
+  const parsed = v.safeParse(PublicationProjection, document);
+  if (!parsed.success) return { nodes: {}, contributions: [] };
+  const contributions = parsed.output.contributions.flatMap((contribution) => contribution.nodes.flatMap((key) => {
+    const value = parsed.output.nodes[key];
+    return value ? [{ key, value, sourceAddon: contribution.addon, point: contribution.at }] : [];
+  }));
+  return { nodes: parsed.output.nodes, contributions };
+}
+
+/** Read the draft's declared insertion names without interpreting their graph policy. */
+export function studioPointNames(values: StudioValues): readonly string[] {
+  const points = values.document.points;
+  return points !== null && typeof points === "object" && !Array.isArray(points)
+    ? Object.keys(points).sort()
+    : [];
 }
 
 /** Send client-addressed declarations unchanged; Definition performs every re-key. */

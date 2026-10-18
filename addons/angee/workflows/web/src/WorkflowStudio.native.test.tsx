@@ -237,6 +237,28 @@ test("monitor-only Studio displays the draft and inspector without editing contr
   expect(screen.queryByRole("textbox", { name: "Key" })).toBeNull();
 });
 
+test("Studio projects extension points and immutable contributed nodes with their source addon", async () => {
+  const requests = vi.fn();
+  render(<StudioStory extended onRequest={requests} />);
+  expect(await screen.findByText("Extension points: after_entry")).toBeTruthy();
+  const contributed = await screen.findByTestId("rf__node-contributed_review");
+  expect(graph.props?.nodes.find((node) => node.id === "contributed_review")).toMatchObject({
+    readOnly: true, detail: "Contributed by tests.extcontrib",
+  });
+  fireEvent.click(contributed);
+  expect(screen.getAllByText("Contributed by tests.extcontrib").length).toBeGreaterThan(0);
+  expect(screen.getByText("Extension point: after_entry")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Delete Contributed review (contributed_review)" }).hasAttribute("disabled")).toBe(true);
+
+  fireEvent.click(screen.getByTestId("rf__node-entry"));
+  fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Edited entry" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await waitFor(() => expect(requests.mock.calls.some(([request]) => request.query.includes("save_workflow_draft"))).toBe(true));
+  const save = requests.mock.calls.map(([request]) => request).find((request) => request.query.includes("save_workflow_draft"));
+  expect(save.variables.draft.nodes.contributed_review).toBeUndefined();
+  expect(save.variables.layout.contributed_review).toBeUndefined();
+});
+
 test("typing config keeps graph outcomes and editing available until the history group commits", async () => {
   let release: (() => void) | undefined;
   let reads = 0;

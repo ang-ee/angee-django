@@ -24,6 +24,9 @@ ERROR_OUTCOME = "error"
 CANCELED_OUTCOME = "canceled"
 """The outcome of a run canceled before terminal settlement."""
 
+INTERRUPTED_OUTCOME = "interrupted"
+"""The outcome of a run whose executing process stopped before settlement."""
+
 INPUT_SOURCE = "input"
 """The reserved binding source for admitted workflow input."""
 
@@ -57,6 +60,11 @@ class RunStatus(TerminalStates):
     SUCCEEDED = "succeeded", "Succeeded"
     FAILED = "failed", "Failed"
     CANCELED = "canceled", "Canceled"
+    INTERRUPTED = "interrupted", "Interrupted"
+
+    @classmethod
+    def terminal_values(cls) -> tuple[str, ...]:
+        return tuple(str(member) for member in (cls.SUCCEEDED, cls.FAILED, cls.CANCELED, cls.INTERRUPTED))
 
 
 class RunRelation(models.TextChoices):

@@ -60,8 +60,10 @@ EXPECTED_VERBS = {
     "workflows.TriggerEvent.manager": "record_change",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
-    "workflows.WorkflowRun.manager": "cancel cancel_abandoned cancel_on_commit prune reopen reprocess start",
-    "workflows.WorkflowRun.queryset": "about for_subject hold hold_owned retention_candidates working_on",
+    "workflows.WorkflowRun.manager": (
+        "cancel cancel_abandoned cancel_on_commit prune reap_interrupted reopen reprocess start"
+    ),
+    "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
     "decisions.Decision.manager": "ask decide withdraw",
     "decisions.Decision.queryset": (
         "attention_expression open open_expression open_for"

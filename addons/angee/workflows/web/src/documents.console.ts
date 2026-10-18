@@ -120,7 +120,7 @@ export const DecisionWaitingRunsDocument = graphql(`
 export const WorkflowStudioDocument = graphql(`
   query WorkflowStudio($id: String!, $target: ID!) {
     workflow_by_pk(id: $id) {
-      id permissions draft draft_revision layout published { number }
+      id permissions draft draft_revision layout published { number document }
     }
     workflow_step_choices(id: $target) {
       key label icon category defaults config_schema internal outcomes
@@ -144,6 +144,6 @@ export const SaveWorkflowDraftDocument = graphql(`
 
 export const PublishWorkflowDocument = graphql(`
   mutation PublishWorkflow($id: ID!, $revision: Int!) {
-    publish_workflow(id: $id, expected_revision: $revision) { number dependents }
+    publish_workflow(id: $id, expected_revision: $revision) { number dependents document }
   }
 `);

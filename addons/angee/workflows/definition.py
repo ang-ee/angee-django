@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import copy
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from graphlib import CycleError, TopologicalSorter
 from typing import Annotated, Any, Literal, Protocol
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.evidence import EvidenceReference
@@ -27,7 +27,8 @@ from angee.base.jsonschema import (
     validate,
     validator,
 )
-from angee.base.serialization import canonical_json
+from angee.base.refs import generic_pointer_model
+from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.workflows.bindings import (
     ABSENT,
     InputBinding,
@@ -56,6 +57,8 @@ type Position = tuple[
 type Layout = dict[NodeKey, Position]
 _LAYOUT: TypeAdapter[Layout] = TypeAdapter(Layout)
 """Persisted node positions share one finite, two-coordinate shape."""
+_ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
+"""Blocked actions use the same stable identifier vocabulary as graph declarations."""
 
 
 def map_body_key(key: str) -> str:
@@ -121,6 +124,93 @@ class Node(Body):
         """Return targets of one outcome, preserving authored fan-out order."""
         targets = self.next.get(outcome, [])
         return targets if isinstance(targets, list) else [targets]
+
+
+class ExtensionPoint(BaseModel):
+    """One named insertion boundary owned by a base workflow definition."""
+
+    model_config = ConfigDict(extra="forbid")
+    after: NodeKey | None = None
+    before: NodeKey | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_boundary(self) -> ExtensionPoint:
+        """Require one unambiguous side of one base node."""
+
+        if (self.after is None) == (self.before is None):
+            raise ValueError("An extension point must declare exactly one of `after` or `before`.")
+        return self
+
+
+class ExtensionEdge(BaseModel):
+    """One internal fragment route in the definition's native edge vocabulary."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
+    source: NodeKey = Field(alias="from")
+    outcome: Outcome = DONE_OUTCOME
+    target: NodeKey = Field(alias="to")
+
+
+class WorkflowExtension(BaseModel):
+    """A typed install declaration contributing one connected graph fragment."""
+
+    model_config = ConfigDict(extra="forbid")
+    extends: str = Field(min_length=1)
+    at: NodeKey
+    sequence: int = 0
+    nodes: dict[NodeKey, Node] = Field(min_length=1)
+    edges: list[ExtensionEdge] = Field(default_factory=list)
+    bindings: dict[NodeKey, InputBinding] = Field(default_factory=dict)
+
+    def fragment(self) -> dict[NodeKey, Node]:
+        """Apply the optional flat edge/binding declarations to copied nodes."""
+
+        nodes = {key: node.model_copy(deep=True) for key, node in self.nodes.items()}
+        for key, binding in self.bindings.items():
+            if key not in nodes:
+                raise ValueError(f"Binding target {key!r} is not contributed by this extension.")
+            if "input" in nodes[key].model_fields_set:
+                raise ValueError(f"Node {key!r} declares input both under nodes and bindings.")
+            nodes[key].input = copy.deepcopy(binding)
+        for edge in self.edges:
+            if edge.source not in nodes or edge.target not in nodes:
+                raise ValueError(
+                    f"Edge {edge.source!r}.{edge.outcome} -> {edge.target!r} must stay inside its extension."
+                )
+            targets = nodes[edge.source].targets(edge.outcome)
+            if edge.target in targets:
+                continue
+            nodes[edge.source].next[edge.outcome] = [*targets, edge.target] if targets else edge.target
+        return nodes
+
+
+@dataclass(frozen=True)
+class SourcedWorkflowExtension:
+    """An extension declaration paired with its composer-ordered addon owner."""
+
+    source_addon: str
+    extension: WorkflowExtension
+    declared_fingerprint: str | None = None
+
+    def fingerprint(self) -> str:
+        """Identify the exact source declaration across later retained publications."""
+
+        return self.declared_fingerprint or canonical_json_sha256({
+            "addon": self.source_addon,
+            "definition": self.extension.model_dump(mode="json", by_alias=True),
+        })
+
+
+class PublishedContribution(BaseModel):
+    """Provenance needed to display and retain a composed version's fragment."""
+
+    model_config = ConfigDict(extra="forbid")
+    addon: str
+    extends: str
+    at: NodeKey
+    sequence: int
+    nodes: tuple[NodeKey, ...]
+    fingerprint: str
 
 
 class ResultBinding(BaseModel):
@@ -195,6 +285,29 @@ class Definition(BaseModel):
     nodes: dict[NodeKey, Node] = Field(default_factory=dict)
     results: list[ResultBinding] = Field(default_factory=list)
     outcome_labels: dict[str, str] = Field(default_factory=dict)
+    blocks: tuple[str, ...] = ()
+    points: dict[NodeKey, ExtensionPoint] = Field(default_factory=dict)
+    contributions: tuple[PublishedContribution, ...] = ()
+
+    @field_validator("blocks")
+    @classmethod
+    def canonical_blocks(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate and canonicalize ``app.Model:action`` declarations once."""
+
+        normalized: list[str] = []
+        for value in values:
+            model_label, separator, action = value.partition(":")
+            if not separator or ":" in action:
+                raise ValueError("A workflow block must use the `app.Model:action` form.")
+            try:
+                model_label = generic_pointer_model(ModelLabelField.get_model(model_label))._meta.label
+                action = _ACTION.validate_python(action, strict=True)
+            except (ValueError, PydanticValidationError) as error:
+                raise ValueError(f"Invalid workflow block {value!r}.") from error
+            normalized.append(f"{model_label}:{action}")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("Workflow blocks must be unique.")
+        return tuple(normalized)
 
     @classmethod
     def rekey(
@@ -272,6 +385,13 @@ class Definition(BaseModel):
                 )
                 for outcome, targets in node.next.items()
             }
+        for point in definition.points.values():
+            if point.after is not None:
+                point.after = keys.get(point.after, point.after)
+            if point.before is not None:
+                point.before = keys.get(point.before, point.before)
+        for contribution in definition.contributions:
+            contribution.nodes = tuple(keys.get(key, key) for key in contribution.nodes)
         for result in definition.results:
             result.source = reference(result.source)
             bindings(result.output)
@@ -372,6 +492,198 @@ class Definition(BaseModel):
                     labels.setdefault(result.outcome or outcome, label)
         document["outcome_labels"] = dict(sorted(labels.items()))
         return document
+
+    def with_extensions(self, sourced: Sequence[SourcedWorkflowExtension]) -> Definition:
+        """Return a composed copy, ordered by source addon and then sequence."""
+
+        addon_order: dict[str, int] = {}
+        indexed = list(enumerate(sourced))
+        for _index, contribution in indexed:
+            addon_order.setdefault(contribution.source_addon, len(addon_order))
+        ordered = [
+            contribution
+            for _index, contribution in sorted(
+                indexed,
+                key=lambda item: (
+                    addon_order[item[1].source_addon],
+                    item[1].extension.sequence,
+                    item[0],
+                ),
+            )
+        ]
+        composed = self.model_copy(deep=True)
+        seen = set(composed.nodes)
+        prepared: list[tuple[SourcedWorkflowExtension, dict[NodeKey, Node], NodeKey, NodeKey]] = []
+        issues: list[Issue] = []
+        for contribution in ordered:
+            extension = contribution.extension
+            point = composed.points.get(extension.at)
+            if point is None:
+                issues.append(Issue(
+                    path=["points", extension.at],
+                    code="extension_point",
+                    message=(
+                        f"{contribution.source_addon} extends unknown point {extension.at!r}."
+                    ),
+                ))
+                continue
+            collisions = seen & extension.nodes.keys()
+            issues.extend(
+                Issue(
+                    node=key,
+                    path=["nodes", key],
+                    code="extension_collision",
+                    message=f"{contribution.source_addon} contributes duplicate node key {key!r}.",
+                )
+                for key in sorted(collisions)
+            )
+            if collisions:
+                continue
+            try:
+                fragment = extension.fragment()
+                entry, exit_ = self._fragment_boundary(fragment)
+            except ValueError as error:
+                issues.append(Issue(
+                    path=["points", extension.at],
+                    code="extension_fragment",
+                    message=f"{contribution.source_addon}: {error}",
+                ))
+                continue
+            seen.update(fragment)
+            prepared.append((contribution, fragment, entry, exit_))
+        if issues:
+            raise DefinitionInvalid(issues)
+
+        by_point: dict[str, list[tuple[SourcedWorkflowExtension, dict[NodeKey, Node], NodeKey, NodeKey]]] = {}
+        for item in prepared:
+            by_point.setdefault(item[0].extension.at, []).append(item)
+        for point_name in sorted(by_point):
+            point = composed.points[point_name]
+            contributions = by_point[point_name]
+            if point.after is not None:
+                contributions = list(reversed(contributions))
+            for _source, fragment, entry, exit_ in contributions:
+                composed._insert_fragment(point, fragment, entry=entry, exit_=exit_)
+        composed.contributions = tuple(
+            PublishedContribution(
+                addon=contribution.source_addon,
+                extends=contribution.extension.extends,
+                at=contribution.extension.at,
+                sequence=contribution.extension.sequence,
+                nodes=tuple(contribution.extension.nodes),
+                fingerprint=contribution.fingerprint(),
+            )
+            for contribution, _fragment, _entry, _exit in prepared
+        )
+        return composed
+
+    @staticmethod
+    def _fragment_boundary(nodes: Mapping[NodeKey, Node]) -> tuple[NodeKey, NodeKey]:
+        """Return the unique entry and exit of one internally connected fragment."""
+
+        targets = {
+            target
+            for node in nodes.values()
+            for outcome in node.next
+            for target in node.targets(outcome)
+        }
+        unknown = targets - nodes.keys()
+        if unknown:
+            raise ValueError(
+                "Fragment routes must stay inside contributed nodes; unknown target(s): "
+                + ", ".join(sorted(unknown))
+                + "."
+            )
+        entries = [key for key in nodes if key not in targets]
+        exits = [key for key, node in nodes.items() if not any(node.targets(outcome) for outcome in node.next)]
+        if len(entries) != 1 or len(exits) != 1:
+            raise ValueError("A workflow extension requires exactly one entry and one exit node.")
+        return entries[0], exits[0]
+
+    def _insert_fragment(
+        self,
+        point: ExtensionPoint,
+        fragment: Mapping[NodeKey, Node],
+        *,
+        entry: NodeKey,
+        exit_: NodeKey,
+    ) -> None:
+        """Splice one prepared fragment at a declared base-node boundary."""
+
+        self.nodes.update(fragment)
+        if point.after is not None:
+            anchor = self.nodes.get(point.after)
+            if anchor is None:
+                raise DefinitionInvalid([Issue(
+                    node=point.after,
+                    path=["points"],
+                    code="extension_point",
+                    message=f"Extension point references unknown node {point.after!r}.",
+                )])
+            routed = [(outcome, targets) for outcome in anchor.next if (targets := anchor.targets(outcome))]
+            if len(routed) > 1:
+                raise DefinitionInvalid([Issue(
+                    node=point.after,
+                    path=["nodes", point.after, "next"],
+                    code="extension_point",
+                    message="An `after` extension point requires at most one routed outcome.",
+                )])
+            if routed:
+                outcome, targets = routed[0]
+                original = anchor.next[outcome]
+                anchor.next[outcome] = entry
+                self.nodes[exit_].next[DONE_OUTCOME] = copy.deepcopy(original)
+            else:
+                anchor.next[DONE_OUTCOME] = entry
+            return
+
+        assert point.before is not None
+        target = point.before
+        if target not in self.nodes:
+            raise DefinitionInvalid([Issue(
+                node=target,
+                path=["points"],
+                code="extension_point",
+                message=f"Extension point references unknown node {target!r}.",
+            )])
+        for node in self.nodes.values():
+            if node is fragment.get(exit_):
+                continue
+            for outcome, declared in tuple(node.next.items()):
+                targets = node.targets(outcome)
+                if target not in targets:
+                    continue
+                replaced = [entry if candidate == target else candidate for candidate in targets]
+                node.next[outcome] = replaced if isinstance(declared, list) else replaced[0]
+        self.nodes[exit_].next[DONE_OUTCOME] = target
+
+    def retained_extensions(self) -> tuple[SourcedWorkflowExtension, ...]:
+        """Recover installed fragments from this immutable composed document."""
+
+        retained: list[SourcedWorkflowExtension] = []
+        for contribution in self.contributions:
+            keys = set(contribution.nodes)
+            nodes: dict[NodeKey, Node] = {}
+            for key in contribution.nodes:
+                node = self.nodes[key].model_copy(deep=True)
+                next_: dict[Outcome, str | list[str]] = {}
+                for outcome, declared in node.next.items():
+                    targets = [target for target in node.targets(outcome) if target in keys]
+                    if targets:
+                        next_[outcome] = targets if isinstance(declared, list) else targets[0]
+                node.next = next_
+                nodes[key] = node
+            retained.append(SourcedWorkflowExtension(
+                contribution.addon,
+                WorkflowExtension(
+                    extends=contribution.extends,
+                    at=contribution.at,
+                    sequence=contribution.sequence,
+                    nodes=nodes,
+                ),
+                contribution.fingerprint,
+            ))
+        return tuple(retained)
 
     @classmethod
     def check(cls, document: Any, *, subject_model: str | None = None) -> tuple[Definition | None, list[Issue]]:
@@ -567,12 +879,28 @@ class Definition(BaseModel):
     def issues(self, *, subject_model: str | None = None) -> list[Issue]:
         """Return publication issues; only parse/unknown-step issues block drafts."""
         issues, offered = self._node_issues(subject_model)
+        issues.extend(self._point_issues())
         issues.extend(self._graph_issues())
         issues.extend(self._input_issues())
         issues.extend(self._result_issues(offered))
         if not issues:
             issues.extend(self._derived_contract_issues())
         return issues
+
+    def _point_issues(self) -> list[Issue]:
+        """Require every named extension boundary to resolve inside the base graph."""
+
+        return [
+            Issue(
+                node=target,
+                path=["points", name, "after" if point.after is not None else "before"],
+                code="extension_point",
+                message=f"Extension point references unknown node {target!r}.",
+            )
+            for name, point in self.points.items()
+            for target in (point.after or point.before,)
+            if target not in self.nodes
+        ]
 
     def _node_issues(self, subject_model: str | None) -> tuple[list[Issue], dict[str, dict[str, str]]]:
         """Check registered steps, their declarations, and authored outgoing edges."""

@@ -14,7 +14,8 @@ import {
 import { PublishWorkflowDocument, SaveWorkflowDraftDocument, WorkflowStepOutcomesDocument, WorkflowStudioDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { EMPTY_ISSUES, OutcomesProjection, captureStudioIssues, diagnosticErrors, dropStudioIssue, projectStudioIssues, studioSnapshot, studioValues,
-  type IssueOrigin, type StudioIssues, type StudioValues, type StudioNode } from "./studio-state";
+  studioPointNames, studioPublication,
+  type IssueOrigin, type StudioContribution, type StudioIssues, type StudioPublication, type StudioValues, type StudioNode } from "./studio-state";
 
 const MODEL = "workflows.Workflow";
 const INSPECTOR_TAB = "workflow-inspector";
@@ -26,9 +27,14 @@ type AddIntent = { from?: string; port?: string; link?: GraphEditorLink; positio
 const EMPTY_SELECTION: GraphEditorSelection = { nodes: [], link: null };
 const ConfigDefaults = v.object({ config: v.optional(v.record(v.string(), v.unknown()), {}) });
 const emptyConfigSchema = { type: "object", properties: {} };
-const configurationsFor = (values: StudioValues) => values.entries.map((entry) => ({
-  node: entry.clientId, step: entry.value.step, config: v.parse(JsonValueSchema, entry.value.config),
-}));
+const configurationsFor = (values: StudioValues, publication: StudioPublication) => [
+  ...values.entries.map((entry) => ({
+    node: entry.clientId, step: entry.value.step, config: v.parse(JsonValueSchema, entry.value.config),
+  })),
+  ...publication.contributions.map((entry) => ({
+    node: entry.key, step: entry.value.step, config: v.parse(JsonValueSchema, entry.value.config),
+  })),
+];
 
 /** Monitor readers inspect drafts; native permissions determine editing. */
 export function WorkflowStudio({ recordId, active = true }: { recordId: string; active?: boolean }): React.ReactElement {
@@ -42,6 +48,7 @@ export function WorkflowStudio({ recordId, active = true }: { recordId: string; 
   if (record?.draft == null || record.draft_revision == null) return <ErrorBanner description={t("studio.unavailable")} />;
   return <StudioSession key={recordId} recordId={recordId} initial={read.data}
     initialValues={studioValues(record.draft, record.layout)} initialRevision={record.draft_revision}
+    initialPublication={studioPublication(record.published?.document)}
     writable={record.permissions.includes("write")} active={active} loadLatest={async () => {
       const latest = await read.refetch();
       if (latest.error) throw latest.error;
@@ -50,8 +57,9 @@ export function WorkflowStudio({ recordId, active = true }: { recordId: string; 
     }} />;
 }
 
-function StudioSession({ recordId, initial, initialValues, initialRevision, writable, loadLatest, active }: {
-  recordId: string; initial: StudioRead; initialValues: StudioValues; initialRevision: number; writable: boolean;
+function StudioSession({ recordId, initial, initialValues, initialRevision, initialPublication, writable, loadLatest, active }: {
+  recordId: string; initial: StudioRead; initialValues: StudioValues; initialRevision: number;
+  initialPublication: StudioPublication; writable: boolean;
   loadLatest: () => Promise<StudioRead>; active: boolean;
 }): React.ReactElement {
   const t = useWorkflowsT();
@@ -76,17 +84,18 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   const [selection, setSelection] = React.useState(EMPTY_SELECTION);
   const [intent, setIntent] = React.useState<AddIntent | null>(null);
   const [version, setVersion] = React.useState(initial.workflow_by_pk?.published?.number);
+  const [published, setPublished] = React.useState(initialPublication);
   const [dependents, setDependents] = React.useState<readonly string[]>([]);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const revision = React.useRef(initialRevision);
   const [conflict, setConflict] = React.useState<{ message: string; revision: number | null } | null>(null);
   const [issues, setIssues] = React.useState<StudioIssues>(EMPTY_ISSUES);
-  const [configurations, setConfigurations] = React.useState(() => configurationsFor(initialValues));
+  const [configurations, setConfigurations] = React.useState(() => configurationsFor(initialValues, initialPublication));
   const savedKeys = React.useRef(new Map(initialValues.entries.map((entry) => [entry.key, entry.clientId])));
   const usedKeys = React.useRef(new Set(initialValues.entries.map((entry) => entry.key)));
   const usedIds = React.useRef(new Set(initialValues.entries.map((entry) => entry.clientId)));
   const [save] = useAuthoredMutation(SaveWorkflowDraftDocument, { invalidateModels: [MODEL] });
-  const [publish, publication] = useAuthoredMutation(PublishWorkflowDocument, { invalidateModels: [MODEL, "workflows.WorkflowVersion"] });
+  const [publish, publishing] = useAuthoredMutation(PublishWorkflowDocument, { invalidateModels: [MODEL, "workflows.WorkflowVersion"] });
   const capture = (errors: ValidationErrors, keys: ReadonlyMap<string, string>, origin: IssueOrigin) => setIssues(captureStudioIssues(errors, keys, origin));
   function refusal(cause: unknown, keys: ReadonlyMap<string, string>, fallback: string, origin: IssueOrigin) {
     const result = formSubmitError(cause, fallback);
@@ -129,7 +138,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   });
   const form = action.form;
   const readOnly = !writable || Boolean(preview.viewAs || preview.pending);
-  const disabled = readOnly || !active || action.submitting || publication.fetching || loadingLatest;
+  const disabled = readOnly || !active || action.submitting || publishing.fetching || loadingLatest;
   const isDirtyNow = React.useCallback(() => form.formState.isDirty, [form]);
   useUnsavedChangesNavigationGuard({ isDirty: form.formState.isDirty, isDirtyNow, readOnly, allowSearchChanges: true });
   const history = useFormHistory(form, { readOnly: disabled });
@@ -137,6 +146,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
     clientId, key, step: value.step, label: value.label, next: value.next,
   }))) });
   const entryIds = useWatch({ control: form.control, compute: (values: StudioValues) => values.entries.map((entry) => entry.clientId) });
+  const pointNames = useWatch({ control: form.control, compute: (values: StudioValues) => studioPointNames(values) });
   const projectedPaths = React.useRef<string[]>([]);
   const applyIssues = React.useCallback(() => {
     if (projectedPaths.current.length) form.clearErrors(projectedPaths.current as Parameters<typeof form.clearErrors>[0]);
@@ -156,13 +166,14 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
     });
     return () => subscription.unsubscribe();
   }, [form]);
-  const commitConfigurations = React.useCallback(() => {
+  const commitConfigurations = React.useCallback((nextPublication = published) => {
     const values = form.getValues();
     for (const entry of values.entries) usedKeys.current.add(entry.key);
-    const next = configurationsFor(values);
+    const next = configurationsFor(values, nextPublication);
     setConfigurations((current) => stableSerialize(current) === stableSerialize(next) ? current : next);
-  }, [form]);
+  }, [form, published]);
   const index = entryIds.indexOf(selection.nodes[0] ?? "");
+  const contribution = published.contributions.find((entry) => entry.key === selection.nodes[0]);
   const select = React.useCallback((next: GraphEditorSelection) => {
     setSelection(next);
     if (next.nodes.length) { chatter.setCollapsed(false); chatter.setActiveTab(INSPECTOR_TAB); }
@@ -213,8 +224,8 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
   const commit = React.useCallback((group: string) => { history.commit(group); commitConfigurations(); }, [history.commit, commitConfigurations]);
   const inspector = React.useMemo(() => ({ tabs: [{ id: INSPECTOR_TAB, label: t("studio.inspector"), icon: "settings",
     children: <StudioInspector index={index} form={form} configForm={configForm}
-      disabled={disabled} start={history.start} commit={commit} />,
-  }] }), [form, index, configForm, disabled, history.start, commit, t]);
+      contribution={contribution} disabled={disabled} start={history.start} commit={commit} />,
+  }] }), [form, index, contribution, configForm, disabled, history.start, commit, t]);
   useChatterContent(active ? inspector : null);
 
   async function discard(): Promise<void> {
@@ -228,7 +239,8 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
       for (const entry of values.entries) { usedKeys.current.add(entry.key); usedIds.current.add(entry.clientId); }
       revision.current = record.draft_revision; setConflict(null); setIssues(EMPTY_ISSUES);
       savedKeys.current = new Map(values.entries.map((entry) => [entry.key, entry.clientId]));
-      setVersion(record.published?.number); history.reset(); commitConfigurations();
+      const nextPublication = studioPublication(record.published?.document);
+      setPublished(nextPublication); setVersion(record.published?.number); history.reset(); commitConfigurations(nextPublication);
     } catch (cause) { form.setError("root.server", { type: "server", message: errorMessage(cause, t("studio.loadFailed")) }); }
     finally { setLoadingLatest(false); }
   }
@@ -238,6 +250,8 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
     try {
       const response = await publish({ id: recordId, revision: revision.current });
       if (!response) throw new Error(t("studio.publishFailed"));
+      const nextPublication = studioPublication(response.publish_workflow.document);
+      setPublished(nextPublication); commitConfigurations(nextPublication);
       setVersion(response.publish_workflow.number); setDependents(response.publish_workflow.dependents);
     } catch (cause) { refusal(cause, savedKeys.current, t("studio.publishFailed"), "publish"); }
   }
@@ -256,6 +270,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
         <Button type="button" disabled={disabled || !form.formState.isDirty} onClick={() => void action.run()}>{t("studio.save")}</Button>
         <Button type="button" disabled={disabled || form.formState.isDirty || conflict !== null} onClick={() => void publishSaved()}>{t("studio.publish")}</Button>
         <span className="text-sm text-fg-muted">{version == null ? t("studio.unpublished") : t("studio.version", { number: version })}</span>
+        {pointNames.length ? <span className="text-sm text-fg-muted">{t("studio.extensionPoints", { names: pointNames.join(", ") })}</span> : null}
       </div>
       {action.formError && (!conflict || !action.saveConflict) ? <ErrorBanner description={action.formError} /> : null}
       {hasIssues ? <ErrorBanner description={[issueMessage, ...projected.formErrors].join("\n")} /> : null}
@@ -268,7 +283,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
         <Button type="button" disabled={disabled} onClick={() => void discard()}>{t("studio.discard")}</Button>
       </div></Alert> : null}
       {dependents.length ? <Alert tone="info">{t("studio.dependents", { names: dependents.join(", ") })}</Alert> : null}
-      <StudioGraph form={form} recordId={recordId} topology={topology} selection={selection} configurations={configurations}
+      <StudioGraph form={form} recordId={recordId} topology={topology} publication={published} selection={selection} configurations={configurations}
         select={select} active={active} disabled={disabled} update={update} add={setIntent} issueIds={issueIds} layoutResolved={layoutResolved} />
     </div>
     <Dialog.Root open={intent !== null} onOpenChange={(open) => { if (!open) setIntent(null); }}>
@@ -282,15 +297,19 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, writ
 }
 
 type ConfigForm = (step: string) => { fields: readonly FormSpecFieldDescriptor[]; error?: string };
-function StudioInspector({ index, form, configForm, disabled, start, commit }: {
-  index: number; form: Form; configForm: ConfigForm; disabled: boolean;
+function StudioInspector({ index, contribution, form, configForm, disabled, start, commit }: {
+  index: number; contribution?: StudioContribution; form: Form; configForm: ConfigForm; disabled: boolean;
   start: (group: string) => void; commit: (group: string) => void;
 }): React.ReactElement {
   const state = useFormState({ control: form.control });
   const t = useWorkflowsT();
   return <ActionFormProvider {...form} formState={state}><PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0">
     <RailPanel title={t("studio.inspector")} empty={t("studio.selectNode")}>
-      {index < 0 ? null : <NodeInspector index={index} form={form} configForm={configForm} disabled={disabled} start={start} commit={commit} />}
+      {contribution ? <div className="grid gap-2 p-3">
+        <p className="font-semibold">{contribution.value.label || contribution.value.step} ({contribution.key})</p>
+        <p>{t("studio.contributedBy", { addon: contribution.sourceAddon })}</p>
+        <p>{t("studio.contributedAt", { point: contribution.point })}</p>
+      </div> : index < 0 ? null : <NodeInspector index={index} form={form} configForm={configForm} disabled={disabled} start={start} commit={commit} />}
     </RailPanel>
   </PageAside></ActionFormProvider>;
 }
@@ -319,8 +338,9 @@ const StructureProjection = v.array(v.object({
   clientId: v.string(), key: v.string(), step: v.string(), label: v.string(),
   next: v.record(v.string(), v.union([v.string(), v.array(v.string())])),
 }));
-function StudioGraph({ form, recordId, topology, selection, select, configurations, active, disabled, update, add, issueIds, layoutResolved }: {
+function StudioGraph({ form, recordId, topology, publication, selection, select, configurations, active, disabled, update, add, issueIds, layoutResolved }: {
   form: Form; recordId: string; topology: string; selection: GraphEditorSelection;
+  publication: StudioPublication;
   select: (value: GraphEditorSelection) => void; disabled: boolean; active: boolean;
   configurations: ReturnType<typeof configurationsFor>; issueIds: readonly string[];
   layoutResolved: (layout: GraphEditorLayout) => void;
@@ -332,17 +352,41 @@ function StudioGraph({ form, recordId, topology, selection, select, configuratio
   });
   const layout = useWatch({ control: form.control, compute: (values: StudioValues) => values.layout });
   const graph = React.useMemo(() => {
-    const entries = v.parse(StructureProjection, JSON.parse(topology));
+    const authored = v.parse(StructureProjection, JSON.parse(topology));
+    const authoredIdByKey = new Map(authored.map((entry) => [entry.key, entry.clientId]));
+    const contributionIds = new Set(publication.contributions.map((entry) => entry.key));
+    const remapTargets = (next: StudioNode["next"]) => Object.fromEntries(Object.entries(next).map(([port, targets]) => [port,
+      typeof targets === "string" ? (authoredIdByKey.get(targets) ?? targets) : targets.map((target) => authoredIdByKey.get(target) ?? target),
+    ]));
+    const entries = [
+      ...authored.map((entry) => {
+        const publishedNode = publication.nodes[entry.key];
+        const contributedRoute = publishedNode !== undefined
+          && Object.values(publishedNode.next).some((targets) => (typeof targets === "string" ? [targets] : targets)
+            .some((target) => contributionIds.has(target)));
+        return {
+          ...entry,
+          next: contributedRoute && publishedNode !== undefined ? remapTargets(publishedNode.next) : entry.next,
+          sourceAddon: undefined,
+        };
+      }),
+      ...publication.contributions.map((entry) => ({
+        clientId: entry.key, key: entry.key, step: entry.value.step, label: entry.value.label,
+        next: remapTargets(entry.value.next), sourceAddon: entry.sourceAddon,
+      })),
+    ];
     const offered = new Map((outcomes.data?.workflow_step_outcomes ?? []).map((entry) => [entry.node, v.parse(OutcomesProjection, entry.outcomes)]));
     const ids = new Set(entries.map((entry) => entry.clientId));
     return {
       nodes: entries.map((entry) => ({ id: entry.clientId, kind: entry.step, title: `${entry.label || entry.step} (${entry.key})`,
-        code: entry.key, ports: Object.entries(offered.get(entry.clientId) ?? {}).map(([id, label]) => ({ id, label })) })),
+        code: entry.key, detail: entry.sourceAddon === undefined ? undefined : t("studio.contributedBy", { addon: entry.sourceAddon }),
+        readOnly: entry.sourceAddon !== undefined,
+        ports: Object.entries(offered.get(entry.clientId) ?? {}).map(([id, label]) => ({ id, label })) })),
       links: entries.flatMap((entry) => Object.entries(entry.next).flatMap(([port, targets]) =>
         Object.hasOwn(offered.get(entry.clientId) ?? {}, port) ? (typeof targets === "string" ? [targets] : targets)
           .filter((to) => ids.has(to)).map((to) => ({ from: entry.clientId, port, to })) : [])),
     };
-  }, [topology, outcomes.data]);
+  }, [topology, publication, outcomes.data, t]);
   const outcomeIssues = (outcomes.data?.workflow_step_outcomes ?? []).flatMap((node) => node.issues.map((issue) => ({ node: node.node, message: issue.message })));
   const status = Object.fromEntries([...issueIds, ...outcomeIssues.map((issue) => issue.node)].map((id) => [id, { label: t("studio.issues"), tone: "danger" as const }]));
   const canLink = React.useCallback((from: string, _port: string, to: string) => {
@@ -366,8 +410,8 @@ function StudioGraph({ form, recordId, topology, selection, select, configuratio
     {outcomeIssues.length ? <ErrorBanner description={outcomeIssues.map((issue) => `${form.getValues().entries.find((entry) => entry.clientId === issue.node)?.key ?? issue.node}: ${issue.message}`).join("\n")} /> : null}
     <GraphEditor {...graph} layoutOptions={{ rankdir: "LR" }} initialView={{ minZoom: 0.65, ready: Boolean(outcomes.data) }} miniMap layout={layout} selected={selection} onSelectionChange={select} readOnly={disabled || !outcomes.data}
       className="min-h-0 flex-1" status={status} canLink={canLink} onLink={(value) => link(value)} onUnlink={(value) => link(value, true)}
-      onLayoutResolved={layoutResolved}
-      onLayoutChange={(value) => update((values) => { values.layout = value; })}
+      onLayoutResolved={(value) => layoutResolved(Object.fromEntries(Object.entries(value).filter(([id]) => !contributionIds(publication).has(id))))}
+      onLayoutChange={(value) => update((values) => { values.layout = Object.fromEntries(Object.entries(value).filter(([id]) => !contributionIds(publication).has(id))); })}
       onDelete={(ids) => update((values) => {
         values.entries = values.entries.filter((entry) => !ids.includes(entry.clientId));
         for (const entry of values.entries) for (const [port, targets] of Object.entries(entry.value.next)) {
@@ -379,4 +423,8 @@ function StudioGraph({ form, recordId, topology, selection, select, configuratio
       })} onAddFromPort={(from, port, position) => add({ from, port, position })}
       onInsertOnLink={(value, position) => add({ from: value.from, port: value.port, link: value, position })} />
   </div>;
+}
+
+function contributionIds(publication: StudioPublication): ReadonlySet<string> {
+  return new Set(publication.contributions.map((entry) => entry.key));
 }

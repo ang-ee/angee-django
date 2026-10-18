@@ -710,14 +710,18 @@ def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(sc
     assert stale.errors[0].extensions == {"code": "STALE_REVISION", "current_revision": revision + 1}
     assert Workflow.system_queryset().get(pk=workflow.pk).draft == draft
     publish = """mutation($id: ID!, $revision: Int!) {
-      publish_workflow(id: $id, expected_revision: $revision) { number dependents }
+      publish_workflow(id: $id, expected_revision: $revision) { number dependents document }
     }"""
     stale = execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision}, user=editor)
     assert stale.errors[0].extensions["code"] == "STALE_REVISION"
     published = result_data(
         execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision + 1}, user=editor)
     )
-    assert published["publish_workflow"] == {"number": 2, "dependents": []}
+    assert published["publish_workflow"] == {
+        "number": 2,
+        "dependents": [],
+        "document": Workflow.system_queryset().get(pk=workflow.pk).published.document,
+    }
     unchanged = result_data(
         execute_schema(schema, publish, {"id": workflow.sqid, "revision": revision + 1}, user=editor)
     )

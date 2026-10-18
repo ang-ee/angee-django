@@ -226,6 +226,9 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react-hook-form:
         specifier: ^7.81.0
         version: 7.81.0(react@19.2.7)
@@ -236,9 +239,6 @@ importers:
       '@angee/storybook':
         specifier: workspace:*
         version: link:../../../../packages/storybook
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

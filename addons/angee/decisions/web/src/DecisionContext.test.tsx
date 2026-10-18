@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { createRouteHref, defaultWidgets } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
@@ -9,13 +9,18 @@ import { testDataResource } from "@angee/metadata/testing";
 import { DecisionContext, FactValue } from "./DecisionContext";
 
 const { Provider, clearClients } = createUiTestProviders({
-  resources: [testDataResource("notes.Note"), testDataResource("storage.File")],
+  resources: [testDataResource("notes.Note"), testDataResource("storage.File"), testDataResource("knowledge.Page")],
 });
 const runtime = {
-  routeHref: createRouteHref([{ name: "notes.record", path: "/notes/$id" }, { name: "storage.file", path: "/storage/$id" }]),
+  routeHref: createRouteHref([
+    { name: "notes.record", path: "/notes/$id" },
+    { name: "storage.file", path: "/storage/$id" },
+    { name: "knowledge.page", path: "/knowledge/$id" },
+  ]),
   routesByResource: {
     "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } },
     "storage.File": { collection: "storage.files", record: { name: "storage.file", param: "id" } },
+    "knowledge.Page": { collection: "knowledge", record: { name: "knowledge.page", param: "id" } },
   },
 };
 afterEach(() => { cleanup(); clearClients(); });
@@ -43,6 +48,28 @@ describe("decision context", () => {
     expect(within(screen.getByRole("region", { name: "References" })).getByRole("link", { name: "Related note" }).getAttribute("href")).toBe("/notes/nte_related");
     expect(screen.getByRole("link", { name: "Evidence file" }).getAttribute("href")).toBe("/storage/fil_source?recordTab=preview&previewPage=fil_source%3A2");
     expect(screen.queryByRole("button", { name: "Evidence file" })).toBeNull();
+  });
+
+  test("renders a knowledge page title and first paragraph through its record link", async () => {
+    const getOne = vi.fn(async () => ({ data: {
+      id: "knp_policy", title: "Posting policy",
+      markdown: { body: "# Internal heading\nBills require approval before posting.\n\nThis paragraph stays on the page." },
+    } }));
+    render(<Provider dataProvider={{ getOne }}><ShellPageTestProviders runtime={{ ...runtime, widgets: defaultWidgets }}>
+      <DecisionContext context={{ references: [{
+        model: "knowledge.Page", id: "knp_policy", pointer: "", label: "Retained page label",
+      }] }} />
+    </ShellPageTestProviders></Provider>);
+
+    const link = await screen.findByRole("link", { name: "Posting policy" });
+    expect(link.getAttribute("href")).toBe("/knowledge/knp_policy");
+    expect(await screen.findByText("Bills require approval before posting.")).toBeTruthy();
+    expect(screen.queryByText("Internal heading")).toBeNull();
+    expect(screen.queryByText("This paragraph stays on the page.")).toBeNull();
+    expect(getOne).toHaveBeenCalledWith(expect.objectContaining({
+      resource: "pages", id: "knp_policy",
+      meta: expect.objectContaining({ fields: ["id", "title", { markdown: ["body"] }] }),
+    }));
   });
 
   test("renders nothing for empty context", () => {

@@ -246,7 +246,7 @@ test("selected step opens in the shared drawer with attempts and records", async
   expect(within(step).queryByText("Map items settled")).toBeNull();
   expect(within(step).queryByText("Map items total")).toBeNull();
   fireEvent.click(within(step).getByRole("tab", { name: "Attempts" }));
-  expect(await screen.findByText("The operation did not finish.")).toBeTruthy();
+  expect(await within(step).findByRole("cell", { name: "The operation did not finish." })).toBeTruthy();
   fireEvent.click(await within(step).findByRole("button", { name: "Open 1" }));
   const attempt = await screen.findByRole("dialog", { name: "Step Attempt" });
   expect(await within(attempt).findByText("TimeoutError: operation expired")).toBeTruthy();

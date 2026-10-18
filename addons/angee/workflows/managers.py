@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -34,11 +34,20 @@ from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
-from angee.workflows.definition import MAP_BODY_SUFFIX, Body, Definition, DefinitionInvalid, Issue
+from angee.workflows.definition import (
+    MAP_BODY_SUFFIX,
+    Body,
+    Definition,
+    DefinitionInvalid,
+    Issue,
+    SourcedWorkflowExtension,
+)
 from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     CANCELED_OUTCOME,
+    INTERRUPTED_OUTCOME,
     AttemptResult,
+    NodeKey,
     RunOrigin,
     RunRelation,
     RunStatus,
@@ -54,6 +63,7 @@ RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
 PRUNE_BATCH_LIMIT = 25
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
 _held_runs: ContextVar[set[int] | None] = ContextVar("workflows_held_runs", default=None)
+_BLOCK_ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
 
 
 def _sqlstate(error: Exception) -> str | None:
@@ -287,7 +297,14 @@ class WorkflowManager(AngeeManager):
                 raise StaleRevisionError(expected_revision, current)
         return DraftSave(expected_revision + 1, issues)
 
-    def publish(self, workflow: Any, *, expected_revision: int, actor: Any = None) -> PublishResult:
+    def publish(
+        self,
+        workflow: Any,
+        *,
+        expected_revision: int,
+        actor: Any = None,
+        extensions: Sequence[SourcedWorkflowExtension] | None = None,
+    ) -> PublishResult:
         """Publish as a user, or install without an actor; report readable dependents."""
 
         actor = workflow.require_access("write", actor)
@@ -298,7 +315,20 @@ class WorkflowManager(AngeeManager):
             with system_context(reason="workflows.publish"):
                 current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
             require_revision(expected=expected_revision, current=current.draft_revision, minimum=0)
-            resolved, resolution_issues = self._resolved_document(current.draft, actor)
+            if extensions is None:
+                extensions = (
+                    current.published.definition.retained_extensions()
+                    if current.published_id is not None
+                    else ()
+                )
+            source = current.draft
+            try:
+                source = Definition.model_validate(source).with_extensions(extensions).model_dump(
+                    mode="json", by_alias=True,
+                )
+            except PydanticValidationError:
+                pass
+            resolved, resolution_issues = self._resolved_document(source, actor)
             definition, issues = Definition.check(resolved, subject_model=current.subject_model)
             issues.extend(resolution_issues)
             if issues:
@@ -331,6 +361,7 @@ class WorkflowManager(AngeeManager):
         publish: bool = True,
         layout: Any = None,
         actor: Any = None,
+        extensions: Sequence[SourcedWorkflowExtension] | None = (),
     ) -> Any:
         """Install a resource document through the same draft and publish verbs."""
 
@@ -350,7 +381,14 @@ class WorkflowManager(AngeeManager):
                 actor=actor,
             )
             if publish:
-                self.publish(workflow, expected_revision=saved.revision, actor=actor)
+                self.publish(
+                    workflow,
+                    expected_revision=saved.revision,
+                    actor=actor,
+                    extensions=extensions,
+                )
+            elif extensions:
+                Definition.model_validate(draft).with_extensions(extensions)
             workflow.refresh_from_db()
             return workflow
 
@@ -404,6 +442,30 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         return self.exclude(status__in=RunStatus.terminal_values()).about(
             record, operations=("created", "changed"), ancestors=False,
         )
+
+    def blocking(self, record: Any, action: str) -> Any:
+        """Return open runs whose pinned definition blocks an action on ``record``."""
+
+        try:
+            action = _BLOCK_ACTION.validate_python(action, strict=True)
+        except PydanticValidationError as error:
+            raise ValidationError({"action": "A workflow action must be a stable lowercase identifier."}) from error
+        target = generic_target(record)
+        model = target.content_type.model_class()
+        if model is None:
+            raise ValidationError("The blocked record model is no longer installed.")
+        token = f"{model._meta.label}:{action}"
+        runs = self.exclude(status__in=RunStatus.terminal_values()).about(record, ancestors=False)
+        version_ids = set(runs.order_by().values_list("version_id", flat=True))
+        version_model = self.model._meta.get_field("version").related_model
+        with system_context(reason="workflows.blocking_policy"):
+            blocked = [
+                version_id
+                for version_id, document in version_model.system_queryset().filter(pk__in=version_ids)
+                .values_list("pk", "document")
+                if token in Definition.model_validate(document).blocks
+            ]
+        return runs.filter(version_id__in=blocked)
 
     @contextmanager
     def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
@@ -652,6 +714,29 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
                 with self.hold_owned(child_id) as children:
                     self._cancel_locked(children, actor=parent.run_as)
+
+    def reap_interrupted(self) -> int:
+        """Settle runs left running across a process restart and close their work."""
+
+        interrupted = 0
+        with system_context(reason="workflows.reap_interrupted"):
+            candidates = list(self.filter(status=RunStatus.RUNNING).order_by("-pk").values_list("pk", flat=True))
+            for run_id in candidates:
+                with self.hold(run_id, skip_locked=True) as run:
+                    if run is None or run.status != RunStatus.RUNNING:
+                        continue
+                    self._write_state(
+                        run,
+                        status=str(RunStatus.INTERRUPTED),
+                        outcome=INTERRUPTED_OUTCOME,
+                        output={},
+                        actor=run.run_as,
+                    )
+                    run.step_runs.cancel_open()
+                    run.refresh_from_db()
+                    publish_change(run, action="update", update_fields=None)
+                    interrupted += 1
+        return interrupted
 
     def _cancel_locked(self, runs: list[Any], *, actor: Any) -> Cancellation:
         """Cancel open rows in an already-held tree without rewriting terminal facts."""

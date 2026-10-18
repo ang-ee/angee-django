@@ -12,6 +12,7 @@
     "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
+    "@refinedev/core": "^5.0.12",
     "react-hook-form": "^7.81.0",
     "valibot": "^1.4.2"
   },
@@ -22,7 +23,6 @@
   },
   "devDependencies": {
     "@angee/storybook": "workspace:*",
-    "@refinedev/core": "^5.0.12",
     "@tanstack/react-router": "^1.170.41",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",

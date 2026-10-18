@@ -132,7 +132,7 @@ function RunStatus({ run }: { run: TimelineRun }) {
   const resolveTone = useStatusTone();
   const holds = runSteps(run).flatMap((step) => step.hold ? [step.hold] : []);
   const status = optionToken(run.status);
-  const state = status === "canceled" ? "stopped" : status === "failed" ? "error"
+  const state = status === "canceled" || status === "interrupted" ? "stopped" : status === "failed" ? "error"
     : status === "succeeded" ? "plan_complete" : status === "running" ? "plan_running"
     : status === "waiting" ? holds.includes("error") ? "error" : holds.includes("run") ? "run"
       : holds.includes("decision") ? "decision" : "waiting" : "unknown";
@@ -218,7 +218,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
   for (const node of ordered.filter((node) => node.plan === "certain")) items.push({ id: node.key, state: "planned", title: node.label });
   const optional = ordered.filter((node) => node.plan === "optional");
   if (optional.length) items.push({ id: "optional", state: "optional", title: t("timeline.optional", { labels: optional.map(({ label }) => label).join(", ") }) });
-  if (run.stopped_at || optionToken(run.status) === "canceled") items.push({ id: "stopped", state: "stopped", title: t("timeline.status.stopped"), timestamp: run.stopped_at ?? run.finished_at,
+  if (run.stopped_at || ["canceled", "interrupted"].includes(optionToken(run.status))) items.push({ id: "stopped", state: "stopped", title: t("timeline.status.stopped"), timestamp: run.stopped_at ?? run.finished_at,
     detail: t("timeline.stoppedDetail") });
   return <StepList items={items} />;
 }

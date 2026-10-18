@@ -25,18 +25,34 @@ const choices = [
 ];
 
 export function StudioStory({ conflict = false, invalid = false, unrenderedIssues = false, failLatest = false, readOnly = false, outcomesGate, retained = false, linked = false,
-  saveInvalid = false, savedDiagnostics = false, outcomeIssue = false, badUnusedSchema = false, emptyLayout = false, onRequest }: {
+  extended = false, saveInvalid = false, savedDiagnostics = false, outcomeIssue = false, badUnusedSchema = false, emptyLayout = false, onRequest }: {
   conflict?: boolean; invalid?: boolean; unrenderedIssues?: boolean; failLatest?: boolean; readOnly?: boolean; retained?: boolean; linked?: boolean; outcomesGate?: () => Promise<void>; onRequest?: (request: v.InferOutput<typeof Request>) => void;
-  saveInvalid?: boolean; savedDiagnostics?: boolean; outcomeIssue?: boolean; badUnusedSchema?: boolean; emptyLayout?: boolean;
+  extended?: boolean; saveInvalid?: boolean; savedDiagnostics?: boolean; outcomeIssue?: boolean; badUnusedSchema?: boolean; emptyLayout?: boolean;
 }) {
   const schemas = React.useMemo(() => {
     let revision = 1;
     let draft: unknown = { nodes: { entry: { step: "echo", label: "Entry", config: { target: "nte_7", threshold: 1 },
       ...(linked ? { next: { done: "second" } } : {}) },
-      ...(linked ? { second: { step: "echo", label: "Second", config: {} } } : {}) }, results: [{ from: "entry" }] };
+      ...(linked ? { second: { step: "echo", label: "Second", config: {} } } : {}) }, results: [{ from: "entry" }],
+      ...(extended ? { points: { after_entry: { after: "entry" } } } : {}) };
     let layout: unknown = emptyLayout ? {} : { entry: [80, 60] };
     let number = 1;
     let refused = false;
+    const publishedDocument = () => {
+      if (!extended) return draft;
+      const document = v.parse(v.looseObject({ nodes: v.record(v.string(), v.looseObject({
+        step: v.string(), label: v.optional(v.string(), ""), config: v.optional(v.record(v.string(), v.unknown()), {}),
+        next: v.optional(v.record(v.string(), v.union([v.string(), v.array(v.string())])), {}),
+      })) }), draft);
+      const entry = document.nodes.entry;
+      if (!entry) throw new Error("The Studio extension fixture requires entry.");
+      return { ...document, nodes: {
+        ...document.nodes,
+        entry: { ...entry, next: { ...entry.next, done: "contributed_review" } },
+        contributed_review: { step: "echo", label: "Contributed review", config: {},
+          ...(linked ? { next: { done: "second" } } : {}) },
+      }, contributions: [{ addon: "tests.extcontrib", extends: "wfl_example", at: "after_entry", sequence: 20, nodes: ["contributed_review"] }] };
+    };
     const publicSchema = storySchema(async (_input, init) => {
       const request = v.parse(Request, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);
@@ -57,7 +73,7 @@ export function StudioStory({ conflict = false, invalid = false, unrenderedIssue
         ? jsonResponse({ errors: [{ message: "Invalid draft.", extensions: { code: "VALIDATION", validationErrors: unrenderedIssues
           ? { "nodes.entry.input": ["Missing binding."], "nodes.entry.config.unknown": ["Unknown config field."] }
           : { "nodes.entry.config.threshold": ["Threshold is too small."] }, formErrors: [] } }] })
-        : jsonResponse({ data: { publish_workflow: { number: ++number, dependents: ["record_parent"] } } });
+        : jsonResponse({ data: { publish_workflow: { number: ++number, dependents: ["record_parent"], document: publishedDocument() } } });
       if (query.includes("workflow_step_outcomes")) {
         await outcomesGate?.();
         const entries = v.parse(v.array(v.object({ node: v.string() })), variables.configurations);
@@ -68,7 +84,7 @@ export function StudioStory({ conflict = false, invalid = false, unrenderedIssue
       if (query.includes("workflow_step_choices") && failLatest && refused) return jsonResponse({ errors: [{ message: "Latest draft unavailable." }] });
       if (query.includes("workflow_step_choices")) return jsonResponse({ data: {
         workflow_by_pk: { id: "wfl_example", permissions: readOnly ? ["monitor"] : ["monitor", "write"], draft, draft_revision: revision, layout,
-          published: { number } }, workflow_step_choices: badUnusedSchema ? [...choices, {
+          published: { number, document: publishedDocument() } }, workflow_step_choices: badUnusedSchema ? [...choices, {
             ...choices[0], key: "bad_schema", label: "Bad form", config_schema: { type: "object", properties: { broken: { widget: "missing_widget" } } },
           }] : choices,
       } });
@@ -77,7 +93,7 @@ export function StudioStory({ conflict = false, invalid = false, unrenderedIssue
       return jsonResponse({ data: {} });
     }).public!;
     return { console: { ...publicSchema, metadata: { angee: { resources: [workflowResourceFixture, runSubjectFixture] } } } };
-  }, [conflict, invalid, unrenderedIssues, failLatest, readOnly, outcomesGate, linked, saveInvalid, savedDiagnostics, outcomeIssue, badUnusedSchema, emptyLayout, onRequest]);
+  }, [conflict, invalid, unrenderedIssues, failLatest, readOnly, outcomesGate, linked, extended, saveInvalid, savedDiagnostics, outcomeIssue, badUnusedSchema, emptyLayout, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/studio">
     <ShellPageTestProviders runtime={{ widgets: defaultWidgets }}>
       <StudioDemo retained={retained} />
