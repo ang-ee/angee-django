@@ -407,7 +407,7 @@ def test_retention_requires_independent_source_and_target_read_access(evidence, 
     assert Extraction.objects.count() == 0
 
 
-def test_target_reader_inherits_evidence_access_without_receiving_ownership(evidence):
+def test_target_reader_inherits_evidence_access_without_becoming_its_creator(evidence):
     retain, values = evidence
     owner = values["actor"]
     author = create_platform_admin("evidence-author")
