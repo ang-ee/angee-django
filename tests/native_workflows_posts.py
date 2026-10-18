@@ -412,7 +412,7 @@ class CommentReplyTests(TransactionTestCase):
     def test_cancellation_of_a_continued_session_stops_only_the_runs_turn(self):
         session = AgentSession.objects.start(
             self.agent,
-            owner=self.workflow.user,
+            user=self.workflow.user,
             context=record_view_context(self.comment),
             actor=self.workflow.user,
         )
@@ -875,14 +875,14 @@ class CommentReplyTests(TransactionTestCase):
                 with transaction.atomic():
                     AgentSession.objects.start(
                         self.agent,
-                        owner=self.workflow.user,
+                        user=self.workflow.user,
                         context={},
                         actor=self.workflow.user,
                     )
                     worker.submit(copy_context().run, select_server).result(timeout=10)
         else:
             with transaction.atomic(), actor_context(self.admin):
-                AgentSession.objects.start(self.agent, owner=self.workflow.user, context={}, actor=self.workflow.user)
+                AgentSession.objects.start(self.agent, user=self.workflow.user, context={}, actor=self.workflow.user)
                 self.agent.with_actor(self.admin).mcp_servers.add(server)
         with system_context(reason="agent server selection assertion"):
             self.assertTrue(self.agent.mcp_servers.filter(pk=server.pk).exists())

@@ -125,7 +125,7 @@ class SessionAgent(ABC):
         session = await self._db(
             self.session_model.objects.start,
             self.agent,
-            owner=self.user,
+            user=self.user,
             context=context,
             actor=self.user,
         )
@@ -138,7 +138,7 @@ class SessionAgent(ABC):
         )
 
     def _sessions(self) -> Any:
-        return self.session_model.objects.with_actor(self.user).filter(agent=self.agent, owner=self.user)
+        return self.session_model.objects.with_actor(self.user).filter(agent=self.agent, user=self.user)
 
     def _session(self, session_id: str) -> Any:
         session = instance_from_public_id(self.session_model, session_id, queryset=self._sessions())
