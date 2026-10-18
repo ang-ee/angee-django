@@ -8,6 +8,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
+from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -111,7 +112,7 @@ class DecisionQuery:
             .exclude(answered_at=None)
             .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
         )
-        return list(DecisionType.get_queryset(queryset, info))
+        return list(optimize(DecisionType.get_queryset(queryset, info), info))
 
 
 schemas = {"console": {

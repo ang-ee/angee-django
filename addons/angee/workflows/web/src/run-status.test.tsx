@@ -18,8 +18,7 @@ vi.mock("@refinedev/core", async (original) => ({
 }));
 vi.mock("@angee/metadata", async (original) => ({
   ...await original<typeof import("@angee/metadata")>(),
-  useModelMetadata: () => ({ resource: { schemaName: "console", modelLabel: "storage.File", roots: { list: "files" } } }),
-  refineResourceIdentifier: () => "console:storage.File",
+  useResourceInvalidates: () => [{ resource: "console:storage.File", dataProviderName: "console", invalidates: ["resourceAll"] }],
 }));
 vi.mock("@angee/ui", async (original) => ({
   ...await original<typeof import("@angee/ui")>(),
@@ -80,6 +79,22 @@ test("a run transition refetches the row's own resource", () => {
   expect(owner.invalidate).toHaveBeenCalledWith({
     resource: "console:storage.File",
     dataProviderName: "console",
-    invalidates: ["list", "many", "detail"],
+    invalidates: ["resourceAll"],
   });
+});
+
+test("the first settled value after loading is the row's state, not a transition", () => {
+  owner.query.mockReturnValue({ data: undefined, isLoading: true });
+  const Cell = runStatusWidget.cell!;
+  const view = render(<AppRuntimeProvider runtime={{ statusTones: { RUNNING: "info" } }}>
+    <Cell row={{ id: "fil_7" }} />
+  </AppRuntimeProvider>);
+  owner.query.mockReturnValue({
+    data: { record_timeline: { records: [{ record_model: "storage.File", record_id: "fil_7", runs: [{ id: "wfr_1", status: "RUNNING" }] }] } },
+  });
+  view.rerender(<AppRuntimeProvider runtime={{ statusTones: { RUNNING: "info" } }}>
+    <Cell row={{ id: "fil_7" }} />
+  </AppRuntimeProvider>);
+  expect(screen.getByText("Running")).toBeTruthy();
+  expect(owner.invalidate).not.toHaveBeenCalled();
 });

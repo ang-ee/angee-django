@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useInvalidate } from "@refinedev/core";
-import { refineResourceIdentifier, useModelMetadata, type Row } from "@angee/metadata";
+import { useResourceInvalidates, type Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Skeleton,
@@ -41,23 +41,25 @@ function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
     enabled: records.length === 1,
   });
   const run = query.data?.record_timeline.records[0]?.runs[0];
-  // The row projects facts its run produces (a bill import's imported bill, an archive
+  // The row projects facts its run produces (an import's resulting document, an archive
   // import's results): when the run moves, the row the list holds is stale, so the live
-  // run change refetches the list and detail the same way a row mutation would.
+  // run change refetches the row's resource the same way a verb that mutates it would,
+  // through the metadata owner's resource invalidations. The first settled value is the
+  // row's current state, not a transition.
   const invalidate = useInvalidate();
-  const listResource = useModelMetadata(resource)?.resource ?? null;
-  const transition = run ? `${run.id}:${run.status}` : "";
-  const seen = React.useRef(transition);
+  const invalidations = useResourceInvalidates(resource ? [resource] : undefined);
+  const transition = query.data ? (run ? `${run.id}:${run.status}` : "none") : undefined;
+  const seen = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
-    if (!listResource || transition === seen.current) return;
+    if (transition === undefined) return;
+    if (seen.current === undefined) {
+      seen.current = transition;
+      return;
+    }
+    if (transition === seen.current) return;
     seen.current = transition;
-    // Lists key their queries on the resource identifier (`<schema>:<modelLabel>`).
-    void invalidate({
-      resource: refineResourceIdentifier(listResource),
-      dataProviderName: listResource.schemaName,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [invalidate, listResource, transition]);
+    for (const params of invalidations) void invalidate(params);
+  }, [invalidate, invalidations, transition]);
   if (!records.length) return null;
   if (query.isLoading) return <Skeleton shape="text" size="sm" className="w-16" />;
   if (!run) return <span aria-label={query.error ? "Run status unavailable" : undefined}>—</span>;

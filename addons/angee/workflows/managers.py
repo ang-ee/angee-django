@@ -455,17 +455,26 @@ class WorkflowRunQuerySet(AngeeQuerySet):
         if model is None:
             raise ValidationError("The blocked record model is no longer installed.")
         token = f"{model._meta.label}:{action}"
-        runs = self.exclude(status__in=RunStatus.terminal_values()).about(record, ancestors=False)
-        version_ids = set(runs.order_by().values_list("version_id", flat=True))
+        # A block is policy: it holds whether or not the caller may read the run (an import's
+        # run belongs to the workflow's service user, not to the clerk posting the bill), so the
+        # open runs and their pinned definitions are read under the policy's own system scope.
         version_model = self.model._meta.get_field("version").related_model
         with system_context(reason="workflows.blocking_policy"):
+            runs = (
+                self.model.system_queryset()
+                .exclude(status__in=RunStatus.terminal_values())
+                .about(record, ancestors=False)
+            )
+            version_ids = set(runs.order_by().values_list("version_id", flat=True))
             blocked = [
                 version_id
                 for version_id, document in version_model.system_queryset().filter(pk__in=version_ids)
                 .values_list("pk", "document")
                 if token in Definition.model_validate(document).blocks
             ]
-        return runs.filter(version_id__in=blocked)
+            return self.model.system_queryset().filter(
+                pk__in=list(runs.filter(version_id__in=blocked).order_by().values_list("pk", flat=True)),
+            )
 
     @contextmanager
     def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:

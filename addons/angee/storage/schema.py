@@ -18,6 +18,7 @@ from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
@@ -29,7 +30,6 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
-from angee.graphql.capabilities import permissions_field
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.identity import instance_from_public_id
 from angee.storage import exceptions
