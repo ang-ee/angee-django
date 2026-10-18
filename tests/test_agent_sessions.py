@@ -25,8 +25,8 @@ from angee.agents.testing.drivers import FakeRunner
 from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
-from angee.base.models import TransitionNotAllowed
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
+from angee.models import TransitionNotAllowed
 from angee.workflows.testing.drivers import capture_tasks as capture_task_sends
 from angee.workflows.testing.drivers import observe
 from tests.conftest import create_platform_admin
@@ -35,7 +35,7 @@ from tests.conftest import create_platform_admin
 @pytest.fixture
 def session(composed_tables: None, capture_tasks: list[Any]) -> Iterator[AgentSession]:
     del composed_tables, capture_tasks
-    owner = get_user_model().objects.create_user(username="session-owner")
+    owner = get_user_model().objects.create_user(username="session-user")
     with system_context(reason="test agent session seed"):
         agent = Agent.objects.create(
             name="Session agent",
@@ -45,7 +45,7 @@ def session(composed_tables: None, capture_tasks: list[Any]) -> Iterator[AgentSe
             runtime_status=RuntimeStatus.RUNNING,
         )
     with actor_context(owner):
-        yield AgentSession.objects.start(agent, owner=owner, context={"label": "Session context"})
+        yield AgentSession.objects.start(agent, user=owner, context={"label": "Session context"})
 
 
 def test_turns_drain_in_order_one_per_task(
@@ -88,7 +88,7 @@ def test_turns_drain_in_order_one_per_task(
 
 def test_post_retains_each_messages_context_without_inheriting_the_session(session: AgentSession) -> None:
     context = {"kind": "list", "type": "agents/agent", "params": {"search": "First view"}}
-    first = session.post("First", context=context, actor=session.owner)
+    first = session.post("First", context=context, actor=session.user)
     second = session.post("Second")
     context["kind"] = "record"
     first.refresh_from_db()
@@ -96,19 +96,19 @@ def test_post_retains_each_messages_context_without_inheriting_the_session(sessi
     session.refresh_from_db()
     assert first.context == {"kind": "list", "type": "agents/agent", "params": {"search": "First view"}}
     assert second.context == {}
-    assert first.created_by_id == second.created_by_id == session.owner_id
+    assert first.created_by_id == second.created_by_id == session.user_id
     assert session.context == {"label": "Session context"}
     assert (first.prompt, second.prompt) == ("First", "Second")
     assert session.title == "First"
 
 
-def test_admin_post_retains_the_poster_instead_of_the_session_owner(session: AgentSession) -> None:
-    """The post permission's admin arm admits a poster distinct from the owner."""
+def test_admin_post_retains_the_poster_instead_of_the_session_user(session: AgentSession) -> None:
+    """The post permission's admin arm admits a poster distinct from the session's user."""
 
     admin = create_platform_admin("session-post-admin")
     turn = session.post("Posted by an admin", actor=admin)
     turn.refresh_from_db()
-    assert admin.pk != session.owner_id
+    assert admin.pk != session.user_id
     assert turn.created_by_id == admin.pk
 
 
@@ -134,7 +134,7 @@ def test_post_during_execution_preserves_the_running_turn(session: AgentSession,
 
     def post_while_running(active: Any, turn: Any, emit: SessionUpdateSink) -> None:
         emit(_chunk("Partial"))
-        with actor_context(session.owner):
+        with actor_context(session.user):
             posted.append(session.post("Arrived while running"))
             run_session.run(session.pk)
             turn.refresh_from_db()
@@ -188,10 +188,10 @@ def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: 
     """A collected pending turn may become active before the session delete guard runs."""
 
     pending = session.post("Claim after collection")
-    other = get_user_model().objects.create_user(username="hidden-claim-session-owner")
-    with system_context(reason="test.agents.hidden_claim.owner"):
-        session.owner = other
-        session.save(update_fields=["owner"])
+    other = get_user_model().objects.create_user(username="hidden-claim-session-user")
+    with system_context(reason="test.agents.hidden_claim.user"):
+        session.user = other
+        session.save(update_fields=["user"])
     target = AgentSession.objects.with_action("delete").get(pk=session.pk)
     assert not target.turns.exists()
     collector = Collector(using=connection.alias, origin=target)
@@ -281,7 +281,7 @@ def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flu
 
     def stop_while_streaming(active: Any, running: Any, emit: SessionUpdateSink) -> None:
         emit(_chunk("Before stop"))
-        with actor_context(session.owner):
+        with actor_context(session.user):
             if close:
                 session.close()
             else:
@@ -481,7 +481,7 @@ def test_legacy_awaiting_approval_is_released_only_by_stop_or_close(session: Age
 def test_start_and_post_enforce_call_at_the_model_verbs(session: AgentSession) -> None:
     stranger = get_user_model().objects.create_user(username="session-stranger")
     with actor_context(stranger), pytest.raises(PermissionDenied):
-        AgentSession.objects.start(session.agent, owner=stranger, context={})
+        AgentSession.objects.start(session.agent, user=stranger, context={})
     with pytest.raises(PermissionDenied):
         session.post("Forbidden", actor=stranger)
     with system_context(reason="test transferred agent owner"):
@@ -493,7 +493,7 @@ def test_start_and_post_enforce_call_at_the_model_verbs(session: AgentSession) -
 
 
 def test_stop_and_close_check_the_explicit_actor_for_bound_instances(session: AgentSession) -> None:
-    turn = session.post("Owner's turn")
+    turn = session.post("User's turn")
     session.claim_turn()
     stranger = get_user_model().objects.create_user(username="stop-stranger")
 
@@ -523,7 +523,7 @@ def test_start_requires_an_available_in_process_runtime(
         agent.runtime_status = runtime_status
         agent.save(update_fields=["runtime_class", "runtime_status"])
     with pytest.raises(ValidationError):
-        AgentSession.objects.start(agent, owner=session.owner, context={})
+        AgentSession.objects.start(agent, user=session.user, context={})
 
 
 def test_deprovision_closes_sessions(session: AgentSession) -> None:
@@ -547,7 +547,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     assert stale_agent.can_chat
 
     with pytest.raises(ValidationError, match="Agent is not running"):
-        AgentSession.objects.start(stale_agent, owner=session.owner, context={})
+        AgentSession.objects.start(stale_agent, user=session.user, context={})
 
     session.refresh_from_db()
     assert session.status == SessionStatus.CLOSED
@@ -765,17 +765,17 @@ def test_claim_rechecks_the_agent_runtime_before_running(
     assert runner.prompts == []
 
 
-def test_start_cannot_assign_another_session_owner(session: AgentSession) -> None:
-    stranger = get_user_model().objects.create_user(username="other-session-owner")
+def test_start_cannot_assign_another_session_user(session: AgentSession) -> None:
+    stranger = get_user_model().objects.create_user(username="other-session-user")
     with pytest.raises(PermissionDenied):
-        AgentSession.objects.start(session.agent, owner=stranger, context={}, actor=session.owner)
+        AgentSession.objects.start(session.agent, user=stranger, context={}, actor=session.user)
 
 
-def test_deprovision_closes_sessions_owned_by_another_person(session: AgentSession) -> None:
-    session.post("A historical session owned by another person")
-    other = get_user_model().objects.create_user(username="historical-session-owner")
-    with system_context(reason="test historical session owner"):
-        AgentSession.objects.filter(pk=session.pk).update(owner=other)
+def test_deprovision_closes_sessions_of_another_person(session: AgentSession) -> None:
+    session.post("A historical session of another person")
+    other = get_user_model().objects.create_user(username="historical-session-user")
+    with system_context(reason="test historical session user"):
+        AgentSession.objects.filter(pk=session.pk).update(user=other)
 
     result = provisioning.deprovision_agent(session.agent.sqid)
 
@@ -815,7 +815,7 @@ def test_delivery_after_session_deletion_is_a_quiet_noop(
 ) -> None:
     session.post("Deleted before the worker starts")
     session_id = session.pk
-    _delete_session_as(session.owner, session_id)
+    _delete_session_as(session.user, session_id)
 
     run_session.run(session_id)
 
@@ -841,7 +841,7 @@ def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
 
     def stop_and_delete(active: Any, running: Any, emit: SessionUpdateSink) -> None:
         emit(_chunk("Before deletion"))
-        with actor_context(session.owner):
+        with actor_context(session.user):
             session.cancel_turn(running)
             if delete_session:
                 _delete_session_as(admin, session.pk)
@@ -957,7 +957,7 @@ def test_chat_blocker_is_shared_by_start_post_and_claim(
     blocker = agent.chat_blocker()
     assert blocker
     with pytest.raises(ValidationError) as refused:
-        AgentSession.objects.start(agent, owner=session.owner, context={})
+        AgentSession.objects.start(agent, user=session.user, context={})
     assert refused.value.message_dict["agent"] == [blocker]
     with pytest.raises(ValidationError) as refused:
         session.post("Refused before insertion")

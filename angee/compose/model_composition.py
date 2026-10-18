@@ -22,7 +22,7 @@ from django.utils.module_loading import module_has_submodule
 from rebac.mixins import INJECTED_BASE_MANAGER
 from rebac.resources import model_resource_type
 
-from angee.base.models import AngeeModel, revalidate_transition_metadata
+from angee.models import AngeeModel, revalidate_transition_metadata
 
 
 def extension_target(model: type[models.Model]) -> str | None:

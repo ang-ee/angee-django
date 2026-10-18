@@ -19,14 +19,14 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.base.actors import actor_user_id, instance_actor
-from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
-from angee.base.errors import DomainError, RecordAccessSubjectRefused
-from angee.base.fields import StateField
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
+from angee.actors import actor_user_id, instance_actor
+from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.errors import DomainError, RecordAccessSubjectRefused
+from angee.fields import StateField
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
+from angee.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
 from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)

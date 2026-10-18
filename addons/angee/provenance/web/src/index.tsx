@@ -1,18 +1,24 @@
 import { defineBaseAddon } from "@angee/app";
 import { Tab } from "@angee/ui";
 
+import { FieldProvenanceMarks } from "./FieldProvenanceMarks";
 import { HISTORY_TAB_ID, HistoryPane } from "./RecordHistory";
 import { enProvenanceMessages } from "./i18n";
 
 /**
- * The provenance addon's console surface: one History tab on every saved
- * record whose resource keeps native history (`resource.history`), composed
- * through the shared form sections container.
+ * The provenance addon's console surface: field-statement marks on saved forms
+ * and one History tab when the resource keeps native history.
  */
 const provenance = defineBaseAddon({
   id: "provenance",
   i18n: { provenance: enProvenanceMessages },
   containers: {
+    "form#chrome": {
+      "provenance.field-provenance": {
+        sequence: 10,
+        content: <FieldProvenanceMarks />,
+      },
+    },
     "form#sections": {
       "provenance.history": {
         sequence: 90,

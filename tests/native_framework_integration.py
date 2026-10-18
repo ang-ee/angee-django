@@ -16,13 +16,13 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.models import CreationKeyConflict
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError
 from angee.integrate.locks import bridge_advisory_lock
 from angee.knowledge.mcp_tools import register
 from angee.messaging.backends import ParsedHandle
+from angee.models import CreationKeyConflict
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
 from angee.posts.models import CommentAnswered

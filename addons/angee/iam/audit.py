@@ -1,6 +1,6 @@
 """Reusable GraphQL projection of audit user-references.
 
-``AuditMixin`` (``angee.base.models``) stamps ``created_by`` / ``updated_by``
+``AuditMixin`` (``angee.models``) stamps ``created_by`` / ``updated_by``
 foreign keys on a row. Every audited GraphQL type needs the same projection of
 those keys: the actor's public id plus a display label, resolved **without**
 exposing the guarded user object — the id goes through IAM's ``user_public_id``

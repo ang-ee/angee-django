@@ -22,8 +22,8 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.pagination import WindowSum
 from angee.messaging.inbox import InboxPage
+from angee.pagination import WindowSum
 
 
 class InboxGroupScope(BaseModel):

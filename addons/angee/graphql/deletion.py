@@ -18,8 +18,6 @@ from django.db.models.deletion import (
 )
 from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
-from angee.base.identity import public_id_of
-from angee.base.models import AngeeModel
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
@@ -30,6 +28,8 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE, require_instance_for_id
+from angee.identity import public_id_of
+from angee.models import AngeeModel
 from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
@@ -367,7 +367,9 @@ def delete_by_public_id(
                     raise ValidationError(RECORD_NOT_FOUND_MESSAGE, code="not_found")
                 instance = locked
             else:
-                instance = require_instance_for_id(model, public_id, queryset=targets.lock_if_supported())
+                lock = getattr(targets, "lock_if_supported", None)
+                locked_targets = lock() if callable(lock) else targets.select_for_update()
+                instance = require_instance_for_id(model, public_id, queryset=locked_targets)
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
             deleted_pk = instance.pk
@@ -482,7 +484,15 @@ class _PreviewRows:
         collected = [row for row in rows if not _is_root(root, row)]
         if not collected:
             return cls()
-        scoped = model.objects.none() if actor is None else model.objects.with_actor(actor).with_action("read")
+        if not issubclass(model, RebacMixin):
+            return cls(
+                total_count=len(collected),
+                visible_count=len(collected),
+                visible_rows=collected,
+            )
+        if actor is None:
+            return cls(total_count=len(collected))
+        scoped = model.objects.with_actor(actor).with_action("read")
         return cls._from_scoped_collected(collected, scoped)
 
     @classmethod
@@ -518,11 +528,15 @@ class _PreviewRows:
 
         if total_count == 0:
             return cls()
-        scoped = (
-            queryset.model.objects.none()
-            if actor is None
-            else queryset.model.objects.with_actor(actor).with_action("read")
-        )
+        if not issubclass(queryset.model, RebacMixin):
+            return cls(
+                total_count=total_count,
+                visible_count=total_count,
+                visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
+            )
+        if actor is None:
+            return cls(total_count=total_count)
+        scoped = queryset.model.objects.with_actor(actor).with_action("read")
         visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
         visible_count = visible_queryset.count()
         return cls(

@@ -270,6 +270,7 @@ def test_resource_row_installs_one_document_and_reuses_its_hash(
     assert result.created == 1
     with system_context(reason="read installed workflow resource"):
         workflow = Workflow.objects.get(key="resource-graph")
+        assert workflow.owner_id is None
         expected_versions = 0 if publish is False else 1
         assert WorkflowVersion.objects.filter(workflow=workflow).count() == expected_versions
         version_id = workflow.published_id
@@ -341,3 +342,15 @@ def test_published_version_requires_a_number(execution):
             content_hash=workflow.published.content_hash,
         )
     assert workflow.versions.with_actor(actor).count() == 1
+
+
+def test_the_installing_user_owns_the_workflow(execution):
+    """An install as a user makes that user the transferable owner beside its attribution."""
+    actor, _ = execution
+    workflow = Workflow.objects.install_definition(
+        key="owned_workflow",
+        name="Owned workflow",
+        draft={"nodes": {"entry": {"step": "echo"}}},
+        actor=actor,
+    )
+    assert (workflow.owner_id, workflow.created_by_id) == (actor.pk, actor.pk)

@@ -15,10 +15,10 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from rebac import system_context
 
-from angee.base.changesets import changeset, changeset_model_label, current_changeset
-from angee.base.lineage import concrete_child_models
-from angee.base.serialization import canonical_json_sha256
+from angee.changesets import changeset, changeset_model_label, current_changeset
+from angee.lineage import concrete_child_models
 from angee.messaging.testing.models import Party
+from angee.serialization import canonical_json_sha256
 from tests.conftest import create_user
 
 
@@ -120,7 +120,7 @@ urlpatterns = [path("write/", _write_view), path("read/", _read_view)]
 @pytest.mark.django_db(transaction=True)
 @override_settings(
     ROOT_URLCONF=__name__,
-    MIDDLEWARE=["rebac.middleware.ActorMiddleware", "angee.base.middleware.ChangesetMiddleware"],
+    MIDDLEWARE=["rebac.middleware.ActorMiddleware", "angee.middleware.ChangesetMiddleware"],
 )
 def test_a_request_boundary_costs_one_insert_and_one_close(composed_tables: None) -> None:
     """A request persists its changeset on the first captured write and closes it once; reads cost nothing."""

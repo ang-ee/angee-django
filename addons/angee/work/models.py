@@ -27,9 +27,9 @@ from rebac import PermissionDenied, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
-from angee.base.actors import actor_user_id, instance_actor
-from angee.base.fields import StateField
-from angee.base.models import (
+from angee.actors import actor_user_id, instance_actor
+from angee.fields import StateField
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AuditMixin,
@@ -37,7 +37,7 @@ from angee.base.models import (
     RowLockMixin,
     StagedModelMixin,
 )
-from angee.base.models import Stage as StagePrimitive
+from angee.models import Stage as StagePrimitive
 from angee.resources.mixins import ResourceLoadMixin
 from angee.spaces.managers import GroupManager
 

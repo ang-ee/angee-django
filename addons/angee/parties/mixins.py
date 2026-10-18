@@ -8,7 +8,7 @@ from typing import Any
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 
-from angee.base.models import Statement, StatementsMixin
+from angee.models import Statement, StatementsMixin
 
 
 class PartyAspectMixin(StatementsMixin):

@@ -7,7 +7,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from rebac import actor_context
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
 from tests.conftest import create_user
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

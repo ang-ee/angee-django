@@ -2005,7 +2005,7 @@ def test_every_stack_leases_its_process_compose_control_port() -> None:
 def test_secret_key_is_mode_invariant() -> None:
     """Both modes declare the secret-key secret and run Django on it.
 
-    Encrypted-at-rest fields (angee.base EncryptedField) derive their Fernet key
+    Encrypted-at-rest fields (angee EncryptedField) derive their Fernet key
     from SECRET_KEY, so re-rendering a stack from process to docker (or back)
     must never rotate the effective key: both modes declare the same generated
     `secret-key` (the env-file backend reuses the existing .env value) and pin

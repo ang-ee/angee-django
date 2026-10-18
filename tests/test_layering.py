@@ -18,7 +18,7 @@ from tests.test_base_layering import _module_imports
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_SERVING_IMPORTS = (
     "angee.asgi",
-    "angee.base",
+    "angee",
     "angee.compose",
     "angee.jobs",
 )
@@ -178,7 +178,7 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
 
 
 def test_addons_never_import_the_build_time_composer() -> None:
-    """Serving code never loads ``angee.compose``; addons share its facts through ``angee.base``."""
+    """Serving code never loads ``angee.compose``; addons share its facts through ``angee``."""
     root = PROJECT_ROOT / "addons/angee"
     violations = {
         path.relative_to(PROJECT_ROOT).as_posix(): sorted(

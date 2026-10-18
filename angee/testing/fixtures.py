@@ -7,7 +7,7 @@ from django.apps import apps
 from django.core.management import call_command
 from pytest_django.django_compat import is_django_unittest
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
 from angee.testing.permissions import composed_permissions as composed_permissions
 
 

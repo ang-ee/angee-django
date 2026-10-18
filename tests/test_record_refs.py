@@ -16,9 +16,11 @@ from django.utils.module_loading import import_string
 from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
 
-from angee.base import refs as record_refs
-from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.refs import (
+from angee import refs as record_refs
+from angee.knowledge import schema as knowledge_schema
+from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.projects.testing.models import Link, Task
+from angee.refs import (
     RecordRef,
     RecordRefMixin,
     ancestor_object_refs,
@@ -28,8 +30,6 @@ from angee.base.refs import (
     record_edges_by_target,
     record_ref_for,
 )
-from angee.knowledge import schema as knowledge_schema
-from angee.projects.testing.models import Link, Task
 from angee.storage import schema as storage_schema
 from tests.conftest import File, FileAttachment, RecordBinding, addon_schema
 from tests.mtidemo.models import (

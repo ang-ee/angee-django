@@ -18,7 +18,7 @@ from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 
-from angee.base.permissions import effective_rebac_definition
+from angee.permissions import effective_rebac_definition
 
 _ACTOR = "_angee_permission_actor"
 

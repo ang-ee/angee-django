@@ -11,12 +11,12 @@ from rebac import PermissionDenied, SubjectRef, actor_context, system_context, t
 from rebac.resources import model_for_resource_type
 from rebac.schema.parser import parse_zed
 
+from angee import models as base_models
 from angee.agents.models import Agent as AbstractAgent
-from angee.base import models as base_models
-from angee.base.identity import public_id_for
 from angee.graphql import sharing
 from angee.graphql.data import metadata
 from angee.graphql.sharing import RecordAccessType
+from angee.identity import public_id_for
 from angee.projects.models import Task
 from angee.projects.testing.models import Project
 from angee.storage.models import Drive

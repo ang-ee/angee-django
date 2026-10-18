@@ -8,12 +8,12 @@ and that JSON as `input`. For example: `Answer {subject[sqid]} in
 The agent runtime renders subject content through `render_view_context` under
 the turn poster's REBAC scope.
 
-Input may name a `session` to continue; omission opens a session owned by the
-run actor. Continuations must have the same agent and subject context. Output
+Input may name a `session` to continue; omission opens a session whose user is
+the run actor. Continuations must have the same agent and subject context. Output
 names the exact `session` and completed `turn`, with `text` from `AgentTurn.text`.
 An empty or whitespace answer selects `no_reply`; other answers select `done`.
 
-The session owner queues `agents.run_session` after commit. The workflow watches
+`AgentSession.post` queues `agents.run_session` after commit. The workflow watches
 that turn and retains its ids in the checkpoint, so waking does not post again.
 Only status changes wake the step; transcript flushes do not. A watch-only
 registration observes the turn without adding an admission trigger source.

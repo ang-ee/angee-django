@@ -4,7 +4,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context
 
-from angee.base.models import TRASH_REASON_MAX_LENGTH
+from angee.models import TRASH_REASON_MAX_LENGTH
 from tests.conftest import create_user
 from tests.core_persistence import TrashRow
 

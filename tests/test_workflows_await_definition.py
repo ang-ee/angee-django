@@ -6,8 +6,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.identity import public_id_of
-from angee.base.jsonschema import schemas_match, validator
+from angee.identity import public_id_of
+from angee.jsonschema import schemas_match, validator
 from angee.workflows.awaits import AwaitRun, AwaitRunConfig, AwaitRunInput, _AwaitedRun
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner

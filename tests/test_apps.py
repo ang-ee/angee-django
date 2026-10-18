@@ -44,7 +44,7 @@ def test_base_config_is_a_plain_core_app() -> None:
     base = apps.get_app_config("base")
     contract = addon_manifest(base)
 
-    assert base.name == "angee.base"
+    assert base.name == "angee"
     assert contract is None
 
 

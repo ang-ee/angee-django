@@ -13,10 +13,10 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.base.fields import SqidField
-from angee.base.identity import SqidPublicIdentity, instance_from_public_id, instances_from_public_ids
-from angee.base.models import AngeeModel
+from angee.fields import SqidField
 from angee.graphql.node import AngeeNode
+from angee.identity import SqidPublicIdentity, instance_from_public_id, instances_from_public_ids
+from angee.models import AngeeModel
 from tests.tables import model_tables
 
 _model_counter = count()

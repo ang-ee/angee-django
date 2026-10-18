@@ -16,14 +16,12 @@ import strawberry_django
 from django.apps import apps
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch
-from rebac import SubjectRef, system_context
+from rebac import system_context
 from rebac.graphql.strawberry_django import optimize
-from rebac.resources import model_for_subject_type
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.identity import public_subject_ref
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -38,6 +36,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.identity import public_subject_ref
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
 from angee.storage.schema import FileType
@@ -201,11 +200,11 @@ class HandleType(AngeeNode):
     party: PartyType | None = actor_scoped_to_one("party")
     avatar: FileType | None = actor_scoped_to_one("avatar")
 
-    @strawberry_django.field(only=["owner_id"])
-    def owner(self) -> strawberry.ID | None:
+    @strawberry_django.field(only=["controller_id"])
+    def controller(self) -> strawberry.ID | None:
         """Return the controlling user's public id, when a user has claimed this handle."""
 
-        return optional_public_id(user_public_id(cast(Any, self).owner_id))
+        return optional_public_id(user_public_id(cast(Any, self).controller_id))
 
     @strawberry_django.field(
         only=["party_id"],
@@ -245,7 +244,7 @@ class PartyStatementType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(only=["asserted_by", "source_kind"])
-    def asserted_by(self, info: strawberry.Info) -> str:
+    def asserted_by(self) -> str:
         """The asserting principal when the reader may read it; otherwise only its source kind.
 
         A statement read never widens what the party reader sees: the principal
@@ -253,14 +252,8 @@ class PartyStatementType(AngeeNode):
         """
 
         row = cast(Any, self)
-        source = SubjectRef.parse(row.asserted_by)
-        readable = row.__dict__.get("_asserting_source_readable")
-        if readable is None:
-            resolved = model_for_subject_type(source.subject_type)
-            if resolved is not None:
-                model, id_attr = resolved
-                readable = model.objects.with_actor(session_user(info)).filter(**{id_attr: source.subject_id}).exists()
-        if readable:
+        source = row.readable_asserting_source
+        if source is not None:
             return str(public_subject_ref(source))
         return str(row.source_kind)
 
@@ -625,10 +618,10 @@ class PartiesDirectoryMutation:
                 **directory_values,
             )
             # The connected account's own login address is the admin's own handle:
-            # claim it (control ownership + normal person identity statement). Synced
+            # claim it (control + normal person identity statement). Synced
             # *contacts'* handles get neither fact — only this connected account's.
             if username.strip():
-                Handle.objects.claim_own(
+                Handle.objects.claim_control(
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),

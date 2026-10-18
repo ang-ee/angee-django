@@ -19,8 +19,12 @@ from rebac.schema import parse_zed
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
-from angee.base.fields import StateField
-from angee.base.models import (
+from angee.fields import StateField
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+from angee.graphql.node import AngeeNode
+from angee.graphql.schema import GraphQLSchemas
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -31,11 +35,7 @@ from angee.base.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import Stage as OrderedStage
-from angee.graphql.data import hasura_model_resource
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.node import AngeeNode
-from angee.graphql.schema import GraphQLSchemas
+from angee.models import Stage as OrderedStage
 from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
 from angee.testing.permissions import install_permission_schema

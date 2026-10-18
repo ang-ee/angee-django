@@ -21,10 +21,10 @@ from graphql import GraphQLError
 from rebac import actor_context, system_context, to_subject_ref
 from strawberry.types import ExecutionResult
 
-from angee.base.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset
-from angee.base.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
+from angee.changesets import ChangesetRequired, changeset, changeset_model_label, current_changeset
 from angee.compose import manage
 from angee.graphql.views import AngeeGraphQLView
+from angee.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 

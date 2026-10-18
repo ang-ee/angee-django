@@ -6,7 +6,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied
 from rebac import actor_context, system_context
 
-from angee.base.identity import public_id_of
+from angee.identity import public_id_of
 from angee.resources.testing.models import Resource
 from angee.spaces.testing.models import Group
 from tests.conftest import (

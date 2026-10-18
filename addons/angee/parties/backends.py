@@ -18,11 +18,11 @@ from django.db.models import CharField
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce
 
-from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError
+from angee.serialization import canonical_json_sha256
 
 
 @dataclass(frozen=True)

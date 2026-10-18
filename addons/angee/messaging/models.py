@@ -57,23 +57,11 @@ from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
-from angee.base.actors import actor_user_id
-from angee.base.errors import DomainError
-from angee.base.fields import StateField
-from angee.base.identity import instance_from_public_id
-from angee.base.impl import ImplClassField
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    HistoryMixin,
-    ModelHistory,
-    OptimisticLockMixin,
-    OwnerMixin,
-    SourceKind,
-    TrashMixin,
-)
-from angee.base.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
-from angee.base.serialization import strip_null_bytes
+from angee.actors import actor_user_id
+from angee.errors import DomainError
+from angee.fields import StateField
+from angee.identity import instance_from_public_id
+from angee.impl import ImplClassField
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.delivery import queue_message_delivery
@@ -93,8 +81,20 @@ from angee.messaging.managers import (
 from angee.messaging.resources import MessageResource
 from angee.messaging.source_copies import SourceCopyMixin
 from angee.messaging.webforms import WebformSpec, default_webform_schema
+from angee.models import (
+    AngeeDataModel,
+    AuditMixin,
+    HistoryMixin,
+    ModelHistory,
+    OptimisticLockMixin,
+    OwnerMixin,
+    SourceKind,
+    TrashMixin,
+)
 from angee.parties.models import Handle
+from angee.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
 from angee.resources.mixins import ResourceLoadMixin
+from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
@@ -223,12 +223,12 @@ class ThreadedModelMixin(models.Model):
     message write path.
 
     **Placement across MTI.** The chatter edge keys on the record's canonical target —
-    its topmost REBAC-typed MTI ancestor (:func:`angee.base.refs.generic_pointer_target`)
+    its topmost REBAC-typed MTI ancestor (:func:`angee.refs.generic_pointer_target`)
     — while target-delete policy discovers edges through that same type. Compose the mixin on that same
     topmost REBAC-typed ancestor (``parties.Party``, not ``parties.Person``), so the write
     content type and the teardown content type match; ``ensure_for_record`` fails fast on a
     child-composed / ancestor-uncomposed split (the placement invariant in
-    :mod:`angee.base.refs`).
+    :mod:`angee.refs`).
     """
 
     thread_attachment_role: ClassVar[str] = "chatter"
@@ -1836,7 +1836,7 @@ class Message(
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
 
-    Moderation is trash (:class:`~angee.base.models.TrashMixin`): a trashed
+    Moderation is trash (:class:`~angee.models.TrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """

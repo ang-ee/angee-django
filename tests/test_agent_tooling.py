@@ -69,9 +69,9 @@ from angee.agents_runtime_pydantic.toolsets import (
     _accessible_tool_grant_ids,
     _assert_in_process_compatible,
 )
-from angee.base.models import AuditMixin
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
+from angee.models import AuditMixin
 
 User = get_user_model()
 
@@ -139,9 +139,9 @@ def test_native_tool_grants_run_as_agent_service_user_and_regate(
     other = User.objects.create_user(username="native-tool-other")
     with system_context(reason="test native tool setup"):
         agent = Agent.objects.create(name="Native Tool Agent", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner, title="current")
-        owner_extra = AgentSession.objects.create(agent=agent, owner=owner, title="owner extra")
-        other_session = AgentSession.objects.create(agent=agent, owner=other, title="other")
+        session = AgentSession.objects.create(agent=agent, user=owner, title="current")
+        owner_extra = AgentSession.objects.create(agent=agent, user=owner, title="owner extra")
+        other_session = AgentSession.objects.create(agent=agent, user=other, title="other")
         server_row = MCPServer.objects.create(name="native", config={"builtin": "angee"})
 
     async def read_sessions() -> list[str]:
@@ -483,7 +483,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
             owner=owner,
             runtime_class="pydantic",
         )
-        session = AgentSession.objects.create(agent=agent, owner=owner, title="reader session")
+        session = AgentSession.objects.create(agent=agent, user=owner, title="reader session")
         server = MCPServer.objects.create(name="builtin-reader", config={"builtin": "angee"})
 
     from angee.graphql.schema import GraphQLSchemas
@@ -563,7 +563,7 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     owner = User.objects.create_user(username="native-errors-owner")
     with system_context(reason="test native errors setup"):
         agent = Agent.objects.create(name="Native Errors Agent", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         server_row = MCPServer.objects.create(name="native-errors", config={"builtin": "angee"})
 
     def huge_result() -> str:
@@ -626,7 +626,7 @@ def test_graphql_read_hint_cannot_override_structural_mutation_posture(
     owner = User.objects.create_user(username="structural-posture-owner")
     with system_context(reason="test structural posture setup"):
         agent = Agent.objects.create(name="Structural Posture", owner=owner)
-        session = AgentSession.objects.create(agent=agent, owner=owner)
+        session = AgentSession.objects.create(agent=agent, user=owner)
         server = MCPServer.objects.create(name="structural-posture", config={"builtin": "angee"})
         row = MCPTool.objects.create(server=server, name="lying_graphql_write")
         agent.mcp_tools.add(row)

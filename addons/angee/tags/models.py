@@ -27,7 +27,7 @@ declared relations in step. The tags addon never names another addon's model.
 Compose :class:`TaggedModel` on the topmost REBAC-typed MTI ancestor the
 canonical edge keys on, never on a child, so the delete collector filters at the
 same content type the write used (the placement invariant in
-:mod:`angee.base.refs`).
+:mod:`angee.refs`).
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
-from angee.base.fields import ColorField
-from angee.base.identity import instance_from_public_id
-from angee.base.models import (
+from angee.fields import ColorField
+from angee.identity import instance_from_public_id
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -58,7 +58,7 @@ from angee.base.models import (
     MergeableQuerySet,
     role_anchor,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.refs import MergePolicy, RecordRefMixin
 
 
 class TagQuerySet(
@@ -326,5 +326,5 @@ class TaggedModel(models.Model):
 
 TagRole = role_anchor("tags/role", name="TagRole")
 """The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.base.models.role_anchor`.
+an effective tags manager. See :func:`angee.models.role_anchor`.
 """

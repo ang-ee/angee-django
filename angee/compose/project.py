@@ -30,13 +30,25 @@ DEFAULTS_SETTINGS_MODULE = "angee.compose.defaults"
 
 
 def prepend_import_paths(paths: Iterable[Path]) -> None:
-    """Put import paths at the front of ``sys.path`` preserving order."""
+    """Put import paths first and refresh the already-loaded framework package.
 
-    for import_path in reversed(tuple(path.resolve() for path in paths if path.exists())):
+    ``angee.compose.settings`` necessarily imports the foundation package before
+    project addon roots are known.  Since the foundation now lives directly in
+    that regular package, its pkgutil path must gain the configured ``angee``
+    portions after those roots enter ``sys.path``.
+    """
+
+    import_paths = tuple(path.resolve() for path in paths if path.exists())
+    for import_path in reversed(import_paths):
         sys_path_entry = str(import_path)
         if sys_path_entry in sys.path:
             sys.path.remove(sys_path_entry)
         sys.path.insert(0, sys_path_entry)
+    package = sys.modules.get("angee")
+    package_path = getattr(package, "__path__", None)
+    portions = tuple(str(path / "angee") for path in import_paths if (path / "angee").is_dir())
+    if package_path is not None and portions:
+        package.__path__ = list(dict.fromkeys((*portions, *(str(path) for path in package_path))))
 
 
 class ProjectContract:

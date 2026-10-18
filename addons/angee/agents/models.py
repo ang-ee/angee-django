@@ -43,6 +43,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
+from angee.actors import instance_actor
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
@@ -51,10 +52,15 @@ from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
-from angee.base.actors import instance_actor
-from angee.base.fields import DiagnosticTextField, StateField
-from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.models import (
+from angee.fields import DiagnosticTextField, StateField
+from angee.graphql.events import ChangeRelatedRecord
+from angee.iam.service_users import sync_service_user
+from angee.impl import ImplClassField, ImplDefaultsMixin
+from angee.integrate.models import IntegrationCreateMode
+from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
+from angee.jobs.enqueue import enqueue_task
+from angee.jobs.locks import LockKey, record_lock_key
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -66,12 +72,6 @@ from angee.base.models import (
     save_state,
     transition,
 )
-from angee.graphql.events import ChangeRelatedRecord
-from angee.iam.service_users import sync_service_user
-from angee.integrate.models import IntegrationCreateMode
-from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
-from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.resources.mixins import ResourceLoadMixin
 
@@ -870,7 +870,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.base.models.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.models.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.
@@ -1815,7 +1815,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 class AgentSessionManager(AngeeManager):
     """Create conversations under the caller's native REBAC create gate."""
 
-    def start(self, agent: Any, *, owner: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
+    def start(self, agent: Any, *, user: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
         """Start an idle conversation with a callable, running in-process agent.
 
         The admission lock orders starts with teardown's session scan. Native
@@ -1830,7 +1830,7 @@ class AgentSessionManager(AngeeManager):
             blocker = locked.chat_blocker()
             if blocker:
                 raise ValidationError({"agent": blocker})
-            return self.with_actor(actor).create(agent=locked, owner=owner, context=dict(context))
+            return self.with_actor(actor).create(agent=locked, user=user, context=dict(context))
 
     def close_for_agent_as_system(self, agent: Any) -> None:
         """Close an agent's sessions as part of its authorized in-process teardown."""
@@ -1856,16 +1856,16 @@ class AgentSession(AuditMixin, AngeeDataModel):
     A pending turn retained across a rebuild runs first when the user next posts.
     A session left awaiting approval is released through Stop or Close. If an
     after-commit settlement signal is lost, the turn stays parked until Stop.
-    Delete authority derives from the agent, independently of session ownership.
+    Delete authority derives from the agent, independently of the session's user.
     """
 
     runtime = True
 
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
-    # A session is its owner's own conversation: deleting the owner deletes it, and
-    # refuses while one of its turns still runs, where other owned roots are released.
-    owner = models.ForeignKey(
+    # A session is its user's own conversation, not a transferable grant root: deleting
+    # the user deletes it, and refuses while one of its turns still runs.
+    user = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, editable=False, on_delete=models.CASCADE, related_name="+",
     )
     title = models.CharField(max_length=200, blank=True)

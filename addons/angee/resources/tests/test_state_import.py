@@ -19,7 +19,7 @@ from import_export.results import RowResult
 from rebac import system_context
 
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
-from angee.base.models import StateTransitions
+from angee.models import StateTransitions
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource, build_resource
@@ -251,7 +251,7 @@ def test_adopted_target_preserves_state_and_updates_other_fields(tmp_path: Path)
     with system_context(reason="test resources adopted state"):
         user = get_user_model().objects.create_user(username="state-owner")
         agent = Agent.objects.create(name="Test agent", owner=user)
-        session = AgentSession.objects.create(agent=agent, owner=user)
+        session = AgentSession.objects.create(agent=agent, user=user)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Original")
         turn.mark_running()
         Resource.objects.create(

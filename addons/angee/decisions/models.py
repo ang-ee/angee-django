@@ -7,9 +7,9 @@ from django.db import models
 from django.utils.text import capfirst
 from rebac import system_context
 
-from angee.base.models import AngeeDataModel, AppendOnlyModel, DerivedFrom, OptimisticLockMixin
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.graphql.events import ChangeRelatedRecord
+from angee.models import AngeeDataModel, AppendOnlyModel, DerivedFrom, OptimisticLockMixin
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):

@@ -26,9 +26,7 @@ from rebac import PermissionDenied, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 
-from angee.base.changesets import changeset_model_label
-from angee.base.identity import instance_from_public_id
-from angee.base.models import record_history
+from angee.changesets import changeset_model_label
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -59,11 +57,13 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
+from angee.identity import instance_from_public_id
 from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
 from angee.messaging.models import ThreadedModelMixin, chatter_record
+from angee.models import record_history
 from angee.parties.schema import HandleType, PartyType
 from angee.provenance.schema import HistorySummaryType
 from angee.storage.schema import FileType

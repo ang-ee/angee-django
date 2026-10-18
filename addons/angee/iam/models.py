@@ -42,10 +42,13 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
-from angee.base.errors import DomainError
-from angee.base.fields import StateField
-from angee.base.identity import canonical_subject_ref, instance_from_public_id
-from angee.base.models import (
+from angee.errors import DomainError
+from angee.fields import StateField
+from angee.iam.events import person_created
+from angee.iam.identity import user_label
+from angee.iam.roles import protected_account_holders
+from angee.identity import canonical_subject_ref, instance_from_public_id
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -54,9 +57,6 @@ from angee.base.models import (
     StatementSourceMixin,
     role_anchor,
 )
-from angee.iam.events import person_created
-from angee.iam.identity import user_label
-from angee.iam.roles import protected_account_holders
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""

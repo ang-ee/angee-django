@@ -12,9 +12,9 @@ from django.db import models
 from import_export import fields, widgets
 from rebac import GenericTarget, generic_target
 
-from angee.base.fields import ModelLabelField
-from angee.base.refs import RecordRefMixin
-from angee.base.serialization import canonical_json
+from angee.fields import ModelLabelField
+from angee.refs import RecordRefMixin
+from angee.serialization import canonical_json
 
 
 class XrefWidgetMixin:

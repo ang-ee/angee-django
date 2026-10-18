@@ -12,12 +12,12 @@ from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_id_for
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.iam.permissions import request_from_info
+from angee.identity import public_id_for
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")

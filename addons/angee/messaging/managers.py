@@ -63,15 +63,11 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
-from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
-from angee.base.identity import instances_from_public_ids
-from angee.base.models import AngeeManager, AngeeQuerySet, MergeableQuerySet, OwnerQuerySet, TrashQuerySet
-from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.serialization import strip_null_bytes
+from angee.actors import actor_user_id
+from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
+from angee.identity import instances_from_public_ids
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.integrate.net import AddressNotAllowedError
@@ -86,7 +82,11 @@ from angee.messaging.delivery import (
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.source_copies import observe_email_identity
+from angee.models import AngeeManager, AngeeQuerySet, MergeableQuerySet, OwnerQuerySet, TrashQuerySet
+from angee.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.parties.managers import Signing
+from angee.refs import generic_pointer_model, generic_pointer_target
+from angee.serialization import strip_null_bytes
 from angee.storage.uploads import attachment_extension, fallback_attachment_name, truncate_filename
 
 if TYPE_CHECKING:
@@ -977,7 +977,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 class ThreadAttachmentManager(AngeeManager):
     """Owns the polymorphic edge from a model row to its chatter thread.
 
-    The edge names its record by :func:`angee.base.refs.generic_pointer_target`: a gated
+    The edge names its record by :func:`angee.refs.generic_pointer_target`: a gated
     record and each of its REBAC-typed MTI ancestors share one chatter thread,
     and an ungated host keeps its own content type. ``permissions.zed``
     backs one relation per attachable record type with ``target``, so a source
@@ -2110,10 +2110,10 @@ def _assert_canonical_composes_thread_mixin(record: Any, canonical_content_type:
 
     ``ThreadedModelMixin`` owns the reverse ``thread_attachments`` GenericRelation while
     the attachment row and target-delete policy key on the *canonical* (topmost REBAC-typed) target
-    (:func:`angee.base.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
+    (:func:`angee.refs.generic_pointer_target`). If a child composes the mixin but its canonical ancestor
     does not, the ancestor cannot collect the child's attachment on delete and a reused
     primary key would mis-resolve. Guard it where the write keys — the placement
-    invariant stated in :mod:`angee.base.refs`.
+    invariant stated in :mod:`angee.refs`.
     """
 
     from angee.messaging.models import ThreadedModelMixin

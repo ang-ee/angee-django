@@ -24,9 +24,9 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.models import CreationKeyConflict, StaleRevisionError
+from angee.errors import RecordAccessSubjectRefused
 from angee.messaging.testing.models import Person
+from angee.models import CreationKeyConflict, StaleRevisionError
 from angee.projects.testing.models import Project, Task
 from tests.conftest import Backend, Drive, create_platform_admin
 from tests.proposals_models import Answer, Proposal, Round, Topic

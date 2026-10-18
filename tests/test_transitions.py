@@ -14,8 +14,10 @@ from rebac import system_context
 
 from angee.agents.models import AgentLifecycle, SessionStatus, TurnStatus
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceProvider
-from angee.base.fields import StateField
-from angee.base.models import (
+from angee.fields import StateField
+from angee.integrate.models import IntegrationLifecycle
+from angee.integrate.testing.integration import Integration
+from angee.models import (
     AngeeModel,
     StateTransitions,
     TransitionNotAllowed,
@@ -23,8 +25,6 @@ from angee.base.models import (
     save_state,
     transition,
 )
-from angee.integrate.models import IntegrationLifecycle
-from angee.integrate.testing.integration import Integration
 from tests.conftest import make_integration
 from tests.tables import model_tables
 

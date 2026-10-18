@@ -7,7 +7,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.jsonschema import union_schema
+from angee.jsonschema import union_schema
 from angee.workflows.states import Outcome, WaitingKind
 from angee.workflows.steps import Done, Step, _Settlement
 

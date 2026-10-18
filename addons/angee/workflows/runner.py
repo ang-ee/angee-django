@@ -22,8 +22,8 @@ from django.utils import timezone
 from rebac import actor_context, generic_target, system_context
 from rebac.actors import is_sudo
 
-from angee.base.changesets import changeset
-from angee.base.errors import exception_text
+from angee.changesets import changeset
+from angee.errors import exception_text
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate

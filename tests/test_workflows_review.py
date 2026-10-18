@@ -6,9 +6,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.actors import is_sudo
 
-from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.identity import public_id_of
 from angee.workflows.decision_steps import AskDecision, DecisionStep, apply_proposals
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step

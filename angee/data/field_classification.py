@@ -140,10 +140,10 @@ def python_type_scalar(python_type: object) -> str | None:
 
 
 def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
-    """Return whether ``field`` is the :class:`~angee.base.models.ArchiveMixin` flag.
+    """Return whether ``field`` is the :class:`~angee.models.ArchiveMixin` flag.
 
     The archive vocabulary is name-based — one column name across the platform
-    (:data:`angee.base.models.ARCHIVE_FLAG_FIELD`) — so any model composing
+    (:data:`angee.models.ARCHIVE_FLAG_FIELD`) — so any model composing
     ``ArchiveMixin`` is recognised by that column and marked ``archivable`` in
     resource metadata. A same-typed boolean under a different contract (the
     trash flag, an enablement ``is_enabled``/``is_active``) is deliberately not
@@ -154,10 +154,10 @@ def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
 
 
 def is_trash_field(field: models.Field[Any, Any] | None) -> bool:
-    """Return whether ``field`` is the :class:`~angee.base.models.TrashMixin` flag.
+    """Return whether ``field`` is the :class:`~angee.models.TrashMixin` flag.
 
     Like the archive flag, trash is recognised by its one column name
-    (:data:`angee.base.models.TRASH_FLAG_FIELD`); resource metadata marks it
+    (:data:`angee.models.TRASH_FLAG_FIELD`); resource metadata marks it
     ``trashable`` so shared views offer a removed-records list and the shared
     ``trash_record`` / ``restore_record`` verbs for the resource.
     """

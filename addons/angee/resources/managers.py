@@ -14,12 +14,12 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.changesets import changeset, current_changeset
-from angee.base.fields import ModelLabelField
-from angee.base.identity import SqidPublicIdentity, public_id_of
-from angee.base.impl import resolve_impl_class
-from angee.base.jsonschema import relation_positions
-from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
+from angee.changesets import changeset, current_changeset
+from angee.fields import ModelLabelField
+from angee.identity import SqidPublicIdentity, public_id_of
+from angee.impl import resolve_impl_class
+from angee.jsonschema import relation_positions
+from angee.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,
@@ -304,7 +304,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         entries: tuple[ResourceEntry, ...],
         row_groups: tuple[ResourceGroup, ...],
         grant_groups: tuple[GrantGroup, ...],
-        kind_declarations: ResourceKindDeclarations | None,
+        kind_declarations: ResourceKindDeclarations | None = None,
         *,
         dry_run: bool,
         addon_aliases: Mapping[str, str],

@@ -48,7 +48,7 @@ import {
 import type { FormViewSurface } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
-import { RecordFieldMarkButton } from "./record-field-marks";
+import { RecordFieldMarkControl } from "./record-field-marks";
 
 const TITLE_TEXT_CLASS =
   "block w-full min-w-0 break-words text-28 font-semibold leading-9 text-fg";
@@ -198,7 +198,7 @@ export function FormViewRecordHeader({
       </header>
     );
   }
-  const statusMark = currentStatusField ? <RecordFieldMarkButton field={currentStatusField.name} label={currentStatusField.label} /> : null;
+  const statusMark = currentStatusField ? <RecordFieldMarkControl field={currentStatusField.name} label={currentStatusField.label} /> : null;
   const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
     compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
     statusOnTitleRow ? "flex-auto justify-end" : "w-full",
@@ -297,7 +297,7 @@ export function FormViewRecordHeader({
           </h1>
         )}
           </div>
-          {currentTitleField ? <RecordFieldMarkButton field={currentTitleField.name} label={currentTitleField.label} /> : null}
+          {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label} /> : null}
           {titlePlacementField && displayRecord ? <FieldDescriptorControl
             field={titlePlacementField}
             value={displayRecord[titlePlacementField.name]}
@@ -418,7 +418,7 @@ export function FormViewSheet({
         <section className="grid gap-2">
           {currentBodyField.label ? (
             <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label} />
-              <RecordFieldMarkButton field={currentBodyField.name} label={currentBodyField.label} /></div>
+              <RecordFieldMarkControl field={currentBodyField.name} label={currentBodyField.label} /></div>
           ) : null}
           <Controller
             control={form.control}
@@ -682,7 +682,7 @@ function BoundFieldRow({
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
-      <RecordFieldMarkButton field={field.name} label={field.label} /></div>
+      <RecordFieldMarkControl field={field.name} label={field.label} /></div>
       <div
         className={cn(
           FIELD_CONTROL_CLASS,

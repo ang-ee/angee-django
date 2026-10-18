@@ -24,16 +24,16 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError
 
-from angee.base.actors import actor_user_id
-from angee.base.evidence import EvidenceReference, readable_records
-from angee.base.fields import ModelLabelField
-from angee.base.identity import public_id_of
-from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet, StaleRevisionError, require_revision
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.actors import actor_user_id
+from angee.evidence import EvidenceReference, readable_records
+from angee.fields import ModelLabelField
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import publish_change
+from angee.identity import public_id_of
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
+from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet, StaleRevisionError, require_revision
+from angee.serialization import canonical_json_sha256, strip_null_bytes
 from angee.workflows.definition import (
     MAP_BODY_SUFFIX,
     Body,

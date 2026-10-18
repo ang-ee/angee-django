@@ -2,7 +2,7 @@
 
 Adapters emit :class:`ParsedConnection` values and never write parties rows.
 This owner upserts the account handle, materializes a Person behind its
-normal PartyStatement (an export is a source, never confirmed), records the account owner's acquaintance edge, and maps
+normal PartyStatement (an export is a source, never confirmed), records the source account's acquaintance edge, and maps
 an optional employer onto parties' existing ``employee`` Relationship shape.
 
 Organization names in social exports are free text, not stable organization
@@ -24,9 +24,9 @@ from django.db import transaction
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.actors import source_kind_for
-from angee.base.evidence import EvidenceReference
-from angee.base.models import SourceKind
+from angee.actors import source_kind_for
+from angee.evidence import EvidenceReference
+from angee.models import SourceKind
 
 
 class ConnectionHandle(Protocol):
@@ -89,13 +89,13 @@ def ingest_connections(
     user_model = apps.get_model(settings.AUTH_USER_MODEL)
     with system_context(reason="parties.connection.ingest"):
         user = user_model._base_manager.get(pk=created_by_id)
-        owner_party = party_model.objects.for_user(user)
+        anchor_party = party_model.objects.for_user(user)
         kinds: dict[Any, Any] = {}
         return [
             _ingest_one_connection(
                 parsed,
                 link=link,
-                owner_party=owner_party,
+                anchor_party=anchor_party,
                 kind_model=kind_model,
                 kinds=kinds,
                 created_by_id=created_by_id,
@@ -109,7 +109,7 @@ def _ingest_one_connection(
     parsed: ParsedConnection,
     *,
     link: Any,
-    owner_party: Any,
+    anchor_party: Any,
     kind_model: Any,
     kinds: dict[Any, Any],
     created_by_id: Any,
@@ -120,7 +120,7 @@ def _ingest_one_connection(
     The source account's user is the relationship anchor. The imported person
     becomes its ``acquaintance`` from ``connected_at`` onward; normal handle
     assertions name the supplied IMPORT integration and are never preferred: an
-    export is a source, not the person's decision. It decides the handle's owner
+    export is a source, not the person's decision. It decides the handle's party
     (confidence 1.0) only when the handle names an account by a real identifier
     (:func:`_identified`); a name alone lands at 0.4, for review. Optional email
     and employment facts compose the same Handle/PartyStatement/Relationship owners.
@@ -174,7 +174,7 @@ def _ingest_one_connection(
                 evidence=[handle],
             )
         _land_acquaintance(
-            owner_party,
+            anchor_party,
             person,
             connected_at=parsed.connected_at,
             relationship_model=relationship_model,
@@ -230,9 +230,9 @@ def _connection_person(
 ) -> Any:
     """Return the handle's Person; identity statements own subsequent names.
 
-    The handle's owner when it has one; otherwise the party an earlier run of the
+    The handle's party when it has one; otherwise the party an earlier run of the
     same import linked it to, since a claim awaiting review, or one the person
-    dismissed, owns nothing; a re-import therefore never mints a second person.
+    dismissed, resolves nothing; a re-import therefore never mints a second person.
     An existing name is never overwritten: it may be user-curated, and export
     text must not clobber curation on every re-run.
     """
@@ -267,7 +267,7 @@ def _relationship_kind(kind_model: Any, slug: str, kinds: dict[Any, Any]) -> Any
 
 
 def _land_acquaintance(
-    owner_party: Any,
+    anchor_party: Any,
     person: Any,
     *,
     connected_at: date | datetime | None,
@@ -281,11 +281,11 @@ def _land_acquaintance(
 ) -> None:
     """Record the source account's idempotent connection to ``person``."""
 
-    if owner_party.pk == person.pk:
+    if anchor_party.pk == person.pk:
         return
     kind = _relationship_kind(kind_model, "acquaintance", kinds)
     edge, _ = relationship_model.objects.get_or_create(
-        party=owner_party,
+        party=anchor_party,
         other_party=person,
         kind=kind,
         defaults={"created_by_id": created_by_id},

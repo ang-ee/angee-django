@@ -5,8 +5,8 @@ from typing import Any
 from django.db import models
 from django.db.models.signals import pre_delete
 
-from angee.base.signals import connect_for_models
 from angee.projects.models import Milestone
+from angee.signals import connect_for_models
 
 
 def connect() -> None:

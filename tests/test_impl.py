@@ -14,7 +14,8 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-from angee.base.impl import (
+from angee.data.form_specs import model_config_form_spec
+from angee.impl import (
     ImplBase,
     ImplChoice,
     ImplClassField,
@@ -27,7 +28,6 @@ from angee.base.impl import (
     resolve_hooks,
     resolve_impl_class,
 )
-from angee.data.form_specs import model_config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
@@ -104,7 +104,7 @@ class _UnsupportedConfigImpl(_BaseImpl):
 def test_impl_owner_public_import_contract() -> None:
     """The impl mechanism has one public owner and no split legacy modules."""
 
-    from angee.base.impl import (  # noqa: PLC0415
+    from angee.impl import (  # noqa: PLC0415
         ImplBase,
         ImplChoice,
         ImplClassField,
@@ -125,7 +125,7 @@ def test_impl_owner_public_import_contract() -> None:
     assert callable(resolve_impl_class)
     legacy_modules = ("impl_types", "registry")
     for legacy_module in legacy_modules:
-        assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
+        assert importlib.util.find_spec(f"angee.{legacy_module}") is None
 
 
 def test_hooks_resolve_optional_single_and_declared_list_order() -> None:

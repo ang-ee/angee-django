@@ -18,8 +18,6 @@ from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.identity import instance_from_public_id
-from angee.base.models import CreationKeyConflict, StaleRevisionError
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import hasura_model_resource
@@ -29,6 +27,8 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
+from angee.identity import instance_from_public_id
+from angee.models import CreationKeyConflict, StaleRevisionError
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")

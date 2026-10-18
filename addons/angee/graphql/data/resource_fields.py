@@ -14,7 +14,6 @@ from strawberry.types.lazy_type import LazyType
 from strawberry_django.utils.typing import get_django_definition
 from strawberry_django_hasura import SnakeNameConverter
 
-from angee.base.impl import ImplClassField
 from angee.data import metadata as data_contract
 from angee.data.field_classification import (
     ENUM_FIELD_WIDGETS,
@@ -33,6 +32,7 @@ from angee.data.field_classification import (
     RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
 )
 from angee.graphql.introspection import surface_field_names, surface_name
+from angee.impl import ImplClassField
 from graphql import (
     GraphQLEnumType,
     GraphQLList,

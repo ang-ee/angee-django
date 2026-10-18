@@ -44,21 +44,12 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
-from angee.base.changesets import (
+from angee.changesets import (
     changeset,
     changeset_model,
     creation_fingerprint,
     current_changeset,
 )
-from angee.base.identity import (
-    instance_from_public_id,
-    instances_from_public_ids,
-    public_data_id_field,
-    public_id_for,
-)
-from angee.base.impl import resolve_hooks
-from angee.base.models import AngeeModel, OptimisticLockMixin, RowLockMixin
-from angee.base.refs import RecordRefMixin
 from angee.data.field_classification import (
     is_to_one_relation,
 )
@@ -100,6 +91,15 @@ from angee.graphql.introspection import (
     require_field_for_path,
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
+from angee.identity import (
+    instance_from_public_id,
+    instances_from_public_ids,
+    public_data_id_field,
+    public_id_for,
+)
+from angee.impl import resolve_hooks
+from angee.models import AngeeModel, OptimisticLockMixin, RowLockMixin
+from angee.refs import RecordRefMixin
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ class HasuraLines:
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.base.models.RowLockMixin` has each row checked
+    child composing :class:`~angee.models.RowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as
@@ -273,7 +273,9 @@ class AngeeHasuraWriteBackend:
         who lost record access delete the thread through ``delete_<res>_by_pk``.
         """
 
-        return self.model.objects.for_write()
+        manager = self.model.objects
+        for_write = getattr(manager, "for_write", None)
+        return for_write() if callable(for_write) else manager.all()
 
     def create(self, info: strawberry.Info, data: dict[str, Any], *, idempotency_key: str | None = None) -> Any:
         """Create one row under the changeset claim; :meth:`insert` owns the row itself.

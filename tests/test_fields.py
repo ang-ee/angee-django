@@ -15,7 +15,7 @@ from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.test.utils import isolate_apps
 
-from angee.base.fields import (
+from angee.fields import (
     DiagnosticTextField,
     EncryptedField,
     FractionalRankExhausted,
@@ -25,7 +25,7 @@ from angee.base.fields import (
     StateField,
     _derive_fernet,
 )
-from angee.base.models import SqidMixin
+from angee.models import SqidMixin
 from tests.tables import model_tables
 
 
@@ -174,7 +174,7 @@ def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) ->
         calls.append(label)
         return _derive_fernet(label)
 
-    monkeypatch.setattr("angee.base.fields._derive_fernet", derive)
+    monkeypatch.setattr("angee.fields._derive_fernet", derive)
 
     first = field._fernet()
     second = field._fernet()

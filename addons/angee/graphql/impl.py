@@ -11,8 +11,8 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
-from angee.base.impl import ImplChoice as BaseImplChoice
-from angee.base.models import AngeeModel
+from angee.impl import ImplChoice as BaseImplChoice
+from angee.models import AngeeModel
 
 
 @strawberry.type

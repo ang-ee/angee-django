@@ -10,7 +10,7 @@ from typing import Any, NoReturn, get_args
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel
 
-from angee.base.jsonschema import (
+from angee.jsonschema import (
     LocalSchemaReferences,
     schema_nodes,
     validation_issues,

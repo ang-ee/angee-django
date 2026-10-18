@@ -189,14 +189,14 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         probe_atomic_states.append(connection.in_atomic_block)
 
     manager_type = type(Handle.objects)
-    claim_own = manager_type.claim_own
+    claim_control = manager_type.claim_control
 
-    def atomic_claim_own(manager: Any, user: Any, **kwargs: Any) -> Any:
+    def atomic_claim_control(manager: Any, user: Any, **kwargs: Any) -> Any:
         write_atomic_states.append(connection.in_atomic_block)
-        return claim_own(manager, user, **kwargs)
+        return claim_control(manager, user, **kwargs)
 
     monkeypatch.setattr(CardDavDirectoryBackend, "probe", accept_probe)
-    monkeypatch.setattr(manager_type, "claim_own", atomic_claim_own)
+    monkeypatch.setattr(manager_type, "claim_control", atomic_claim_control)
     admin = parties_graphql._platform_admin("carddav-probe-success-admin")
 
     result = _connect_carddav(admin)
@@ -236,7 +236,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert directory.backend_class == "carddav"
         assert directory.lifecycle == "connected"
         assert directory.config == {"server_url": "https://dav.example.com/"}
-        assert handle.owner_id == admin.pk
+        assert handle.controller_id == admin.pk
         assert (handle.platform, handle.value) == ("email", "ada@example.com")
         assert person.user_id == admin.pk
         assert link.subject_id == person.pk

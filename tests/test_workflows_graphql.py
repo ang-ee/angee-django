@@ -851,8 +851,8 @@ def test_studio_success_keeps_nonblocking_config_diagnostics_and_publish_validat
 
 def test_studio_registry_projection_resolves_and_builds_each_choice_once(monkeypatch, register_step):
     """The rowless projection passes one resolved class to the common choice owner."""
-    from angee.base import impl as impl_owner
-    from angee.base.impl import resolve_all_impl_classes
+    from angee import impl as impl_owner
+    from angee.impl import resolve_all_impl_classes
     from angee.workflows.schema import WorkflowStepChoice
 
     class Projected(Step[Value, Value, None]):

@@ -16,7 +16,7 @@ CORE_APP_NAMES = [
     "django.contrib.contenttypes",
     "rebac",
     "simple_history",
-    "angee.base",
+    "angee",
     "django_celery_beat",
     "angee.jobs",
 ]

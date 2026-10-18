@@ -40,10 +40,8 @@ from rebac.actors import current_sudo_reason, is_sudo
 
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
+from angee.actors import source_kind_for
 from angee.agents.testing.models import Agent
-from angee.base.actors import source_kind_for
-from angee.base.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
-from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -78,7 +76,9 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
+from angee.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
 from angee.projects.testing.models import Task as ProjectTask
+from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -640,7 +640,7 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     assert reaction.handle is not None
     assert reaction.handle.platform == "email"
     assert reaction.handle.value == "reactor@example.com"
-    assert reaction.handle.owner_id == user.pk
+    assert reaction.handle.controller_id == user.pk
     person = Person._base_manager.get(user=user)
     link = Party.statements.get(handle=reaction.handle, subject=person)
     assert link.confidence == 1.0
@@ -801,7 +801,7 @@ def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tabl
             [
                 RelationshipTuple(
                     resource=to_object_ref(doc),
-                    relation="owner",
+                    relation="manager",
                     subject=to_subject_ref(owner),
                 ),
                 RelationshipTuple(resource=to_object_ref(doc), relation="reader", subject=to_subject_ref(watcher)),
@@ -907,7 +907,7 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
     agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
-    invariant in ``angee.base.refs``).
+    invariant in ``angee.refs``).
     """
 
     del composed_tables

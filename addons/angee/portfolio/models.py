@@ -22,8 +22,8 @@ from rebac import (
     system_context,
 )
 
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.models import (
+from angee.fields import FractionalRankField, StateField
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -34,7 +34,7 @@ from angee.base.models import (
     OwnerMixin,
     role_anchor,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.refs import MergePolicy, RecordRefMixin
 from angee.resources.mixins import ResourceLoadMixin
 
 

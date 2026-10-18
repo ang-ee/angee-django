@@ -375,7 +375,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.test_postgresql and args.action != "tests":
         parser.error("--test-postgresql is available only for native test runs")
-    from angee.base.changesets import changeset
+    from angee.changesets import changeset
 
     boundary = (
         nullcontext()
@@ -405,7 +405,7 @@ def run(args: argparse.Namespace) -> None:
         from django.test import TransactionTestCase
         from django.test.runner import DiscoverRunner
 
-        from angee.base.changesets import changeset
+        from angee.changesets import changeset
         from angee.provenance.testing import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):

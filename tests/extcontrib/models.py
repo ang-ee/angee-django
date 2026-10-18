@@ -4,7 +4,7 @@ from typing import cast
 
 from django.db import models
 
-from angee.base.models import (
+from angee.models import (
     AngeeDataModel,
     Aspect,
     SourceKind,
@@ -13,7 +13,7 @@ from angee.base.models import (
     StatementsMixin,
     role_anchor,
 )
-from angee.base.refs import RetainedGenericRelation
+from angee.refs import RetainedGenericRelation
 
 Role = role_anchor("extcontrib/role", name="Role")
 

@@ -3,6 +3,7 @@ import {
   refineResourcesFromDataResources,
   refineRoutePathForTanStack,
   type AngeeSchemaMetadata,
+  type QueryFilter,
   type RefineResourceMetadata,
 } from "@angee/metadata";
 import type { ResourceProps } from "@refinedev/core";
@@ -192,6 +193,7 @@ export class AppRouteProjection {
   /** Record match claims per resource, in every app: a matching row opens there. */
   private readonly recordDestinations = new Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>();
   private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  private readonly canonicalModels: Readonly<Record<string, string>>;
   private readonly presentNavigation = new Map<string, MenuTree>();
 
   /** Console routes removed menu nodes made unavailable, with the reason; they redirect home. */
@@ -216,12 +218,15 @@ export class AppRouteProjection {
       removed?: readonly { id: string; route?: string }[];
       owners?: Readonly<Record<string, string>>;
       ancestors?: ReadonlyMap<string, ReadonlySet<string>>;
+      /** Concrete model label to its canonical MTI/base model label. */
+      canonicalModels?: Readonly<Record<string, string>>;
     } = {},
   ) {
     const navigation = options.navigation ?? menuTree;
     this.navigationTree = selection === undefined ? navigation.withSettingsPlace() : navigation.confineTo(selection.rail);
     this.unavailable = unavailableRoutes(routes, menuTree, options.removed ?? []);
     this.routesByName = new Map(routes.map((route) => [route.name, route]));
+    this.canonicalModels = options.canonicalModels ?? {};
     // Places are composition facts, so every host checks them whatever it selects.
     this.assertRoutePlaces(selection === undefined ? this.navigationTree : navigation.withSettingsPlace());
     const home = selection?.home !== undefined ? this.routesByName.get(selection.home) : undefined;
@@ -378,6 +383,48 @@ export class AppRouteProjection {
     return route ? inheritedRouteFact(route, this.routesByName, (item) => item.defaultResourceView) : undefined;
   }
 
+  /** The active collection's inherited editable filter, paired with its model. */
+  defaultResourceFilter(routeName?: string): { resource: string; filter: QueryFilter } | undefined {
+    const route = routeName ? this.routesByName.get(routeName) : undefined;
+    if (!route) return undefined;
+    const filter = inheritedRouteFact(route, this.routesByName, (item) => item.defaultFilter);
+    const resource = inheritedRouteFact(route, this.routesByName, (item) => item.recordModel ?? item.resource);
+    return filter !== undefined && resource ? { resource, filter } : undefined;
+  }
+
+  /**
+   * Route aliases contributed by mounts in `app`. The active mount family wins
+   * when a model has several mounted views; everywhere else declaration/menu
+   * order selects the first. This keeps links app-local even from dashboards
+   * and other pages outside the mounted route's own ancestry.
+   */
+  mountedRouteAliases(
+    app: string | undefined,
+    activeRoute: string | undefined,
+    families: readonly ReadonlyMap<string, string>[],
+  ): ReadonlyMap<string, string> {
+    if (!app) return new Map();
+    const activeTrail = new Set<string>();
+    for (let route = activeRoute ? this.routesByName.get(activeRoute) : undefined; route;) {
+      activeTrail.add(route.name);
+      route = route.parent ? this.routesByName.get(route.parent) : undefined;
+    }
+    const scoped = families.filter((family) => {
+      const alias = family.values().next().value;
+      const route = alias ? this.routesByName.get(alias) : undefined;
+      return route !== undefined && this.rootFor(route) === app;
+    });
+    const active = scoped.find((family) => [...family.values()].some((alias) => activeTrail.has(alias)));
+    const ordered = active ? [active, ...scoped.filter((family) => family !== active)] : scoped;
+    const aliases = new Map<string, string>();
+    for (const family of ordered) {
+      for (const [source, alias] of family) {
+        if (!aliases.has(source)) aliases.set(source, alias);
+      }
+    }
+    return aliases;
+  }
+
   /**
    * The resource routes on a page of `app`. A record opens, in order: at the
    * record match claim its row matches, in every app; at the app's own claim;
@@ -403,6 +450,22 @@ export class AppRouteProjection {
         ...selected,
         recordDestinations: destinations,
         ...(fallback ? { recordFallback: fallback } : {}),
+      };
+    }
+    // MTI/base references on a concrete record page name the same identity.
+    // Keep those links on the concrete page the active app selected, while the
+    // base collection remains at its own canonical route.
+    const activeModel = route
+      ? inheritedRouteFact(route, this.routesByName, (item) => item.recordModel ?? item.resource)
+      : undefined;
+    const canonicalModel = activeModel ? this.canonicalModels[activeModel] : undefined;
+    const activeRecord = activeModel ? result[activeModel]?.record : undefined;
+    if (canonicalModel && activeRecord && result[canonicalModel]) {
+      const canonical = result[canonicalModel];
+      result[canonicalModel] = {
+        ...canonical,
+        record: activeRecord,
+        ...(canonical.recordDestinations ? { recordFallback: activeRecord } : {}),
       };
     }
     return result;

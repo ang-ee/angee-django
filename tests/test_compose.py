@@ -21,7 +21,6 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
-from angee.base.models import AngeeModel, HistoryMixin, role_anchor
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.dependencies import AddonDependencyGroupResult
@@ -32,6 +31,7 @@ from angee.compose.rendering import render_models
 from angee.compose.runtime import Runtime
 from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL
+from angee.models import AngeeModel, HistoryMixin, role_anchor
 from tests.conftest import make_addon
 
 
@@ -1756,7 +1756,7 @@ def test_appgraph_distinguishes_project_roots_from_injected_runtime_roots() -> N
 def test_appgraph_rejects_duplicate_dependencies() -> None:
     """Repeated dependencies are rejected at their declaring owner."""
 
-    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee.base", "angee.base"))
+    config = make_addon(name="tests.duplicate_dependency", depends_on=("angee", "angee"))
 
     with pytest.raises(ImproperlyConfigured, match="duplicate dependency"):
         AppGraph().resolve([config])
@@ -2013,7 +2013,7 @@ import angee.compose.project
 import angee.compose.bootstrap
 import angee.compose.composer
 assert not settings.configured
-for module in ('angee.compose.runtime', 'angee.base.models', 'rebac.models'):
+for module in ('angee.compose.runtime', 'angee.models', 'rebac.models'):
     assert module not in sys.modules, module
 """,
         ],

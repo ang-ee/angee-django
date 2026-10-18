@@ -10,7 +10,7 @@ from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
-from angee.base.actors import actor_user_id
+from angee.actors import actor_user_id
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
 from angee.graphql.node import AngeeNode

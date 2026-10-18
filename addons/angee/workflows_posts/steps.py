@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
 from angee.agents.context import record_view_context
-from angee.base.identity import public_id_of
+from angee.identity import public_id_of
 from angee.posts.models import CommentAnswered
 from angee.workflows.states import ERROR_OUTCOME
 from angee.workflows.steps import Settlement, Step, StepMode

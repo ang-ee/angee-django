@@ -5,7 +5,7 @@ from contextlib import nullcontext
 import pytest
 from rebac import SubjectRef, actor_context, system_context, to_subject_ref
 
-from angee.base.actors import instance_actor
+from angee.actors import instance_actor
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 

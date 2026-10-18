@@ -74,11 +74,11 @@ from rebac.managers import RebacManager
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
-from angee.base.actors import actor_user_id, user_subject_type
-from angee.base.fields import StateField
-from angee.base.identity import canonical_subject_ref, public_subject_ref
-from angee.base.impl import ImplClassField
-from angee.base.models import (
+from angee.actors import actor_user_id, user_subject_type
+from angee.fields import StateField
+from angee.identity import canonical_subject_ref, public_subject_ref
+from angee.impl import ImplClassField
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -97,7 +97,7 @@ from angee.base.models import (
     TrashQuerySet,
     role_anchor,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.refs import MergePolicy, RecordRefMixin
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -1876,7 +1876,7 @@ class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
     ergonomic reverse accessor. Declare that reverse relation on the topmost
     REBAC-typed MTI ancestor that :func:`rebac.generic_target` keys the edge on,
     so the delete collector filters at the write content type (the placement
-    invariant in :mod:`angee.base.refs`). Existing-edge access follows the file
+    invariant in :mod:`angee.refs`). Existing-edge access follows the file
     parent; creation follows the target relation the target's app declares in
     ``permissions.zed``.
     """
@@ -1923,7 +1923,7 @@ StorageRole = role_anchor("storage/role")
 
 The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
 registers through this anchor's ``rebac_resource_type`` (``rebac.E009``); the row
-is never created or read. See :func:`angee.base.models.role_anchor`.
+is never created or read. See :func:`angee.models.role_anchor`.
 """
 
 

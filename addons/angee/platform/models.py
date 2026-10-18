@@ -30,9 +30,8 @@ from hatch_angee import AddonManifest
 from rebac import system_context
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
-from angee.base.fields import StateField
-from angee.base.models import AngeeManager, AngeeModel
-from angee.base.serialization import canonical_json_sha256
+from angee.fields import StateField
+from angee.models import AngeeManager, AngeeModel
 from angee.platform import composed
 from angee.platform.installer import (
     AddonInstaller,
@@ -41,6 +40,7 @@ from angee.platform.installer import (
     StaleAddonPreviewError,
     addon_installer,
 )
+from angee.serialization import canonical_json_sha256
 
 
 def get_addon_display_label(name: str, label: str) -> str:

@@ -12,13 +12,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from rebac import generic_target, system_context, to_subject_ref
 
-from angee.base.actors import actor_user_id
-from angee.base.evidence import EvidenceReference, readable_records
-from angee.base.identity import public_id_of
-from angee.base.jsonschema import validate
-from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
-from angee.base.refs import record_ref_for
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.actors import actor_user_id
+from angee.evidence import EvidenceReference, readable_records
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
     CorrectionBinding,
@@ -30,6 +25,11 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
+from angee.identity import public_id_of
+from angee.jsonschema import validate
+from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
+from angee.refs import record_ref_for
+from angee.serialization import canonical_json_sha256, strip_null_bytes
 
 
 class StaleExtraction(ValidationError):

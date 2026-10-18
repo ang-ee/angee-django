@@ -362,6 +362,8 @@ function ActionRelationControl({
     <RelationFieldWidget
       relation={relation}
       filters={arg.filters}
+      optionDescriptionField={arg.optionDescriptionField}
+      optionStatusField={arg.optionStatusField}
       create={arg.create ?? null}
       value={relationValueId(value)}
       readOnly={readOnly}

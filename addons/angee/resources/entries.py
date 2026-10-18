@@ -20,12 +20,12 @@ from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
 from angee.addons import addon_manifest
-from angee.base.fields import ModelLabelField
-from angee.base.impl import impl_registry, resolve_impl_class
-from angee.base.tiers import ResourceTier
+from angee.fields import ModelLabelField
+from angee.impl import impl_registry, resolve_impl_class
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceEntryKind
+from angee.tiers import ResourceTier
 
 
 class _ResourceAddon(Protocol):

@@ -8,8 +8,8 @@ from django.db import transaction
 from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
-from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRequest
+from angee.identity import public_id_of
 from angee.workflows.states import DONE_OUTCOME
 from angee.workflows.steps import Settlement, Step, StepMode
 

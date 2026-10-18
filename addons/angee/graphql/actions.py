@@ -19,10 +19,10 @@ from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
-from angee.base.errors import DomainError
-from angee.base.models import TransitionNotAllowed
+from angee.errors import DomainError
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
+from angee.models import TransitionNotAllowed
 from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)

@@ -19,11 +19,10 @@ from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
-from angee.base.identity import instances_from_public_ids, public_id_of
-from angee.base.impl import ImplDefaultsMixin
-from angee.base.models import AngeeModel, StateTransitions, update_fields_with_auto_now
-from angee.base.refs import RecordRefMixin
-from angee.base.serialization import json_safe
+from angee.identity import instances_from_public_ids, public_id_of
+from angee.impl import ImplDefaultsMixin
+from angee.models import AngeeModel, StateTransitions, update_fields_with_auto_now
+from angee.refs import RecordRefMixin
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceKindDeclarations
@@ -37,6 +36,7 @@ from angee.resources.widgets import (
     XrefWidgetMixin,
     _NativeJSONWidget,
 )
+from angee.serialization import json_safe
 
 if TYPE_CHECKING:
     from angee.resources.models import Resource

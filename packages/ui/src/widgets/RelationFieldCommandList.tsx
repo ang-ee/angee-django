@@ -4,6 +4,7 @@ import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { Command } from "../ui/command";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import type { RelationSearchState, RelationOption } from "./RelationField";
 
 export interface RelationFieldCommandListProps {
@@ -44,7 +45,7 @@ export default function RelationFieldCommandList({
   const filtered = useMemo(() => {
     if (onSearchChange || !normalized) return options;
     return options.filter((option) =>
-      `${option.label} ${option.value}`.toLowerCase().includes(normalized),
+      `${option.label} ${option.value} ${option.description ?? ""} ${option.status?.label ?? ""}`.toLowerCase().includes(normalized),
     );
   }, [options, normalized, onSearchChange]);
   const exactMatch = options.some(
@@ -97,7 +98,17 @@ export default function RelationFieldCommandList({
                 onDismiss();
               }}
             >
-              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{option.label}</span>
+                {option.description ? (
+                  <span className="block truncate text-2xs text-fg-muted">{option.description}</span>
+                ) : null}
+              </span>
+              {option.status ? (
+                <Badge className="shrink-0" density="compact" tone={option.status.tone}>
+                  {option.status.label}
+                </Badge>
+              ) : null}
               {option.value === value ? (
                 <Glyph decorative name="check" />
               ) : null}

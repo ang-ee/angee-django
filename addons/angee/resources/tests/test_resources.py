@@ -19,8 +19,7 @@ from rebac import system_context
 from rebac.errors import MissingActorError
 
 from angee.addons import addon_manifest
-from angee.base.models import AngeeModel
-from angee.base.tiers import ResourceTier
+from angee.models import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -38,6 +37,7 @@ from angee.resources.widgets import (
     resolve_xref,
 )
 from angee.testing.permissions import install_permission_schema
+from angee.tiers import ResourceTier
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 

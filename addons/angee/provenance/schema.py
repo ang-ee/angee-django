@@ -23,17 +23,25 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
-from rebac.resources import model_for_subject_type
+from rebac.resources import model_for_subject_type, model_resource_type
 from strawberry.scalars import JSON
 
-from angee.base.actors import source_kind_for
-from angee.base.autoconfig import SETTINGS
-from angee.base.identity import public_id_for, public_id_of, public_subject_ref
-from angee.base.models import HistoryMixin, SourceKind, Statement, model_history, record_history
-from angee.base.serialization import json_safe
+from angee.actors import source_kind_for
+from angee.autoconfig import SETTINGS
+from angee.evidence import FactAuthority
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.identity import public_id_for, public_id_of, public_subject_ref
+from angee.models import (
+    HistoryMixin,
+    SourceKind,
+    Statement,
+    StatementsMixin,
+    model_history,
+    record_history,
+)
 from angee.provenance.models import Changeset as ChangesetContract
+from angee.serialization import json_safe
 
 Changeset = apps.get_model(getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]))
 
@@ -48,6 +56,7 @@ strawberry.enum(cast(Any, SourceKind), name="StatementSourceKind")
 strawberry.enum(cast(Any, Statement.StatementSnak), name="StatementSnak")
 strawberry.enum(cast(Any, Statement.StatementRank), name="StatementRank")
 strawberry.enum(cast(Any, Statement.StatementStatus), name="StatementStatus")
+strawberry.enum(cast(Any, FactAuthority), name="FactAuthority")
 
 
 class HistoryType(models.TextChoices):
@@ -96,6 +105,17 @@ class HistoryStatementType:
     confidence: float
     history_type: HistoryType
     values: JSON
+
+
+@strawberry.type
+class FieldProvenanceType:
+    """The applied statement decorating one visible field on its subject form."""
+
+    field: str
+    authority: FactAuthority
+    origin: str
+    statement_model: str
+    statement_id: PublicID
 
 
 @strawberry.type
@@ -166,6 +186,55 @@ def history_model(label: str) -> type[models.Model]:
     if record_history(model) is None:
         raise ValidationError(f"{model._meta.label} keeps no history.")
     return model
+
+
+def provenance_model(label: str) -> type[models.Model]:
+    """Return the resource model ``label`` names for the global form decoration."""
+
+    try:
+        model = apps.get_model(label)
+    except (LookupError, ValueError) as error:
+        raise ValidationError(f"Unknown model {label!r}.") from error
+    if model_resource_type(model) is None:
+        raise ValidationError(f"{model._meta.label} is not a permission-governed resource.")
+    return model
+
+
+def _statement_origin(statement: Statement) -> str:
+    """Name a readable asserting principal, otherwise disclose only its kind."""
+
+    source = statement.readable_asserting_source
+    if source is not None:
+        return str(public_subject_ref(source))
+    return str(SourceKind(statement.source_kind).label)
+
+
+def field_provenance(record: StatementsMixin, actor: Any) -> list[FieldProvenanceType]:
+    """Project each visible field's applied statement in deterministic owner order."""
+
+    hidden = record.redacted_fields()
+    projected = []
+    for statement_model in type(record).statement_models():
+        rows = (
+            statement_model.objects.for_reader(actor)
+            .applied()
+            .filter(subject_id=record.pk)
+            .order_by("aspect", "pk")
+        )
+        for row in rows:
+            declaration = statement_model.statement_aspects[row.aspect]
+            projected.extend(
+                FieldProvenanceType(
+                    field=name,
+                    authority=cast(Any, row.fact_authority),
+                    origin=_statement_origin(row),
+                    statement_model=statement_model._meta.label,
+                    statement_id=PublicID(public_id_of(row)),
+                )
+                for name in declaration.fields
+                if name not in hidden
+            )
+    return projected
 
 
 _Version = tuple[type[models.Model], Any, Any, Any | None]
@@ -493,6 +562,22 @@ def _validate_page(limit: int, offset: int) -> None:
 @strawberry.type
 class HistoryQuery:
     @strawberry.field
+    def field_provenance(self, model: str, id: PublicID) -> list[FieldProvenanceType] | None:
+        """Applied field statements through their subject and source read gates."""
+
+        subject_model = provenance_model(model)
+        actor = current_actor()
+        queryset = (
+            subject_model.objects.with_actor(actor).with_action("read")
+            if actor is not None
+            else subject_model._base_manager.none()
+        )
+        record = instance_for_id(subject_model, id, queryset=queryset)
+        if record is None:
+            return None
+        return field_provenance(record, actor) if isinstance(record, StatementsMixin) else []
+
+    @strawberry.field
     def history(
         self, model: str, id: PublicID, limit: int = HISTORY_LIMIT_DEFAULT, offset: int = 0
     ) -> RecordHistoryType | None:
@@ -543,6 +628,7 @@ schemas = {
             HistoryEntryType,
             HistoryFieldChangeType,
             HistoryStatementType,
+            FieldProvenanceType,
             HistoryMergeType,
             HistoryRecordType,
         ],

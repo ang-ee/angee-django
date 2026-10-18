@@ -13,7 +13,7 @@ is unset, and the addon's system check (``apps.py``) surfaces the same at
 ``manage.py check`` time.
 
 Rounding vocabulary lives here too. :meth:`Currency.round` wraps
-:func:`angee.base.numeric.quantize` to the currency's exponent and resolves the
+:func:`angee.numeric.quantize` to the currency's exponent and resolves the
 mode from :class:`angee.money.rounding.RoundingMode`, defaulting to ``half_up``
 unless a caller explicitly overrides it. :meth:`Currency.convert` crosses through
 the reference currency and returns the amount **unrounded** — the consumer rounds
@@ -34,7 +34,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import GenericTarget, generic_target
 
-from angee.base.models import (
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -43,9 +43,9 @@ from angee.base.models import (
     HistoryMixin,
     role_anchor,
 )
-from angee.base.numeric import quantize
-from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.money.rounding import RoundingMode, rounding_constant
+from angee.numeric import quantize
+from angee.refs import MergePolicy, RecordRefMixin
 
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
@@ -488,5 +488,5 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel):
 
 MoneyRole = role_anchor("money/role")
 """The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective money manager. See :func:`angee.base.models.role_anchor`.
+an effective money manager. See :func:`angee.models.role_anchor`.
 """

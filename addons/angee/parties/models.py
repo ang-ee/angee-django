@@ -14,7 +14,7 @@ carries its legal name and domain.
 
 Parties are organised two ways, both human-owned facts: :class:`Circle` is a
 private, overlapping grouping (a party may belong to many circles; circles nest
-as a :class:`~angee.base.models.HierarchyMixin` tree), and :class:`Relationship`
+as a :class:`~angee.models.HierarchyMixin` tree), and :class:`Relationship`
 is a typed, directed party↔party edge whose vocabulary
 (:class:`RelationshipKind`) is catalogue data seeded from the XFN / vCard
 ``RELATED`` values — never a schema fact.
@@ -41,12 +41,13 @@ from phonenumbers import (
 from rebac import PermissionDenied, actor_context
 from rebac.mixins import RebacModelBase
 
-from angee.base.actors import instance_actor
-from angee.base.fields import ColorField, StateField
-from angee.base.identity import public_id_of
-from angee.base.impl import ImplClassField
-from angee.base.lineage import concrete_child, concrete_child_models
-from angee.base.models import (
+from angee.actors import instance_actor
+from angee.fields import ColorField, StateField
+from angee.identity import public_id_of
+from angee.impl import ImplClassField
+from angee.integrate.models import Bridge, IntegrationCreateMode
+from angee.lineage import concrete_child, concrete_child_models
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     Aspect,
@@ -55,6 +56,7 @@ from angee.base.models import (
     HistoryMixin,
     MergeableMixin,
     ModelHistory,
+    OwnerMixin,
     PairAspect,
     SourceKind,
     StatementRecords,
@@ -62,8 +64,6 @@ from angee.base.models import (
     StatementSubjectManager,
     TrashMixin,
 )
-from angee.base.refs import RetainedGenericRelation
-from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
@@ -73,16 +73,20 @@ from angee.parties.managers import (
     PartyStatementQuerySet,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
+from angee.refs import RetainedGenericRelation
 from angee.tags.models import TaggedModel
 
 
-class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel):
+class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
-    display name, avatar, notes and tags. RecordLink owns directory payloads. The
+    display name, avatar, notes and tags. Ownership is the transferable ``owner``
+    (:class:`~angee.models.OwnerMixin`), which an insert defaults to the creator;
+    ``created_by`` stays attribution. RecordLink owns directory payloads. The
     concrete kind (and its kind-specific fields) lives on the :class:`Person` /
-    :class:`Organization` child row; a child's tags key on its party.
+    :class:`Organization` child row, which inherits the owner; a child's tags key
+    on its party.
     """
 
     runtime = True
@@ -489,7 +493,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
-    idempotent. ``party`` is the resolved owner the Handle manager
+    idempotent. ``party`` is the resolved identity the Handle manager
     materialises; it is null until a handle is linked, so a handle synced for an
     unknown sender is still a valid row. A handle carries tags of its own, apart
     from its party's (a consumer marks a company's accounts-payable address).
@@ -532,20 +536,21 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
     display_name = models.CharField(max_length=4096, blank=True, default="")
     label = models.CharField(max_length=64, blank=True, default="")
     is_preferred = models.BooleanField(default=False)
-    owner = models.ForeignKey(
+    controller = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="own_handles",
+        related_name="controlled_handles",
         db_index=True,
     )
     """The user who controls this address — sends, posts, or syncs as it.
 
     The **control** fact, distinct from the **identity** fact (``party`` — who the
-    address reaches, resolved from member statements). A shared team inbox or a
-    service account may carry an ``owner`` without resolving to that user's party,
-    and an ex-address may reach a person's party without anyone controlling it.
+    address reaches, resolved from member statements) and from access, which
+    belongs to the handle's creator. A shared team inbox or a service account may
+    carry a ``controller`` without resolving to that user's party, and an
+    ex-address may reach a person's party without anyone controlling it.
     """
 
     is_verified = models.BooleanField(default=False)
@@ -662,7 +667,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         super().merge_fields(merged, **options)
         for row in merged:
             filled = []
-            for name in ("owner", "label", "display_name", "is_verified"):
+            for name in ("controller", "label", "display_name", "is_verified"):
                 attname = self._meta.get_field(name).attname
                 if not getattr(self, attname) and getattr(row, attname):
                     setattr(self, attname, getattr(row, attname))
@@ -678,13 +683,13 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
         owner = type(self).objects.db_manager(self._state.db)
         owner.resolve(merged)
         owner.resolve(self)
-        # Resolution wrote the owner on its own locked row; the redirect's history
-        # snapshot must carry that owner, not this instance's stale one.
+        # Resolution wrote the party on its own locked row; the redirect's history
+        # snapshot must carry that party, not this instance's stale one.
         merged.refresh_from_db(using=self._state.db, fields=("party", "party_link_confirmed"))
         super().retire_merged(merged)
 
     def _party_links_resolved(self) -> None:
-        """Run addon contributions after this handle's owner is fully resolved.
+        """Run addon contributions after this handle's party is fully resolved.
 
         The parties owner invokes this hook inside the same database transaction as
         its derived ``party`` and counter writes.  Base parties has no additional
@@ -695,7 +700,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
     @property
     def resolved_confidence(self) -> float | None:
-        """Confidence of the subject-authorized applied owner assertion."""
+        """Confidence of the subject-authorized applied party assertion."""
         if self.party_id is None:
             return None
         if "_resolved_confidence" in self.__dict__:
@@ -962,15 +967,16 @@ class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataM
         return ", ".join(part for part in (self.street, self.city, self.country) if part)
 
 
-class Folder(AuditMixin, AngeeDataModel):
+class Folder(OwnerMixin, AngeeDataModel):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's
     ``Vault`` container idea, kept to exactly what sync needs today: the directory
     it mirrors, the collection ``source_href`` (one folder per ``(directory,
     source_href)`` makes the folder upsert idempotent). Sync progress belongs to
-    ``integrate.SyncStream``. Owned via ``created_by``; deleting a folder leaves
-    its linked parties. Manual creation and a folder
+    ``integrate.SyncStream``. Owned through its transferable ``owner``, which a
+    sync's insert takes from the directory owner it stamps as ``created_by``;
+    deleting a folder leaves its linked parties. Manual creation and a folder
     tree (``parent``) are deferred until a create path lands to exercise them.
     """
 
@@ -1009,17 +1015,19 @@ class Folder(AuditMixin, AngeeDataModel):
         return self.name
 
 
-class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
+class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel):
     """A private, overlapping grouping of parties — how the owner organises people.
 
     Circles are the curated counterpart of :class:`Folder` (which mirrors a synced
     address book): "Family", "Inner Circle", a climbing crew. A party may belong to
     many circles (:class:`CircleMember`), and circles nest as a tree — overlap
     comes from multi-membership, never from multiple parents. The tree is
-    :class:`~angee.base.models.HierarchyMixin`'s materialized path, so "everyone in
+    :class:`~angee.models.HierarchyMixin`'s materialized path, so "everyone in
     this circle including sub-circles" is an indexed prefix scan
     (``Circle.objects.subtree_of(circle)``), and ``hierarchy_scope_fields`` keeps a
-    personal circle tree from straddling owners.
+    personal circle tree from straddling owners: the transferable ``owner`` scopes
+    the tree, so a transfer never leaves a circle's parent or children under
+    another owner.
 
     Circles are an organising surface only — they never gate visibility or
     sharing; REBAC stays the one authorization owner.
@@ -1027,7 +1035,7 @@ class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "cir_"
-    hierarchy_scope_fields = ("created_by",)
+    hierarchy_scope_fields = ("owner",)
 
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")

@@ -15,10 +15,10 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
-from angee.base.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
-from angee.base.models import DerivedFrom
-from angee.base.refs import RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
+from angee.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
+from angee.models import DerivedFrom
+from angee.refs import RecordRefMixin
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Settlement, Step

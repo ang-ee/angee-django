@@ -18,7 +18,7 @@ outside it fails the await step. Publishing returns the version and the readable
 published parent workflow keys that should be republished to adopt a changed child
 contract.
 Schema declaration checks, format validation and structural schema operations
-come from [`angee.base.jsonschema`](../../../angee/base/jsonschema.py).
+come from [`angee.jsonschema`](../../../angee/jsonschema.py).
 
 [`Step`](steps.py) owns `ANGEE_WORKFLOW_STEP_CLASSES` through the shared
 implementation registry and supplies its input, output and config types.

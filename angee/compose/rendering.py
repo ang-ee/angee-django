@@ -10,8 +10,8 @@ from __future__ import annotations
 from django.db import models
 from rebac.mixins import REBAC_META_OPTIONS
 
-from angee.base.tiers import ResourceTier
 from angee.compose.model_composition import ModelComposition
+from angee.tiers import ResourceTier
 
 
 def render_models(composition: ModelComposition, label: str, *, runtime_module: str = "runtime") -> str:
@@ -61,7 +61,7 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
         if parent is None and not any(
             manager.name == "_angee_base" for base in (*donors, source) for manager in base._meta.managers
         ):
-            imports.add("from angee.base.models import AngeeUnscopedManager")
+            imports.add("from angee.models import AngeeUnscopedManager")
             body_lines.extend(["    _angee_base = AngeeUnscopedManager()", ""])
             default_manager = source._meta.default_manager
             if default_manager is None:

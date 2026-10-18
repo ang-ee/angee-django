@@ -27,8 +27,8 @@ from django.db.models.functions import Lower
 from django.utils import timezone
 
 from angee.addons import addon_manifest
-from angee.base.fields import SqidField
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
+from angee.fields import SqidField
 from angee.resources.entries import resource_manifest_for, retired_models_for
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from tests.conftest import make_addon, write_addon_manifest

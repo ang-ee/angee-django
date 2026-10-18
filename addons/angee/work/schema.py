@@ -12,7 +12,6 @@ from django.db.models import F
 from rebac import system_context, to_subject_ref
 from strawberry import auto
 
-from angee.base.identity import public_subject_ref
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -30,6 +29,7 @@ from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_labels, user_label, user_public_id
 from angee.iam.permissions import request_from_info
+from angee.identity import public_subject_ref
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
 

@@ -34,8 +34,6 @@ from rebac.schema import Definition, Permission, Relation, Schema, render_allowe
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.identity import instance_from_public_id, public_subject_ref
-from angee.base.models import AngeeModel
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression
@@ -92,6 +90,8 @@ from angee.iam.roles import (
     revoke_role as _revoke_role_owner,
 )
 from angee.iam.roles import subject_permitted as _subject_permitted_owner
+from angee.identity import instance_from_public_id, public_subject_ref
+from angee.models import AngeeModel
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))

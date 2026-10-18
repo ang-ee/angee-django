@@ -9,8 +9,8 @@ import pytest
 from django.db import close_old_connections, connection, connections, transaction
 from django.test.utils import CaptureQueriesContext
 
-from angee.base.models import StaleRevisionError
 from angee.decisions.testing.models import Decision
+from angee.models import StaleRevisionError
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun

@@ -12,10 +12,10 @@ from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
 from strawberry import auto
 
-from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.models import AngeeDataModel
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables

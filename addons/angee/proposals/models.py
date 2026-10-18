@@ -42,11 +42,13 @@ from rebac.relationships import delete_relationships
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
-from angee.base.actors import actor_user_id, instance_actor, subject_reaches_user
-from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
-from angee.base.errors import DomainError, RecordAccessSubjectRefused
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.models import (
+from angee.actors import actor_user_id, instance_actor, subject_reaches_user
+from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.errors import DomainError, RecordAccessSubjectRefused
+from angee.fields import FractionalRankField, StateField
+from angee.iam.identity import user_label_expression, user_label_queryset
+from angee.messaging.models import ThreadedModelMixin
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -59,11 +61,9 @@ from angee.base.models import (
     save_state,
     transition,
 )
-from angee.base.validation import validate_value
-from angee.iam.identity import user_label_expression, user_label_queryset
-from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.inputs import RoundTemplate
+from angee.validation import validate_value
 
 _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 """Non-user attribution for Project rows created only by ``create_track``."""

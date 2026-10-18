@@ -16,8 +16,7 @@ from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.actors import source_kind_for
-from angee.base.models import SourceKind
+from angee.actors import source_kind_for
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
@@ -39,6 +38,7 @@ from angee.messaging.testing.models import (
     RelationshipKind,
     Thread,
 )
+from angee.models import SourceKind
 from angee.parties.backends import ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.tags.testing.models import Tag, TagAssignment
@@ -182,7 +182,7 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     assert not proposed.is_confirmed
     assert not proposed.is_dismissed
     assert reader_handle.label == "Shared read-only label"
-    # A manual claim awaits review, so it does not decide the shared handle's owner.
+    # A manual claim awaits review, so it does not decide the shared handle's party.
     assert reader_handle.party_id is None
     assert not reader_handle.party_link_confirmed
     assert reader_proposed.subject_id == reader_target.pk
@@ -211,14 +211,40 @@ def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
-    """hierarchy_scope_fields=("created_by",): a parent from another owner is rejected."""
+    """hierarchy_scope_fields=("owner",): a parent from another owner is rejected."""
 
     del composed_tables
     with system_context(reason="test circles"):
         mine = Circle._base_manager.create(name="Mine", created_by=_user("me"))
         theirs = Circle._base_manager.create(name="Theirs", created_by=_user("them"))
+        assert (mine.owner_id, theirs.owner_id) == (mine.created_by_id, theirs.created_by_id)
         with pytest.raises(ValidationError):
             Circle._base_manager.create(name="Nested", parent=theirs, created_by=mine.created_by)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_circle_transfer_moves_a_lone_circle_and_never_splits_a_tree(composed_tables: None) -> None:
+    """The owner scopes the tree: a transfer refuses a circle with a parent or children."""
+
+    del composed_tables
+    with system_context(reason="test circles"):
+        owner, recipient = _user("circle-owner"), _user("circle-recipient")
+    with actor_context(owner):
+        root = Circle.objects.create(name="Friends")
+        child = Circle.objects.create(name="Climbing", parent=root)
+        loose = Circle.objects.create(name="Loose")
+        for circle in (root, child):
+            with pytest.raises(ValidationError):
+                Circle.objects.get(pk=circle.pk).transfer_ownership(recipient)
+        Circle.objects.get(pk=loose.pk).transfer_ownership(recipient)
+        assert not Circle.objects.filter(pk=loose.pk).exists()
+    with actor_context(recipient):
+        nested = Circle.objects.create(name="Nested", parent=Circle.objects.get(pk=loose.pk))
+    with system_context(reason="test circles"):
+        rows = Circle._base_manager.in_bulk([root.pk, child.pk, loose.pk, nested.pk])
+    assert (rows[root.pk].owner_id, rows[child.pk].owner_id) == (owner.pk, owner.pk)
+    assert (rows[loose.pk].owner_id, rows[loose.pk].created_by_id) == (recipient.pk, owner.pk)
+    assert rows[nested.pk].owner_id == recipient.pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -517,7 +543,11 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
     with system_context(reason="test handle merge fill"):
         owner, alias, phone = _handle_merge_fixture("merge-handle-fill", "1941")
         Handle._base_manager.filter(pk=alias.pk).update(
-            owner=owner, label="work", display_name="Bob (LID)", is_verified=True, metadata={"jid": "a", "lid": "b"}
+            controller=owner,
+            label="work",
+            display_name="Bob (LID)",
+            is_verified=True,
+            metadata={"jid": "a", "lid": "b"},
         )
         Handle._base_manager.filter(pk=phone.pk).update(display_name="Bob", metadata={"jid": "p"})
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
@@ -528,7 +558,7 @@ def test_merging_a_handle_fills_only_what_the_kept_handle_lacks_and_moves_its_st
         stance.refresh_from_db()
     assert kept.pk == phone.pk
     assert Handle._base_manager.get(pk=alias.pk).merged_into_id == phone.pk
-    assert (kept.owner_id, kept.label, kept.display_name, kept.is_verified) == (owner.pk, "work", "Bob", True)
+    assert (kept.controller_id, kept.label, kept.display_name, kept.is_verified) == (owner.pk, "work", "Bob", True)
     assert kept.metadata == {"jid": "p"}
     assert (stance.handle_id, stance.is_confirmed, kept.party_id, kept.party_link_confirmed) == (
         phone.pk,
@@ -735,19 +765,19 @@ def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None,
 
 
 @pytest.mark.django_db(transaction=True)
-def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> None:
-    """Handle.claim_own sets the owner (control) and a normal person statement (identity)."""
+def test_claim_control_writes_control_and_identity_facts(composed_tables: None) -> None:
+    """Handle.claim_control sets the controller (control) and a normal person statement (identity)."""
 
     del composed_tables
-    with system_context(reason="test claim_own"):
+    with system_context(reason="test claim_control"):
         user = User.objects.create_user(username="nils", email="nils@example.com", password="x")
-        handle = Handle.objects.claim_own(
+        handle = Handle.objects.claim_control(
             user,
             platform=Handle.Platform.EMAIL,
             value="nils@work.example",
             asserted_by=user,
         )
-        again = Handle.objects.claim_own(
+        again = Handle.objects.claim_control(
             user,
             platform=Handle.Platform.EMAIL,
             value="nils@work.example",
@@ -756,7 +786,7 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
 
         handle.refresh_from_db()
         assert again.pk == handle.pk
-        assert handle.owner_id == user.pk
+        assert handle.controller_id == user.pk
         person = Person.objects.for_user(user)
         assert handle.party_id == person.pk
         assert handle.party_link_confirmed is False
@@ -766,20 +796,20 @@ def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_claim_own_records_a_contested_identity_without_reassigning_control(composed_tables: None) -> None:
-    """A second user's claim stays weak and unconfirmed; the first owner remains in control."""
+def test_claim_control_records_a_contested_identity_without_reassigning_control(composed_tables: None) -> None:
+    """A second user's claim stays weak and unconfirmed; the first controller remains in control."""
 
     del composed_tables
-    with system_context(reason="test contested claim_own"):
+    with system_context(reason="test contested claim_control"):
         first_user = User.objects.create_user(username="first", email="shared@example.com", password="x")
         competing_user = User.objects.create_user(username="competing", email="competing@example.com", password="x")
-        handle = Handle.objects.claim_own(
+        handle = Handle.objects.claim_control(
             first_user,
             platform=Handle.Platform.EMAIL,
             value="shared@example.com",
             asserted_by=first_user,
         )
-        contested = Handle.objects.claim_own(
+        contested = Handle.objects.claim_control(
             competing_user,
             platform=Handle.Platform.EMAIL,
             value="shared@example.com",
@@ -793,7 +823,7 @@ def test_claim_own_records_a_contested_identity_without_reassigning_control(comp
 
     contested.refresh_from_db()
     assert contested.pk == handle.pk
-    assert contested.owner_id == first_user.pk
+    assert contested.controller_id == first_user.pk
     assert contested.party_id == first_person.pk
     assert not first_link.is_confirmed and first_link.confidence == 1.0
     assert not competing_link.is_confirmed
@@ -964,6 +994,28 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None
     assert link.confidence == 0.4
     assert not link.is_confirmed
     assert link.source_kind == "rule"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(composed_tables: None) -> None:
+    """The partition follows party ownership, not who first recorded the party."""
+
+    del composed_tables
+    with system_context(reason="test suggest owner partition"):
+        recorder, owner = _user("rhea"), _user("otto")
+        acme = Organization._base_manager.create(
+            display_name="Acme",
+            domain="acme.com",
+            created_by=recorder,
+            owner=owner,
+        )
+        recorded = Handle._base_manager.create(platform="email", value="ann@acme.com", created_by=recorder)
+        owned = Handle._base_manager.create(platform="email", value="ben@acme.com", created_by=owner)
+
+        assert Party.objects.suggest_for(recorded) is None
+        link = Party.objects.suggest_for(owned)
+
+    assert link is not None and link.subject_id == acme.pk
 
 
 @pytest.mark.django_db(transaction=True)

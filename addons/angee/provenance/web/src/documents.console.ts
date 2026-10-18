@@ -41,9 +41,23 @@ export const RecordHistoryDocument = graphql(`
   }
 `);
 
+/** Applied statements projected onto the fields of one readable record. */
+export const FieldProvenanceDocument = graphql(`
+  query FieldProvenance($model: String!, $id: ID!) {
+    field_provenance(model: $model, id: $id) {
+      field
+      authority
+      origin
+      statement_model
+      statement_id
+    }
+  }
+`);
+
 export type RecordHistory = NonNullable<DocumentType<typeof RecordHistoryDocument>["history"]>;
 export type HistoryEntry = RecordHistory["entries"][number];
 export type HistoryStatement = HistoryEntry["statements"][number];
 export type HistoryFieldChange = HistoryEntry["changes"][number];
+export type FieldProvenance = NonNullable<DocumentType<typeof FieldProvenanceDocument>["field_provenance"]>[number];
 
 export type HistorySummaryEntry = DocumentType<typeof HistoryEntrySummaryFields>;

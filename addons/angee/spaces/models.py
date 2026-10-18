@@ -19,9 +19,9 @@ from django.db import models, transaction
 from django.utils.text import slugify
 from rebac import PermissionDenied, current_actor
 
-from angee.base.fields import StateField
-from angee.base.models import AngeeDataModel, AuditMixin, HierarchyMixin, OwnerMixin
+from angee.fields import StateField
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
+from angee.models import AngeeDataModel, AuditMixin, HierarchyMixin, OwnerMixin
 from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 

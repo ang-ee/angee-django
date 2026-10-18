@@ -11,7 +11,7 @@ from django.db import models
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
-from angee.base.models import (
+from angee.models import (
     AngeeModel,
     AngeeQuerySet,
     HistoryMixin,

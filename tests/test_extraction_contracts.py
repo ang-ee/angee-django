@@ -7,7 +7,6 @@ import pytest
 from django.core.exceptions import ValidationError
 from pydantic import ValidationError as PydanticValidationError
 
-from angee.base.impl import resolve_impl_class
 from angee.extraction.acquisition import ExtractionConfig, ExtractionRequestConfig
 from angee.extraction.contracts import DocumentPart, ExtractionPartKind, PipelineError
 from angee.extraction.inference import TransientInferenceError, derive_text_claims, map_parts
@@ -25,6 +24,7 @@ from angee.extraction.profiles import (
     PlainTextExtractionProfile,
     UnconfiguredExtractionProfile,
 )
+from angee.impl import resolve_impl_class
 from angee.workflows_extraction.steps import PreparePagesStep, RecognizePageStep
 from tests.extraction_models import Extraction
 

@@ -31,14 +31,14 @@ from rebac.backends import backend
 from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
 
-from angee.base.errors import exception_text
-from angee.base.fields import ModelLabelField
-from angee.base.identity import public_id_of
-from angee.base.impl import ImplBase, ImplClassField, resolve_all_impl_classes
-from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label
-from angee.base.permissions import rebac_relation_label
+from angee.errors import exception_text
+from angee.fields import ModelLabelField
 from angee.iam.identity import user_label
 from angee.iam.service_users import sync_service_user
+from angee.identity import public_id_of
+from angee.impl import ImplBase, ImplClassField, resolve_all_impl_classes
+from angee.models import AngeeManager, AngeeQuerySet, record_display_label
+from angee.permissions import rebac_relation_label
 
 logger = logging.getLogger(__name__)
 TRIGGER_DRAIN_LIMIT = 100

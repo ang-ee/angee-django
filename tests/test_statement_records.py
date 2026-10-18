@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.evidence import FactAuthority
+from angee.models import SourceKind
 from tests.conftest import create_platform_admin, create_user
 from tests.extcontrib.models import Claimed, ClaimedBilling, ClaimedSource, ClaimedStatementQuerySet
 
@@ -20,6 +22,21 @@ def test_the_source_declaration_finalizes_one_table_carrying_every_donor_aspect(
     declaration = ClaimedBilling.__dict__["statements"].declaration_for(Claimed)
     assert declaration is ClaimedSource.__dict__["statements"]
     assert not Claimed.check()
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "authority"),
+    [
+        (SourceKind.DIRECTORY, FactAuthority.SOURCE),
+        (SourceKind.PERSON, FactAuthority.CORRECTION),
+        (SourceKind.RULE, FactAuthority.UNVERIFIED),
+        (SourceKind.EXTRACTION, FactAuthority.UNVERIFIED),
+    ],
+)
+def test_a_statement_owns_its_shared_fact_authority(source_kind: SourceKind, authority: FactAuthority) -> None:
+    statement = Claimed.statements.model(source_kind=source_kind)
+
+    assert statement.fact_authority is authority
 
 
 @pytest.mark.django_db(transaction=True)
@@ -94,7 +111,7 @@ def test_a_declaration_names_its_model_and_copies_money_without_its_currency() -
 
     generated = Ledger.statements.model
     assert generated.__name__ == "LedgerStance"
-    assert generated._meta.db_table == "base_ledgerstance"
+    assert generated._meta.db_table == "angee_ledgerstance"
     amount = generated._meta.get_field("amount")
     assert type(amount) is models.DecimalField
     assert (amount.max_digits, amount.decimal_places, amount.null) == (12, 2, True)

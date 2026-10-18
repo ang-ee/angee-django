@@ -10,12 +10,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.evidence import FactAuthority
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
-from angee.base.refs import record_ref_for
-from angee.base.serialization import canonical_json
+from angee.evidence import FactAuthority
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -41,6 +36,11 @@ from angee.extraction.pointers import (
     set_json_pointer,
 )
 from angee.extraction.profiles import ExtractionProfile
+from angee.fields import StateField
+from angee.impl import ImplClassField
+from angee.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
+from angee.refs import record_ref_for
+from angee.serialization import canonical_json
 
 
 class RetainedEvidence(AppendOnlyModel):

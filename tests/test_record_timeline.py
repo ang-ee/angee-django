@@ -2,7 +2,7 @@
 
 from rebac import actor_context
 
-from angee.base.changesets import changeset
+from angee.changesets import changeset
 from tests.conftest import execute_schema, result_data
 from tests.messaging_campaign import comment_record as comment_record
 from tests.test_messaging_graphql import _schema

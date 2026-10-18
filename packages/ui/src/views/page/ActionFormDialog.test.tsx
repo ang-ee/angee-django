@@ -43,7 +43,7 @@ Element.prototype.scrollIntoView = vi.fn();
 
 const listRows = vi.hoisted(() => ({
   collections: [
-    { id: "col-primary", name: "Primary Collection" },
+    { id: "col-primary", name: "Primary Collection", description: "Operating account •••• 4242", verification_state: "VERIFIED" },
     { id: "col-secondary", name: "Secondary Collection" },
   ] as Row[],
   documents: [
@@ -83,6 +83,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     useList: (options?: {
       resource?: string;
       filters?: readonly unknown[];
+      meta?: { fields?: readonly string[] };
       queryOptions?: { enabled?: boolean };
     }) => {
       listOptions.push(options);
@@ -117,6 +118,8 @@ function resourceMetadata(
     fields: [
       scalarField("id", "ID"),
       { ...scalarField(representation, "String"), creatable: true },
+      scalarField("description", "String"),
+      { ...scalarField("verification_state", "String"), kind: "enum", values: [{ value: "VERIFIED", description: "Verified" }] },
     ],
     capabilities: ["list", "create"],
   });
@@ -217,7 +220,7 @@ function renderDialog(
       <ModalsHost>
         <ToastProvider>
           <ModelMetadataProvider metadata={metadata}>
-            <AppRuntimeProvider runtime={{ widgets: defaultWidgets, forms: options?.forms }}>
+            <AppRuntimeProvider runtime={{ widgets: defaultWidgets, forms: options?.forms, statusTones: { verified: "success" } }}>
               {onParentSubmit ? <form onSubmit={(event) => {
                 event.preventDefault();
                 onParentSubmit();
@@ -566,6 +569,24 @@ describe("ActionFormDialog", () => {
         filters: [{ field: "kind", operator: "eq", value: "primary" }],
       }),
     );
+  });
+
+  test("renders a relation argument's declared option description and status", async () => {
+    renderDialog({
+      id: "collect", label: "Collect", submit: vi.fn(),
+      args: [{
+        name: "collection", argKind: "relation", resource: "Collection", label: "Collection",
+        optionDescriptionField: "description", optionStatusField: "verification_state",
+      }],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    expect(await screen.findByText("Operating account •••• 4242")).toBeTruthy();
+    expect(screen.getByText("Verified").className).toContain("text-success-text");
+    expect(listOptions).toContainEqual(expect.objectContaining({
+      resource: "collections",
+      meta: expect.objectContaining({ fields: ["id", "name", "description", "verification_state"] }),
+    }));
   });
 
   test("offers the picker's inline create only for relation args that declare it", async () => {

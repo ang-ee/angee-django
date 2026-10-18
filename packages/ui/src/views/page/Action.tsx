@@ -108,6 +108,10 @@ export interface ActionRelationArg extends ActionArgBase {
   resource: string;
   /** Server-side filters narrowing the relation rows offered by the picker. */
   filters?: readonly CrudFilter[];
+  /** Related-row field rendered as secondary picker-option text. */
+  optionDescriptionField?: string;
+  /** Related-row enum/status field rendered as a shared-tone picker badge. */
+  optionStatusField?: string;
   /**
    * Inline create forwarded to the picker (`RelationPicker.create`): a no-match
    * typed query offers "Create …", `actionLabel` also exposes the form as a

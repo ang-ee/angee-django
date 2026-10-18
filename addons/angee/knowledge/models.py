@@ -39,12 +39,14 @@ from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
 
-from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset, write_group
-from angee.base.fields import StateField
-from angee.base.impl import ImplClassField
-from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.models import (
+from angee.actors import actor_user_id
+from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset, write_group
+from angee.fields import StateField
+from angee.impl import ImplClassField
+from angee.knowledge.retrieval import RetrievalBackend
+from angee.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.messaging.models import ThreadedModelMixin
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -56,13 +58,11 @@ from angee.base.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.refs import (
+from angee.refs import (
     MergePolicy,
     RecordRef,
     RecordRefMixin,
 )
-from angee.knowledge.retrieval import RetrievalBackend
-from angee.messaging.models import ThreadedModelMixin
 from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")

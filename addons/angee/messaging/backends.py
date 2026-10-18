@@ -25,12 +25,12 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 
-from angee.base.models import SourceKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import ApplyResult, SemanticError, StreamPage
+from angee.models import SourceKind
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 

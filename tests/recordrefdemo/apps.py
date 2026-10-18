@@ -1,7 +1,7 @@
 """AppConfig for the record-reference probes (test-only installed app).
 
 Registered in ``tests.settings`` so pytest-django creates the probe tables that
-exercise :class:`~angee.base.refs.RecordRefMixin`: typed and untyped targets,
+exercise :class:`~angee.refs.RecordRefMixin`: typed and untyped targets,
 edges with default, subject and custom column names, and nullable pointers. It
 also hosts the rows a merge moves that no addon model has: many-to-many links
 to a record's own model, and a key under an expression constraint.

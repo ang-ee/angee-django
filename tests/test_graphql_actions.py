@@ -23,8 +23,7 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.models import CreationKeyConflict, StaleRevisionError, TransitionNotAllowed
+from angee.errors import RecordAccessSubjectRefused
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -35,6 +34,7 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from angee.graphql.schema import AngeeSchema
+from angee.models import CreationKeyConflict, StaleRevisionError, TransitionNotAllowed
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 
@@ -435,7 +435,7 @@ def _owned_document(owner: Any, *, title: str = "Document") -> Document:
 
     with system_context(reason="tests.action.seed"):
         document = Document.objects.create(title=title)
-    _grant(document, "owner", owner)
+    _grant(document, "manager", owner)
     return document
 
 

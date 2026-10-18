@@ -27,11 +27,11 @@ from django.db import IntegrityError, transaction
 from rebac import system_context
 
 from angee.agents.grants import sync_builtin_tool_catalogue
-from angee.base.models import TransitionNotAllowed
 from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.ids import PublicID
 from angee.iam.service_users import sync_service_user
 from angee.jobs.locks import task_lock
+from angee.models import TransitionNotAllowed
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonConflict, OperatorInstanceKind, WorkspaceStatus
 from angee.resources.exceptions import ResourceLoadError
 

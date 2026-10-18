@@ -28,6 +28,12 @@ class Composer:
         installed_apps = self.namespace.get("INSTALLED_APPS")
         if installed_apps is None:
             raise ImproperlyConfigured("settings must define INSTALLED_APPS")
+        # Direct Composer consumers (notably disposable composed hosts) add
+        # addon roots after the foundation package has already been imported.
+        # Refresh the shared ``angee`` package portions before resolving apps.
+        from angee.compose.project import prepend_import_paths
+
+        prepend_import_paths(self.namespace.get("ANGEE_ADDON_DIRS", ()))
         root_apps = self._app_entries(installed_apps)
         declared_apps = None if project_apps is None else self._app_entries(project_apps)
 

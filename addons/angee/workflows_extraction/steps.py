@@ -10,7 +10,6 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from angee.agents.models import InferenceModelUnavailable
-from angee.base.impl import resolve_impl_class
 from angee.extraction.acquisition import (
     ExtractionConfig,
     ExtractionRequestConfig,
@@ -29,6 +28,7 @@ from angee.extraction.enums import ExtractionRole, ExtractionStatus
 from angee.extraction.inference import RETAINED_CARRIER_UNAVAILABLE, TransientInferenceError, map_parts, recognize_page
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import ExtractionProfile, UnconfiguredExtractionProfile
+from angee.impl import resolve_impl_class
 from angee.workflows.maps import MapItem
 from angee.workflows.steps import Done, Retryable, RetryPolicy, Step, StepMode
 

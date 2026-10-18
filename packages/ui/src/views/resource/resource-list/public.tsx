@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useModelMetadata, type Row } from "@angee/metadata";
+import { Filter, useModelMetadata, type Row } from "@angee/metadata";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { type ListColumn, type ListViewProps } from "../ListView";
 import { FormView, type FormField, type FormViewProps } from "../../form/FormView";
@@ -20,6 +20,7 @@ import { type ActionDescriptor, type FacetDescriptor, type GroupDescriptor } fro
 import { ResourceListBody } from "./body";
 import { parseResourceListDeclarations, validateResourceListDeclarations } from "./declarations";
 import { declaredGroupDefaults } from "../search/group-defaults";
+import { useAppRuntime } from "../../../runtime";
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer" | "split";
 
@@ -257,6 +258,15 @@ export function ResourceList<TRow extends Row = Row>({
   const initialDefaultView = declarations.list?.props.defaultView ?? defaultView;
   const resourceView = useResourceViewMaybe();
   const modelMetadata = useModelMetadata(props.resource);
+  const { defaultResourceFilter } = useAppRuntime();
+  const routeDefaultFilter = defaultResourceFilter
+    && defaultResourceFilter.resource === (modelMetadata?.resource.modelLabel ?? props.resource)
+    ? defaultResourceFilter.filter
+    : undefined;
+  const initialDefaultFilter = React.useMemo(
+    () => Filter.combineOptional(defaultFilter, routeDefaultFilter),
+    [defaultFilter, routeDefaultFilter],
+  );
   const initialOrder = declarations.list?.props.order ?? props.order;
   const initialDefaultGroup = declarations.list?.props.defaultGroup === undefined ? defaultGroup : declarations.list.props.defaultGroup;
   const initialDefaultGroups = declarations.list?.props.defaultGroups ?? defaultGroups;
@@ -265,10 +275,10 @@ export function ResourceList<TRow extends Row = Row>({
       pageSize: initialPageSize,
       view: initialDefaultView,
       sorting: initialResourceSorting(modelMetadata, initialOrder),
-      filter: defaultFilter,
+      filter: initialDefaultFilter,
       ...declaredGroupDefaults(initialDefaultGroup, initialDefaultGroups),
     }),
-    [defaultFilter, initialDefaultView, initialPageSize, initialOrder, initialDefaultGroup, initialDefaultGroups, modelMetadata],
+    [initialDefaultFilter, initialDefaultView, initialPageSize, initialOrder, initialDefaultGroup, initialDefaultGroups, modelMetadata],
   );
   return withResourceViewScope({
     ambient: resourceView,

@@ -13,14 +13,14 @@ from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.base.actors import actor_user_id
-from angee.base.evidence import readable_records
-from angee.base.identity import public_id_of
-from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
-from angee.base.refs import generic_pointer_model
+from angee.actors import actor_user_id
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_answered
+from angee.evidence import readable_records
 from angee.graphql.publishing import mute_changes, publish_change
+from angee.identity import public_id_of
+from angee.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
+from angee.refs import generic_pointer_model
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:

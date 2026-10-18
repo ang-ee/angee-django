@@ -228,8 +228,8 @@ def test_empty_concerns_are_rejected(records):
 
 
 def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
-    from angee.base.refs import record_ref_for
     from angee.graphql.events import ChangeRelatedRecord
+    from angee.refs import record_ref_for
     from tests.mtidemo.models import MtiChild, MtiParent
 
     with system_context(reason="test.batch_concerns"):

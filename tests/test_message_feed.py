@@ -429,12 +429,8 @@ def test_revalidation_partitions_current_scope_search_and_moved_rows(kind: str) 
     assert [row["feed_order_key"] for row in result["messages"]] == sorted(
         [row["feed_order_key"] for row in result["messages"]], reverse=True
     )
-    if kind == "thread":
-        root.with_actor(owner).transfer_ownership(other)
-        assert root.created_by_id == owner.pk
-    else:
-        with system_context(reason="test revalidation root denial"):
-            type(root)._base_manager.filter(pk=root.pk).update(created_by=other)
+    root.with_actor(owner).transfer_ownership(other)
+    assert root.created_by_id == owner.pk
     assert _revalidate(kind, owner, root, ids).errors
 
 

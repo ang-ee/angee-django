@@ -34,12 +34,6 @@ from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
-from angee.base.identity import (
-    instance_from_public_id,
-    public_data_id_field,
-    public_id_for,
-    public_id_of,
-)
 from angee.data.field_classification import resource_field_kind, resource_field_widget
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
@@ -47,6 +41,12 @@ from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
+from angee.identity import (
+    instance_from_public_id,
+    public_data_id_field,
+    public_id_for,
+    public_id_of,
+)
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -754,7 +754,7 @@ def test_oauth_client_crud_are_admin_only(
     assert linked["provider_slug"] == "console"
     with system_context(reason="test.iam.external_account"):
         account = ExternalAccount.objects.get(external_id="admin-sub")
-    assert ExternalAccount.objects.owner_for(account) == admin
+    assert account.owner_id == admin.pk
     assert (
         _execute(
             console_schema,
@@ -1104,7 +1104,7 @@ def test_external_account_update_delete_are_admin_only(
         "status": "REVOKED",
     }
     with system_context(reason="test.iam.external_account.owner_before_delete"):
-        assert ExternalAccount.objects.owner_for(account) == admin
+        assert ExternalAccount.objects.get(pk=account.pk).owner_id == admin.pk
 
     delete_account = """
         mutation DeleteExternalAccount($id: ID!) {
@@ -1122,7 +1122,6 @@ def test_external_account_update_delete_are_admin_only(
     assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.external_account.after_delete"):
         assert not ExternalAccount.objects.filter(pk=account.pk).exists()
-        assert ExternalAccount.objects.owner_for(account) is None
 
 
 def test_credential_crud_create_delete_are_admin_only(
@@ -1780,7 +1779,7 @@ def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
     assert data["disconnect_account"] == {"ok": True, "error": None, "error_code": None}
     assert revoked_tokens == ["unlink-access"]
     with system_context(reason="test assertions"):
-        assert ExternalAccount.objects.owner_for(account) is None
+        assert ExternalAccount.objects.get(pk=account.pk).owner_id is None
         assert not Credential.objects.filter(user=user, external_account=account).exists()
     with pytest.raises(OAuthFlowError):
         oidc_identity.OidcIdentityResolver(oauth_client).resolve(
@@ -1834,9 +1833,7 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
         "error_code": "only_sign_in_method",
     }
     with system_context(reason="test assertions"):
-        owner = ExternalAccount.objects.owner_for(account)
-        assert owner is not None
-        assert owner.pk == user.pk
+        assert ExternalAccount.objects.get(pk=account.pk).owner_id == user.pk
         assert Credential.objects.filter(user=user, external_account=account).exists()
 
 

@@ -7,6 +7,7 @@ import type {
 import {
   canonicalModelLabelOrNull,
   useSchemaFieldMetadata,
+  type QueryFilter,
 } from "@angee/metadata";
 
 import type {
@@ -97,6 +98,8 @@ export interface AppRuntime {
   vocabulary: RuntimeVocabulary;
   resourceViews: Readonly<Record<string, ResourceViewPreset>>;
   defaultResourceView?: string;
+  /** Active routed collection's initial editable filter, scoped to its model. */
+  defaultResourceFilter?: { resource: string; filter: QueryFilter };
   /** Presets targeted by menu entries for the active collection route. */
   menuResourceViewIds?: readonly string[];
   auth: RuntimeAuthState;

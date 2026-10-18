@@ -46,9 +46,8 @@ from angee.agents.sessions import run_next_turn
 from angee.agents.testing.drivers import FakeRunner, update_chunk
 from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.agents_runtime_pydantic.toolsets import AngeeToolset, ToolGrantAccess
-from angee.base.changesets import changeset_model
-from angee.base.identity import instance_from_public_id
-from angee.base.tiers import ResourceTier
+from angee.changesets import changeset_model
+from angee.identity import instance_from_public_id
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedPost
@@ -56,6 +55,7 @@ from angee.posts.ingest import land_posts
 from angee.resources.entries import ResourceEntry
 from angee.resources.loader import build_resource
 from angee.resources.widgets import resolve_ledger_xref
+from angee.tiers import ResourceTier
 from angee.workflows.runner import runner
 from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
@@ -412,7 +412,7 @@ class CommentReplyTests(TransactionTestCase):
     def test_cancellation_of_a_continued_session_stops_only_the_runs_turn(self):
         session = AgentSession.objects.start(
             self.agent,
-            owner=self.workflow.user,
+            user=self.workflow.user,
             context=record_view_context(self.comment),
             actor=self.workflow.user,
         )
@@ -875,14 +875,14 @@ class CommentReplyTests(TransactionTestCase):
                 with transaction.atomic():
                     AgentSession.objects.start(
                         self.agent,
-                        owner=self.workflow.user,
+                        user=self.workflow.user,
                         context={},
                         actor=self.workflow.user,
                     )
                     worker.submit(copy_context().run, select_server).result(timeout=10)
         else:
             with transaction.atomic(), actor_context(self.admin):
-                AgentSession.objects.start(self.agent, owner=self.workflow.user, context={}, actor=self.workflow.user)
+                AgentSession.objects.start(self.agent, user=self.workflow.user, context={}, actor=self.workflow.user)
                 self.agent.with_actor(self.admin).mcp_servers.add(server)
         with system_context(reason="agent server selection assertion"):
             self.assertTrue(self.agent.mcp_servers.filter(pk=server.pk).exists())

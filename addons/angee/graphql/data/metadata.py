@@ -13,11 +13,6 @@ from django.db import models
 from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
-from angee.base.impl import ImplClassField
-from angee.base.lineage import concrete_child_models
-from angee.base.models import AngeeModel, MergeableMixin, record_history
-from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import generic_pointer_model, record_edges_by_target
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis
@@ -46,6 +41,11 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
+from angee.impl import ImplClassField
+from angee.lineage import concrete_child_models
+from angee.models import AngeeModel, MergeableMixin, record_history
+from angee.permissions import effective_rebac_definition
+from angee.refs import generic_pointer_model, record_edges_by_target
 from graphql import GraphQLSchema, get_named_type
 
 __all__ = [
@@ -686,7 +686,7 @@ def _record_edges(
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An
     edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.base.refs.RecordRefMixin.record_edge_roles`), so a surface
+    (:meth:`~angee.refs.RecordRefMixin.record_edge_roles`), so a surface
     serving one role (Comments on the chatter role) gates on that entry.
     """
 

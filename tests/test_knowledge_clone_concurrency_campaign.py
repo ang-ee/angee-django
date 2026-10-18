@@ -7,7 +7,7 @@ import pytest
 from django.db import close_old_connections, connection, connections
 from rebac import actor_context, system_context
 
-from angee.base.changesets import changeset_model
+from angee.changesets import changeset_model
 from tests.conftest import MarkdownPage, Page, Vault
 from tests.knowledge_campaign import clone_template as clone_template
 

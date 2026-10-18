@@ -2,7 +2,7 @@
 
 The addon stores attribution for logical writes. Addons composing history declare
 provenance as a dependency; the composer emits its concrete
-[`Changeset`](models.py). The [core boundary](../../../angee/base/changesets.py)
+[`Changeset`](models.py). The [core boundary](../../../angee/changesets.py)
 owns context and commit-aware persistence, without granting an authorization bypass.
 
 The [permission schema](permissions.zed) owns direct access. Other actor types
@@ -10,7 +10,7 @@ contribute additive permission fragments from their own addons. Attribution neve
 grants access to touched records; history reads follow those records' permissions.
 
 Storage follows Django's swappable-model convention, with the default owned by
-[base autoconfig](../../../angee/base/autoconfig.py). Consumer history-FK migrations
+[base autoconfig](../../../angee/autoconfig.py). Consumer history-FK migrations
 must depend on `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)`.
 Django's `makemigrations` owns the initial schema; see the
 [runtime migration policy](../../../docs/composer.md#addon-owned-runtime-migrations).
@@ -22,8 +22,8 @@ Strict mode refuses a captured write without an open boundary
 
 | Entrypoint | Boundary | Owner |
 |---|---|---|
-| HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](../../../angee/base/middleware.py), [`AngeeGraphQLView`](../graphql/views.py) |
-| WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](../../../angee/base/middleware.py) via [`angee.asgi`](../../../angee/asgi.py) |
+| HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](../../../angee/middleware.py), [`AngeeGraphQLView`](../graphql/views.py) |
+| WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](../../../angee/middleware.py) via [`angee.asgi`](../../../angee/asgi.py) |
 | Celery task | one per task run, `task.<name>` | [`angee.jobs.celery.Task`](../../../angee/jobs/celery.py) |
 | Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | [`angee.compose.manage.main()`](../../../angee/compose/manage.py), called by every rendered `manage.py` |
 | Bridge live session | one per session run, in the task or the spawned child | [`run_bridge_session_job`](../integrate/session_runner.py) |

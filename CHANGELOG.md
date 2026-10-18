@@ -16,7 +16,7 @@ Upgrade steps and the retired names with their owners now:
 native history".
 
 - A record's facts are statements: who asserted a value, from what evidence,
-  through which link. `StatementsMixin` and `Aspect` (`angee.base.mixins`)
+  through which link. `StatementsMixin` and `Aspect` (`angee.mixins`)
   declare them, `StatementManager` resolves the winner, and every write runs
   under a provenance changeset. Parties, circles and spaces memberships,
   addresses and relationships carry statements instead of `source` columns.
@@ -29,13 +29,13 @@ native history".
   CardDAV columns on `Party` are folded into statements and record links, then
   retired by a declared chain that preflights every refusal before it drops.
   `Party.merge_into` and `PartyManager.merge` give way to the shared record
-  merge (`angee.base.merge`).
+  merge (`angee.merge`).
 - Integrate: `RecordRevision` and `SyncDiscrepancy` are retired. A link's
   observations are its native history and a sync failure is a state of its link
   (`SyncFailure`, `LinkStatus.FAILED`); `SyncStream.authoritative` marks a
   system of record.
-- Kept as imports until 0.4.0: `angee.base.evidence.DerivedFromRelation` (now
-  `angee.base.refs.RetainedGenericRelation`) and `@angee/ui`'s `RevisionsTab`,
+- Kept as imports until 0.4.0: `angee.evidence.DerivedFromRelation` (now
+  `angee.refs.RetainedGenericRelation`) and `@angee/ui`'s `RevisionsTab`,
   which renders a retired notice.
 - GraphQL removals: `confirm_party_handle`, `dismiss_party_handle`, `veto_merge`,
   `duplicate_party_candidates`, `Party.party_handles`, `Person.folder`, the
@@ -155,7 +155,7 @@ Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tas
 
 ## Unreleased — workflow and integration upgrades
 
-- `angee.base.refs.canonical_record_target`, `canonical_record_model` and
+- `angee.refs.canonical_record_target`, `canonical_record_model` and
   `CanonicalRecordTarget` are removed: a polymorphic edge stores
   `rebac.generic_target`, and model-level canonical projections read
   `rebac.field_backing.canonical_model`. Currency-rate contexts, resource
@@ -163,7 +163,7 @@ Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tas
   refuse an untyped row with `ValueError` (a currency-rate context reports it as
   a `ValidationError`). The two edges that name rows outside REBAC — a chatter
   thread on an ungated host and an import record link to a plain domain sink —
-  store `angee.base.refs.generic_pointer_target`, the library's identity for a
+  store `angee.refs.generic_pointer_target`, the library's identity for a
   gated row and Django's own for an ungated one. Consumers that imported the removed
   helpers move to `rebac.generic_target` (an instance's stored content type and
   id) or `rebac.field_backing.canonical_model` (a model's canonical class,
@@ -186,7 +186,7 @@ Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tas
   on the row's role): the chatter edge remains the record's own thread,
   materialized by its verbs under system context, with access riding on the
   thread as before, and an ungated host keeps its own concrete content type
-  (`angee.base.refs.generic_pointer_target`). The edge's `create` no longer
+  (`angee.refs.generic_pointer_target`). The edge's `create` no longer
   admits every authenticated actor.
 - Project links, project resource bindings and portfolio health reports
   authorize their target in the REBAC schema: each edge's per-type relations are
@@ -350,7 +350,7 @@ Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tas
 - Workflow definition validation asserts JSON Schema formats for inputs and
   binding literals.
 - Declare core `jsonschema[format-nongpl]` and `referencing` dependencies.
-  `angee.base.jsonschema` owns declaration checks, local-reference proof,
+  `angee.jsonschema` owns declaration checks, local-reference proof,
   format validation and bounded schema algebra for core and addon callers.
 - Row-lock callers consistently use `lock_if_supported`, which delegates write
   routing and backend support to Django.
@@ -361,10 +361,10 @@ Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tas
   locale-specific zero-count selection unless the fallback declares a zero form.
   Test fixtures use the shared initializer, and runtime translation types match
   i18next's language contract without instance casts.
-- Row and batch resource target resolution share `angee.base.identity` and its
+- Row and batch resource target resolution share `angee.identity` and its
   field-owned public-ID decoding with Django's `in_bulk`; row adoption and hash-skip state
   stay on the resource and are reset before import.
-- `angee.base.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
+- `angee.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
   pointers and anchors through `referencing` for workflow structural proofs and
   implementation forms; remote references and nested resource scopes remain
   unsupported.
@@ -386,7 +386,7 @@ Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tas
 - Existing stacks must build and migrate on the previous release line first,
   at least through source revision `0a55a6fb`. Framework runtime history is
   carried forward, including materialized bodies from retired declarations and
-  the frozen `angee.base.historical_relationships` import module. Never empty
+  the frozen `angee.historical_relationships` import module. Never empty
   `runtime/*/migrations` on a stack whose database is carried forward. Stacks
   depending on the retired `workflows_ocr` label must remain at that upgrade floor
   until their migration graph has a supported transition.
@@ -540,7 +540,7 @@ HTTP stack. Durable decisions:
   while the ambient actor stamps `created_by`; the GraphQL mutations are thin
   dispatchers. Console backend/drive CRUD uses `crud(...,
   permission_classes=[StorageAdminPermission], write_context=…)`.
-- **`SqidField` (None-safe `SqidsField`) in `angee.base.fields`:**
+- **`SqidField` (None-safe `SqidsField`) in `angee.fields`:**
   `from_db_value` passes the `NULL` of nullable-FK joins through — the exact
   query REBAC field-backed arrows run (`parent->read`). `SqidMixin` and every
   model across iam/integrate/storage/notes now declare it; raw `SqidsField`
@@ -560,7 +560,7 @@ HTTP stack. Durable decisions:
   handing out a purge-doomed row or blocking the re-upload.
 - **Audit-reference projections are shared, not copied.** Storage reuses
   `angee.iam.identity.user_public_id` / `user_display_label` (the home the
-  knowledge work established) instead of carrying its own. `angee.base.mixins.actor_user_id`
+  knowledge work established) instead of carrying its own. `angee.mixins.actor_user_id`
   is the one reading of "current actor as a user id" (used by `AuditMixin`,
   `File.delete`, the proxy push gate). The layering test derives its addon
   list from `addons/angee/` so new base addons are guarded automatically.
@@ -643,11 +643,11 @@ Commit map (newest→oldest): `1e2cbb1` (A1 SDK auth) · `3838048`
   `django-angee-addons` / `angee-react` split **without changing a single
   import**: `angee` stays a PEP 420 namespace (no `__init__.py` at `angee/` or
   `addons/angee/`), so two source roots merge into one `angee.*` namespace.
-- **Django-shaped recomposition**: `angee/base` is now the model toolkit only
+- **Django-shaped recomposition**: `angee` is now the model toolkit only
   (the `django.db` analog); the GraphQL runtime moved to its own `angee/graphql/`
   package (schema, CRUD, deletion preview, events, publishing, access); `net.py`
   moved to `addons/angee/integrate`. (`json_safe` stays the single public
-  serializer in `angee/base/serialization.py`, consumed by both graphql and
+  serializer in `angee/serialization.py`, consumed by both graphql and
   resources.) `tests/test_layering.py` enforces base ⊥ {graphql, compose,
   addons}, graphql ⊥ compose, and addons ⊥ compose.
 
@@ -685,7 +685,7 @@ that proposed it.
   (`packages = ["angee"]`, framework-only deps) and `addons/pyproject.toml`
   `django-angee-addons` (`dependencies = ["django-angee", …]`). Partition
   dependencies from real imports — `django-import-export` / `tablib` / `pyyaml` →
-  addons, `pyjwt[crypto]` → iam, whatever `angee/base` + `angee/compose` import →
+  addons, `pyjwt[crypto]` → iam, whatever `angee` + `angee/compose` import →
   framework — so the addons→framework dependency direction is enforced, not just
   implied by directory. The repo split then becomes "move `addons/` to a new repo
   + point its `django-angee` dependency at the published version."

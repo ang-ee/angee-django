@@ -1714,7 +1714,7 @@ describe("createApp resource route index", () => {
       return createElement(
         "span",
         null,
-        `${route?.resourceType ?? "none"} ${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordEdges?.join(",") ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
+        `${route?.viewType ?? "none"} ${route?.resourceType ?? "none"} ${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordEdges?.join(",") ?? "none"} ${route?.recordParam ?? "none"} ${tabs.join(",") || "none"}`,
       );
     }
 
@@ -1748,7 +1748,7 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes/note notes.Note parties.Party storage.FileAttachment id notes.comments");
+        expect(host.textContent).toContain("notes/note none notes.Note parties.Party storage.FileAttachment id notes.comments");
       });
     } finally {
       root.unmount();
@@ -2565,7 +2565,7 @@ test("a container's when.app matches every app on the page's trail, flattened on
 
 test("a mount serves the mounted page in the borrowing app, which keeps its links, words and anchor; matching records open there from every app", async () => {
   const seen: { route?: string | null; app?: string | null; menu?: string | null; apps?: readonly string[]; list?: string;
-    record?: string; staff?: string; other?: string; label?: string } = {};
+    record?: string; staff?: string; other?: string; canonical?: string; label?: string; filter?: unknown } = {};
   function Probe(): ReactNode {
     const runtime = useAppRuntime();
     const href = useRouteHref();
@@ -2574,18 +2574,24 @@ test("a mount serves the mounted page in the borrowing app, which keeps its link
       route: runtime.activeRouteName, app: runtime.activeApp, menu: runtime.activeMenuId, apps: runtime.containerScope?.apps,
       list: href("iam.users"), record: href("iam.users.record", { id: "u1" }),
       staff: lookup("iam.User", "u2", { kind: "staff" }), other: lookup("iam.User", "u3", { kind: "guest" }),
+      canonical: lookup("core.Principal", "u4"),
       label: runtime.vocabulary.resources["iam.User"]?.label,
+      filter: runtime.defaultResourceFilter,
     });
     return null;
   }
   const addons: BaseAddon[] = [
-    { id: "iam", routes: resourcePageRoutes("iam.users", "/iam/users", Probe, "iam.User", { menu: "iam.users" }),
+    { id: "iam", routes: [
+      ...resourcePageRoutes("iam.users", "/iam/users", Probe, "iam.User", { menu: "iam.users" }),
+      ...resourcePageRoutes("core.principals", "/core/principals", Probe, "core.Principal"),
+    ],
       menus: { iam: {}, "iam.users": { parent: "iam", route: "iam.users" } } },
     { id: "desk", dependsOn: ["iam"],
-      routes: [{ name: "desk.home", path: "/desk/home", component: EmptyPage }],
+      routes: [{ name: "desk.home", path: "/desk/home", component: Probe }],
       menus: {
         desk: { route: "desk.home" },
-        "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People" },
+        "desk.people": { parent: "desk", mount: "iam.users", path: "people", label: "People",
+          defaultFilter: { kind: { exact: "staff" } } },
         "desk.staff": { parent: "desk", mount: "iam.users", path: "staff", recordMatch: { field: "kind", equals: "staff" } },
       },
       vocabulary: [{ app: "desk", resources: { "iam.User": { label: "Colleague" } } }] },
@@ -2593,12 +2599,21 @@ test("a mount serves the mounted page in the borrowing app, which keeps its link
   const input: CreateAppInput = {
     ...testAppInput(addons, { console: { requireAuth: false } }),
     schemas: testSchemasWithConsoleResources([
-      testDataResource("iam.User", { query: testResourceQuery({ fields: { kind: testQueryField("kind") } }) }),
+      testDataResource("core.Principal"),
+      testDataResource("iam.User", {
+        canonicalLabel: "core.Principal",
+        query: testResourceQuery({ fields: { kind: testQueryField("kind") } }),
+      }),
     ]),
   };
   // Only an addon depending on the route's owner may mount it.
   expect(() => createApp({ ...input, addons: [addons[0]!, { ...addons[1]!, dependsOn: [] }] }))
     .toThrow(/Addon "desk" mounts route "iam.users" of "iam", which it does not depend on/);
+  expect(() => createApp({ ...input, addons: [addons[0]!, { ...addons[1]!, menus: {
+    desk: { route: "desk.home" },
+    "desk.people": { parent: "desk", mount: "iam.users", path: "people", defaultFilter: { missing: true } },
+    "desk.staff": { parent: "desk", mount: "iam.users", path: "staff", recordMatch: { field: "kind", equals: "staff" } },
+  } }] })).toThrow(/unknown or non-filterable field/);
   history.replaceState(null, "", "/desk/people");
   const app = createApp(input);
   expect(routesByFullPath(app.router).has("/desk/people/$id")).toBe(true);
@@ -2609,11 +2624,22 @@ test("a mount serves the mounted page in the borrowing app, which keeps its link
     await waitFor(() => expect(seen).toMatchObject({
       route: "desk.people", app: "desk", menu: "desk.people", apps: ["desk"], label: "Colleague",
       list: "/desk/people", record: "/desk/people/u1", staff: "/desk/staff/u2", other: "/desk/people/u3",
+      canonical: "/desk/people/u4",
+      filter: { resource: "iam.User", filter: { kind: { exact: "staff" } } },
+    }));
+    await app.router.navigate({ to: "/desk/home" });
+    await waitFor(() => expect(seen).toMatchObject({
+      route: "desk.home", app: "desk", menu: "desk", apps: ["desk"],
+      list: "/desk/people", record: "/desk/people/u1",
+      staff: "/desk/staff/u2", other: "/desk/people/u3", canonical: "/core/principals/u4",
+      filter: undefined,
     }));
     await app.router.navigate({ to: "/iam/users" });
     await waitFor(() => expect(seen).toMatchObject({
       route: "iam.users", app: "iam", menu: "iam.users", apps: ["iam"], label: undefined,
       list: "/iam/users", record: "/iam/users/u1", staff: "/desk/staff/u2", other: "/iam/users/u3",
+      canonical: "/iam/users/u4",
+      filter: undefined,
     }));
   } finally { root.unmount(); host.remove(); }
 });

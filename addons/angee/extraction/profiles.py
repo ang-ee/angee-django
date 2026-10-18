@@ -9,10 +9,10 @@ from django.core.exceptions import ValidationError
 from jsonpointer import JsonPointer, JsonPointerException
 from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
 
-from angee.base.impl import ImplBase
-from angee.base.jsonschema import check_schema
 from angee.extraction.contracts import DocumentPart, Result, Source
 from angee.extraction.enums import ExtractionRole
+from angee.impl import ImplBase
+from angee.jsonschema import check_schema
 
 
 class EvidenceLayout(BaseModel):

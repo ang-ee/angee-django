@@ -14,13 +14,13 @@ from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
-from angee.base.impl import impl_choices_enum
-from angee.base.models import AngeeQuerySet
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.impl import impl_choices_enum
 from angee.knowledge import schema as knowledge_schema
+from angee.models import AngeeQuerySet
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.steps import Step

@@ -31,11 +31,11 @@ from rebac.errors import PermissionDenied
 from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
-from angee.base.actors import instance_actor
-from angee.base.changesets import changeset, current_changeset, discard_changeset_claim
-from angee.base.errors import CreationKeyConflict
-from angee.base.fields import StateField
-from angee.base.models import (
+from angee.actors import instance_actor
+from angee.changesets import changeset, current_changeset, discard_changeset_claim
+from angee.errors import CreationKeyConflict
+from angee.fields import StateField
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeUnscopedManager,
@@ -47,8 +47,8 @@ from angee.base.models import (
     model_history,
     role_anchor,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
+from angee.refs import MergePolicy, RecordRefMixin
+from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
 

@@ -10,10 +10,10 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from angee.base.evidence import FactAuthority
-from angee.base.identity import public_id_of
-from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionProposal, DecisionRequest
+from angee.evidence import FactAuthority
+from angee.identity import public_id_of
+from angee.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem

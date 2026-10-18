@@ -17,8 +17,8 @@ from rebac.actors import is_sudo
 from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 
-from angee.base.errors import DomainError
-from angee.base.identity import public_id_of
+from angee.errors import DomainError
+from angee.identity import public_id_of
 
 logger = logging.getLogger(__name__)
 _DENIED = "View-as is not permitted."

@@ -8,7 +8,7 @@ import pytest
 from django.db import connection, models
 from django.test.utils import isolate_apps
 
-from angee.base.fields import StateField
+from angee.fields import StateField
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import models_with

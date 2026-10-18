@@ -13,7 +13,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import current_actor
 
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.models import AngeeManager, AngeeQuerySet
 
 
 @dataclass

@@ -15,7 +15,7 @@ from rebac.errors import MissingActorError, PermissionDenied
 from rebac.models import PermissionAuditEvent
 from rebac.schema import parse_zed
 
-from angee.base.models import AngeeModel, OwnerMixin
+from angee.models import AngeeModel, OwnerMixin
 from angee.testing.permissions import install_permission_schema
 
 

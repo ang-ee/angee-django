@@ -13,7 +13,7 @@ Reference resolution composes the two owners, never re-deriving either:
   is written with a slash-form type token (``<ns>/type:<id>[#relation]``, e.g.
   ``angee/role:admin``, ``products/role:products_manager#member``,
   ``auth/user:*``). Subject literals cross a transport boundary, so model-backed
-  public ids are normalized through :func:`angee.base.identity.canonical_subject_ref`;
+  public ids are normalized through :func:`angee.identity.canonical_subject_ref`;
 * a **row xref** — anything else (the loader's ``<addon>.<xref>`` form, e.g.
   ``iam.alice``) — resolves through the resource ledger
   (:func:`angee.resources.widgets.resolve_xref`) to the loaded row, whose own
@@ -44,8 +44,8 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.schema.walker import find_relation, subject_allowed_by_relation
 
-from angee.base.identity import canonical_subject_ref
-from angee.base.refs import ancestor_object_refs
+from angee.identity import canonical_subject_ref
+from angee.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import resolve_xref
@@ -127,7 +127,7 @@ def _resolve_resource_refs(
 
     A literal ref names exactly one identity. A row xref resolves through the
     ledger to the loaded row and expands to each REBAC identity the row IS-A — the
-    MTI enumeration owned by :func:`angee.base.refs.ancestor_object_refs`.
+    MTI enumeration owned by :func:`angee.refs.ancestor_object_refs`.
     The caller filters implicit ancestor grants against the native schema.
     """
 

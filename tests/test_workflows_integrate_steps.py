@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.models import SourceKind
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.net import AddressResolutionError
@@ -34,6 +33,7 @@ from angee.integrate.streams import (
 )
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Party
+from angee.models import SourceKind
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun

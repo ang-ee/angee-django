@@ -14,9 +14,8 @@ from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 
-from angee.base.fields import SqidField
-from angee.base.identity import instance_from_public_id
 from angee.data.metadata import DataResourceSubtitleMetadata
+from angee.fields import SqidField
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
@@ -39,6 +38,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
+from angee.identity import instance_from_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
     RecordBindingManager,

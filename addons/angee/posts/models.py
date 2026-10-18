@@ -35,9 +35,9 @@ from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
-from angee.base.impl import ImplClassField
-from angee.base.models import AngeeDataModel, AuditMixin, update_fields_with_auto_now
+from angee.impl import ImplClassField
 from angee.integrate.models import IntegrationCreateMode
+from angee.models import AngeeDataModel, AuditMixin, update_fields_with_auto_now
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
     FeedFollowManager,

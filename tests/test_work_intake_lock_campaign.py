@@ -7,7 +7,7 @@ import pytest
 from django.db import connection
 from rebac import actor_context
 
-from angee.base.models import StaleRevisionError
+from angee.models import StaleRevisionError
 from angee.projects.testing.models import Task
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user

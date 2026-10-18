@@ -12,9 +12,13 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
-from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
-from angee.base.fields import StateField
-from angee.base.models import (
+from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.dashboards.resources import DashboardResource
+from angee.fields import StateField
+from angee.graphql.access import is_gated_read_axis
+from angee.graphql.data.hasura import declared_hasura_resource_fields
+from angee.graphql.introspection import FieldPathError, require_field_for_path
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -28,11 +32,7 @@ from angee.base.models import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.permissions import effective_rebac_definition
-from angee.dashboards.resources import DashboardResource
-from angee.graphql.access import is_gated_read_axis
-from angee.graphql.data.hasura import declared_hasura_resource_fields
-from angee.graphql.introspection import FieldPathError, require_field_for_path
+from angee.permissions import effective_rebac_definition
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1

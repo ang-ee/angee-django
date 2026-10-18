@@ -9,8 +9,8 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import ObjectRef
 
-from angee.base.fields import StateField
-from angee.base.models import (
+from angee.fields import StateField
+from angee.models import (
     AngeeDataModel,
     AuditMixin,
     HistoryMixin,

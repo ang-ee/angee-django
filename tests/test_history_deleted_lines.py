@@ -12,9 +12,9 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
-from angee.base.changesets import changeset
-from angee.base.identity import public_id_of
-from angee.base.models import model_history
+from angee.changesets import changeset
+from angee.identity import public_id_of
+from angee.models import model_history
 from angee.provenance.schema import RecordHistory
 from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_user

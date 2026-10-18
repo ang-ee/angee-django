@@ -172,10 +172,10 @@ def _grant(document: Document, relation: str, user: Any) -> None:
     )
 
 
-def _grant_owner(document: Document, user: Any) -> None:
-    """Write the ``owner`` relationship that grants write on a document."""
+def _grant_manager(document: Document, user: Any) -> None:
+    """Write the ``manager`` relationship that grants write on a document."""
 
-    _grant(document, "owner", user)
+    _grant(document, "manager", user)
 
 
 _INSERT = """
@@ -260,7 +260,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(composed_table
         doc = Document.objects.create(title="Document", note="draft")
         keep = DocumentLine.objects.create(document=doc, label="Keep", quantity=1, position=0)
         drop = DocumentLine.objects.create(document=doc, label="Drop", quantity=9, position=1)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA,
@@ -297,7 +297,7 @@ def test_removing_a_line_other_records_use_is_a_public_refusal(composed_tables):
         keep = DocumentLine.objects.create(document=doc, label="Keep", quantity=1, position=0)
         used = DocumentLine.objects.create(document=doc, label="Used", quantity=2, position=1)
         LineReceipt.objects.create(line=used)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA,
@@ -323,7 +323,7 @@ def test_save_without_lines_leaves_children_untouched(composed_tables):
     with system_context(reason="seed"):
         doc = Document.objects.create(title="Document", note="draft")
         DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA,
@@ -346,7 +346,7 @@ def test_save_denies_actor_without_write_on_parent(composed_tables):
     with system_context(reason="seed"):
         doc = Document.objects.create(title="Document")
         line = DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA,
@@ -380,7 +380,7 @@ def test_save_denies_reader_without_write_even_with_empty_patch(composed_tables)
     with system_context(reason="seed"):
         doc = Document.objects.create(title="Document")
         line = DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
     _grant(doc, "reader", reader)
 
     # The reader can load the parent — proving the denial is the write gate, not
@@ -421,7 +421,7 @@ def test_save_rejects_line_ids_not_on_the_parent(composed_tables):
         mine = DocumentLine.objects.create(document=doc, label="Mine", quantity=1, position=0)
         other_doc = Document.objects.create(title="Other")
         foreign = DocumentLine.objects.create(document=other_doc, label="Foreign", quantity=1, position=0)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA,
@@ -457,7 +457,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
                 DocumentLine.objects.create(document=doc, label=f"L{index}", quantity=1, position=index)
                 for index in range(line_count)
             ]
-        _grant_owner(doc, owner)
+        _grant_manager(doc, owner)
         lines = [
             {"id": line.public_id, "label": line.label, "quantity": 2, "position": index}
             for index, line in enumerate(kept)
@@ -484,7 +484,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeyp
     the base helper, targeting the parent model, before touching the child set.
     """
 
-    from angee.base.models import AngeeQuerySet
+    from angee.models import AngeeQuerySet
 
     locked_models: list[type] = []
     original = AngeeQuerySet.lock_if_supported
@@ -499,7 +499,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeyp
     with system_context(reason="seed"):
         doc = Document.objects.create(title="Document")
         line = DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA,
@@ -523,8 +523,8 @@ def test_save_decodes_line_relation_under_the_callers_actor(composed_tables):
         doc = Document.objects.create(title="Document")
         visible = Product.objects.create(name="Visible")
         hidden = Product.objects.create(name="Hidden")
-    _grant_owner(doc, owner)
-    _grant(visible, "owner", owner)  # the caller may read `visible`, not `hidden`
+    _grant_manager(doc, owner)
+    _grant(visible, "manager", owner)  # the caller may read `visible`, not `hidden`
 
     _SAVE_PROD = """
     mutation($pk: ID!, $lines: [documents_prod_lines_insert_input!]) {
@@ -742,7 +742,7 @@ def test_rich_save_round_trips_enum_and_m2m_diff(composed_tables):
             document=doc, label="Line", quantity=1, position=0, kind=DocumentLine.Kind.GOODS
         )
         line.tags.set([red])
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
 
     result = execute_schema(
         _SCHEMA_RICH,
@@ -849,7 +849,7 @@ def _pinned_document(owner: Any) -> tuple[Document, PinnedLine, PinnedLine]:
         doc = Document.objects.create(title="Document")
         pinned = PinnedLine.objects.create(document=doc, label="Base", quantity=1, position=0, pinned=True)
         free = PinnedLine.objects.create(document=doc, label="Extra", quantity=1, position=1)
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
     return doc, pinned, free
 
 
@@ -913,7 +913,7 @@ def test_lines_cannot_create_a_system_row(composed_tables):
     owner = create_user("owner")
     with system_context(reason="seed"):
         doc = Document.objects.create(title="Document")
-    _grant_owner(doc, owner)
+    _grant_manager(doc, owner)
     candidate = PinnedLine(document=doc, label="Forged", pinned=True)
     with pytest.raises(ValidationError, match="system-provisioned"):
         candidate.validate_row_lock(None)

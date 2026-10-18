@@ -25,11 +25,12 @@ from rebac import (
 from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
-from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
-from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.fields import FractionalRankField, StateField
-from angee.base.models import (
+from angee.actors import actor_user_id
+from angee.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
+from angee.errors import RecordAccessSubjectRefused
+from angee.fields import FractionalRankField, StateField
+from angee.messaging.models import AudienceMember, ThreadedModelMixin
+from angee.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
@@ -48,9 +49,6 @@ from angee.base.models import (
     TrashQuerySet,
     candidate_relationships,
 )
-from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.serialization import strip_null_bytes
-from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
     milestone_reached,
@@ -59,7 +57,9 @@ from angee.projects.events import (
     task_promoted,
 )
 from angee.projects.inputs import MilestoneTemplate
+from angee.refs import MergePolicy, RecordRefMixin
 from angee.scheduling.fields import RecurrenceField
+from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 

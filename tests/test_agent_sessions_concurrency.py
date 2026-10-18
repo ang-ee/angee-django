@@ -46,13 +46,13 @@ def test_post_blocked_behind_settlement_sends_exactly_one_wakeup(
     session.post("Settle before the new post")
     claimed = session.claim_turn()
     assert claimed is not None
-    owner = session.owner
+    user = session.user
     capture_tasks.clear()
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
             AgentSession.system_queryset().select_for_update().get(pk=session.pk)
             session.settle_turn(claimed, TurnOutcome(kind="completed", text="Done"))
-            contender, pid = submit(pool, lambda: session.post("Post while settling", actor=owner))
+            contender, pid = submit(pool, lambda: session.post("Post while settling", actor=user))
             wait_for_lock(pid, contender)
             assert capture_tasks == []
         posted = contender.result(timeout=10)
@@ -65,20 +65,20 @@ def test_claim_prevents_a_user_delete_that_collected_a_pending_turn(session: Age
 
     queued = session.post("Claim while user deletion waits")
     agent_owner_id = session.agent.owner_id
-    session_owner = get_user_model().objects.create_user(username="claim-delete-session-owner")
+    session_user = get_user_model().objects.create_user(username="claim-delete-session-user")
     admin = create_platform_admin("claim-delete-admin")
     with actor_context(admin):
-        session.owner = session_owner
-        session.save(update_fields=["owner"])
+        session.user = session_user
+        session.save(update_fields=["user"])
 
-    def delete_session_owner() -> Any:
+    def delete_session_user() -> Any:
         with actor_context(admin):
-            return get_user_model().objects.get(pk=session_owner.pk).delete()
+            return get_user_model().objects.get(pk=session_user.pk).delete()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
             AgentSession.system_queryset(lock=("self",)).get(pk=session.pk)
-            contender, pid = submit(pool, delete_session_owner)
+            contender, pid = submit(pool, delete_session_user)
             wait_for_lock(pid, contender)
             claimed = session.claim_turn()
             assert claimed is not None and claimed.pk == queued.pk
@@ -88,20 +88,20 @@ def test_claim_prevents_a_user_delete_that_collected_a_pending_turn(session: Age
     session.refresh_from_db()
     assert queued.status == TurnStatus.RUNNING
     assert session.status == SessionStatus.RUNNING
-    assert get_user_model().system_queryset().filter(pk__in=[agent_owner_id, session_owner.pk]).count() == 2
+    assert get_user_model().system_queryset().filter(pk__in=[agent_owner_id, session_user.pk]).count() == 2
 
 
 @pytest.mark.parametrize("winner", ["start", "deprovision"])
 def test_start_races_with_in_process_deprovision(session: AgentSession, winner: str) -> None:
-    owner = session.owner
+    user = session.user
     agent = session.agent
 
     def deprovision() -> Any:
-        with actor_context(owner):
+        with actor_context(user):
             return provisioning.deprovision_agent(agent.sqid)
 
     def start() -> Any:
-        return AgentSession.objects.start(agent, owner=owner, context={}, actor=owner)
+        return AgentSession.objects.start(agent, user=user, context={}, actor=user)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
@@ -129,13 +129,13 @@ def test_stop_during_an_append_keeps_the_streamed_batch(session: AgentSession) -
     session.post("Stop while saving a tool event")
     turn = session.claim_turn()
     assert turn is not None
-    owner = session.owner
+    user = session.user
     principal = session.agent.principal_subject()
     update = {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress"}
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
             AgentTurn.system_queryset().select_for_update().get(pk=turn.pk)
-            contender, pid = submit(pool, lambda: session.cancel_turn(turn, actor=owner))
+            contender, pid = submit(pool, lambda: session.cancel_turn(turn, actor=user))
             wait_for_lock(pid, contender)
             with actor_context(principal):
                 assert turn.append_updates([update])

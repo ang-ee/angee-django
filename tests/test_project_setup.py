@@ -12,8 +12,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.changesets import changeset_model
-from angee.base.models import CreationKeyConflict
+from angee.changesets import changeset_model
+from angee.models import CreationKeyConflict
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 

@@ -16,7 +16,6 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.models import CreationKeyConflict, StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -42,6 +41,7 @@ from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
+from angee.models import CreationKeyConflict, StaleRevisionError
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
 from angee.projects.schema import MilestoneType, ProjectType, TaskType

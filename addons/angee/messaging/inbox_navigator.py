@@ -29,9 +29,9 @@ from django.db.models.functions import Coalesce, RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.pagination import WindowSum
 from angee.messaging.inbox import InboxCoverage, InboxPage, MessageInbox
 from angee.messaging.inbox_groups import InboxGroup, InboxGroupPage, InboxGroups, InboxGroupScope
+from angee.pagination import WindowSum
 
 
 @dataclass(frozen=True)
@@ -400,9 +400,7 @@ class InboxMembershipGroups:
         if self.axis == "circle":
             return self.memberships.filter(
                 circle__path__startswith=record.path if record is not None else OuterRef(OuterRef("path")),
-                circle__created_by_id=record.created_by_id
-                if record is not None
-                else OuterRef(OuterRef("created_by_id")),
+                circle__owner_id=record.owner_id if record is not None else OuterRef(OuterRef("owner_id")),
             )
         return self.memberships.filter(other_party_id=record.pk if record is not None else OuterRef(OuterRef("pk")))
 

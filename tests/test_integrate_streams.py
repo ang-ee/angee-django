@@ -1141,7 +1141,12 @@ def test_identity_rescan_skips_an_identity_another_attempt_healed_while_it_read(
     advance_stream(stream, adapter)
     # The local projection is the applied base the adapter read, as a pull-only replica's is.
     changed = RecordChange(
-        "person:1", {"name": "v2"}, "v2", mapped_payload={"name": "v2"}, projection={"name": "base"}
+        "person:1",
+        {"name": "v2"},
+        "v2",
+        "base",
+        mapped_payload={"name": "v2"},
+        projection={"name": "base"},
     )
     adapter.semantic_key = "person:1"
     adapter.pages = [StreamPage((changed,), {"page": 2})]

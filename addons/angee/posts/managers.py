@@ -10,7 +10,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac.managers import RebacManager
 
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.models import AngeeManager, AngeeQuerySet
 
 
 class FeedFollowQuerySet(AngeeQuerySet[Any]):
@@ -35,13 +35,13 @@ class FeedFollowQuerySet(AngeeQuerySet[Any]):
 class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type: ignore[misc]
     """Owns the follow/unfollow writes over the ``(feed, handle)`` subscription."""
 
-    def follow(self, *, feed: Any, handle: Any, owner_id: Any = None) -> Any:
+    def follow(self, *, feed: Any, handle: Any) -> Any:
         """Open (or re-open) the follow of ``feed`` by ``handle``; idempotent."""
 
         follow, created = self.get_or_create(
             feed_id=feed.pk,
             handle_id=handle.pk,
-            defaults={"started_at": timezone.now(), "created_by_id": owner_id},
+            defaults={"started_at": timezone.now()},
         )
         if not created and follow.ended_at is not None:
             follow.ended_at = None
@@ -60,25 +60,27 @@ class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type
 class PostMetricsManager(AngeeManager):
     """Owns the one-to-one engagement-counter upsert for a message."""
 
-    def upsert(self, *, message: Any, metrics: Any, owner_id: Any = None) -> Any:
+    def upsert(self, *, message: Any, metrics: Any, created_by_id: Any = None) -> Any:
         """Write the rolled-up engagement counters for ``message`` (idempotent).
 
         ``metrics`` is a :class:`~angee.posts.backends.ParsedMetrics`. Counters are a
-        platform-reported snapshot, so the latest fetch overwrites the row.
+        platform-reported snapshot, so the latest fetch overwrites them.
+        ``created_by_id`` attributes the insert only: the row's ``creator`` keeps it.
         """
 
+        counters = {
+            "view_count": metrics.view_count,
+            "like_count": metrics.like_count,
+            "repost_count": metrics.repost_count,
+            "quote_count": metrics.quote_count,
+            "reply_count": metrics.reply_count,
+            "bookmark_count": metrics.bookmark_count,
+            "metadata": metrics.metadata,
+        }
         row, _created = self.update_or_create(
             message_id=message.pk,
-            defaults={
-                "view_count": metrics.view_count,
-                "like_count": metrics.like_count,
-                "repost_count": metrics.repost_count,
-                "quote_count": metrics.quote_count,
-                "reply_count": metrics.reply_count,
-                "bookmark_count": metrics.bookmark_count,
-                "metadata": metrics.metadata,
-                "created_by_id": owner_id,
-            },
+            defaults=counters,
+            create_defaults={**counters, "created_by_id": created_by_id},
         )
         return row
 
