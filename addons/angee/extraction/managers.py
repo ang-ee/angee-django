@@ -18,7 +18,6 @@ from angee.base.identity import public_id_of
 from angee.base.jsonschema import validate
 from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
 from angee.base.refs import record_ref_for
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
@@ -133,12 +132,12 @@ class ExtractionManager(EvidenceManager):
             if not (
                 source.file is not None and target._meta.label == "storage.File" and source.file.pk == target.pk
                 or source.file is not None and target._meta.label == "messaging.Message"
-                and system_queryset(target.parts.model).filter(message_id=target.pk, file_id=source.file.pk).exists()
+                and target.parts.model.system_queryset().filter(message_id=target.pk, file_id=source.file.pk).exists()
                 or source.message_part is not None and target._meta.label == "messaging.Message"
                 and source.message_part.message_id == target.pk
                 # A file delivered by a message keeps that message's parts as context.
                 or source.message_part is not None and target._meta.label == "storage.File"
-                and system_queryset(source.message_part._meta.model).filter(
+                and source.message_part._meta.model.system_queryset().filter(
                     message_id=source.message_part.message_id, file_id=target.pk,
                 ).exists()
             ):
@@ -245,7 +244,7 @@ class ExtractionManager(EvidenceManager):
             outcome["stage"] = failure.stage if failure is not None else None
         page_values = []
         file_model = self.model._meta.apps.get_model("storage.File")
-        readable_files = read_scoped_queryset(file_model, actor)
+        readable_files = file_model.objects.with_actor(actor).with_action("read")
         for page in pages:
             carrier = None
             if page.image_file_id:

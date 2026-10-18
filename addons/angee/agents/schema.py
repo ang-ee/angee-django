@@ -35,7 +35,6 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import PlatformAdminPermission, request_from_info
 from angee.iam.schema import UserType
@@ -715,7 +714,7 @@ class AgentDeletePreviewMutation:
     def delete_agent(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview or confirm deletion of one agent by public id."""
 
-        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=write_queryset(Agent))
+        return delete_by_public_id(Agent, str(id), confirm=confirm, queryset=Agent.objects.for_write())
 
 
 attach_delete_preview_metadata(

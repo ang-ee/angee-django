@@ -16,7 +16,6 @@ from strawberry import auto
 
 from angee.base.fields import SqidField
 from angee.base.identity import instance_from_public_id
-from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.capabilities import permissions_field
@@ -37,7 +36,6 @@ from angee.graphql.ids import (
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.iam.permissions import request_from_info, session_user
@@ -430,7 +428,7 @@ def _record_for_binding(
         return None
     if model_resource_type(model) is None:
         return None
-    queryset = write_scoped_queryset(model) if write else None
+    queryset = model.objects.for_write() if write else None
     return instance_from_public_id(model, str(record_id), queryset=queryset)
 
 
@@ -444,9 +442,9 @@ def _knowledge_for_binding(
     if (input.page is None) == (input.vault is None):
         raise ValueError("Exactly one of page or vault is required.")
     if input.page is not None:
-        queryset = write_scoped_queryset(Page) if write else None
+        queryset = Page.objects.for_write() if write else None
         return require_instance_for_id(Page, input.page, queryset=queryset), None
-    queryset = write_scoped_queryset(Vault) if write else None
+    queryset = Vault.objects.for_write() if write else None
     return None, require_instance_for_id(Vault, cast(PublicID, input.vault), queryset=queryset)
 
 
@@ -600,7 +598,7 @@ class KnowledgeMutation:
             Vault,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Vault),
+            queryset=Vault.objects.for_write(),
         )
 
     @strawberry.mutation(name="delete_page")
@@ -611,7 +609,7 @@ class KnowledgeMutation:
             Page,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Page),
+            queryset=Page.objects.for_write(),
         )
 
     @strawberry.mutation(name="update_page_body")

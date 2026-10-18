@@ -37,6 +37,8 @@ from angee.base.lineage import concrete_child_models, concrete_lineage
 from angee.base.models.query import AngeeQuerySet, by_key, candidate_relationships, model_history
 from angee.base.models.trash import TrashMixin
 
+_UNLOADED = object()
+
 
 class ChangesetQuerySet(AngeeQuerySet[Any]):
     """Changeset scopes derived from the history contracts of records they touch."""
@@ -227,18 +229,23 @@ class ModelHistory(HistoricalRecords):
                     raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
                 yield boundary, boundary, boundary
 
-    def diff(self, first: Any, last: Any) -> Any:
-        """Return the native field delta across one changeset boundary."""
+    def diff(self, first: Any, last: Any, *, previous: Any = _UNLOADED) -> Any:
+        """Return the native field delta across one changeset boundary.
+
+        Page assemblers pass their already loaded predecessor. Standalone callers
+        retain the same owner contract and let the history table resolve it.
+        """
 
         target = last.history_object
         model = type(target)
         key = model._meta.pk.attname
-        previous = (
-            type(last).objects.using(last._state.db)
-            .filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
-            .order_by("-history_id")
-            .first()
-        )
+        if previous is _UNLOADED:
+            previous = (
+                type(last).objects.using(last._state.db)
+                .filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
+                .order_by("-history_id")
+                .first()
+            )
         fields = {
             field.name: field
             for field in model._meta.concrete_fields
@@ -264,17 +271,32 @@ class ModelHistory(HistoricalRecords):
             current = last
         return current.diff_against(previous, included_fields=included)
 
-    def redacted(self, version: Any, actor: Any) -> frozenset[str]:
-        """Return fields hidden by the row's current or retained snapshot policy."""
+    def redacted(
+        self,
+        version: Any,
+        actor: Any,
+        *,
+        current: Any = _UNLOADED,
+        retained: bool | object = _UNLOADED,
+    ) -> frozenset[str]:
+        """Return fields hidden by the row's current or retained snapshot policy.
+
+        A page may supply its bulk-loaded current row and retention decision so
+        this owner does not probe those facts again for every retained version.
+        """
 
         target = version.history_object
         model = type(target)
         using = version._state.db
-        row = model.objects.with_actor(actor).with_action("read").using(using).filter(pk=target.pk).first()
+        row = current
+        if row is _UNLOADED:
+            row = model.objects.with_actor(actor).with_action("read").using(using).filter(pk=target.pk).first()
         if row is not None:
-            return frozenset(getattr(row, "_rebac_redacted_fields", ()))
+            return row.redacted_fields()
         hidden = frozenset(field.name for field in model._meta.concrete_fields)
-        if model._base_manager.using(using).filter(pk=target.pk).exists():
+        if retained is _UNLOADED:
+            retained = model._base_manager.using(using).filter(pk=target.pk).exists()
+        if retained:
             return hidden
         if not self.snapshot_allows(version, "read", actor=actor):
             return hidden
@@ -629,32 +651,73 @@ class HistoryMixin(models.Model):
                 )
         return {**scopes, **statements}
 
-    def admits_revert(self, changeset: Any) -> bool:
-        """Return whether a successful changeset belongs wholly to this history document."""
+    def admitted_reverts(self, changesets: Iterable[Any]) -> frozenset[Any]:
+        """Return page changeset keys belonging wholly to this history document.
 
-        if (
-            changeset._state.db != self._state.db
-            or changeset.state != changeset.State.CLOSED
-            or changeset.outcome != changeset.Outcome.SUCCESS
-        ):
-            return False
-        origin = changeset.record_ref
-        if (
-            changeset.activity == changeset.Activity.MERGE
-            and origin.model_label.lower() in {table._meta.label_lower for table in self.history_tables()}
-            and str(origin.object_id) == str(self.pk)
-        ):
-            return True
+        Each touched history table reports all page boundaries in one grouped
+        query. A boundary is admitted only when it has at least one stored row
+        and every stored row belongs to this record's declared document.
+        """
+
+        page = {
+            changeset.pk: changeset
+            for changeset in changesets
+            if changeset._state.db == self._state.db
+            and changeset.state == changeset.State.CLOSED
+            and changeset.outcome == changeset.Outcome.SUCCESS
+        }
+        table_labels = {table._meta.label_lower for table in self.history_tables()}
+        admitted = {
+            changeset.pk
+            for changeset in page.values()
+            if changeset.activity == changeset.Activity.MERGE
+            and changeset.record_ref.model_label.lower() in table_labels
+            and str(changeset.record_ref.object_id) == str(self.pk)
+        }
+        candidates = {pk: changeset for pk, changeset in page.items() if pk not in admitted}
         scopes = self.history_scopes()
-        touched = False
-        for model, versions in changeset.history_rows():
-            if not versions.exists():
-                continue
-            touched = True
+        touched: set[Any] = set()
+        refused: set[Any] = set()
+        by_label: dict[str, set[Any]] = {}
+        for changeset in candidates.values():
+            for label in set(changeset.touched):
+                by_label.setdefault(label, set()).add(changeset.pk)
+        for label, changeset_ids in sorted(by_label.items()):
+            model = apps.get_model(label)
+            if model_history(model) is None:
+                raise ValidationError(f"{label}: the history owner is unavailable.")
+            rows = model.history.using(self._state.db).filter(changeset_id__in=changeset_ids)
             predicate = scopes.get(model)
-            if predicate is None or versions.exclude(predicate).exists():
-                return False
-        return touched
+            if predicate is None:
+                present = set(rows.values_list("changeset_id", flat=True).distinct())
+                touched.update(present)
+                refused.update(present)
+                continue
+            for totals in rows.values("changeset_id").annotate(
+                total=models.Count("history_id"),
+                admitted=models.Count("history_id", filter=predicate),
+            ):
+                changeset_id = totals["changeset_id"]
+                touched.add(changeset_id)
+                if totals["total"] != totals["admitted"]:
+                    refused.add(changeset_id)
+        admitted.update(pk for pk in candidates if pk in touched and pk not in refused)
+        return frozenset(admitted)
+
+    def admits_revert(self, changeset: Any) -> bool:
+        """Return whether one successful changeset belongs wholly to this document."""
+
+        return changeset.pk in self.admitted_reverts((changeset,))
+
+    def revertable_changesets(self, changesets: Iterable[Any], *, actor: Any = None) -> frozenset[Any]:
+        """Return admitted page keys when the reader may replay this record."""
+
+        admitted = self.admitted_reverts(changesets)
+        if not admitted:
+            return admitted
+        if actor is not None:
+            self.with_actor(actor)
+        return admitted if self.has_access(self.history_revert_permission) else frozenset()
 
     class Meta:
         abstract = True

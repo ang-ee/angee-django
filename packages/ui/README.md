@@ -48,7 +48,7 @@ Console chatter renders the `record#aside` and `<model>#aside` children for the
 active view after every layer's narrowing (`useContainer`). A `record#aside` tab
 appears on record views; a model-level tab on that model's pages. Tabs a page
 publishes follow the composed ones and take the same narrowing. Tab ids are
-namespaced, and `aliases` keep their former ids working in `?chatterTab=` links.
+namespaced and `?chatterTab=` links name those ids directly.
 The view switcher offers a collection's `resource#views` children for its
 models: the built-in `list`, `board`, `calendar`, `gantt` and `dashboard`
 kinds, and kinds addons contribute as `<model>#views` children with namespaced

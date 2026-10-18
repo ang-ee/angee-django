@@ -7,7 +7,6 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NoReturn, Self, cast
 
-from angee.base.scoping import read_scoped_queryset
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
@@ -81,7 +80,7 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
         scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
     allowed = [False] * len(policies)
     for (model, key), entries in scopes.items():
-        rows = read_scoped_queryset(model, actor)
+        rows = model.objects.with_actor(actor) if actor is not None else model.objects.none()
         readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
         for index, value in entries:
             allowed[index] = value in readable

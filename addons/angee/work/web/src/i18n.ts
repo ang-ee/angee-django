@@ -18,9 +18,6 @@ export const enWorkMessages: Record<string, string> = {
   "stage.ruleOwned": "Moved by rules",
   "stage.ruleOwned.help":
     "Only automation rules move tasks into or out of this stage; hand moves and the default stage are refused.",
-  "stage.conceals": "Hides tasks",
-  "stage.conceals.help":
-    "Moves tasks entering this stage to Removed. Restoring them returns to their earlier stage.",
   "queue.open.board": "Board",
   "queue.open.triage": "Triage",
   "queue.open.cycles": "Cycles",

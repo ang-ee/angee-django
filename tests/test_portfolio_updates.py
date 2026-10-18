@@ -17,7 +17,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.portfolio.testing.models import Initiative, ProductRow, Update
+from angee.portfolio.testing.models import Initiative, Product, Update
 from tests.conftest import create_user
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -34,7 +34,7 @@ def reportable(composed_permissions: None) -> dict[str, Any]:
     ])
     with system_context(reason="test.updates.seed"):
         initiative = Initiative.objects.create(name="Strategic")
-        product = ProductRow.objects.create(name="Phasal")
+        product = Product.objects.create(name="Phasal")
     return {"manager": manager, "reader": reader, "initiative": initiative, "product": product}
 
 

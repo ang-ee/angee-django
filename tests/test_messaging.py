@@ -868,9 +868,8 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
 
     The ``GenericForeignKey`` the attachment binds through points *at* the thread, so the
     delete collector can never cascade from a deleted record up to its private ``Thread``
-    or that thread's messages. The ``pre_delete`` teardown receiver fires per collected
-    row on the bulk path exactly as on the instance path, so filtering-then-deleting a
-    chattered record leaves no orphaned thread, message or follower behind.
+    or that thread's messages. The generic target-delete owner must remove the edge and
+    its private graph on both instance and queryset paths.
     """
 
     del composed_tables
@@ -905,8 +904,8 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
     """Deleting a threaded MTI child collects its chatter attachment, leaving no orphan.
 
     ``TrackedRecordChild`` composes ``ThreadedModelMixin`` through its MTI parent, so the
-    chatter edge, the reverse ``thread_attachments`` GenericRelation, and the ``pre_delete``
-    teardown must all agree on the child's canonical content type. A leftover attachment on
+    chatter edge, reverse ``thread_attachments`` relation and target-delete policy must all
+    agree on the child's canonical content type. A leftover attachment on
     a reused primary key would mis-resolve, so the delete must remove it (the placement
     invariant in ``angee.base.refs``).
     """
@@ -1790,7 +1789,9 @@ def test_claimed_sender_proposal_accumulates_evidence_without_demoting_confirmat
     assert confirmed.is_confirmed and not confirmed.is_dismissed
     assert (handle.party_id, handle.party_link_confirmed) == (party.pk, True)
     assert (claim.source_kind, claim.confidence, claim.applied) == ("rule", 0.4, False)
-    assert claim.evidence == [{"model": "messaging.Message", "id": str(message.sqid)} for message in messages]
+    assert claim.evidence == [
+        {"model": "messaging.Message", "id": str(message.sqid), "pointer": ""} for message in messages
+    ]
     assert claim.evidence_truncated
     assert len(readable) == 20
 

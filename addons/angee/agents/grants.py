@@ -11,10 +11,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import ObjectRef, RelationshipTuple, SubjectRef, system_context
 from rebac.relationships import delete_relationships, write_relationships
-from rebac.roles import grant, revoke
 from rebac.types import RelationshipFilter
 
 from angee.agents.constants import BUILTIN_MCP_ANGEE
+from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 from angee.mcp.server import mcp_server
 
@@ -23,10 +23,6 @@ TOOL_GRANT_RESOURCE_TYPE = "agents/tool_grant"
 
 TOOL_ROLE_RELATION = "role"
 """Stored tool-bundle relation resolved through ToolRole.effective_member."""
-
-RESOURCE_READER_ROLE = ObjectRef("agents/toolrole", "resource_reader")
-"""Built-in bundle granted to successfully provisioned in-process agents."""
-
 
 def tool_grant_ref(server_sqid: str, tool_name: str) -> ObjectRef:
     """Resolve one public server/tool key to its model-backed grant object.
@@ -115,17 +111,6 @@ def sync_builtin_tool_catalogue() -> int:
         tool_model._base_manager.filter(server=server).exclude(name__in=names).delete()
         _sync_resource_reader_grants(server, registered)
     return len(registered)
-
-
-def sync_resource_reader_role(agent: Any) -> None:
-    """Reconcile the default bundle with the agent's persistent tool policy."""
-
-    if agent.user_id is None:
-        return
-    if agent.resource_reader and agent.lifecycle == "ready" and agent.runs_in_process:
-        grant(actor=agent.principal_subject(), role=RESOURCE_READER_ROLE)
-    else:
-        revoke(actor=agent.principal_subject(), role=RESOURCE_READER_ROLE)
 
 
 def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:

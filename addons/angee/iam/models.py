@@ -29,11 +29,13 @@ from django.utils import timezone
 from rebac import (
     PermissionDenied,
     SubjectRef,
+    check_new,
     current_actor,
     resolve_subjects,
     system_context,
     to_subject_ref,
 )
+from rebac.errors import MissingActorError
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
 from rebac.permissions_mixin import RebacPermissionsMixin
@@ -382,7 +384,16 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         Omitting the password creates an account with no usable password.
         """
 
-        actor = self.check_create()
+        actor, _ = self.effective_actor(strict=True)
+        resource_type = model_resource_type(self.model)
+        if actor is None:
+            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
+        if resource_type is None or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
         return self._create_person(
             username,
             email,

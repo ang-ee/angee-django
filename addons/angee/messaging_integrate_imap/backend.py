@@ -60,7 +60,8 @@ from pydantic import BaseModel, ConfigDict
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.net import is_unsafe_address, resolved_addresses
-from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage, open_stream, reset_stream
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import CursorInvalid, StreamPage, open_stream, reset_stream
 from angee.integrate.sync import current_bridge_progress
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend

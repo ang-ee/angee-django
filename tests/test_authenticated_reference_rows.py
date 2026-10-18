@@ -7,7 +7,7 @@ from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.portfolio.testing.models import Initiative, InitiativeProject, ProductRow, ReferenceRelease, Update
+from angee.portfolio.testing.models import Initiative, InitiativeProject, Product, Release, Update
 from angee.projects.testing.models import Project
 from angee.tags.testing.models import Tag
 from angee.uom.testing.models import (
@@ -23,12 +23,12 @@ def reference_rows(composed_tables):
         tag = Tag.objects.create(name="Reference")
         category = UomCategory.objects.create(name="Count")
         unit = Uom.objects.create(category=category, name="Each", ratio=1, rounding=1, is_reference=True)
-        product = ProductRow.objects.create(name="Reference")
+        product = Product.objects.create(name="Reference")
         initiative = Initiative.objects.create(name="Reference")
         project = Project.objects.create(title="Reference")
         placement = InitiativeProject.objects.create(initiative=initiative, project=project)
         update = Update.objects.create(target=initiative, health="on_track", body="Reference")
-        release = ReferenceRelease.objects.create(product=product, name="Reference")
+        release = Release.objects.create(product=product, name="Reference")
     # A tag assignment is not reference data: its record authorizes it (tests/test_tags.py).
     return [tag, category, unit, product, initiative, placement, update, release]
 

@@ -22,7 +22,6 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, cast
 
-from angee.base.scoping import lock_if_supported
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -47,6 +46,7 @@ from rebac.mixins import RebacModelBase
 from angee.agents.backends import InferenceBackend
 from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.deployments import InferenceDeploymentIdentity
+from angee.agents.reader_role import sync_resource_reader_role
 from angee.agents.resources import AgentResource
 from angee.agents.runners import TurnOutcome
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
@@ -1039,7 +1039,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         with transaction.atomic():
             persisted = None
             if not creating and should_check_name:
-                persisted = lock_if_supported(type(self)._base_manager.filter(pk=self.pk), no_key=True).values(
+                persisted = type(self)._base_manager.filter(pk=self.pk).lock_if_supported(no_key=True).values(
                     "name", *_READER_POLICY_FIELDS,
                 ).first()
             renamed = not creating and should_check_name and (persisted or {}).get("name") != self.name
@@ -1057,9 +1057,6 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
                 after = type(self)._base_manager.filter(pk=self.pk).values(*_READER_POLICY_FIELDS).first()
                 explicit = after != {field: persisted[field] for field in _READER_POLICY_FIELDS}
             if creating or explicit:
-                # Source discovery precedes concrete auth models required by MCP.
-                from angee.agents.grants import sync_resource_reader_role
-
                 # Read the persisted policy: a partial save can omit edited fields.
                 sync_resource_reader_role(type(self)._base_manager.get(pk=self.pk))
 
@@ -1853,7 +1850,7 @@ class AgentSessionManager(AngeeManager):
                 session._close_locked()
 
 
-class AgentSession(OwnerMixin, AngeeDataModel):
+class AgentSession(AuditMixin, AngeeDataModel):
     """Runtime-neutral conversation whose turns run once, without crash recovery.
 
     A pending turn retained across a rebuild runs first when the user next posts.

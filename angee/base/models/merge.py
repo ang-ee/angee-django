@@ -211,7 +211,7 @@ class Reference:
 
         raise NotImplementedError
 
-    def pointing(self, target: type[models.Model], *, using: str | None = None) -> Exists:
+    def pointing(self, target: type[models.Model]) -> Exists:
         """Return a condition on ``target`` rows: some row of this reference points at it."""
 
         raise NotImplementedError
@@ -320,11 +320,11 @@ class ForeignKeyReference(Reference):
         target = self.field.target_field
         return {self.field.attname: record.pk if target.primary_key else getattr(record, target.attname)}
 
-    def pointing(self, target: type[models.Model], *, using: str | None = None) -> Exists:
+    def pointing(self, target: type[models.Model]) -> Exists:
         """Return a condition on ``target`` rows: a row's key holds the target's value."""
 
         column = "pk" if self.field.target_field.primary_key else self.field.target_field.attname
-        return Exists(self.model._base_manager.using(using).filter(**{self.field.attname: OuterRef(column)}))
+        return Exists(self.model._base_manager.filter(**{self.field.attname: OuterRef(column)}))
 
     def holds(self, survivor: models.Model) -> bool:
         """Return whether ``survivor`` has a row in the model the key points at.
@@ -362,14 +362,14 @@ class EdgeReference(Reference):
         content_type = ContentType.objects.db_manager(record._state.db).get_for_model(model)
         return {self.pointer.ct_field: content_type, self.pointer.fk_field: record.pk}
 
-    def pointing(self, target: type[models.Model], *, using: str | None = None) -> Exists:
+    def pointing(self, target: type[models.Model]) -> Exists:
         """Return a condition on ``target`` rows: an edge row names the target's type and key."""
 
         object_id = self.model._meta.get_field(self.pointer.fk_field)
         model = canonical_model(target) or target._meta.concrete_model or target
-        content_type = ContentType.objects.db_manager(using).get_for_model(model)
+        content_type = ContentType.objects.get_for_model(model)
         return Exists(
-            self.model._base_manager.using(using).filter(
+            self.model._base_manager.filter(
                 **{
                     self.pointer.ct_field: content_type,
                     self.pointer.fk_field: Cast(OuterRef("pk"), output_field=object_id),
@@ -504,7 +504,7 @@ class MergeableMixin(models.Model):
         abstract = True
 
     @classmethod
-    def merge_blockers(cls, *, using: str | None = None) -> tuple[tuple[Q, str], ...]:
+    def merge_blockers(cls) -> tuple[tuple[Q, str], ...]:
         """Return each condition on a merged record that refuses its merge, with its message.
 
         A verb and a batched projection share these: a row matching any of them
@@ -517,7 +517,7 @@ class MergeableMixin(models.Model):
 
         if cls.retains_merged and not cls.merge_moves_references:
             return ()
-        return reference_blockers(cls, using=using)
+        return reference_blockers(cls)
 
     def merge(self, *, records: Sequence[str], **options: Any) -> Self:
         """Merge the records named by public id into this one and return it.
@@ -542,7 +542,7 @@ class MergeableMixin(models.Model):
             if self.pk in merged_ids:
                 raise ValidationError("A record cannot be merged into itself.")
             for row in sorted((self, *found.values()), key=lambda item: item.pk):
-                row.lock_for_merge(using)
+                row.lock_for_merge()
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=(self.pk, *merged_ids)
             ).order_by("pk")
@@ -586,7 +586,7 @@ class MergeableMixin(models.Model):
         using = self._state.db
         with transaction.atomic(using=using):
             for row in sorted((self, *merged), key=lambda item: item.pk):
-                row.lock_for_merge(using)
+                row.lock_for_merge()
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=[self.pk, *ids]
             ).order_by("pk")
@@ -614,16 +614,14 @@ class MergeableMixin(models.Model):
             merged,
             carry=carry,
             retire=survivor.retire_merged,
-            blockers=type(survivor).merge_blockers(using=survivor._state.db),
+            blockers=type(survivor).merge_blockers(),
             retained=all(survivor.retains(record) for record in merged),
             move_references=survivor.merge_moves_references,
             join=join,
         )
 
-    def lock_for_merge(self, using: str) -> None:
+    def lock_for_merge(self) -> None:
         """Acquire domain locks that must precede the core record locks."""
-
-        del using
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
         """Only live operational roots merge; model hooks add domain refusals."""
@@ -660,9 +658,7 @@ class MergeableMixin(models.Model):
             raise ValidationError(f"{merged} is still referred to and cannot be removed.") from error
 
 
-def reference_blockers(
-    model: type[models.Model], *, using: str | None = None,
-) -> tuple[tuple[Q, str], ...]:
+def reference_blockers(model: type[models.Model]) -> tuple[tuple[Q, str], ...]:
     """Return a refusal condition on ``model`` rows per ``BLOCK`` reference, with its message.
 
     A row a ``BLOCK`` reference points at cannot be merged: the refusal every
@@ -671,7 +667,7 @@ def reference_blockers(
     """
 
     return tuple(
-        (Q(reference.pointing(model, using=using)), f"{reference.label} still refer to it.")
+        (Q(reference.pointing(model)), f"{reference.label} still refer to it.")
         for reference in references(model)
         if reference.policy == MergePolicy.BLOCK
     )

@@ -55,11 +55,14 @@ its normal outbox/precondition policy.
 
 [`schema.py`](schema.py) owns the read surface in the `console` schema. The
 `history(model, id, limit, offset)` query returns one record's changesets newest
-first (`RecordHistory { total, entries }`), resolved through the record's own
+first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved through the record's own
 `read` gate: a hidden or unknown record reads as `null`, and a model without
-native history or a REBAC resource type is refused. Each `HistoryEntry` carries
-the changeset's attribution (`actor` as the SubjectRef, `actor_model`/`actor_id`
-as the public reference, `source_kind`), `action`, `activity`, `change_reason`,
+native history or a REBAC resource type is refused. `HistoryAttribution` is the
+shared interface for detailed entries and the compact `HistorySummaryType` lines
+used by Comments; the web `HistoryEntrySummary` component renders that compact
+shape. Each `HistoryEntryType` carries the changeset's attribution (`actor` as
+the public SubjectRef, `actor_model`/`actor_id` as the same public reference,
+`source_kind`), `action`, `activity`, `change_reason`,
 times, `outcome`, the field deltas simple-history's `diff_against` computes
 between the record's versions in that changeset and the row before them (a first
 version diffs against an empty snapshot; references carry public ids), the
@@ -70,8 +73,8 @@ mirror history tables, so the subject's redaction is the only rule. MTI parents'
 versions of the same row join the entry. A page holds at most 100 changesets.
 
 `revert_changeset(model, id, changeset)` is the `ActionResult` verb behind the
-History tab's Revert: `write` on the record admits it and `Changeset.revert()`
-restores. Resource metadata marks a model that keeps history with
+History tab's Revert: the record's `history_revert_permission` is the one
+admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with
 `history: true`, the fact [`web/`](web/) uses to show the tab.
 
 [`web/`](web/) contributes the History tab once, at `form#sections`, visible on

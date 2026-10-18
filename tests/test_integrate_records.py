@@ -26,7 +26,7 @@ from angee.integrate.states import (
 from angee.integrate.testing.integration import Integration
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.testing.models import Channel
-from tests.conftest import make_integration
+from tests.conftest import current_stream, make_integration
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.stream_adapters import applied_history, failure_state
 
@@ -38,7 +38,7 @@ def replica(composed_tables: None) -> Iterator[Any]:
     del composed_tables
     with system_context(reason="test record protocol"):
         bridge = make_integration("record-protocol", model=Channel)
-        yield SyncStream.objects.current(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
+        yield current_stream(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
 
 
 def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None:
@@ -156,7 +156,7 @@ def test_baseline_completion_is_independent_of_actor_visibility(composed_tables:
     with system_context(reason="test baseline completion authorization"):
         bridge = make_integration("baseline-completion-rebac", model=Channel)
         other = get_user_model().objects.create_user(username="baseline-completion-other")
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         SyncStream.objects.advance(stream, {}, exhausted=True)
         successor = SyncStream.objects.bump_generation(stream)
         deferred = SyncStream.objects.only("pk").get(pk=successor.pk)
@@ -265,7 +265,7 @@ def test_record_parent_is_one_root_in_same_stream_and_cannot_be_reassigned(repli
     with pytest.raises(ValidationError, match="root with children"):
         RecordLink.objects.observe(replica, parent.external_key, parent=other)
     bridge = make_integration("other-record-protocol", model=Channel)
-    stream = SyncStream.objects.current(bridge, "other", kind=StreamKind.RECORD_REPLICA)
+    stream = current_stream(bridge, "other", kind=StreamKind.RECORD_REPLICA)
     foreign = RecordLink.objects.observe(stream, "aggregate:foreign")
     with pytest.raises(ValidationError, match="same stream"):
         RecordLink.objects.observe(replica, "member:foreign", parent=foreign)
@@ -384,7 +384,7 @@ def test_event_feeds_reject_record_links(composed_tables: None) -> None:
     del composed_tables
     with system_context(reason="test event feed identity"):
         bridge = make_integration("event-protocol", model=Channel)
-        stream = SyncStream.objects.current(bridge, "messages", "inbox")
+        stream = current_stream(bridge, "messages", "inbox")
         with pytest.raises(ValidationError, match="Event feeds"):
             RecordLink.objects.observe(stream, "message:1")
         assert not RecordLink.objects.exists()
@@ -394,16 +394,16 @@ def test_current_partition_query_returns_latest_generation_only(composed_tables:
     del composed_tables
     with system_context(reason="test current stream selection"):
         bridge = make_integration("partition-protocol", model=Channel)
-        old = SyncStream.objects.current(bridge, "messages", "inbox", cursor={"uid": 1})
-        sent = SyncStream.objects.current(bridge, "messages", "sent")
+        old = current_stream(bridge, "messages", "inbox", cursor={"uid": 1})
+        sent = current_stream(bridge, "messages", "sent")
         current = SyncStream.objects.bump_generation(old)
         assert list(SyncStream.objects.current_for_bridge(bridge, "messages").values_list("pk", flat=True)) == [
             current.pk,
             sent.pk,
         ]
-        assert SyncStream.objects.current(bridge, "messages", "inbox", cursor={"uid": 999}).cursor == {}
-        contacts = SyncStream.objects.current(bridge, "contacts")
-        other = SyncStream.objects.current(make_integration("partition-other", model=Channel), "messages", "inbox")
+        assert current_stream(bridge, "messages", "inbox", cursor={"uid": 999}).cursor == {}
+        contacts = current_stream(bridge, "contacts")
+        other = current_stream(make_integration("partition-other", model=Channel), "messages", "inbox")
         every_key = list(SyncStream.objects.current_for_bridge(bridge).values_list("pk", flat=True))
         assert every_key == [contacts.pk, current.pk, sent.pk]
         assert other.pk not in every_key
@@ -413,7 +413,7 @@ def test_stream_uses_a_protected_integration_foreign_key(composed_tables: None) 
     del composed_tables
     with system_context(reason="test stream bridge identity"):
         bridge = make_integration("stream-identity", model=Channel)
-        stream = SyncStream.objects.current(bridge, "messages")
+        stream = current_stream(bridge, "messages")
         stream.refresh_from_db()
         assert stream.integration_id == bridge.pk
         assert stream.integration.concrete_capability() == bridge
@@ -433,7 +433,7 @@ def test_stream_rejects_an_integration_without_a_concrete_bridge(composed_tables
     with system_context(reason="test stream requires a bridge"):
         integration = make_integration("stream-no-bridge")
         with pytest.raises(ValidationError, match="concrete Integration child"):
-            SyncStream.objects.current(integration, "messages")
+            current_stream(integration, "messages")
         assert not SyncStream.objects.exists()
 
 
@@ -444,7 +444,7 @@ def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tabl
         bridge = make_integration("stream-rebac", model=Channel)
         owner = get_user_model().objects.get(pk=bridge.owner_id)
         other = get_user_model().objects.create_user(username="stream-rebac-other")
-        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
         link = RecordLink.objects.observe(stream, "person:1")
 
     for model, row in ((SyncStream, stream), (RecordLink, link)):

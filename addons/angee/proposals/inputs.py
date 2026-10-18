@@ -9,8 +9,6 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from angee.base.scoping import system_queryset
-
 
 class TopicTemplate(BaseModel):
     """One ordered topic in a round template."""
@@ -69,7 +67,7 @@ class RoundTemplate(BaseModel):
                 if project is None:
                     raise ValidationError({name: "A milestone requires a target project."})
                 matches = list(
-                    system_queryset(apps.get_model("projects", "Milestone")).filter(
+                    apps.get_model("projects", "Milestone").system_queryset().filter(
                         project=project,
                         name=milestone_name,
                     )[:2]

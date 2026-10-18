@@ -6,15 +6,16 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from rebac import (
     ObjectRef,
-    PermissionDenied,
     RelationshipTuple,
     SubjectRef,
     actor_context,
+    check_new,
     system_context,
     to_subject_ref,
     write_relationships,
 )
 from rebac.models import active_relationship_model
+from rebac.resources import model_resource_type
 
 from angee.graphql.view_as import ViewAs
 from angee.spaces.testing.models import Group, Membership
@@ -176,12 +177,11 @@ def test_const_manager_role_tracks_roster_create_and_issue_but_never_preview(spa
             ),
         ]
     )
+    resource_type = model_resource_type(User)
+    assert resource_type is not None
     with actor_context(actor):
-        if permitted:
-            assert User.objects.check_create() == to_subject_ref(actor)
-        else:
-            with pytest.raises(PermissionDenied):
-                User.objects.check_create()
+        verdict = check_new(subject=to_subject_ref(actor), action="create", resource_type=resource_type)
+        assert verdict.allowed is permitted
         assert target.with_actor(actor).has_access("issue_password") is permitted
         assert not target.has_access("view_as")
     assert User.objects.viewable_people(actor) == []
@@ -199,6 +199,5 @@ def test_const_manager_role_tracks_roster_create_and_issue_but_never_preview(spa
     with system_context(reason="test.role.roster-demotion"):
         membership.role = Membership.MembershipRole.MEMBER
         membership.save(update_fields=["role"])
-    with actor_context(actor), pytest.raises(PermissionDenied):
-        User.objects.check_create()
+    assert not check_new(subject=to_subject_ref(actor), action="create", resource_type=resource_type).allowed
     assert not target.with_actor(actor).has_access("issue_password")

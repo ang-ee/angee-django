@@ -33,7 +33,6 @@ A handle that proves to be another's spelling folds through the shared
 value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
-Its model hooks and ordinary actor merge use the same coordinator.
 
 Ordinary person edits assert normal statements; confirm/dismiss writes preferred
 statements without rewriting the source or copying evidence. Person preferences

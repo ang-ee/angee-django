@@ -16,17 +16,48 @@ class BaseConfig(AppConfig):
         """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
-        from django.db.models.signals import pre_delete
+        from django.apps import apps
+        from django.db.models.signals import class_prepared, pre_delete
         from rebac.field_backing import canonical_model
 
-        from angee.base.refs import delete_record_refs, record_edges_by_target
+        from angee.base.refs import (
+            RecordRefMixin,
+            delete_record_refs,
+            record_ref_cleanup_edges_for_target,
+            record_ref_cleanup_target,
+        )
         from angee.base.signals import connect_for_models
 
         connect_for_models(
             pre_delete,
             delete_record_refs,
-            applies=lambda model: canonical_model(model) in record_edges_by_target(),
+            applies=lambda model: bool(record_ref_cleanup_edges_for_target(model))
+            or canonical_model(model) is not None,
             dispatch_uid="angee.base.record_refs.target_delete",
+        )
+
+        def bind_late_cleanup_edge(sender: type, **_kwargs: object) -> None:
+            """Bind targets prepared before a composed cleanup edge existed."""
+
+            if (
+                sender._meta.abstract
+                or sender._meta.apps is not apps
+                or not issubclass(sender, RecordRefMixin)
+                or not callable(getattr(sender, "teardown_for_target", None))
+            ):
+                return
+            for model in apps.get_models():
+                if record_ref_cleanup_target(sender, model):
+                    pre_delete.connect(
+                        delete_record_refs,
+                        sender=model,
+                        dispatch_uid=f"angee.base.record_refs.target_delete.{model._meta.label_lower}",
+                    )
+
+        class_prepared.connect(
+            bind_late_cleanup_edge,
+            dispatch_uid="angee.base.record_refs.target_delete.late_cleanup_edge",
+            weak=False,
         )
         # The check imports REBAC models, which require completed app population.
         from angee.base.checks import (

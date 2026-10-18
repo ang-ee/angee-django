@@ -20,7 +20,6 @@ from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
-from angee.base.impl import ImplClassField
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
@@ -32,7 +31,6 @@ from angee.base.models import (
     update_fields_with_auto_now,
 )
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.service_users import sync_service_user
@@ -59,7 +57,13 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import Step
-from angee.workflows.triggers import TriggerEventManager, TriggerGrantTarget, TriggerManager, TriggerSource
+from angee.workflows.triggers import (
+    TriggerEventManager,
+    TriggerGrantTarget,
+    TriggerManager,
+    TriggerSource,
+    TriggerSourceField,
+)
 
 
 @dataclass(frozen=True)
@@ -311,7 +315,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
             with system_context(reason="workflows.execution_policy"):
                 return self.version
         model = self._meta.get_field("version").related_model
-        return system_queryset(model).get(pk=self.version_id)
+        return model.system_queryset().get(pk=self.version_id)
 
     @property
     def subject_model_class(self) -> type[models.Model] | None:
@@ -350,7 +354,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         self.require_access("read", actor)
         definition = self.policy_version.definition
         topology = definition.topology()
-        steps = cast(Any, read_scoped_queryset(self.step_runs.model, actor)).filter(run_id=self.pk)
+        steps = cast(Any, self.step_runs.model.objects.with_actor(actor)).filter(run_id=self.pk)
         rows = {row.node_key: row for row in steps.nodes()}
         for row in rows.values():
             row.run = self
@@ -394,9 +398,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         return (
             not self.is_terminal
             or self.status == RunStatus.FAILED and self.stopped_at is None
-            or system_queryset(self.step_runs.model).filter(run=self)
+            or self.step_runs.model.system_queryset().filter(run=self)
             .exclude(status__in=StepRunStatus.terminal_values()).exists()
-            or any(child._has_open_owned_work for child in system_queryset(type(self)).filter(
+            or any(child._has_open_owned_work for child in type(self).system_queryset().filter(
                 parent_step__run=self, relation=RunRelation.OWNED,
             ))
         )
@@ -597,7 +601,7 @@ class StepRun(AngeeDataModel):
     @classmethod
     def map_settled_expression(cls) -> Coalesce:
         """Count terminal body rows in one correlated expression for bulk reads."""
-        rows = cast(Any, system_queryset(cls)).for_map(models.OuterRef("run_id"), models.OuterRef("node_key"))
+        rows = cast(Any, cls.system_queryset()).for_map(models.OuterRef("run_id"), models.OuterRef("node_key"))
         counts = (rows.filter(status__in=StepRunStatus.terminal_values()).order_by().values("run_id")
                   .annotate(total=models.Count("pk")).values("total"))
         return Coalesce(models.Subquery(counts), 0, output_field=models.IntegerField())
@@ -607,7 +611,7 @@ class StepRun(AngeeDataModel):
         """Use the same progress expression for ordinary model and optimized reads."""
         if "_map_settled" in self.__dict__:
             return int(self.__dict__["_map_settled"])
-        return int(system_queryset(type(self)).filter(pk=self.pk)
+        return int(type(self).system_queryset().filter(pk=self.pk)
                    .annotate(_map_settled=self.map_settled_expression()).values_list("_map_settled", flat=True).get())
 
     @property
@@ -825,7 +829,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     resource_class = TriggerResource
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
-    source = ImplClassField(TriggerSource)
+    source = TriggerSourceField(TriggerSource)
     model_label: str = ModelLabelField(max_length=200, blank=True, default="")
     condition = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False, editable=False)
@@ -837,8 +841,10 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     @classmethod
     def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
         """Workflow authors can configure sources without platform administration."""
-        workflows = read_scoped_queryset(cls._meta.get_field("workflow").related_model, actor, action="write")
-        return field_name == "source" and workflows.exists()
+        if field_name != "source" or actor is None:
+            return False
+        workflows = cls._meta.get_field("workflow").related_model.objects.with_actor(actor).with_action("write")
+        return workflows.exists()
 
     @property
     def source_class(self) -> type[TriggerSource]:
@@ -876,6 +882,8 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 
     def validate_configuration(self) -> tuple[Any, Any]:
         """Use the model's final resource input and native filter compiler."""
+        if self.source_class.watch_only:
+            raise ValidationError({"source": "Watch-only observations cannot be workflow trigger sources."})
         self._trigger_hooks("trigger_input")
         self._trigger_hooks("check_admission")
         model = self.source_class.model(self)
@@ -926,7 +934,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         super().clean()
         self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
-        previous = system_queryset(type(self)).filter(pk=self.pk).first() if self.pk else None
+        previous = type(self).system_queryset().filter(pk=self.pk).first() if self.pk else None
         self.granted_targets = previous.granted_targets if previous is not None else []
         if previous is not None and self.workflow_id != previous.workflow_id:
             raise ValidationError("A trigger's workflow cannot be changed.")
@@ -948,7 +956,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
                 type(self).objects.lock_grants(self.workflow_id)
             previous = None
             if not self._state.adding:
-                previous = system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
+                previous = type(self).system_queryset().filter(pk=self.pk).lock_if_supported(no_key=True).get()
             self.clean()
             self.workflow.require_access("write", self.actor())
             if not self.enabled and kwargs.get("update_fields") is not None:

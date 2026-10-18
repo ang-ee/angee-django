@@ -55,18 +55,11 @@ def _grant(resource: Any, relation: str, subject: Any) -> None:
 
 
 def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
-    """Exercise the retained manual factory's explicit preflight and scoped insert."""
+    """Exercise the prepared row's native scoped insertion gate."""
 
     proposal = Proposal(round=round, responder=responder)
     with actor_context(actor):
-        Proposal.objects.check_create(
-            {
-                "round": (round,),
-                "responder": (responder,),
-            }
-        )
-        proposal.sudo(reason="tests.proposals.create").save()
-    return proposal
+        return Proposal.objects.insert(proposal)
 
 
 @pytest.mark.django_db(transaction=True)

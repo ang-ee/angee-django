@@ -215,9 +215,11 @@ class TrashMixin(models.Model):
     def _require_trash_state(self, *, trashed: bool) -> None:
         """Lock the stored row and refuse a trash verb that would change nothing."""
 
+        owner = self._meta.get_field(TRASH_FLAG_FIELD).model
         stored = (
-            type(self).system_queryset(lock=("self",))
-            .using(self._state.db)
+            owner._base_manager.db_manager(hints={"instance": self})
+            .all()
+            .lock_if_supported(of=("self",))
             .filter(pk=self.pk)
             .values_list(TRASH_FLAG_FIELD, flat=True)
             .first()

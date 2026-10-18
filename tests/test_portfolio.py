@@ -11,7 +11,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeDataModel
 from angee.portfolio.models import InitiativeProject
-from angee.portfolio.testing.models import ProductRow
+from angee.portfolio.testing.models import Product
 from tests.hierdemo.models import HierNode
 
 
@@ -53,14 +53,14 @@ def test_portfolio_authenticated_reads_do_not_grant_write(composed_tables: None)
     del composed_tables
     reader = SubjectRef.of("auth/user", "1")
     with system_context(reason="test.portfolio.product"):
-        row = ProductRow.objects.create(name="Shared")
+        row = Product.objects.create(name="Shared")
         row.save()
         assert not active_relationship_model().objects.filter(
             resource_type="portfolio/product", resource_id=str(row.pk), relation="reader",
         ).exists()
     with actor_context(reader):
-        readable = ProductRow.objects.get(pk=row.pk)
+        readable = Product.objects.get(pk=row.pk)
         assert readable.name == "Shared"
         assert not readable.has_access("write")
     with actor_context(AnonymousUser()):
-        assert not ProductRow.objects.filter(pk=row.pk).exists()
+        assert not Product.objects.filter(pk=row.pk).exists()

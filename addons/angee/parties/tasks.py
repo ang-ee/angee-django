@@ -20,8 +20,7 @@ def refresh_handle_suggestions(timestamp: int | None = None) -> int:
 
     :meth:`~angee.parties.managers.PartyManager.reconcile_suggestions` owns
     the evidence providers and their contract, so a rule change heals every
-    deployment on the next run. Like the phone renormalization, each run first
-    repairs handle owners stored under an older resolution rule.
+    deployment on the next run.
 
     Every run reads every signature: whether a number is one person's own depends
     on all the mail that carries it, and the whole corpus mines in seconds. The
@@ -36,13 +35,10 @@ def refresh_handle_suggestions(timestamp: int | None = None) -> int:
 
 
 def _refresh_handle_suggestions() -> int:
-    """Run the owner repair and suggester passes under the already-held task lock."""
+    """Run the suggester passes under the already-held task lock."""
 
     parties = apps.get_model("parties", "Party").objects
     with system_context(reason="parties.tasks.refresh_handle_suggestions"):
-        parties.resolve_handle_statements()
-        handles = apps.get_model("parties", "Handle").objects
-        changed = int(handles.renormalize_phone_values()) + int(handles.resolve_stale_owners())
-        changed += int(parties.reconcile_suggestions())
+        changed = int(parties.reconcile_suggestions())
         changed += int(parties.reconcile_same_as())
     return changed

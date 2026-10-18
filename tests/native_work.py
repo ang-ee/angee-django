@@ -50,7 +50,6 @@ class WorkCase(TransactionTestCase):
                     ("Active", "started", {"rule_owned": True}),
                     ("Final", "completed", {"rule_owned": True}),
                     ("Canceled", "canceled", {"rule_owned": True}),
-                    ("Removed", "canceled", {"conceals": True}),
                     ("Duplicate", "duplicate", {}),
                 )
             ):

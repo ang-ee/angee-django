@@ -267,5 +267,3 @@ class OwnerMixin(AuditMixin):
                 locked.sudo(reason="ownership.transfer").save()
             self.refresh_from_db()
         return self
-
-

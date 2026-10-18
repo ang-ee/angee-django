@@ -119,7 +119,6 @@ addons = [
     "httpx2>=2.10,<3",
     "httpx>=0.28.1,<0.29",
     "imapclient>=3.1.0",
-    "jsonpatch>=1.34",
     "jsonpointer>=3.1",
     "mail-parser-reply>=1.36",
     "markdown-it-py>=4.2",

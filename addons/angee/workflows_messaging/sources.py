@@ -6,7 +6,6 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, to_object_ref
 
-from angee.base.scoping import read_scoped_queryset
 from angee.messaging.events import message_ingested
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
@@ -43,7 +42,7 @@ class MessageIngested(TriggerSource):
         if record is not None:
             if record.channel_id != channel_id:
                 raise PermissionDenied("The message no longer belongs to the trigger's channel.")
-        visible = read_scoped_queryset(apps.get_model("messaging", "Channel"), actor)
+        visible = apps.get_model("messaging", "Channel").objects.with_actor(actor).with_action("read")
         if not visible.filter(pk=channel_id).exists():
             subject = "The enabling user" if record is None else "The workflow principal"
             raise PermissionDenied(f"{subject} cannot read the channel.")

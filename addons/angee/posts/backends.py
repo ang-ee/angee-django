@@ -42,7 +42,8 @@ from angee.integrate.http import HttpClientMixin, ResponseTooLargeError
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.net import AddressNotAllowedError
-from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import ApplyResult, SemanticError, StreamPage
 from angee.messaging.backends import (
     DeliveryOutcome,
     DeliveryUncertain,

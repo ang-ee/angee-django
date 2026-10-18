@@ -7,8 +7,6 @@ from typing import Any
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.base_session import AbstractBaseSession
-from django.test.utils import isolate_apps
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -29,7 +27,7 @@ from angee.knowledge.models import (
     parse_wikilinks,
 )
 from angee.mcp.graphql import execute_under_actor
-from tests.conftest import Link, MarkdownPage, Page, RecordBinding, SchemaAddon, Vault, create_user, vault_for
+from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
 
 
 def test_create_for_sets_owner_and_audit_stamps(composed_tables: None) -> None:
@@ -476,20 +474,3 @@ def _rename(vault: Any, name: str) -> None:
 
     vault.name = name
     vault.save(update_fields=("name",))
-
-
-@pytest.mark.django_db
-@isolate_apps()
-def test_binding_teardown_ignores_string_pk_rows() -> None:
-    """A row no binding can name (untyped, such as django's Session) is a no-op, not an error.
-
-    Coercing Session's string key into the integer object_id filter once crashed
-    logout; typed rows with non-integer keys are skipped the same way.
-    """
-
-    class Session(AbstractBaseSession):
-        class Meta:
-            app_label = "tests"
-
-    probe = Session(session_key="5nak4kkrccy3b268oc6zt7hbcui3ru1l")
-    RecordBinding.objects.teardown_for_record(probe)

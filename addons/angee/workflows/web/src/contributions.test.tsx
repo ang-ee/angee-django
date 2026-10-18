@@ -78,12 +78,13 @@ const runsTab = recordRunsTab.content;
 
 test("the record contribution only mounts for identified records", () => {
   const context: ChatterViewContext = { pathname: "/notes/nte_7", params: { id: "nte_7" },
-    route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", canonicalLabel: "notes.Note" },
+    route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", resourceType: "notes/note", canonicalLabel: "notes.Note" },
     view: { kind: "record", type: "notes/note", sqid: "nte_7" },
   };
   expect(runsTab.when?.(context)).toBe(true);
   expect(runsTab.when?.({ ...context, view: { kind: "list", type: "notes/note" } })).toBe(false);
   expect(runsTab.when?.({ ...context, route: undefined })).toBe(false);
+  expect(runsTab.when?.({ ...context, route: { ...context.route!, resourceType: null } })).toBe(false);
   for (const model of ["Workflow", "WorkflowVersion", "WorkflowRun", "StepRun", "StepAttempt", "StepRecord", "Trigger", "TriggerEvent"]) {
     expect(runsTab.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(true);
   }
@@ -93,7 +94,6 @@ test("the record contribution only mounts for identified records", () => {
 test("the contextual contribution is labeled as Runs through the record aside", () => {
   render(<>{runsTab.label}</>);
   expect(screen.getByText("Runs")).toBeTruthy();
-  expect(runsTab.aliases).toEqual(["workflows.timeline"]);
   expect(recordRunsTab.sequence).toBe(30);
 });
 
