@@ -22,7 +22,6 @@ from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.refs import RecordRef, RecordRefMixin
-from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
@@ -74,7 +73,7 @@ class _ActorScopedSubquery(models.Expression):
         self.field_name = field_name
 
     def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
-        queryset = aggregate_scoped_queryset(self.queryset.using(connection.alias))
+        queryset = self.queryset.using(connection.alias).scoped_for_aggregate()
         return models.Subquery(queryset.order_by().values(self.field_name)).as_sql(compiler, connection)
 
     def get_group_by_cols(self) -> list[Any]:
@@ -88,7 +87,7 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
     reference = queryset.model.record_ref_field()
     key_field = queryset.model._meta.get_field(reference.fk_field)
-    content_types = ContentType.objects.filter(pk__in=aggregate_scoped_queryset(queryset).order_by().values(
+    content_types = ContentType.objects.filter(pk__in=queryset.scoped_for_aggregate().order_by().values(
         reference.ct_field,
     )).order_by("app_label", "model")
     actor = relation_actor(queryset)
@@ -97,7 +96,7 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         model = content_type.model_class()
         if model is None:
             continue
-        targets = read_scoped_queryset(model, actor)
+        targets = model.objects.with_actor(actor).with_action("read")
         keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
         readable |= models.Q(**{
             reference.ct_field_attname: content_type.pk,
@@ -134,7 +133,12 @@ def _record_readable(row: Any) -> bool:
     """Return the row's batched target-read annotation, computing it once when absent."""
 
     if "_angee_record_readable" not in row.__dict__:
-        rows = with_record_reference_access(read_scoped_queryset(type(row), current_actor()).filter(pk=row.pk))
+        actor = current_actor()
+        rows = with_record_reference_access(
+            type(row).objects.none()
+            if actor is None
+            else type(row).objects.with_actor(actor).with_action("read").filter(pk=row.pk)
+        )
         row._angee_record_readable = bool(rows.values_list("_angee_record_readable", flat=True).first())
     return bool(row._angee_record_readable)
 
@@ -183,7 +187,7 @@ def actor_scoped_relation_expression(
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = read_scoped_queryset(related_model, actor)
+        related_queryset = related_model.objects.with_actor(actor).with_action("read")
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))
@@ -305,7 +309,12 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         if related_model is None:
             # A public-ID scalar has no nested model projection to optimize.
             return field_name
-        queryset = read_scoped_queryset(related_model, current_actor())
+        actor = current_actor()
+        queryset = (
+            related_model.objects.none()
+            if actor is None
+            else related_model.objects.with_actor(actor).with_action("read")
+        )
         queryset = run_type_get_queryset(queryset, field.django_type, info)
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)

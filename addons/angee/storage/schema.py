@@ -269,12 +269,10 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class FolderWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a real folder through ``Folder.objects.create_in_drive``."""
 
         del info
-        if client_creation_key is not None:
-            raise ValidationError({"client_creation_key": "Folder creation does not support creation keys."})
         try:
             return Folder.objects.create_in_drive(
                 drive_id=str(data["drive"]),

@@ -18,8 +18,9 @@ from django.db.models.deletion import PROTECT
 from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
-from angee.base.evidence import DerivedFrom, FactAuthority
+from angee.base.evidence import FactAuthority
 from angee.base.fields import StateField
+from angee.base.models import DerivedFrom
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,

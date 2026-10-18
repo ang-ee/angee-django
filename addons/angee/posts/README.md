@@ -38,7 +38,7 @@ their records independently. Landing repairs
 a bound, discovery-ready feed's missing horizon before classifying its next record,
 using the completed discovery time when available. NULL never means everything live.
 
-`MessagePublic.reply_to_comment(*, body, actor, local=None, creation_key=None)`
+`MessagePublic.reply_to_comment(*, body, actor, local=None, idempotency_key=None)`
 owns feed reply policy on the shared Message row. It composes
 `reply_state()` under the comment's row lock on insertion, after replay, excluding
 other runs and native platform answers. The same owner predicate serves workflow
@@ -46,14 +46,14 @@ eligibility; possibly accepted and SENT outbound deliveries still count after lo
 trash because trash does not retract a public reply. Other discarded and failed
 replies do not. Reply preparation composes
 `Message.objects.compose_reply` with the final hold state at insertion and native
-creation-key replay. The actor needs readable context and channel `reply`.
+idempotency replay. The actor needs readable context and channel `reply`.
 Unreadable comments raise `PermissionDenied`. New attempts on answered comments
 raise `CommentAnswered`; matching replays return their existing reply first.
 `Feed.reply_hold` is operator-editable hours: null holds for approval indefinitely,
 positive hours schedule a held draft, and zero queues immediate delivery. Replays
 preserve the original hold and settlement. `local` is trusted Python provenance,
 never an agent GraphQL argument. Retained replies advance thread counters on
-insertion; queueing and creation-key replay never increment again. Replaying a
+insertion; queueing and idempotency replay never increment again. Replaying a
 discarded receipt returns its row or an explicit validation refusal.
 
 `FeedBackend.deliver` owns publication order and error classification. Providers

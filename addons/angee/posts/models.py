@@ -36,8 +36,7 @@ from rebac import PermissionDenied, system_context
 from rebac.mixins import RebacModelBase
 
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, update_fields_with_auto_now
-from angee.base.models import AngeeDataModel
+from angee.base.models import AngeeDataModel, AuditMixin, update_fields_with_auto_now
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
@@ -483,7 +482,7 @@ class MessagePublic(models.Model):
 
     def reply_to_comment(
         self, *, body: str, actor: Any, local: Mapping[str, Any] | None = None,
-        creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Message:
         """Apply feed reply policy over messaging's idempotent Python-only factory.
 
@@ -509,7 +508,7 @@ class MessagePublic(models.Model):
                     raise CommentAnswered("The comment is already answered.")
 
             return apps.get_model("messaging", "Message").objects.compose_reply(
-                parent, body=body, sender=feed.handle, actor=actor, local=local, creation_key=creation_key,
+                parent, body=body, sender=feed.handle, actor=actor, local=local, idempotency_key=idempotency_key,
                 scheduled_at=feed.reply_schedule(), queued=feed.reply_hold == 0,
                 admit=admit,
             )

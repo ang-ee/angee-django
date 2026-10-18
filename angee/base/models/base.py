@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 import sys
 from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -11,26 +9,24 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
-from django.core import checks, signing
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import models
-from django.db.models import Exists, OuterRef
-from django.db.models.functions import Coalesce
 from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
-    check_new,
-    current_actor,
     delete_relationship,
     system_context,
     to_object_ref,
     write_relationships,
 )
 from rebac.actors import is_sudo, to_subject_ref
-from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
-from rebac.managers import RebacManager, RebacQuerySet
+from rebac.errors import NoActorResolvedError, PermissionDenied
+from rebac.managers import RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 from simple_history.models import HistoricalChanges
@@ -38,20 +34,15 @@ from simple_history.models import HistoricalChanges
 from angee.base.actors import instance_actor
 from angee.base.identity import PublicIdentity
 from angee.base.impl import ImplClassField
-from angee.base.merge import named_in_relationships, references
-from angee.base.mixins import (
-    MergeContractMixin,
-    SqidMixin,
-    TimestampMixin,
-    TrashQuerySet,
-)
-from angee.base.pagination import KeysetOrder, KeysetPage
+from angee.base.models.append_only import AppendOnlyModel
+from angee.base.models.identity import SqidMixin, TimestampMixin
+from angee.base.models.manager import AngeeManager, AngeeUnscopedManager
+from angee.base.models.merge import MergeContractMixin, named_in_relationships, references
+from angee.base.models.query import AngeeQuerySet
+from angee.base.models.transitions import StateTransitions
 from angee.base.permissions import effective_rebac_definition
-from angee.base.querysets import AngeeUnscopedQuerySet as AngeeUnscopedQuerySet
-from angee.base.querysets import _AngeeQuerySetMixin
-from angee.base.scoping import lock_if_supported
+from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.tiers import ResourceTier
-from angee.base.transitions import StateTransitions
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _SAVE_VERDICT = "_angee_save_verdict"
@@ -67,202 +58,6 @@ class DirectRecordAccess:
     relation: str
     subject: SubjectRef
 
-
-class AngeeQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
-    RebacQuerySet[_ModelT],
-):
-    """QuerySet API shared by Angee source and runtime models."""
-
-    def readable_scalar_subquery(
-        self,
-        field: str,
-        *,
-        actor: Any = None,
-        default: Any = None,
-        output_field: models.Field | None = None,
-    ) -> models.Expression:
-        """Project one correlated readable value, including under an elevated parent.
-
-        Add correlation predicates before calling. No actor yields no value;
-        callers own domain fallbacks and may explicitly coalesce an absent value.
-        """
-
-        actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self
-        # The selected field owns the scalar type; only the outer fallback needs
-        # a common output type (overriding Subquery changes empty-set compilation).
-        scalar = models.Subquery(readable.values(field)[:1])
-        if actor is None:
-            return models.Value(default, output_field=output_field or scalar.output_field)
-        if default is None:
-            return scalar
-        return Coalesce(
-            scalar,
-            models.Value(default),
-            output_field=output_field or scalar.output_field,
-        )
-
-    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression:
-        """Count a correlated actor-scoped row set, returning zero when empty."""
-
-        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
-        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
-            "_count",
-            actor=actor,
-            default=0,
-            output_field=models.IntegerField(),
-        )
-
-    def keyset_page(
-        self,
-        *,
-        order: KeysetOrder,
-        cursor_scope: tuple[Any, ...],
-        cursor_salt: str = "angee.keyset.v1",
-        before_cursor: str | None = None,
-        after_cursor: str | None = None,
-        through_cursor: str | None = None,
-        around: models.Model | None = None,
-        limit: int = 50,
-    ) -> KeysetPage[_ModelT]:
-        """Page this authorized queryset using signed, stable timestamp/PK cuts.
-
-        The caller supplies a prepared, scoped queryset and canonical effective
-        query identity in ``cursor_scope`` (root, filters and any variable order).
-        Database, model and actor are always included. The salt versions the
-        ordering contract. Cuts authorize nothing: each call reevaluates the
-        readable queryset, including rows whose anchor was deleted or moved.
-
-        ``before`` is exclusive; ``through`` is an inclusive fixed lower cut.
-        ``after`` discovers the nearest newer page and cannot combine with either.
-        Return rows newest-first and distinguish an exhausted fixed window from
-        history below that window, even when the window is now empty.
-        """
-
-        if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
-            raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
-        limit = max(1, min(int(limit), 200))
-        actor = self.actor() or current_actor()
-        namespace = json.dumps([self.db, self.model._meta.label_lower, *cursor_scope, str(actor)])
-        fingerprint = hashlib.sha256(namespace.encode()).hexdigest()
-        signer = signing.Signer(salt=f"{cursor_salt}.{fingerprint}")
-        cursor = before_cursor if before_cursor is not None else after_cursor
-        anchor = order.unsign(cursor, signer, self.model._meta.pk) if cursor is not None else None
-        lower = order.unsign(through_cursor, signer, self.model._meta.pk) if through_cursor is not None else None
-        count = self.count()
-        window = self
-        if anchor is not None:
-            window = window.filter(order.before(anchor) if before_cursor is not None else order.after(anchor))
-        if lower is not None:
-            window = window.exclude(order.before(lower))
-        if around is not None and before_cursor is None and after_cursor is None:
-            # Bound the first window around an already authorized record. The
-            # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2])
-            upper = order.position(newer[-1] if newer else around)
-            window = window.exclude(order.after(upper))
-        ascending = after_cursor is not None
-        ordering = (order.field, "pk") if ascending else (f"-{order.field}", "-pk")
-        selected = list(window.order_by(*ordering)[: limit + 1])
-        has_more = len(selected) > limit
-        rows = selected[:limit]
-        if ascending:
-            rows.reverse()
-        below = self.filter(order.before(lower)).exists() if lower is not None else False
-        if not rows:
-            return KeysetPage(
-                rows=[],
-                count=count,
-                older_cursor=None,
-                newer_cursor=None,
-                has_older=False,
-                has_newer=False,
-                has_more_in_window=False,
-                has_older_than_through=below,
-                has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
-            )
-        # Re-fetch the bounded identities through the original queryset so callers
-        # retain a composable queryset instead of inheriting this method's probe list.
-        return KeysetPage(
-            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
-            count=count,
-            older_cursor=order.sign(rows[-1], signer),
-            newer_cursor=order.sign(rows[0], signer),
-            has_older=self.filter(order.before(order.position(rows[-1]))).exists(),
-            has_newer=self.filter(order.after(order.position(rows[0]))).exists(),
-            has_more_in_window=has_more,
-            has_older_than_through=below,
-            has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
-        )
-
-
-class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[misc]
-    """Manager backed by AngeeQuerySet."""
-
-    def get_queryset(self) -> AngeeQuerySet[Any]:
-        """Return the base Angee queryset for this manager's model."""
-
-        return cast(AngeeQuerySet[Any], super().get_queryset())
-
-    def check_create(
-        self,
-        relationships: Mapping[str, Sequence[Any]] | None = None,
-    ) -> SubjectRef:
-        """Authorize the ambient actor to create one not-yet-persisted row.
-
-        Manual factories use this explicit relationship preflight
-        (``rebac.check_new``), insert under per-instance sudo, and re-bind the
-        verified actor with ``with_actor`` so the bypass ends with that insert.
-        Ordinary ``create`` and prepared-instance ``insert`` instead rely on
-        REBAC's candidate-aware pre-save gate.
-
-        ``relationships`` values may be model instances or ``SubjectRef``s;
-        instances are resolved through their declared REBAC resource type.
-        Returns the verified actor; raises ``MissingActorError`` without an
-        ambient actor and ``PermissionDenied`` when the gate refuses.
-        """
-
-        actor = current_actor()
-        resource_type = model_resource_type(self.model)
-        if not resource_type:
-            raise ImproperlyConfigured(f"{self.model._meta.label} declares no rebac_resource_type")
-        if actor is None:
-            raise MissingActorError(f"Creating {resource_type} requires an actor.")
-        result = check_new(
-            subject=actor,
-            action="create",
-            resource_type=resource_type,
-            relationships={
-                relation: tuple(_relationship_subject(value) for value in values)
-                for relation, values in (relationships or {}).items()
-            },
-        )
-        if not result.allowed:
-            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type}")
-        return actor
-
-
-class StatementSubjectQuerySet(TrashQuerySet, AngeeQuerySet):
-    """Canonical asserted rows, retaining withdrawn subjects and their identities."""
-
-    def canonical(self) -> Any:
-        statements = self.model.statements.model._base_manager.filter(subject_id=OuterRef("pk"))
-        remaining = statements.exclude(status=self.model.statements.model.StatementStatus.WITHDRAWN)
-        return self.untrashed().filter(~Exists(statements) | Exists(remaining))
-
-
-class StatementSubjectManager(AngeeManager.from_queryset(StatementSubjectQuerySet)):  # type: ignore[misc]
-    """Shared scope for canonical models whose presence is asserted."""
-
-
-class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]
-    """Manager backed by AngeeUnscopedQuerySet."""
-
-    def get_queryset(self) -> AngeeUnscopedQuerySet[Any]:
-        """Return the base unscoped Angee queryset for this manager's model."""
-
-        return cast(AngeeUnscopedQuerySet[Any], super().get_queryset())
 
 
 class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin):
@@ -283,7 +78,7 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
 
         return named_in_relationships(self) or any(reference.retains(self) for reference in references(type(self)))
 
-    def revert_removal(self, *, using: str, reason: str = "") -> None:
+    def revert_removal(self, *, reason: str = "") -> None:
         """Remove an undone creation while preserving live references and grants.
 
         Native historical snapshots may outlive deleted targets. They retain a
@@ -295,10 +90,10 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
             if not issubclass(reference.model, HistoricalChanges)
         )
         if named_in_relationships(self) or any(
-            reference.rows(self).using(using).exists() for reference in live_references
+            reference.rows(self).using(self._state.db).exists() for reference in live_references
         ):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
-        self.delete(using=using)
+        self.delete()
 
     extends: str | None = None
     """Optional ``app_label.ModelName`` target this source model extends."""
@@ -360,7 +155,14 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
         """
 
         targets = queryset if queryset is not None else type(self).system_queryset()
-        return lock_if_supported(targets).filter(pk=self.pk).first()
+        return targets.lock_if_supported().filter(pk=self.pk).first()
+
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
+        """Lock and reload this row through its row-bound base manager."""
+
+        del members
+        manager = type(self)._base_manager.db_manager(hints={"instance": self})
+        return cast(Self, manager.all().select_for_update().get(pk=self.pk))
 
     def apply_input_extensions(self, **values: Any) -> None:
         """Terminal cooperative hook for write-input values no model field owns.
@@ -917,6 +719,20 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
+
+
+class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
+    """One retained edge from an evidence owner to a canonical source record."""
+
+    merge_policy = MergePolicy.KEEP
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("content_type", "object_id")
+
+    class Meta:
+        abstract = True
+
 
 
 def record_display_label(record: models.Model) -> str:

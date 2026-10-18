@@ -16,11 +16,21 @@ class BaseConfig(AppConfig):
         """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
+        from django.db.models.signals import pre_delete
+        from rebac.field_backing import canonical_model
+
+        from angee.base.refs import delete_record_refs, record_edges_by_target
+        from angee.base.signals import connect_for_models
+
+        connect_for_models(
+            pre_delete,
+            delete_record_refs,
+            applies=lambda model: canonical_model(model) in record_edges_by_target(),
+            dispatch_uid="angee.base.record_refs.target_delete",
+        )
         # The check imports REBAC models, which require completed app population.
         from angee.base.checks import (
             check_changeset_middleware,
-            check_creation_key_constraints,
-            check_expat_version,
             check_hierarchy_queryset_order,
             check_hooks,
             check_impl_registries,
@@ -30,11 +40,9 @@ class BaseConfig(AppConfig):
         )
 
         checks.register(check_changeset_middleware, checks.Tags.security)
-        checks.register(check_expat_version, checks.Tags.security)
         checks.register(check_rebac_database, checks.Tags.models)
         checks.register(check_hierarchy_queryset_order, checks.Tags.models)
         checks.register(check_impl_registries, checks.Tags.models)
         checks.register(check_hooks, checks.Tags.models)
-        checks.register(check_creation_key_constraints, checks.Tags.models)
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)

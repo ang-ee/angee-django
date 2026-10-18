@@ -4,7 +4,8 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
-from angee.base.mixins import StaleRevisionError
+from angee.base.changesets import changeset_model
+from angee.base.models import StaleRevisionError
 from angee.dashboards.models import DashboardConflictError
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import create_user
@@ -13,15 +14,16 @@ from tests.test_dashboards import DashboardTarget, dashboard_tables  # noqa: F40
 pytestmark = pytest.mark.usefixtures("dashboard_tables")
 
 
-def test_personal_creation_key_replays_within_owner_scope():
+def test_personal_idempotency_replays_within_owner_scope():
     first, second = create_user("first"), create_user("second")
     with actor_context(first):
-        created = DashboardTarget.objects.create_personal(first, name="Original", client_creation_key="request")
-        replay = DashboardTarget.objects.create_personal(first, name="Replay", client_creation_key="request")
+        created = DashboardTarget.objects.create_personal(first, name="Original", idempotency_key="request")
+        replay = DashboardTarget.objects.create_personal(first, name="Original", idempotency_key="request")
         assert (replay.pk, replay.name, replay.revision) == (created.pk, "Original", 1)
-        assert replay.creation_fingerprint == ""
+        claim = changeset_model()._base_manager.get(key="request", created_object_id=str(created.pk))
+        assert claim.created_row.pk == created.pk
     with actor_context(second):
-        separate = DashboardTarget.objects.create_personal(second, name="Separate", client_creation_key="request")
+        separate = DashboardTarget.objects.create_personal(second, name="Separate", idempotency_key="request")
         assert separate.pk != created.pk
 
 
@@ -29,8 +31,8 @@ def test_personal_creation_still_validates_key_field_length():
     owner = create_user("owner")
     with actor_context(owner):
         with pytest.raises(ValidationError) as caught:
-            DashboardTarget.objects.create_personal(owner, name="Original", client_creation_key="x" * 129)
-        assert "client_creation_key" in caught.value.message_dict
+            DashboardTarget.objects.create_personal(owner, name="Original", idempotency_key="x" * 129)
+        assert "idempotency_key" in caught.value.message_dict
         assert not DashboardTarget.objects.exists()
 
 
@@ -39,7 +41,7 @@ def test_shared_trash_bumps_the_revision_once_per_change_and_refuses_a_repeat():
 
     owner = create_user("owner")
     with actor_context(owner):
-        row = DashboardTarget.objects.create_personal(owner, name="Original", client_creation_key="request")
+        row = DashboardTarget.objects.create_personal(owner, name="Original", idempotency_key="request")
         row.trash()
         assert (row.is_trashed, row.revision) == (True, 2)
         with pytest.raises(ValidationError):
@@ -55,7 +57,7 @@ def test_snapshot_update_bumps_once_and_missing_or_stale_expectation_keeps_conte
     monkeypatch.setattr(GraphQLSchemas, "resources", lambda self, name: ())
     owner = create_user("owner")
     with actor_context(owner):
-        row = DashboardTarget.objects.create_personal(owner, name="Original", client_creation_key="request")
+        row = DashboardTarget.objects.create_personal(owner, name="Original", idempotency_key="request")
         arguments = {
             "scope": "personal", "scope_key": None, "persisted_id": row.pk,
             "snapshot": {"schemaVersion": 1, "columns": 6, "widgets": []},

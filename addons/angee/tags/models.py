@@ -46,20 +46,18 @@ from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.fields import ColorField
 from angee.base.identity import instance_from_public_id
-from angee.base.merge import MergeableMixin
-from angee.base.mixins import (
-    ArchiveMixin,
-    ArchiveQuerySet,
-    AuditMixin,
-    HistoryMixin,
-)
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
     AngeeQuerySet,
+    ArchiveMixin,
+    ArchiveQuerySet,
+    AuditMixin,
+    HistoryMixin,
+    MergeableMixin,
+    MergeableQuerySet,
     role_anchor,
 )
-from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import MergePolicy, RecordRefMixin
 
 

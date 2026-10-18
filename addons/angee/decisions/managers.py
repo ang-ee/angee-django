@@ -16,8 +16,7 @@ from rebac.actors import is_sudo
 from angee.base.actors import actor_user_id
 from angee.base.evidence import readable_records
 from angee.base.identity import public_id_of
-from angee.base.mixins import AppendOnlyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, AppendOnlyQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.scoping import lock_if_supported, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest

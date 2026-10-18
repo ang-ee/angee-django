@@ -1,4 +1,4 @@
-"""Behaviour of :class:`~angee.base.mixins.HierarchyMixin` (F-hier, foundation R3).
+"""Behaviour of :class:`~angee.base.models.HierarchyMixin` (F-hier, foundation R3).
 
 The mixin gives a self-parented model a maintained materialized ``path`` so
 subtree membership is a database prefix test, not a client-side ``parent`` walk.

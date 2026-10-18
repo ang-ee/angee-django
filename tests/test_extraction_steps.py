@@ -19,7 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
 from angee.agents.testing.models import InferenceModel, InferenceProvider
-from angee.base.scoping import system_queryset
 from angee.extraction.acquisition import (
     ExtractionConfig,
     PageCarrier,
@@ -189,7 +188,7 @@ def execute(step, value, actor, *, config=None):
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, input=value)
     run_until(run)
-    return system_queryset(WorkflowRun).get(pk=run.pk)
+    return WorkflowRun.system_queryset().get(pk=run.pk)
 
 
 def prepare_and_process(actor, file, *, profile_config=None, recognized=False, with_model=True):
@@ -199,7 +198,7 @@ def prepare_and_process(actor, file, *, profile_config=None, recognized=False, w
         "target_id": str(file.sqid),
     }
     prepared = execute(PreparePagesStep, source, actor, config={"recognized": recognized})
-    assert prepared.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
+    assert prepared.status == "succeeded", list(StepAttempt.system_queryset().values_list("error", flat=True))
     return execute(
         ProcessEvidenceStep,
         {
@@ -207,8 +206,8 @@ def prepare_and_process(actor, file, *, profile_config=None, recognized=False, w
             "recognition": [],
             "target_model": source["target_model"],
             "target_id": source["target_id"],
-            "model_id": str(system_queryset(InferenceModel).get().sqid) if with_model else None,
-            "recognition_model_id": str(system_queryset(InferenceModel).get().sqid)
+            "model_id": str(InferenceModel.system_queryset().get().sqid) if with_model else None,
+            "recognition_model_id": str(InferenceModel.system_queryset().get().sqid)
             if recognized
             else None,
         },
@@ -220,14 +219,14 @@ def prepare_and_process(actor, file, *, profile_config=None, recognized=False, w
 def test_preparation_runs_once_and_retains_native_evidence(step_evidence):
     actor, file = step_evidence
     run = prepare_and_process(actor, file)
-    assert run.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
+    assert run.status == "succeeded", list(StepAttempt.system_queryset().values_list("error", flat=True))
     assert run.outcome == "processed"
-    row = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
+    row = Extraction.system_queryset().get(sqid=run.output["extraction_id"])
     assert row.result == {"text": "Retained note"}
     with actor_context(actor):
         assert row.sources.count() == row.pages.count() == row.parts.count() == 1
     assert DeterministicExtraction.calls == ["prepare"]
-    assert system_queryset(StepRecord).filter(step_run__run=run).count() == 1
+    assert StepRecord.system_queryset().filter(step_run__run=run).count() == 1
 
 
 def test_workflow_reader_cannot_obtain_document_text_from_step_rows(step_evidence):
@@ -235,7 +234,7 @@ def test_workflow_reader_cannot_obtain_document_text_from_step_rows(step_evidenc
     processed = prepare_and_process(actor, file)
     reader = get_user_model().objects.create_user(username="workflow-reader")
     assert not file.with_actor(reader).has_access("read")
-    runs = list(system_queryset(WorkflowRun).all())
+    runs = list(WorkflowRun.system_queryset().all())
     for run in runs:
         run.with_actor(actor).grant_record_access("reader", reader)
     with actor_context(reader):
@@ -263,7 +262,7 @@ def test_recognition_runs_with_registered_pure_provider(step_evidence):
     )
     run = execute(
         RecognizePageStep,
-        {"page": page.model_dump(), "model_id": str(system_queryset(InferenceModel).get().sqid)},
+        {"page": page.model_dump(), "model_id": str(InferenceModel.system_queryset().get().sqid)},
         actor,
     )
     assert run.status == "succeeded" and run.outcome == "recognized"
@@ -278,7 +277,7 @@ def test_recognition_runs_with_registered_pure_provider(step_evidence):
     assert output.part == parts[0] and holds == []
     assert "Retained note" not in json.dumps(run.output)
     with actor_context(actor):
-        envelope = system_queryset(File).get(sqid=output.part.file_id).read_verified(max_bytes=10000)
+        envelope = File.system_queryset().get(sqid=output.part.file_id).read_verified(max_bytes=10000)
         assert json.loads(envelope)["value"] == "Retained note"
     with pytest.raises(ValidationError, match="indices"):
         value.model_copy(update={"recognition": [
@@ -295,7 +294,7 @@ def test_recognition_runs_with_registered_pure_provider(step_evidence):
         MapItem[RecognitionOutput](index=0, outcome="error", error="unavailable"),
     ]}).carriers()[1] == ["recognition_unavailable:0:0"]
     assert DeterministicExtraction.calls == ["recognize"]
-    assert system_queryset(StepAttempt).get(step_run__run=run).effect_started_at is not None
+    assert StepAttempt.system_queryset().get(step_run__run=run).effect_started_at is not None
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -315,9 +314,9 @@ def test_inference_retains_a_successor_including_provider_failure(step_evidence,
         actor,
         config={"fail": fail},
     )
-    assert run.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
+    assert run.status == "succeeded", list(StepAttempt.system_queryset().values_list("error", flat=True))
     assert run.outcome == ("inference_failed" if fail else "inferred")
-    assert run.output["revision"] == 2 and system_queryset(Extraction).count() == 2
+    assert run.output["revision"] == 2 and Extraction.system_queryset().count() == 2
     assert DeterministicExtraction.calls == ["prepare", "infer"]
     stale = execute(
         InferEvidenceStep,
@@ -338,7 +337,7 @@ def test_unconfigured_inference_routes_to_review_with_reason(step_evidence):
     processed = prepare_and_process(
         actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]}, with_model=False,
     )
-    base = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
+    base = Extraction.system_queryset().get(sqid=processed.output["extraction_id"])
     assert not base.inference_configured
 
     run = execute(InferEvidenceStep, {
@@ -347,20 +346,20 @@ def test_unconfigured_inference_routes_to_review_with_reason(step_evidence):
     }, actor)
     assert run.status == "succeeded" and run.outcome == "inference_failed"
     assert run.output["inference_failure"]["reason"] == "Select an inference model."
-    assert system_queryset(Extraction).count() == 1
+    assert Extraction.system_queryset().count() == 1
 
 
 def test_unusable_inference_model_routes_to_review_with_reason(step_evidence):
     actor, file = step_evidence
     processed = prepare_and_process(actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]})
-    system_queryset(InferenceModel).update(status="retired")
+    InferenceModel.system_queryset().update(status="retired")
     run = execute(InferEvidenceStep, {
         "base_extraction_id": processed.output["extraction_id"], "base_revision": 1,
         "target_model": "storage.File", "target_id": str(file.sqid),
     }, actor)
     assert run.status == "succeeded" and run.outcome == "inference_failed"
     assert run.output["inference_failure"]["reason"] == "Select an available inference model."
-    assert system_queryset(Extraction).count() == 1
+    assert Extraction.system_queryset().count() == 1
 
 
 def test_unusable_retained_recognition_model_routes_to_review(step_evidence):
@@ -368,12 +367,12 @@ def test_unusable_retained_recognition_model_routes_to_review(step_evidence):
     processed = prepare_and_process(
         actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]}, recognized=True,
     )
-    retained_model = system_queryset(InferenceModel).get()
+    retained_model = InferenceModel.system_queryset().get()
     with actor_context(actor):
         replacement = InferenceModel.objects.create(
             provider_id=retained_model.provider_id, name="replacement", model_use="multimodal",
         )
-    system_queryset(InferenceModel).filter(pk=retained_model.pk).update(status="retired")
+    InferenceModel.system_queryset().filter(pk=retained_model.pk).update(status="retired")
     run = execute(InferEvidenceStep, {
         "base_extraction_id": processed.output["extraction_id"], "base_revision": 1,
         "target_model": "storage.File", "target_id": str(file.sqid), "model_id": str(replacement.sqid),
@@ -395,7 +394,7 @@ def test_inference_programming_failure_remains_a_failed_step(step_evidence, monk
         "target_model": "storage.File", "target_id": str(file.sqid),
     }, actor)
     assert run.status == "failed" and run.outcome == "error"
-    assert system_queryset(Extraction).count() == 1
+    assert Extraction.system_queryset().count() == 1
 
 
 def test_native_text_acquisition_drops_script_and_checks_digest(step_evidence):
@@ -422,8 +421,8 @@ def test_inference_preserves_the_retained_recognition_model(step_evidence):
     processed = prepare_and_process(
         actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]}, recognized=True,
     )
-    recognized = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
-    model = system_queryset(InferenceModel).get()
+    recognized = Extraction.system_queryset().get(sqid=processed.output["extraction_id"])
+    model = InferenceModel.system_queryset().get()
     run = execute(
         InferEvidenceStep,
         {
@@ -435,7 +434,7 @@ def test_inference_preserves_the_retained_recognition_model(step_evidence):
         actor,
     )
     assert run.status == "succeeded" and run.outcome == "inferred"
-    successor = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
+    successor = Extraction.system_queryset().get(sqid=run.output["extraction_id"])
     assert successor.recognition_model_id == model.pk and successor.model_id == model.pk
     assert set(successor.used_model_roles) == {"mapping", "recognition"}
 
@@ -466,7 +465,7 @@ def test_explicit_correspondence_finalizes_the_held_candidate_without_inference(
         actor,
     )
     assert run.status == "succeeded" and run.outcome == "inferred"
-    finalized = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
+    finalized = Extraction.system_queryset().get(sqid=run.output["extraction_id"])
     assert finalized.result == held.result and finalized.revision == held.revision + 1
     assert DeterministicExtraction.calls == []
 
@@ -497,20 +496,20 @@ def test_held_text_pass_is_inferred_before_identity_correspondence(evidence, ste
     run = execute(InferEvidenceStep, {
         "base_extraction_id": str(held.sqid),
         "base_revision": held.revision,
-        "model_id": str(system_queryset(InferenceModel).get().sqid),
+        "model_id": str(InferenceModel.system_queryset().get().sqid),
         "target_model": "storage.File",
         "target_id": str(values["target"].sqid),
     }, actor)
-    assert run.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
+    assert run.status == "succeeded", list(StepAttempt.system_queryset().values_list("error", flat=True))
     assert run.outcome == "inferred" and DeterministicExtraction.calls == ["infer"]
-    inferred = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
+    inferred = Extraction.system_queryset().get(sqid=run.output["extraction_id"])
     assert inferred.revision == held.revision + 1 and inferred.document_map == first.document_map
 
 
 def test_cross_target_original_source_is_rejected_before_inference(step_evidence):
     admin, source = step_evidence
     processed = prepare_and_process(admin, source)
-    original = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
+    original = Extraction.system_queryset().get(sqid=processed.output["extraction_id"])
     reader = get_user_model().objects.create_user(username="separate-target-owner")
     with actor_context(reader):
         target = File.objects.ingest_bytes(
@@ -554,7 +553,7 @@ def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
         actor,
     )
     assert run.status == "succeeded" and run.outcome == "source_hold"
-    row = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
+    row = Extraction.system_queryset().get(sqid=run.output["extraction_id"])
     assert row.outcome["kind"] == "failed" and row.unresolved_reasons == ("unsupported_media_type:0",)
     inferred = execute(
         InferEvidenceStep,
@@ -597,7 +596,7 @@ def test_partial_recognition_failure_blocks_inference_before_provider_call(step_
         actor,
     )
     assert processed.status == "succeeded" and processed.outcome == "source_hold"
-    base = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
+    base = Extraction.system_queryset().get(sqid=processed.output["extraction_id"])
     with actor_context(actor):
         assert base.document_parts() and base.outcome["code"] == "source_hold"
     inferred = execute(

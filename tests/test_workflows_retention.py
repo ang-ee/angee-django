@@ -7,7 +7,6 @@ from django.apps import apps
 from django.db import models
 from django.db.models.functions import Now
 
-from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.workflows.managers import PRUNE_BATCH_LIMIT
 from angee.workflows.runner import runner
@@ -51,7 +50,7 @@ def protected_execution(execution):
 
 def retry_prune(run):
     """Advance only the marked retry deadline, retaining the real lifecycle state."""
-    system_queryset(WorkflowRun).filter(pk=run.pk).update(prune_after=Now() - timedelta(seconds=1))
+    WorkflowRun.system_queryset().filter(pk=run.pk).update(prune_after=Now() - timedelta(seconds=1))
 
 
 def test_prune_removes_derived_from_rows_with_the_run(execution):
@@ -61,10 +60,10 @@ def test_prune_removes_derived_from_rows_with_the_run(execution):
     source = vault_for(actor, name="Retained input")
     run = start_run(workflow, actor=actor, subject=source)
     run_until(run)
-    assert system_queryset(StepRecord).filter(run=run).count() == 1
+    assert StepRecord.system_queryset().filter(run=run).count() == 1
     age_runs(run)
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(StepRecord).filter(run_id=run.pk).exists()
+    assert not StepRecord.system_queryset().filter(run_id=run.pk).exists()
 
 
 def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_graph, register_step):
@@ -87,19 +86,19 @@ def test_prune_deletes_owned_descendants_including_recent_grandchildren(child_gr
     run_until(parent)
     child = admitted[0]
     run_until(child)
-    grandchild = system_queryset(WorkflowRun).get(pk=grandchildren[0].pk)
+    grandchild = WorkflowRun.system_queryset().get(pk=grandchildren[0].pk)
     assert grandchild.status == "canceled" and child.status == "succeeded"
     runner.wake_runs(child.pk)
     run_until(parent)
     assert parent.status == "succeeded"
     age_runs(parent)
     run_ids = [parent.pk, child.pk, grandchild.pk]
-    assert system_queryset(StepAttempt).filter(step_run__run_id__in=run_ids).exists()
+    assert StepAttempt.system_queryset().filter(step_run__run_id__in=run_ids).exists()
     assert WorkflowRun.objects.prune() == 3
-    assert not system_queryset(WorkflowRun).filter(pk__in=run_ids).exists()
-    assert not system_queryset(StepRun).filter(run_id__in=run_ids).exists()
-    assert not system_queryset(StepAttempt).filter(step_run__run_id__in=run_ids).exists()
-    assert system_queryset(grand_workflow.versions.model).filter(workflow=grand_workflow).exists()
+    assert not WorkflowRun.system_queryset().filter(pk__in=run_ids).exists()
+    assert not StepRun.system_queryset().filter(run_id__in=run_ids).exists()
+    assert not StepAttempt.system_queryset().filter(step_run__run_id__in=run_ids).exists()
+    assert grand_workflow.versions.model.system_queryset().filter(workflow=grand_workflow).exists()
 
 
 def test_prune_preserves_parent_cause_until_terminal_continuation_is_pruned(child_graph):
@@ -117,13 +116,13 @@ def test_prune_preserves_parent_cause_until_terminal_continuation_is_pruned(chil
     assert child.status == "succeeded" and child.output == {"value": 7}
     assert child.parent_step_id is not None
     assert child.relation == "continuation"
-    assert system_queryset(StepAttempt).filter(step_run__run=child).exists()
+    assert StepAttempt.system_queryset().filter(step_run__run=child).exists()
     age_runs(child)
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(WorkflowRun).filter(pk=child.pk).exists()
+    assert not WorkflowRun.system_queryset().filter(pk=child.pk).exists()
     retry_prune(parent)
     assert WorkflowRun.objects.prune() == 1
-    assert not system_queryset(WorkflowRun).filter(pk=parent.pk).exists()
+    assert not WorkflowRun.system_queryset().filter(pk=parent.pk).exists()
 
 
 def test_active_continuation_marks_parent_until_the_continuation_is_pruned(child_graph):
@@ -138,7 +137,7 @@ def test_active_continuation_marks_parent_until_the_continuation_is_pruned(child
     child.refresh_from_db()
     assert parent.prune_after is not None and parent.prune_reason == "A descendant is still running."
     assert child.status == "running" and child.parent_step_id is not None
-    assert not system_queryset(WorkflowRun).retention_candidates().filter(pk=parent.pk).exists()
+    assert not WorkflowRun.system_queryset().retention_candidates().filter(pk=parent.pk).exists()
     run_until(child)
     assert WorkflowRun.objects.prune() == 0
     retry_prune(parent)
@@ -179,9 +178,9 @@ def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_
     run_until(child)
     runner.wake_runs(child.pk)
     run_until(parent)
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert waiter.awaited_run_id == child.pk
-    attempt = system_queryset(StepAttempt).get(step_run__run=parent, step_run__node_key="start")
+    attempt = StepAttempt.system_queryset().get(step_run__run=parent, step_run__node_key="start")
     evidence = protected_execution.objects.create(attempt=attempt)
     age_runs(parent)
     assert WorkflowRun.objects.prune() == 0
@@ -189,8 +188,8 @@ def test_protected_attempt_rolls_back_the_whole_owned_tree_and_wait_links(child_
     waiter.refresh_from_db()
     assert parent.prune_after is not None and parent.prune_reason
     assert waiter.awaited_run_id == child.pk
-    assert system_queryset(WorkflowRun).filter(pk=child.pk).exists()
-    assert system_queryset(StepAttempt).filter(pk=attempt.pk).exists()
+    assert WorkflowRun.system_queryset().filter(pk=child.pk).exists()
+    assert StepAttempt.system_queryset().filter(pk=attempt.pk).exists()
     evidence.delete()
     retry_prune(parent)
     assert WorkflowRun.objects.prune() == 2
@@ -214,10 +213,10 @@ def test_prune_checks_only_twenty_five_roots_and_marked_blockers_do_not_starve_l
     assert WorkflowRun.objects.prune() == 24
     blocked.refresh_from_db()
     assert blocked.prune_after is not None
-    assert system_queryset(WorkflowRun).filter(pk__in=[run.pk for run in roots]).count() == 2
+    assert WorkflowRun.system_queryset().filter(pk__in=[run.pk for run in roots]).count() == 2
     assert WorkflowRun.objects.prune() == 2
     assert WorkflowRun.objects.prune() == 0
-    assert system_queryset(WorkflowRun).filter(pk__in=[blocked.pk, admitted[0].pk]).count() == 2
+    assert WorkflowRun.system_queryset().filter(pk__in=[blocked.pk, admitted[0].pk]).count() == 2
 
 
 def test_retention_setting_keeps_recent_terminal_runs(execution, settings):
@@ -240,5 +239,5 @@ def test_run_pruning_retains_decisions_and_releases_the_asking_link(review):
     run_until(run)
     age_runs(run)
     assert WorkflowRun.objects.prune() == 1
-    retained = system_queryset(Decision).get(pk=decision.pk)
+    retained = Decision.system_queryset().get(pk=decision.pk)
     assert not retained.requesting_steps.with_actor(people[0]).exists() and retained.verdict == ["approve"]

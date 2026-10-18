@@ -9,8 +9,7 @@ from django.db import transaction
 from rebac import PermissionDenied, SubjectRef, current_actor
 
 from angee.base.fields import enum_member_for
-from angee.base.mixins import HierarchyQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, HierarchyQuerySet
 from angee.base.scoping import bind_actor
 
 

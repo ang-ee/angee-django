@@ -18,8 +18,7 @@ from angee.base.changesets import changeset, current_changeset
 from angee.base.fields import ModelLabelField
 from angee.base.identity import SqidPublicIdentity, public_id_of
 from angee.base.jsonschema import relation_positions
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet
+from angee.base.models import AngeeModel, AngeeUnscopedManager, AngeeUnscopedQuerySet, SqidMixin
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,

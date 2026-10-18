@@ -78,21 +78,21 @@ def _tree_imports(root: Path) -> set[str]:
     ("source_path", "source", "expected"),
     [
         (
-            "angee/base/models.py",
-            "from . import mixins",
-            {"angee.base", "angee.base.mixins"},
+            "angee/base/models/base.py",
+            "from . import merge",
+            {"angee.base.models", "angee.base.models.merge"},
         ),
         (
             "addons/angee/example/models.py",
-            "from ..base import mixins as base_mixins",
-            {"angee.base", "angee.base.mixins"},
+            "from ..base import models as base_models",
+            {"angee.base", "angee.base.models"},
         ),
         (
             "addons/angee/example/__init__.py",
-            "from ..base.mixins import retained_set_null",
+            "from ..base.models import retained_set_null",
             {
-                "angee.base.mixins",
-                "angee.base.mixins.retained_set_null",
+                "angee.base.models",
+                "angee.base.models.retained_set_null",
             },
         ),
     ],

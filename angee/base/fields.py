@@ -48,7 +48,6 @@ from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
 
-from angee.base.scoping import system_queryset
 from angee.base.serialization import strip_null_bytes
 
 
@@ -460,7 +459,7 @@ class FractionalRankField(models.FloatField):
             for context_field in context_fields
         }
         previous = (
-            system_queryset(model, lock=("self",))
+            model.system_queryset(lock=("self",))
             .filter(**context)
             .order_by(f"-{self.name}")
             .values_list(self.name, flat=True)
@@ -563,7 +562,7 @@ class FractionalRankField(models.FloatField):
         context_filter = self._context_filter(context)
 
         with transaction.atomic():
-            writer = system_queryset(model, lock=("self",)).filter(**context_filter)
+            writer = model.system_queryset(lock=("self",)).filter(**context_filter)
             rows = list(writer.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name))
             current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
             clean = self._clean_ranks(len(rows))

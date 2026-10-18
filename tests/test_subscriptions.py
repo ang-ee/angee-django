@@ -345,10 +345,12 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
 
     gate = object.__new__(access.ChangeReadGate)
     gate.actor = ANON
-    parent_model = SimpleNamespace()
     empty_scope = object()
+    scoped_manager = SimpleNamespace(
+        with_actor=lambda actor: SimpleNamespace(with_action=lambda action: empty_scope),
+    )
+    parent_model = SimpleNamespace(objects=scoped_manager)
     monkeypatch.setattr(access.apps, "get_model", lambda label: parent_model)
-    monkeypatch.setattr(access, "read_scoped_queryset", lambda model, actor: empty_scope)
 
     def unreadable(model, public_id, *, queryset):
         assert queryset is empty_scope

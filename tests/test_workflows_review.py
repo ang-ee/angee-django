@@ -7,7 +7,6 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from rebac.actors import is_sudo
 
 from angee.base.identity import public_id_of
-from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.workflows.decision_steps import AskDecision, DecisionStep, apply_proposals
@@ -83,11 +82,11 @@ def start_review(review, *, input=None, graph=None):
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=question.review_subject, input=input or {})
     run_until(run)
-    return run, system_queryset(StepRun).get(run=run, node_key="review")
+    return run, StepRun.system_queryset().get(run=run, node_key="review")
 
 
 def questions(step):
-    return [system_queryset(Decision).get(pk=system_queryset(StepRun).get(pk=step.pk).decision_id)]
+    return [Decision.system_queryset().get(pk=StepRun.system_queryset().get(pk=step.pk).decision_id)]
 
 
 def answer(decision, person, key="approve"):
@@ -101,7 +100,7 @@ def test_ask_answer_then_apply_as_run_actor(review):
     decision = questions(step)[0]
     before = question.review_subject.name
     answer(decision, people[0])
-    assert system_queryset(StepRun).get(pk=step.pk).status == "ready"
+    assert StepRun.system_queryset().get(pk=step.pk).status == "ready"
     question.review_subject.refresh_from_db()
     assert question.review_subject.name == before
     run_until(run)
@@ -129,7 +128,7 @@ def test_configured_decision_without_assignees_waits_answers_and_applies(executi
     }, actor=actor)
     run = start_run(workflow, actor=actor, subject=subject)
     run_until(run)
-    step = system_queryset(StepRun).get(run=run, node_key="review")
+    step = StepRun.system_queryset().get(run=run, node_key="review")
     assert (step.status, step.waiting_kind) == ("waiting", "decision")
     decision = questions(step)[0]
     assert not decision.assignees.with_actor(actor).exists()
@@ -162,7 +161,7 @@ def test_choose_is_applied_on_workflow_resume(review):
     Decision.objects.decide(decision, actor=people[0], chosen=["approve"], values=values)
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Answerer's value"
-    assert system_queryset(Decision).get(pk=decision.pk).verdict_values == values
+    assert Decision.system_queryset().get(pk=decision.pk).verdict_values == values
     run_until(run)
     question.review_subject.refresh_from_db()
     assert run.status == "succeeded" and run.outcome == "approved"
@@ -178,10 +177,10 @@ def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, regis
     run_until(run)
     question.review_subject.refresh_from_db()
     assert run.status == "failed" and question.review_subject.name == original_name
-    assert system_queryset(Decision).get(pk=decision.pk).verdict == ["approve"]
-    assert system_queryset(Decision).count() == 1
-    assert system_queryset(Workflow).get(pk=run.version.workflow_id).name != "Rolled back"
-    assert "Application unavailable" in system_queryset(StepAttempt).latest("pk").error
+    assert Decision.system_queryset().get(pk=decision.pk).verdict == ["approve"]
+    assert Decision.system_queryset().count() == 1
+    assert Workflow.system_queryset().get(pk=run.version.workflow_id).name != "Rolled back"
+    assert "Application unavailable" in StepAttempt.system_queryset().latest("pk").error
 
     class AvailableQuestion(question):
         def continue_with(self, ctx, decision, outcome):
@@ -190,7 +189,7 @@ def test_apply_failure_rolls_back_record_writes_and_retains_answer(review, regis
     register_step(AvailableQuestion)
     StepRun.objects.retry_step(step, actor=actor)
     run_until(run)
-    assert run.status == "succeeded" and system_queryset(Decision).count() == 1
+    assert run.status == "succeeded" and Decision.system_queryset().count() == 1
 
 
 def test_sweep_recovers_missed_answer_notification(review, monkeypatch):
@@ -199,7 +198,7 @@ def test_sweep_recovers_missed_answer_notification(review, monkeypatch):
     with monkeypatch.context() as patch:
         patch.setattr(type(runner), "wake_decisions", lambda *args, **kwargs: 0)
         answer(questions(step)[0], people[0])
-    assert system_queryset(StepRun).get(pk=step.pk).status == "waiting"
+    assert StepRun.system_queryset().get(pk=step.pk).status == "waiting"
     assert runner.wake_decisions() == 1
     run_until(run)
     assert run.status == "succeeded"
@@ -216,12 +215,12 @@ def test_terminal_failure_withdraws_an_open_sibling_question(review, register_st
         "ask": {"step": question.key}, "fail": {"step": "reject"},
     }}, actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=question.review_subject)
-    assert runner.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
-    step = system_queryset(StepRun).get(run=run, node_key="ask")
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="entry").pk)
+    step = StepRun.system_queryset().get(run=run, node_key="ask")
     assert runner.execute(step.pk)
     decision = questions(step)[0]
     assert decision.is_open
-    assert runner.execute(system_queryset(StepRun).get(run=run, node_key="fail").pk)
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="fail").pk)
     decision.refresh_from_db()
     assert decision.verdict == []
     with pytest.raises(ValidationError, match="changed"):

@@ -16,8 +16,8 @@ notes why responding ends or proceeds.
 answer `text`. Empty or whitespace text selects `no_reply`. `schedule_reply`
 is a DATABASE step accepting that output. It verifies the completed turn was
 created by this run for this subject, then calls
-`MessagePublic.reply_to_comment(body=text, actor=ctx.actor, local=..., creation_key=...)`.
-The creation key is `workflow-reply:<run sqid>` and remains stable across retries
+`MessagePublic.reply_to_comment(body=text, actor=ctx.actor, local=..., idempotency_key=...)`.
+The idempotency key is `workflow-reply:<run sqid>` and remains stable across retries
 and task redelivery. Message owns replay, permissions, scheduling and delivery;
 the step records the reply as created and returns its actual `message_id`,
 `status` and `scheduled_at`. Local `agent_turn` metadata names the completed turn
@@ -26,7 +26,7 @@ approval, timed release and immediate delivery.
 
 An answer arriving during inference raises posts' typed `CommentAnswered` on
 insertion. The step settles as `replied` with empty output and closes the session.
-Creation-key replay runs first, so retrying an existing reply still returns its
+Idempotency replay runs first, so retrying an existing reply still returns its
 original `scheduled` output. Route `replied` to the same end as `check_replied`.
 
 Install a workflow resource document with a concrete public agent id:
@@ -77,7 +77,7 @@ and grants through resource documents. Install `workflows_messaging` for
 `message_ingested`, scoped to feed channels with condition
 `{direction: {_eq: inbound}, is_original_post: {_eq: false}}`. Historical and
 trashed messages do not enter that source. Trigger admission owns its request
-key; the scheduling creation key protects one run's effect.
+key; scheduling idempotency protects one run's effect.
 
 Grant the workflow principal `caller` on the agent and `replier` on the channel,
 with channel read access for the subject and reply evidence. Only the agent's
@@ -111,4 +111,4 @@ agent. Catalogue synchronization updates tools and bundle contents.
 Native contracts live in `tests/native_workflows_posts.py`.
 `tests/test_workflows_posts.py` composes the messaging trigger, agent runtime,
 knowledge tools and posts reply owner. Its PostgreSQL selection covers
-scheduling races, creation-key replay and retry rollback.
+scheduling races, idempotency replay and retry rollback.

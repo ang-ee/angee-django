@@ -285,8 +285,8 @@ export interface DashboardStoreBinding {
   reload: () => Promise<void>;
   save: (command: DashboardSaveCommand) => Promise<DashboardSaveResult>;
   reset: (target: DashboardTarget, persistedId: string, expectedRevision: number) => Promise<void>;
-  createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
-  duplicate: (target: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
+  createPersonal: (input: { name: string; description?: string; idempotencyKey: string }) => Promise<DashboardSaveResult>;
+  duplicate: (target: DashboardTarget, input: { name: string; idempotencyKey: string; snapshot: DashboardSnapshot }) => Promise<DashboardSaveResult>;
 }
 
 export interface DashboardCatalogueBinding {
@@ -294,7 +294,7 @@ export interface DashboardCatalogueBinding {
   loading: boolean;
   error: Error | null;
   refresh: () => void;
-  createPersonal: (input: { name: string; description?: string; clientCreationKey: string }) => Promise<DashboardSaveResult>;
+  createPersonal: (input: { name: string; description?: string; idempotencyKey: string }) => Promise<DashboardSaveResult>;
 }
 
 export interface DashboardStore {

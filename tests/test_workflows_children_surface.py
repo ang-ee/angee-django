@@ -2,7 +2,6 @@
 
 import pytest
 
-from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.runner import runner
@@ -68,9 +67,9 @@ def test_child_reads_inherit_the_parent_rule_without_write_or_workflow_access(sc
     parent = start_run(parent_workflow, actor=starter)
     run_until(parent)
     parent.with_actor(admin).grant_record_access("reader", viewer)
-    start = system_queryset(StepRun).get(run=parent, node_key="start")
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
-    child = system_queryset(WorkflowRun).get(parent_step=start)
+    start = StepRun.system_queryset().get(run=parent, node_key="start")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
+    child = WorkflowRun.system_queryset().get(parent_step=start)
     query = """query($parent: String!, $child: String!, $step: String!) {
       workflowrun(where: {parent_step__run: {_eq: $parent}}) {
         id origin can_cancel can_reprocess version { id }
@@ -114,7 +113,7 @@ def test_a_child_reader_does_not_gain_its_parent_or_starting_step(schema, child_
     parent_workflow, _child_workflow = child_workflows
     parent = start_run(parent_workflow, actor=admin)
     run_until(parent)
-    child = system_queryset(WorkflowRun).get(parent_step__run=parent)
+    child = WorkflowRun.system_queryset().get(parent_step__run=parent)
     reader = create_user("child-only-reader")
     child.with_actor(admin).grant_record_access("reader", reader)
     query = """query($parent: String!, $child: String!) {
@@ -149,7 +148,7 @@ def test_await_executes_with_run_read_without_access_to_its_workflow(schema, exe
     assert projection["workflowrun_by_pk"] == {"id": child.sqid, "version": None}
     parent = start_run(parent_workflow, actor=reader)
     run_until(parent)
-    waiter = system_queryset(StepRun).get(run=parent, node_key="await")
+    waiter = StepRun.system_queryset().get(run=parent, node_key="await")
     assert (waiter.status, waiter.awaited_run_id) == ("waiting", child.pk)
     run_until(child)
     assert runner.wake_runs(child.pk) == 1

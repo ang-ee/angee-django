@@ -7,18 +7,21 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NoReturn, Self, cast
 
+from angee.base.scoping import read_scoped_queryset
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
+from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.base.fields import StateField
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    CreationKeyMixin,
-    CreationKeyQuerySet,
     HistoryMixin,
     ImmutableFieldsMixin,
     OptimisticLockMixin,
@@ -26,9 +29,7 @@ from angee.base.mixins import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.permissions import effective_rebac_definition
-from angee.base.scoping import read_scoped_queryset
 from angee.dashboards.resources import DashboardResource
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.data.hasura import declared_hasura_resource_fields
@@ -452,7 +453,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
 
 
 class DashboardQuerySet(
-    CreationKeyQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any],
+    TrashQuerySet[Any], AngeeQuerySet[Any],
 ):
     """Actor-scoped dashboards with removal reserved for personal snapshots."""
 
@@ -485,25 +486,30 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
 
         return self.model(owner=owner, is_baseline=False).require_access("create", actor or current_actor())
 
-    def create_personal(self, owner: Any, *, name: str, description: str = "", client_creation_key: str) -> Any:
+    def create_personal(self, owner: Any, *, name: str, description: str = "", idempotency_key: str) -> Any:
         actor = self.may_create(owner)
         if to_subject_ref(owner) != actor:
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
-        if not client_creation_key:
-            raise ValidationError({"client_creation_key": "A client creation key is required."})
         name = name.strip() or "Untitled dashboard"
-        def insert() -> Any:
+        fingerprint = creation_fingerprint({"name": name, "description": description})
+        with changeset(fresh=True), transaction.atomic():
+            replay = changeset_model().objects.claim(
+                f"dashboards.personal:{actor}",
+                idempotency_key,
+                fingerprint=fingerprint,
+            )
+            if replay is not None:
+                dashboard = replay.created_row
+                if not isinstance(dashboard, self.model):
+                    raise ValidationError({"idempotency_key": "The claimed dashboard is unavailable."})
+                return dashboard.with_actor(actor)
             dashboard = self.model(
                 owner=owner, scope="personal", scope_key=None, name=name, description=description,
-                client_creation_key=client_creation_key,
             )
-            dashboard.full_clean(validate_constraints=False)
-            dashboard.validate_constraints(exclude={"client_creation_key"})
+            dashboard.full_clean()
             dashboard.sudo(reason="dashboards.create_personal").save()
+            current_changeset(required=True).record_created(dashboard)
             return dashboard.with_actor(actor)
-
-        dashboard, _created = self.replay_or_insert(owner, client_creation_key, "", insert)
-        return dashboard
 
     def save_snapshot(
         self,
@@ -657,7 +663,7 @@ DashboardObjects = DashboardManager()
 
 
 class Dashboard(
-    CreationKeyMixin, ImmutableFieldsMixin, OptimisticLockMixin,
+    ImmutableFieldsMixin, OptimisticLockMixin,
     ResourceLoadMixin, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
@@ -666,7 +672,6 @@ class Dashboard(
     resource_class = DashboardResource
     immutable_fields = ("is_baseline",)
     sqid_prefix = "dsh_"
-    creation_key_scope = "owner"
     rebac_grantable = {"viewer": "share", "editor": "share"}
     history_relations = ("widgets",)
 
@@ -727,7 +732,6 @@ class Dashboard(
                 condition=models.Q(is_baseline=False) | models.Q(owner__isnull=True, scope__in=("addon", "resource")),
                 name="dashboard_baseline_shape",
             ),
-            CreationKeyMixin.creation_key_constraint(scope="owner", name="dashboard_owner_creation_key"),
         )
 
     def __str__(self) -> str:

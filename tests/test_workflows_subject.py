@@ -15,7 +15,6 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.scoping import system_queryset
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
@@ -59,20 +58,20 @@ def test_context_preserves_concrete_mti_subject(execution, register_step):
     )
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
     assert WorkflowRun.objects.with_actor(actor).for_subject(subject).get().pk == run.pk
-    step_run = system_queryset(StepRun).get(run=run)
+    step_run = StepRun.system_queryset().get(run=run)
 
     assert runner.execute(step_run.pk)
 
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.SUCCEEDED
     assert retained.subject_content_type.model_class() is MtiParent
-    assert system_queryset(MtiChild).get(pk=subject.pk).detail == "Updated child state"
+    assert MtiChild.system_queryset().get(pk=subject.pk).detail == "Updated child state"
     replacement = WorkflowRun.objects.reprocess(retained, actor=actor)
     assert replacement.reprocess_of_id == retained.pk
     assert replacement.subject_content_type_id == retained.subject_content_type_id
     assert replacement.subject_model_class is MtiChild
     assert replacement.subject_object_id == subject.pk
-    assert [row.record_model_label for row in system_queryset(StepRecord).filter(run=replacement)] == [
+    assert [row.record_model_label for row in StepRecord.system_queryset().filter(run=replacement)] == [
         MtiParent._meta.label,
     ]
 
@@ -160,7 +159,7 @@ def test_subject_loading_requires_current_access_to_the_declared_child(execution
     assert parent.with_actor(actor).has_access("read")
     run_until(run)
     assert run.status == RunStatus.FAILED
-    assert "absent or inaccessible" in system_queryset(StepRun).get(run=run).attempts.with_actor(actor).get().error
+    assert "absent or inaccessible" in StepRun.system_queryset().get(run=run).attempts.with_actor(actor).get().error
     with system_context(reason="test.workflow_subject_ambient") if ambient_system else nullcontext():
         with pytest.raises(PermissionDenied, match="referenced record"):
             WorkflowRun.objects.reprocess(run, actor=actor)
@@ -185,13 +184,13 @@ def test_start_requires_read_access_to_subject(execution, ambient_system):
         pytest.raises(PermissionDenied, match="referenced record"),
     ):
         WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
-    assert not system_queryset(WorkflowRun).filter(version__workflow=workflow).exists()
+    assert not WorkflowRun.system_queryset().filter(version__workflow=workflow).exists()
 
     subject.with_actor(admin).grant_record_access("viewer", actor)
     with system_context(reason="test.explicit_subject_actor") if ambient_system else nullcontext():
         run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
     assert run.run_as_id == actor.pk and run.subject_object_id == subject.pk
-    evidence = system_queryset(StepRecord).get(run=run)
+    evidence = StepRecord.system_queryset().get(run=run)
     assert (evidence.record_model_label, evidence.record_public_id) == (subject._meta.label, subject.sqid)
 
 
@@ -232,12 +231,12 @@ def test_entry_record_input_is_checked_deduplicated_and_retained(execution, regi
     run = WorkflowRun.objects.start(workflow, actor=actor, subject=source, input=payload, request_key="input-evidence")
     assert {
         (row.record_model_label, row.record_public_id)
-        for row in system_queryset(StepRecord).filter(run=run)
+        for row in StepRecord.system_queryset().filter(run=run)
     } == {("knowledge.Vault", source.sqid), ("knowledge.Vault", another.sqid)}
     assert WorkflowRun.objects.start(
         workflow, actor=actor, subject=source, input=payload, request_key="input-evidence",
     ).pk == run.pk
-    assert system_queryset(StepRecord).filter(run=run).count() == 2
+    assert StepRecord.system_queryset().filter(run=run).count() == 2
     viewer = create_user("record-input-viewer")
     run.with_actor(actor).grant_record_access("reader", viewer)
     schema = addon_schema(workflow_schema.schemas, "console")
@@ -252,4 +251,4 @@ def test_entry_record_input_is_checked_deduplicated_and_retained(execution, regi
     payload["nested"]["record"] = private.sqid
     with pytest.raises(PermissionDenied, match="referenced record"):
         WorkflowRun.objects.start(workflow, actor=actor, subject=source, input=payload)
-    assert system_queryset(WorkflowRun).filter(version__workflow=workflow).count() == 1
+    assert WorkflowRun.system_queryset().filter(version__workflow=workflow).count() == 1

@@ -12,7 +12,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import IntegrityError, connections, models, router, transaction
 from django.utils import timezone
 from rebac import (
     RebacMixin,
@@ -32,15 +32,21 @@ from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
 from angee.base.actors import instance_actor
-from angee.base.changesets import changeset, current_changeset
+from angee.base.changesets import changeset, current_changeset, discard_changeset_claim
+from angee.base.errors import CreationKeyConflict
 from angee.base.fields import StateField
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeUnscopedManager,
+    ChangesetQuerySet,
+    HistoryMixin,
     SourceKind,
     SqidMixin,
     StatementSourceMixin,
+    model_history,
+    role_anchor,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeUnscopedManager, role_anchor
-from angee.base.querysets import model_history
 from angee.base.refs import MergePolicy, RecordRefMixin
 from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
 
@@ -56,6 +62,42 @@ class StatementPrincipalManager(AngeeManager):
         if not key:
             raise ValueError("A statement principal requires a nonempty key.")
         return self.get(key=key)
+
+
+class ChangesetManager(AngeeManager.from_queryset(ChangesetQuerySet)):  # type: ignore[misc]
+    """Atomic idempotency claims on logical write boundaries."""
+
+    def claim(self, scope: str, key: str, *, fingerprint: str) -> Any | None:
+        """Claim ``(scope, key)`` on the fresh current boundary or return its completed match."""
+
+        for name, value in (("scope", scope), ("key", key), ("fingerprint", fingerprint)):
+            error_name = "idempotency_key" if name == "key" else name
+            try:
+                self.model._meta.get_field(name).clean(value, None)
+            except ValidationError as error:
+                raise ValidationError({error_name: error}) from error
+            if not value.strip():
+                raise ValidationError({error_name: f"A changeset {name} must not be blank."})
+        if not connections[self.db].in_atomic_block:
+            raise RuntimeError("Changeset claims require an outer transaction.atomic() boundary.")
+        claimed = cast(Any, current_changeset(required=True))
+        if not claimed._state.adding or claimed.pk is not None:
+            raise RuntimeError("Claim an idempotency key before the boundary records any writes.")
+        claimed.scope = scope
+        claimed.key = key
+        claimed.fingerprint = fingerprint
+        try:
+            with transaction.atomic(using=self.db):
+                current_changeset(required=True, record=True)
+        except IntegrityError:
+            discard_changeset_claim(claimed)
+            existing = self.model._base_manager.using(self.db).filter(scope=scope, key=key).first()
+            if existing is None:
+                raise
+            if existing.fingerprint != fingerprint:
+                raise CreationKeyConflict("This idempotency key was already used for different content.")
+            return existing
+        return None
 
 
 class Rule(StatementSourceMixin, AngeeDataModel):
@@ -103,7 +145,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     runtime = True
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
-    objects = AngeeManager()
+    objects = ChangesetManager()
     _angee_base = AngeeUnscopedManager()
 
     class Action(models.TextChoices):
@@ -135,12 +177,19 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     activity = StateField(choices_enum=Activity, default=Activity.MANUAL)
     change_reason = models.TextField(blank=True)
     correlation_id = models.CharField(max_length=255, blank=True, db_index=True)
-    idempotency_key = models.CharField(max_length=255, blank=True, db_index=True)
+    scope = models.CharField(max_length=255, blank=True, editable=False)
+    key = models.CharField(max_length=128, blank=True, editable=False)
+    fingerprint = models.CharField(max_length=64, blank=True, editable=False)
     origin_content_type = models.ForeignKey(
         ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     origin_object_id = models.CharField(max_length=1024, null=True, blank=True)
     origin = GenericForeignKey("origin_content_type", "origin_object_id")
+    created_content_type = models.ForeignKey(
+        ContentType, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    created_object_id = models.CharField(max_length=1024, null=True, blank=True)
+    created_row = GenericForeignKey("created_content_type", "created_object_id")
     occurred_at = models.DateTimeField(default=timezone.now)
     recorded_at = models.DateTimeField(default=timezone.now, editable=False)
     state = StateField(choices_enum=State, default=State.OPEN)
@@ -159,6 +208,39 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             models.Index(fields=("-recorded_at", "-id")),
             models.Index(fields=("origin_content_type", "origin_object_id")),
         )
+        constraints = (
+            models.UniqueConstraint(
+                fields=("scope", "key"),
+                condition=~models.Q(scope="") & ~models.Q(key=""),
+                name="%(app_label)s_%(class)s_claim",
+            ),
+        )
+
+    @classmethod
+    def record_ref_field(cls) -> GenericForeignKey:
+        """Keep the authored origin as this edge's canonical record reference."""
+
+        return cast(GenericForeignKey, cls._meta.get_field("origin"))
+
+    def record_created(self, row: models.Model) -> None:
+        """Attach the claimed create result inside the claim's transaction."""
+
+        if not self.scope or not self.key:
+            raise RuntimeError("Only a claimed changeset can record a created row.")
+        self.created_row = row
+        type(self)._base_manager.db_manager(hints={"instance": self}).filter(pk=self.pk).update(
+            created_content_type_id=self.created_content_type_id,
+            created_object_id=self.created_object_id,
+        )
+
+    def revertable(self, record: models.Model, *, actor: Any = None) -> bool:
+        """Return whether ``record`` admits this boundary under its declared permission."""
+
+        if not isinstance(record, HistoryMixin):
+            return False
+        if actor is not None:
+            record.with_actor(actor)
+        return record.admits_revert(self) and record.has_access(record.history_revert_permission)
 
     def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert."""

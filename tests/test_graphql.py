@@ -40,8 +40,7 @@ from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
-from angee.base.models import AngeeModel
-from angee.base.transitions import TransitionNotAllowed
+from angee.base.models import AngeeModel, TransitionNotAllowed
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
@@ -275,7 +274,7 @@ class UnexpectedErrorQuery:
         )
 
 
-def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
+def test_hasura_write_backend_decodes_public_relations_through_write_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Relation public IDs in writes resolve through the actor-scoped write owner."""
@@ -284,8 +283,8 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
     related = SimpleNamespace(pk=7)
     calls: dict[str, Any] = {}
 
-    def fake_write_queryset(model: type[models.Model]) -> object:
-        calls["write_model"] = model
+    def fake_for_write() -> object:
+        calls["write_model"] = ManagedThing
         return sentinel_queryset
 
     def fake_require_instance_for_id(
@@ -297,7 +296,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         calls["decode"] = (model, value, queryset)
         return related
 
-    monkeypatch.setattr(hasura_data, "write_queryset", fake_write_queryset)
+    monkeypatch.setattr(ManagedThing.objects, "for_write", fake_for_write)
     monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))

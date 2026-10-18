@@ -24,13 +24,13 @@ export const KnowledgeCreateVaultFrom = graphql(`
     $template: ID!
     $name: String!
     $owned: Boolean! = true
-    $client_creation_key: String
+    $idempotency_key: String
   ) {
     create_vault_from(
       template: $template
       name: $name
       owned: $owned
-      client_creation_key: $client_creation_key
+      idempotency_key: $idempotency_key
     ) {
       ok
       message

@@ -5,7 +5,6 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.workflows.decision_steps import DecisionStep
@@ -76,9 +75,9 @@ def nested_reviews(execution, register_step, composed_permissions):
         run = start_run(workflow, actor=owner)
         run.with_actor(owner).grant_record_access("operator", operator)
         run_until(run)
-        step = system_queryset(StepRun).get(run=run)
+        step = StepRun.system_queryset().get(run=run)
         assert step.status == "waiting"
-        return system_queryset(Decision).get(requesting_steps=step)
+        return Decision.system_queryset().get(requesting_steps=step)
 
     return workflow, owner, operator, assignee, admit
 

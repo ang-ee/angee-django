@@ -12,7 +12,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.mixins import CreationKeyConflict
+from angee.base.changesets import changeset_model
+from angee.base.models import CreationKeyConflict
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -82,7 +83,7 @@ class ProjectSetupFixture(WorkCase):
         with actor_context(self.manager):
             return self.Project.objects.setup_from_task(
                 self.as_user(self.source, self.manager), configuration=self.native_configuration(configuration),
-                client_creation_key=key, expected_revision=expected_revision,
+                idempotency_key=key, expected_revision=expected_revision,
             )
 
 
@@ -134,19 +135,25 @@ class ProjectSetupCase(ProjectSetupFixture):
 
     def test_setup_receipt_scope_and_ordinary_project_insert_semantics(self):
         first = self.setup_project()
-        receipts = apps.get_model("projects", "ProjectSetupReceipt")
-        self.assertEqual(receipts.objects.get(task=self.source).actor_id, self.manager.pk)
+        first_claim = changeset_model()._base_manager.get(
+            scope=f"projects.setup:{self.manager.pk}:{self.source.pk}", key="setup",
+        )
+        self.assertEqual(first_claim.created_row.pk, first.pk)
         second_source = self.task(owner=self.manager, title="Second request")
         with actor_context(self.manager):
             second = self.Project.objects.setup_from_task(
                 self.as_user(second_source, self.manager), configuration=self.native_configuration(),
-                client_creation_key="setup",
+                idempotency_key="setup",
             )
         self.assertNotEqual(first.pk, second.pk)
+        second_claim = changeset_model()._base_manager.get(
+            scope=f"projects.setup:{self.manager.pk}:{second_source.pk}", key="setup",
+        )
+        self.assertEqual(second_claim.created_row.pk, second.pk)
         # The full schema exists only after this composed host has booted.
         from angee.graphql.schema import GraphQLSchemas
         schema = GraphQLSchemas.from_discovery().build("console")
-        self.assertNotIn("client_creation_key", schema._schema.mutation_type.fields["insert_projects_one"].args)
+        self.assertIn("idempotency_key", schema._schema.mutation_type.fields["insert_projects_one"].args)
 
     def test_setup_failure_rolls_back_all_new_acts_and_resumes_partial_project(self):
         invalid = deepcopy(self.configuration)
@@ -177,7 +184,7 @@ class ProjectSetupCase(ProjectSetupFixture):
             invalid = {**self.configuration, field: value}
             data = self.graphql(
                 """mutation($id: ID!, $configuration: ProjectSetupInput!) {
-                  setup_project(id: $id, configuration: $configuration, client_creation_key: "invalid") {
+                  setup_project(id: $id, configuration: $configuration, idempotency_key: "invalid") {
                     ok code
                   }
                 }""", {"id": self.source.sqid, "configuration": invalid}, user=self.manager,
@@ -236,7 +243,7 @@ class ProjectSetupCase(ProjectSetupFixture):
     def test_graphql_setup_and_actor_safe_state(self):
         data = self.graphql(
             """mutation Setup($id: ID!, $configuration: ProjectSetupInput!, $key: String!) {
-              setup_project(id: $id, configuration: $configuration, client_creation_key: $key) {
+              setup_project(id: $id, configuration: $configuration, idempotency_key: $key) {
                 ok id message validation_errors
               }
             }""", {"id": self.source.sqid, "configuration": self.configuration, "key": "graphql"},
@@ -259,13 +266,13 @@ class ProjectSetupCase(ProjectSetupFixture):
         self.setup_project()
         with actor_context(self.outsider), self.assertRaises(PermissionDenied):
             self.Project.objects.setup_from_task(
-                self.source.with_actor(self.outsider), configuration=self.configuration, client_creation_key="setup",
+                self.source.with_actor(self.outsider), configuration=self.configuration, idempotency_key="setup",
             )
 
     def test_file_task_with_need_replay_conflict_and_rollback(self):
         values = dict(queue=self.as_user(self.queue, self.manager), title="Direct request", body="Details",
                       party=self.requester.party_ptr.with_actor(self.manager),
-                      client_creation_key="filing")
+                      idempotency_key="filing")
         with actor_context(self.manager):
             task = self.Need.objects.file_task(**values)
             self.assertEqual(self.Need.objects.file_task(**values).pk, task.pk)
@@ -273,13 +280,15 @@ class ProjectSetupCase(ProjectSetupFixture):
             with self.assertRaises(CreationKeyConflict):
                 self.Need.objects.file_task(**{**values, "body": "Changed"})
             with self.assertRaises(ValidationError):
-                self.Need.objects.file_task(**{**values, "client_creation_key": "empty", "body": ""})
-        self.assertFalse(self.Task._base_manager.filter(client_creation_key="empty").exists())
+                self.Need.objects.file_task(**{**values, "idempotency_key": "empty", "body": ""})
+        self.assertFalse(changeset_model()._base_manager.filter(
+            scope=f"intake.file-task:{self.manager.pk}", key="empty",
+        ).exists())
 
     def test_graphql_filing_checks_permission_and_replays_the_task(self):
         mutation = """mutation($queue: ID!, $party: ID!) {
           file_task_with_need(queue: $queue, party: $party, title: "Request", body: "Details",
-                              client_creation_key: "graphql-filing") { ok id }
+                              idempotency_key: "graphql-filing") { ok id }
         }"""
         variables = {"queue": self.queue.sqid, "party": self.requester.sqid}
         result = self.graphql(mutation, variables, user=self.manager)["file_task_with_need"]
@@ -391,7 +400,7 @@ class DashboardVisibilityCase(WorkCase):
         }]}
         with actor_context(self.manager):
             dashboard = dashboard_model.objects.create_personal(
-                self.manager, name="Overview", client_creation_key="snapshot",
+                self.manager, name="Overview", idempotency_key="snapshot",
             )
             updated = dashboard_model.objects.save_snapshot(
                 self.manager, scope="personal", scope_key=None, persisted_id=dashboard.pk,

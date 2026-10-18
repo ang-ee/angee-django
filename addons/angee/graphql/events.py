@@ -16,7 +16,8 @@ from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
 from angee.base.identity import public_id_for, public_id_of
-from angee.base.refs import RecordRef, concrete_child_models
+from angee.base.lineage import concrete_child_models
+from angee.base.refs import RecordRef
 from angee.base.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]

@@ -25,7 +25,7 @@ from angee.base.fields import (
     StateField,
     _derive_fernet,
 )
-from angee.base.mixins import SqidMixin
+from angee.base.models import SqidMixin
 from tests.tables import model_tables
 
 

@@ -19,7 +19,6 @@ from django.db.models import F
 from django.db.models.functions import Now
 from rebac import actor_context, system_context
 
-from angee.base.scoping import system_queryset
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks as workflow_tasks
 from angee.workflows.definition import Definition
@@ -53,7 +52,7 @@ def in_connection(fn, *args):
 
 def row(run, key=None):
     """Read one durable step without changing the ambient worker principal."""
-    query = system_queryset(StepRun).filter(run=run)
+    query = StepRun.system_queryset().filter(run=run)
     return query.get(node_key=key) if key else query.get()
 
 
@@ -74,7 +73,7 @@ def test_same_request_key_concurrent_starts_return_one_run(execution):
         second = pool.submit(in_connection, start)
         ready.wait(timeout=10)
         assert first.result(timeout=15) == second.result(timeout=15)
-    assert system_queryset(WorkflowRun).filter(request_key="test:concurrent_same_key").count() == 1
+    assert WorkflowRun.system_queryset().filter(request_key="test:concurrent_same_key").count() == 1
 
 
 def test_t1_duplicate_database_delivery_executes_one_body(execution, register_step):
@@ -106,7 +105,7 @@ def test_t1_duplicate_database_delivery_executes_one_body(execution, register_st
             release.set()
         assert first.result(timeout=10) is True
     assert not runner.execute(step_run.pk)
-    assert system_queryset(StepAttempt).filter(step_run=step_run).count() == 1
+    assert StepAttempt.system_queryset().filter(step_run=step_run).count() == 1
     assert row(run).status == StepRunStatus.SUCCEEDED
 
 
@@ -166,9 +165,9 @@ def test_t2_serialized_branch_settlements_plan_one_join(execution, register_step
     assert row(run, "join").pk in [envelope["kwargs"]["step_run_id"] for name, envelope in sent
                                    if name == "workflows.execute"]
     assert row(run, "join").status == StepRunStatus.SUCCEEDED
-    assert system_queryset(StepRun).filter(run=run, node_key="join").count() == 1
-    assert system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="join").count() == 1
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert StepRun.system_queryset().filter(run=run, node_key="join").count() == 1
+    assert StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="join").count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 def test_t15_busy_branch_is_dispatched_on_holder_commit_without_tick(execution, register_step, monkeypatch):
@@ -233,16 +232,20 @@ def test_t7_reentrant_fence_fault_rolls_back_database_body(execution, register_s
         assert entered.wait(10)
         try:
             # Another connection sees neither the domain write nor a usable run lock.
-            assert system_queryset(Workflow).get(pk=workflow.pk).name == original
+            assert Workflow.system_queryset().get(pk=workflow.pk).name == original
             with transaction.atomic():
-                locked = system_queryset(WorkflowRun).filter(pk=run.pk).lock_if_supported(no_key=True, skip_locked=True)
+                locked = (
+                    WorkflowRun.system_queryset()
+                    .filter(pk=run.pk)
+                    .lock_if_supported(no_key=True, skip_locked=True)
+                )
                 assert not locked.exists()
         finally:
             release.set()
         assert future.result(timeout=10) is False
-    assert system_queryset(Workflow).get(pk=workflow.pk).name == original
+    assert Workflow.system_queryset().get(pk=workflow.pk).name == original
     assert row(run).status == StepRunStatus.READY and row(run).attempt == 0
-    assert not system_queryset(StepAttempt).filter(step_run__run=run).exists()
+    assert not StepAttempt.system_queryset().filter(step_run__run=run).exists()
 
 
 @pytest.mark.parametrize("first_holder", ["worker", "tick"])
@@ -285,7 +288,7 @@ def test_t16_redispatch_and_settlement_follow_both_lock_orders(execution, regist
         assert entered.wait(10)
         try:
             if first_holder == "worker":
-                assert system_queryset(StepRun).filter(pk=step_run.pk, status="ready").exists()
+                assert StepRun.system_queryset().filter(pk=step_run.pk, status="ready").exists()
                 assert pool.submit(in_connection, runner.redispatch).result(timeout=5) == 0
             else:
                 assert pool.submit(in_connection, runner.execute, step_run.pk).result(timeout=5) is False
@@ -297,7 +300,7 @@ def test_t16_redispatch_and_settlement_follow_both_lock_orders(execution, regist
         assert runner.execute(step_run.pk)
     assert runner.redispatch() == 0
     assert row(run).status == StepRunStatus.SUCCEEDED and row(run).dispatches == 0
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 def test_t13_plain_orm_query_is_scoped_to_actor(execution):
@@ -312,7 +315,7 @@ def test_t13_plain_orm_query_is_scoped_to_actor(execution):
     run = WorkflowRun.objects.start(workflow, actor=actor)
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(in_connection, runner.execute, row(run).pk).result(timeout=10)
-    assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 1}
+    assert WorkflowRun.system_queryset().get(pk=run.pk).output == {"value": 1}
     with actor_context(actor):
         assert type(own).objects.filter(pk=own.pk).exists()
         assert not type(hidden).objects.filter(pk=hidden.pk).exists()
@@ -344,12 +347,12 @@ def test_statement_timeout_rolls_back_body_and_restores_connection(execution, re
     register_step(TimedOutWrite)
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
-            system_queryset(Workflow).filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+            Workflow.system_queryset().filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
             future = pool.submit(in_connection, execute_and_read_timeout, row(run).pk)
             assert future.result(timeout=10)
     assert row(run).status == StepRunStatus.FAILED
-    assert "statement timeout" in system_queryset(StepAttempt).get(step_run__run=run).error
-    assert system_queryset(Workflow).get(pk=workflow.pk).name != "Must roll back"
+    assert "statement timeout" in StepAttempt.system_queryset().get(step_run__run=run).error
+    assert Workflow.system_queryset().get(pk=workflow.pk).name != "Must roll back"
 
 
 def test_t15_duplicate_delivery_holder_restores_busy_sibling(execution, monkeypatch):
@@ -396,7 +399,7 @@ def test_t15_duplicate_delivery_holder_restores_busy_sibling(execution, monkeypa
     assert runner.execute(right.pk)
     assert row(run, "right").status == StepRunStatus.SUCCEEDED
     assert row(run, "right").dispatches == 0
-    assert system_queryset(StepAttempt).filter(step_run=left).count() == 1
+    assert StepAttempt.system_queryset().filter(step_run=left).count() == 1
 
 
 def cancel_while_database_body_runs(workflow, run, actor, monkeypatch, register_step):
@@ -447,18 +450,18 @@ def test_t20_cancel_waits_for_nonfinal_body_and_cancels_successor(execution, reg
 
     cancel_while_database_body_runs(workflow, run, actor, monkeypatch, register_step)
 
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert (retained.status, retained.outcome, retained.output, retained.error) == (
         RunStatus.CANCELED, "canceled", {}, "",
     )
     entry, successor = row(run, "entry"), row(run, "successor")
     assert entry.status == StepRunStatus.SUCCEEDED and entry.output == {"value": 20}
-    assert system_queryset(StepAttempt).get(step_run=entry).result == "succeeded"
+    assert StepAttempt.system_queryset().get(step_run=entry).result == "succeeded"
     assert successor.status == StepRunStatus.CANCELED and successor.attempt == 0
-    assert not system_queryset(StepAttempt).filter(step_run=successor).exists()
-    assert system_queryset(Workflow).get(pk=workflow.pk).name == "Committed body"
+    assert not StepAttempt.system_queryset().filter(step_run=successor).exists()
+    assert Workflow.system_queryset().get(pk=workflow.pk).name == "Committed body"
     assert not runner.execute(successor.pk)
-    assert not system_queryset(StepAttempt).filter(step_run=successor).exists()
+    assert not StepAttempt.system_queryset().filter(step_run=successor).exists()
 
 
 def test_t20b_cancel_racing_final_body_preserves_success(execution, register_step, monkeypatch):
@@ -471,15 +474,15 @@ def test_t20b_cancel_racing_final_body_preserves_success(execution, register_ste
 
     cancel_while_database_body_runs(workflow, run, actor, monkeypatch, register_step)
 
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert (retained.status, retained.outcome, retained.output, retained.error) == (
         RunStatus.SUCCEEDED, "reported", {"value": 21}, "",
     )
     assert row(run).status == StepRunStatus.SUCCEEDED
-    assert system_queryset(StepAttempt).get(step_run=row(run)).result == "succeeded"
-    assert system_queryset(Workflow).get(pk=workflow.pk).name == "Committed body"
+    assert StepAttempt.system_queryset().get(step_run=row(run)).result == "succeeded"
+    assert Workflow.system_queryset().get(pk=workflow.pk).name == "Committed body"
     assert not runner.execute(row(run).pk)
-    assert not system_queryset(StepRun).filter(run=run).exclude(
+    assert not StepRun.system_queryset().filter(run=run).exclude(
         status__in=StepRunStatus.terminal_values(),
     ).exists()
 
@@ -503,9 +506,9 @@ def test_t21_non_admin_run_as_cannot_load_another_actors_record(execution, regis
 
     register_step(ScopedRecordReader)
     assert runner.execute(row(run).pk)
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.FAILED
-    attempt = system_queryset(StepAttempt).get(step_run__run=run)
+    attempt = StepAttempt.system_queryset().get(step_run__run=run)
     assert attempt.result == "failed" and "inaccessible" in attempt.error
 
 
@@ -523,12 +526,12 @@ def test_t19_database_result_error_preserves_final_body(execution, register_step
     register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", lambda *args: ("x" * 64, {}))
     assert runner.execute(row(run).pk)
-    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained = WorkflowRun.system_queryset().get(pk=run.pk)
     assert retained.status == RunStatus.FAILED and retained.output == {} and retained.outcome == "error"
     assert "value too long" in retained.error
     assert row(run).status == StepRunStatus.SUCCEEDED
-    assert system_queryset(StepAttempt).get(step_run__run=run).result == "succeeded"
-    assert system_queryset(Workflow).get(pk=workflow.pk).name == "Retained final write"
+    assert StepAttempt.system_queryset().get(step_run__run=run).result == "succeeded"
+    assert Workflow.system_queryset().get(pk=workflow.pk).name == "Retained final write"
 
 
 def test_commit_dispatch_skips_a_ready_row_locked_by_another_claim(execution):
@@ -605,7 +608,7 @@ def test_t3_t4_worker_loss_obeys_the_durable_effect_marker(execution, register_s
         with pytest.raises(WorkerDied):
             pool.submit(in_connection, runner.execute, step_run.pk).result(timeout=10)
         assert row(run).status == StepRunStatus.RUNNING
-        first = system_queryset(StepAttempt).get(step_run=step_run)
+        first = StepAttempt.system_queryset().get(step_run=step_run)
         assert first.finished_at is None
         assert (first.effect_started_at is not None) is (effect_idempotent is not None)
         expire_attempt(step_run)
@@ -622,10 +625,10 @@ def test_t3_t4_worker_loss_obeys_the_durable_effect_marker(execution, register_s
         assert pool.submit(in_connection, runner.execute, step_run.pk).result(timeout=10)
     first.refresh_from_db()
     assert first.result == "timed_out"
-    second = system_queryset(StepAttempt).get(step_run=step_run, number=2)
+    second = StepAttempt.system_queryset().get(step_run=step_run, number=2)
     assert second.acknowledged_by_id == (actor.pk if effect_idempotent is False else None)
     assert second.result == "succeeded" and keys[0] == keys[1]
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize("failure", ["retryable", "operational"])
@@ -659,8 +662,8 @@ def test_t4_marked_transient_failure_requires_acknowledged_redelivery(execution,
             StepRun.objects.retry_step(step_run, actor=actor)
         StepRun.objects.retry_step(step_run, actor=actor, accept_duplicate=True)
         assert pool.submit(in_connection, runner.execute, step_run.pk).result(timeout=10)
-    assert system_queryset(StepAttempt).get(step_run=step_run, number=2).acknowledged_by_id == actor.pk
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert StepAttempt.system_queryset().get(step_run=step_run, number=2).acknowledged_by_id == actor.pk
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 def test_t5_broker_failure_keeps_a_durable_ready_row(execution, monkeypatch, caplog):
@@ -675,7 +678,7 @@ def test_t5_broker_failure_keeps_a_durable_ready_row(execution, monkeypatch, cap
         patch.setattr(celery_app, "send_task", unavailable)
         WorkflowRun.objects.start(workflow, actor=actor)
     assert "Broker unavailable" in caplog.text
-    run = system_queryset(WorkflowRun).get(version__workflow=workflow)
+    run = WorkflowRun.system_queryset().get(version__workflow=workflow)
     step_run = row(run)
     assert step_run.status == StepRunStatus.READY and step_run.attempt == 0
     with system_context(reason="test missed broker delivery"):
@@ -684,7 +687,7 @@ def test_t5_broker_failure_keeps_a_durable_ready_row(execution, monkeypatch, cap
         assert pool.submit(in_connection, runner.redispatch).result(timeout=10) == 1
         assert sent[-1][1]["kwargs"]["step_run_id"] == step_run.pk
         assert pool.submit(in_connection, runner.execute, step_run.pk).result(timeout=10)
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 def test_t6_reaped_io_attempt_cannot_overwrite_its_successor(execution, register_step):
@@ -718,8 +721,8 @@ def test_t6_reaped_io_attempt_cannot_overwrite_its_successor(execution, register
             release.set()
         assert stale.result(timeout=10) is False
     assert row(run).output == {"value": 2}
-    assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 2}
-    assert list(system_queryset(StepAttempt).filter(step_run=step_run).order_by("number").values_list(
+    assert WorkflowRun.system_queryset().get(pk=run.pk).output == {"value": 2}
+    assert list(StepAttempt.system_queryset().filter(step_run=step_run).order_by("number").values_list(
         "result", flat=True,
     )) == ["timed_out", "succeeded"]
 
@@ -779,7 +782,7 @@ def test_t8_reaper_and_begin_effect_share_the_step_fence(execution, register_ste
                 begin.set()
                 assert locked.wait(10)
                 limit = monotonic() + 5
-                while not system_queryset(StepRun).filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
+                while not StepRun.system_queryset().filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
                     assert monotonic() < limit, "The database deadline did not expire."
                     sleep(0.02)
                 reaper = pool.submit(in_connection, reap)
@@ -800,7 +803,7 @@ def test_t8_reaper_and_begin_effect_share_the_step_fence(execution, register_ste
             begin.set()
             finish.set()
         assert worker.result(timeout=10) is False
-    attempt = system_queryset(StepAttempt).get(step_run=step_run)
+    attempt = StepAttempt.system_queryset().get(step_run=step_run)
     assert attempt.result == "timed_out"
     assert (attempt.effect_started_at is not None) is (first_holder == "effect")
     assert bool(effects) is (first_holder == "effect")
@@ -830,10 +833,10 @@ def test_t2_io_simultaneous_branch_results_plan_one_join(execution, register_ste
         assert entered.wait(10), "The first IO claim must commit before delivering its sibling."
         second = pool.submit(in_connection, runner.execute, row(run, "right").pk)
         assert first.result(timeout=15) and second.result(timeout=15)
-    assert system_queryset(StepRun).filter(run=run, node_key="join").count() == 1
+    assert StepRun.system_queryset().filter(run=run, node_key="join").count() == 1
     assert runner.execute(row(run, "join").pk)
-    assert system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="join").count() == 1
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert StepAttempt.system_queryset().filter(step_run__run=run, step_run__node_key="join").count() == 1
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize("first_holder", ["settlement", "reaper"])
@@ -893,7 +896,7 @@ def test_t16_io_reap_and_settlement_follow_both_run_lock_orders(execution, regis
                 return_body.set()
                 assert locked.wait(10)
                 limit = monotonic() + 5
-                while not system_queryset(StepRun).filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
+                while not StepRun.system_queryset().filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
                     assert monotonic() < limit, "The database deadline did not expire."
                     sleep(0.02)
                 assert pool.submit(in_connection, reap).result(timeout=5) == 0
@@ -912,7 +915,7 @@ def test_t16_io_reap_and_settlement_follow_both_run_lock_orders(execution, regis
             return_body.set()
         assert worker.result(timeout=10) is (first_holder == "settlement")
     assert row(run).status == (StepRunStatus.SUCCEEDED if first_holder == "settlement" else StepRunStatus.WAITING)
-    assert system_queryset(StepAttempt).get(step_run=step_run).result == (
+    assert StepAttempt.system_queryset().get(step_run=step_run).result == (
         "succeeded" if first_holder == "settlement" else "timed_out"
     )
 
@@ -947,11 +950,11 @@ def test_cancel_lock_timeout_reports_running_and_restores_connection(execution, 
         assert entered.wait(10)
         try:
             pool.submit(in_connection, cancel).result(timeout=5)
-            assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.RUNNING
+            assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.RUNNING
         finally:
             release.set()
         assert worker.result(timeout=10)
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
+    assert WorkflowRun.system_queryset().get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
 def test_io_settlement_stops_at_deadline_when_step_row_stays_locked(execution, register_step):
@@ -998,4 +1001,4 @@ def test_io_settlement_stops_at_deadline_when_step_row_stays_locked(execution, r
     assert bodies == [1]
     assert row(run).output == {"error": "The attempt deadline expired."}
     assert row(run).status == StepRunStatus.FAILED
-    assert system_queryset(StepAttempt).get(step_run=step_run).result == "timed_out"
+    assert StepAttempt.system_queryset().get(step_run=step_run).result == "timed_out"

@@ -7,7 +7,6 @@ import yaml
 from django.db import IntegrityError, transaction
 from rebac import system_context
 
-from angee.base.scoping import system_queryset
 from angee.resources.testing.models import Resource
 from angee.workflows.definition import DefinitionInvalid
 from angee.workflows.steps import Step
@@ -70,7 +69,7 @@ def test_install_canonicalizes_subject_model_identity(execution, subject_model):
         actor=actor,
     )
     assert workflow.subject_model == "knowledge.Vault"
-    assert system_queryset(Workflow).get(pk=workflow.pk).subject_model == "knowledge.Vault"
+    assert Workflow.system_queryset().get(pk=workflow.pk).subject_model == "knowledge.Vault"
     reinstalled = Workflow.objects.install_definition(
         key=workflow.key,
         name=workflow.name,
@@ -97,8 +96,8 @@ def test_install_rejects_unknown_subject_model_with_issue(execution, subject_mod
     issue = caught.value.issues[0]
     assert issue.code == "subject_model" and issue.path == ["subject_model"]
     assert subject_model in issue.message
-    assert not system_queryset(Workflow).filter(key="unknown_subject").exists()
-    assert not system_queryset(WorkflowVersion).exists()
+    assert not Workflow.system_queryset().filter(key="unknown_subject").exists()
+    assert not WorkflowVersion.system_queryset().exists()
 
 
 def test_published_version_requires_a_number(execution):
@@ -111,7 +110,7 @@ def test_published_version_requires_a_number(execution):
         actor=actor,
     )
     with pytest.raises(IntegrityError), transaction.atomic():
-        system_queryset(WorkflowVersion).create(
+        WorkflowVersion.system_queryset().create(
             workflow=workflow,
             number=None,
             document=workflow.published.document,

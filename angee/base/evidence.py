@@ -7,18 +7,13 @@ from enum import StrEnum
 from typing import Any
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 from pydantic import BaseModel, ConfigDict, JsonValue
 from rebac.resources import model_resource_type
 
 from angee.base.identity import instances_from_public_ids, public_id_for
-from angee.base.mixins import AppendOnlyModel
-from angee.base.models import AngeeDataModel
-from angee.base.refs import MergePolicy, RecordRefMixin, generic_pointer_model
-from angee.base.scoping import read_scoped_queryset
+from angee.base.refs import generic_pointer_model
 
 
 class FactAuthority(StrEnum):
@@ -45,13 +40,14 @@ class EvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str
     id: str
+    pointer: str = ""
 
     @classmethod
-    def of(cls, record: models.Model) -> EvidenceReference:
+    def of(cls, record: models.Model, *, pointer: str = "") -> EvidenceReference:
         """Name a saved record by the model its generic pointers resolve to and its public id."""
 
         pointer_model = generic_pointer_model(type(record))
-        return cls(model=pointer_model._meta.label, id=public_id_for(pointer_model, record.pk))
+        return cls(model=pointer_model._meta.label, id=public_id_for(pointer_model, record.pk), pointer=pointer)
 
 
 def _readable(
@@ -64,11 +60,11 @@ def _readable(
     refuses it, display simply finds nothing readable there.
     """
 
-    grouped: dict[str, set[str]] = {}
+    grouped: dict[str, list[EvidenceReference]] = {}
     for ref in refs:
-        grouped.setdefault(ref.model.lower(), set()).add(ref.id)
+        grouped.setdefault(ref.model.lower(), []).append(ref)
     resolved: dict[EvidenceReference, Any] = {}
-    for label, ids in sorted(grouped.items()):
+    for label, labelled in sorted(grouped.items()):
         try:
             model = apps.get_model(label)
         except (LookupError, ValueError) as error:
@@ -77,10 +73,20 @@ def _readable(
             if standing:
                 raise PermissionDenied("Referenced records require a standing permission.")
             continue
+        ids = sorted({ref.id for ref in labelled})
         found = instances_from_public_ids(
-            model, sorted(ids), queryset=read_scoped_queryset(model, actor, action=permission)
+            model,
+            ids,
+            queryset=model.objects.with_actor(actor).with_action(permission),
         )
-        resolved.update((EvidenceReference(model=label, id=public_id), record) for public_id, record in found.items())
+        resolved.update(
+            (
+                EvidenceReference(model=label, id=ref.id, pointer=ref.pointer),
+                found[ref.id],
+            )
+            for ref in labelled
+            if ref.id in found
+        )
     return resolved
 
 
@@ -93,7 +99,11 @@ def readable_evidence(
     """Return the references whose records ``actor`` may read, in their stored order."""
 
     readable = _readable(refs, actor, permission=permission, standing=False)
-    return [ref for ref in refs if EvidenceReference(model=ref.model.lower(), id=ref.id) in readable]
+    return [
+        ref
+        for ref in refs
+        if EvidenceReference(model=ref.model.lower(), id=ref.id, pointer=ref.pointer) in readable
+    ]
 
 
 def readable_records(
@@ -106,23 +116,13 @@ def readable_records(
 
     if not actors:
         raise ValidationError("Evidence admission requires a reader.")
-    wanted = {EvidenceReference(model=ref.model.lower(), id=ref.id) for ref in refs}
+    wanted = {
+        EvidenceReference(model=ref.model.lower(), id=ref.id, pointer=ref.pointer)
+        for ref in refs
+    }
     records: dict[EvidenceReference, Any] = {}
     for actor in actors:
         records = _readable(refs, actor, permission=permission, standing=True)
         if set(records) != wanted:
             raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
-    return [records[ref] for ref in sorted(wanted, key=lambda ref: (ref.model, ref.id))]
-
-
-class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
-    """One retained edge from an evidence owner to a canonical source record."""
-
-    merge_policy = MergePolicy.KEEP
-
-    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
-    object_id = models.PositiveBigIntegerField()
-    record = GenericForeignKey("content_type", "object_id")
-
-    class Meta:
-        abstract = True
+    return [records[ref] for ref in sorted(wanted, key=lambda ref: (ref.model, ref.id, ref.pointer))]

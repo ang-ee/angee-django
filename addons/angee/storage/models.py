@@ -78,10 +78,15 @@ from angee.base.actors import actor_user_id, user_subject_type
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.impl import ImplClassField
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AngeeUnscopedManager,
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
+    DirectRecordAccess,
     HierarchyMixin,
     HierarchyQuerySet,
     HistoryMixin,
@@ -90,13 +95,6 @@ from angee.base.mixins import (
     OwnerQuerySet,
     TrashMixin,
     TrashQuerySet,
-)
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    AngeeUnscopedManager,
-    DirectRecordAccess,
     role_anchor,
 )
 from angee.base.refs import MergePolicy, RecordRefMixin

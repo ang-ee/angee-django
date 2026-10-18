@@ -29,11 +29,16 @@ from rebac.mixins import RebacModelBase
 
 from angee.base.actors import actor_user_id, instance_actor
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ImmutableFieldsMixin, RowLockMixin
-from angee.base.models import AngeeDataModel, AngeeManager
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AuditMixin,
+    ImmutableFieldsMixin,
+    RowLockMixin,
+    StagedModelMixin,
+)
+from angee.base.models import Stage as StagePrimitive
 from angee.base.scoping import system_queryset
-from angee.base.stages import Stage as StagePrimitive
-from angee.base.stages import StagedModelMixin
 from angee.resources.mixins import ResourceLoadMixin
 from angee.spaces.managers import GroupManager
 

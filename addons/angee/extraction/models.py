@@ -10,11 +10,10 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.evidence import DerivedFrom, FactAuthority
+from angee.base.evidence import FactAuthority
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AppendOnlyModel, AuditMixin
-from angee.base.models import AngeeDataModel, AngeeModel
+from angee.base.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
 from angee.base.refs import record_ref_for
 from angee.base.serialization import canonical_json
 from angee.extraction.contracts import (

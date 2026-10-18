@@ -1,7 +1,7 @@
 """Ordered, data-owned pipeline stages.
 
 Lifecycles whose vocabulary belongs to code use
-:class:`angee.base.transitions.StateTransitions`.  A pipeline whose names and
+:class:`angee.base.models.StateTransitions`.  A pipeline whose names and
 ordering belong to users composes :class:`Stage` into an addon-owned concrete
 stage model instead.  The concrete model supplies only its container relation
 and optional category field; records compose :class:`StagedModelMixin` and
@@ -81,11 +81,7 @@ class Stage(models.Model):
         """Return every stage configured for ``container`` in pipeline order."""
 
         cls.container_field()
-        queryset = cls._base_manager.all()
-        sudo = getattr(queryset, "sudo", None)
-        if callable(sudo):
-            queryset = sudo(reason="base.stage.for_container")
-        return queryset.filter(**{cls.container_field_name: container}).order_by("position", "pk")
+        return cls._base_manager.filter(**{cls.container_field_name: container}).order_by("position", "pk")
 
     @classmethod
     def resolve_default(cls, container: models.Model) -> Any | None:

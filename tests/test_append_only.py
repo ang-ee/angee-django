@@ -11,14 +11,14 @@ from django.db import models
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeQuerySet,
     AppendOnlyBaseQuerySet,
     AppendOnlyModel,
     AppendOnlyQuerySet,
     AuditMixin,
     retained_set_null,
 )
-from angee.base.models import AngeeQuerySet
 from tests.conftest import create_user
 
 
@@ -61,8 +61,8 @@ def test_audit_foreign_keys_declare_serializable_materialized_nullification() ->
         on_delete = RetainedEvidence._meta.get_field(name).remote_field.on_delete
         assert on_delete is retained_set_null
         serialized, imports = MigrationWriter.serialize(on_delete)
-        assert serialized == "angee.base.mixins.retained_set_null"
-        assert imports == {"import angee.base.mixins"}
+        assert serialized == "angee.base.models.ownership.retained_set_null"
+        assert imports == {"import angee.base.models.ownership"}
 
 
 def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_fks(

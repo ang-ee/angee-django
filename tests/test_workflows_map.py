@@ -11,7 +11,6 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.identity import public_id_of
-from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.graphql.events import ChangeRelatedRecord
@@ -58,12 +57,12 @@ def start_map(actor, items, **kwargs):
     workflow = load_workflow(map_document(**kwargs), actor=actor)
     run = start_run(workflow, actor=actor, input={"items": items})
     run_until(run, node="items.body")
-    return run, system_queryset(StepRun).get(run=run, node_key="items")
+    return run, StepRun.system_queryset().get(run=run, node_key="items")
 
 
 def body_rows(run):
     """Read body identities in the declared item order."""
-    return system_queryset(StepRun).filter(run=run, node_key="items.body").order_by("map_index")
+    return StepRun.system_queryset().filter(run=run, node_key="items.body").order_by("map_index")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -325,7 +324,7 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
     run_until(run)
     assert run.status == "succeeded" and identities[0] == identities[1]
     assert body_rows(run).get().rank == mapped.rank
-    assert system_queryset(StepAttempt).get(step_run=item, number=2).acknowledged_by_id == actor.pk
+    assert StepAttempt.system_queryset().get(step_run=item, number=2).acknowledged_by_id == actor.pk
 
 
 
@@ -386,7 +385,7 @@ def test_decision_map_body_has_independent_questions_and_typed_outputs(execution
     run, _ = start_map(actor, [{"value": 0}, {"value": 1}], body=ItemReview.key)
     run_until(run)
     original = list(body_rows(run))
-    decisions = [system_queryset(Decision).get(requesting_steps=row) for row in original]
+    decisions = [Decision.system_queryset().get(requesting_steps=row) for row in original]
     assert decisions[0].pk != decisions[1].pk
     decide(decisions[1], actor=reviewer, chosen=["accept"])
     run_until(run)
@@ -394,6 +393,6 @@ def test_decision_map_body_has_independent_questions_and_typed_outputs(execution
     decide(decisions[0], actor=reviewer, chosen=["accept"])
     run_until(run)
     assert run.status == "succeeded" and applied == [1, 0]
-    assert [item["output"] for item in system_queryset(StepRun).get(run=run, node_key="items").output] == [
+    assert [item["output"] for item in StepRun.system_queryset().get(run=run, node_key="items").output] == [
         {"value": 0}, {"value": 1},
     ]

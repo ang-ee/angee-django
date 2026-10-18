@@ -22,6 +22,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, cast
 
+from angee.base.scoping import lock_if_supported
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -53,10 +54,18 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.actors import instance_actor
 from angee.base.fields import DiagnosticTextField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, HistoryMixin, OwnerMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.scoping import lock_if_supported
-from angee.base.transitions import StateTransitions, save_state, transition
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AuditMixin,
+    HistoryMixin,
+    OwnerMixin,
+    StateTransitions,
+    role_anchor,
+    save_state,
+    transition,
+)
 from angee.graphql.events import ChangeRelatedRecord
 from angee.iam.service_users import sync_service_user
 from angee.integrate.models import IntegrationCreateMode
@@ -861,7 +870,7 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.base.mixins.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.base.models.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.

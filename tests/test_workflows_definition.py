@@ -1284,7 +1284,6 @@ def test_rekey_rejects_ambiguous_identity_and_unknown_layout_without_repointing_
 
 
 def test_draft_save_applies_definition_rekey_and_layout_validation(execution):
-    from angee.base.scoping import system_queryset
     from angee.workflows.testing.drivers import load_workflow
 
     actor, _ = execution
@@ -1297,18 +1296,17 @@ def test_draft_save_applies_definition_rekey_and_layout_validation(execution):
         expected_revision=workflow.draft_revision,
         actor=actor,
     )
-    persisted = system_queryset(Workflow).get(pk=workflow.pk)
+    persisted = Workflow.system_queryset().get(pk=workflow.pk)
     assert persisted.draft == {"nodes": {"renamed": {"step": "echo"}}}
     assert persisted.layout == {"renamed": [10, 20]}
     with pytest.raises(ValidationError):
         Workflow.objects.save_draft(
             workflow, draft=persisted.draft, layout={"renamed": [20]}, expected_revision=saved.revision, actor=actor
         )
-    assert system_queryset(Workflow).get(pk=workflow.pk).draft_revision == saved.revision
+    assert Workflow.system_queryset().get(pk=workflow.pk).draft_revision == saved.revision
 
 
 def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execution, monkeypatch):
-    from angee.base.scoping import system_queryset
     from angee.workflows.testing.drivers import load_workflow
 
     actor, _ = execution
@@ -1319,7 +1317,7 @@ def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execut
     def update(queryset, **values):
         changed = original(queryset, **values)
         if "draft" in values and changed:
-            original(system_queryset(Workflow).filter(pk=workflow.pk), draft_revision=workflow.draft_revision + 2)
+            original(Workflow.system_queryset().filter(pk=workflow.pk), draft_revision=workflow.draft_revision + 2)
         return changed
 
     monkeypatch.setattr(queryset_type, "update", update)
@@ -1327,4 +1325,4 @@ def test_draft_acknowledges_its_own_revision_when_another_writer_advances(execut
         workflow, draft={"nodes": {"entry": {"step": "echo"}}}, expected_revision=workflow.draft_revision, actor=actor
     )
     assert saved.revision == workflow.draft_revision + 1
-    assert system_queryset(Workflow).get(pk=workflow.pk).draft_revision == saved.revision + 1
+    assert Workflow.system_queryset().get(pk=workflow.pk).draft_revision == saved.revision + 1

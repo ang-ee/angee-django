@@ -17,6 +17,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Self, cast
 
+from angee.base.scoping import bind_actor, system_queryset
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -40,12 +41,22 @@ from rebac.relationships import delete_relationships
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.base.actors import actor_user_id, instance_actor, subject_reaches_user
+from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, CreationKeyConflict, ImmutableFieldsMixin, OptimisticLockMixin, OwnerQuerySet
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
-from angee.base.scoping import bind_actor, system_queryset
-from angee.base.transitions import StateTransitions, save_state, transition
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AuditMixin,
+    ImmutableFieldsMixin,
+    OptimisticLockMixin,
+    OwnerQuerySet,
+    StateTransitions,
+    role_anchor,
+    save_state,
+    transition,
+)
 from angee.base.validation import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
@@ -790,7 +801,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         body: str,
         audience: str = "default",
         recipient: Any = None,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Any:
         """Ask one replay-safe question with anonymous content attribution."""
         if not self.has_access("ask"):
@@ -805,30 +816,28 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise ValidationError({"recipient": "Only managers may choose a recipient."})
         if manager and recipient is None:
             raise ValidationError({"recipient": "Choose a user or responders."})
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                dict(
-                    title=title,
-                    body=body,
-                    audience=audience,
-                    recipient=str(recipient.pk) if isinstance(recipient, models.Model) else recipient,
-                ),
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        with transaction.atomic(), system_context(reason="proposals.round.ask"):
+        fingerprint = creation_fingerprint(
+            {
+                "title": title,
+                "body": body,
+                "audience": audience,
+                "recipient": recipient,
+            }
+        )
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with claim_boundary, transaction.atomic(), system_context(reason="proposals.round.ask"):
             locked = type(self).objects.lock_if_supported().get(pk=self.pk)
             task_model = apps.get_model("projects", "Task")
-            if client_creation_key:
-                previous = task_model.objects.filter(
-                    clarification_round=locked,
-                    clarification_asker_id=asker_id,
-                    clarification_creation_key=client_creation_key,
-                ).first()
-                if previous is not None:
-                    if previous.clarification_creation_fingerprint != fingerprint:
-                        raise CreationKeyConflict()
+            if idempotency_key is not None:
+                replay = changeset_model().objects.claim(
+                    f"proposals.clarification:{locked.pk}:{asker_id}",
+                    idempotency_key,
+                    fingerprint=fingerprint,
+                )
+                if replay is not None:
+                    previous = replay.created_row
+                    if not isinstance(previous, task_model):
+                        raise ValidationError({"idempotency_key": "The claimed question is unavailable."})
                     return previous
             if not manager and timezone.now() > locked.last_call_at:
                 raise ValidationError("The last call for questions has passed.")
@@ -846,8 +855,6 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 clarification_by_manager=manager,
                 clarification_default_visibility=default,
                 clarification_surrendered=audience == "managers",
-                clarification_creation_key=client_creation_key or None,
-                clarification_creation_fingerprint=fingerprint if client_creation_key else "",
                 visibility="restricted" if audience == "managers" else default,
                 assignee_id=locked.facilitator_id,
             )
@@ -856,6 +863,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 task.sudo(reason="proposals.round.ask.insert").save(ownerless=True)
                 if manager:
                     locked._pass_clarification_locked(task, recipient, "default", manager_ask=True)
+            if idempotency_key is not None:
+                current_changeset(required=True).record_created(task)
         return task
 
     def resolve_clarification(self, task: Any, *, expected_revision: int) -> Any:
@@ -2341,8 +2350,6 @@ class TaskProposalAccess(ImmutableFieldsMixin):
     clarification_default_visibility = models.CharField(max_length=20, default="restricted", editable=False)
     clarification_passed_at = models.DateTimeField(null=True, blank=True, editable=False)
     clarification_passed_audience = models.CharField(max_length=16, default="", blank=True, editable=False)
-    clarification_creation_key = models.CharField(max_length=255, null=True, blank=True, editable=False)
-    clarification_creation_fingerprint = models.CharField(max_length=64, blank=True, default="", editable=False)
     shared_with_responders = models.BooleanField(default=False, editable=False)
     hasura_readable_fields = (
         "clarification_round",
@@ -2370,22 +2377,12 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         "clarification_default_visibility",
         "clarification_passed_at",
         "clarification_passed_audience",
-        "clarification_creation_key",
-        "clarification_creation_fingerprint",
         "shared_with_responders",
     )
 
     class Meta:
-        """Question replay identity is independent of anonymous task attribution."""
-
         abstract = True
-        constraints = (
-            models.UniqueConstraint(
-                fields=("clarification_round", "clarification_asker", "clarification_creation_key"),
-                condition=models.Q(clarification_creation_key__isnull=False),
-                name="uq_proposals_clarification_creation_key",
-            ),
-        )
+        constraints: tuple[Any, ...] = ()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Reject content changes after the first pass, including generated writes."""
