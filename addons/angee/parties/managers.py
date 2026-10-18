@@ -27,6 +27,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
+from django.db.models.query import ModelIterable
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
 from rebac import (
@@ -570,7 +571,8 @@ class PartyStatementQuerySet(StatementQuerySet):
         fresh = self._result_cache is None
         super()._fetch_all()
         reader = getattr(self, "_reference_reader", None)
-        if fresh and reader is not None and self._result_cache:
+        # Aggregation and values() pages carry no rows to prime.
+        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
             _prime_readable_statement_records(self._result_cache, reader)
 
     def handles(self) -> Any:
