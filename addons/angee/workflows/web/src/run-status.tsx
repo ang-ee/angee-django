@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useInvalidate } from "@refinedev/core";
-import { refineResourceName, useModelMetadata, type Row } from "@angee/metadata";
+import { refineResourceIdentifier, useModelMetadata, type Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Skeleton,
@@ -51,8 +51,9 @@ function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
   React.useEffect(() => {
     if (!listResource || transition === seen.current) return;
     seen.current = transition;
+    // Lists key their queries on the resource identifier (`<schema>:<modelLabel>`).
     void invalidate({
-      resource: refineResourceName(listResource),
+      resource: refineResourceIdentifier(listResource),
       dataProviderName: listResource.schemaName,
       invalidates: ["list", "many", "detail"],
     });

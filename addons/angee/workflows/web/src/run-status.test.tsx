@@ -19,7 +19,7 @@ vi.mock("@refinedev/core", async (original) => ({
 vi.mock("@angee/metadata", async (original) => ({
   ...await original<typeof import("@angee/metadata")>(),
   useModelMetadata: () => ({ resource: { schemaName: "console", modelLabel: "storage.File", roots: { list: "files" } } }),
-  refineResourceName: () => "files",
+  refineResourceIdentifier: () => "console:storage.File",
 }));
 vi.mock("@angee/ui", async (original) => ({
   ...await original<typeof import("@angee/ui")>(),
@@ -78,7 +78,7 @@ test("a run transition refetches the row's own resource", () => {
   expect(screen.getByText("Waiting")).toBeTruthy();
   expect(owner.invalidate).toHaveBeenCalledTimes(1);
   expect(owner.invalidate).toHaveBeenCalledWith({
-    resource: "files",
+    resource: "console:storage.File",
     dataProviderName: "console",
     invalidates: ["list", "many", "detail"],
   });
