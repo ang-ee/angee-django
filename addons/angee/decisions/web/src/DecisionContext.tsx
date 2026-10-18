@@ -7,6 +7,7 @@ import { useDecisionsT } from "./i18n";
 const ReferenceSchema = v.strictObject({
   model: v.string(),
   id: v.string(),
+  pointer: v.optional(v.string(), ""),
   label: v.optional(v.string(), ""),
   tab: v.nullish(v.string(), null),
   page: v.nullish(v.pipe(v.number(), v.integer()), null),

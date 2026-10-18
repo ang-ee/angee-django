@@ -29,10 +29,10 @@ describe("decision context", () => {
   });
 
   test("shows attributed facts and links evidence to its record tab and preview page", async () => {
-    const evidence = { model: "storage.File", id: "fil_source", label: "Evidence file", tab: "preview", page: 2, search: { previewPage: "fil_source:2", stale: null } };
+    const evidence = { model: "storage.File", id: "fil_source", pointer: "/count", label: "Evidence file", tab: "preview", page: 2, search: { previewPage: "fil_source:2", stale: null } };
     render(<Provider><ShellPageTestProviders runtime={runtime}><DecisionContext context={{
       facts: [{ pointer: "/count", label: "Count", value: 7, authority: "source", evidence: [evidence] }],
-      references: [{ model: "notes.Note", id: "nte_related", label: "Related note" }],
+      references: [{ model: "notes.Note", id: "nte_related", pointer: "", label: "Related note" }],
     }} /></ShellPageTestProviders></Provider>);
     expect(await screen.findByText("7")).toBeTruthy();
     expect(screen.getByText("Count")).toBeTruthy();
