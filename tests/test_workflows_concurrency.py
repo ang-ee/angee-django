@@ -310,8 +310,8 @@ def test_t13_plain_orm_query_is_scoped_to_actor(execution):
     own = vault_for(actor, name="Visible")
     hidden = vault_for(outsider, name="Hidden")
     workflow = load_workflow(document("entry", step="visible"), key="scope", actor=admin)
-    with system_context(reason="test.workflow_owner"):
-        Workflow.objects.filter(pk=workflow.pk).update(created_by=actor)
+    with actor_context(admin):
+        workflow.with_actor(admin).transfer_ownership(actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(in_connection, runner.execute, row(run).pk).result(timeout=10)
@@ -493,8 +493,8 @@ def test_t21_non_admin_run_as_cannot_load_another_actors_record(execution, regis
     actor, other = create_user("run_as_reader"), create_user("foreign_owner")
     own, hidden = vault_for(actor, name="Own"), vault_for(other, name="Foreign")
     workflow = load_workflow(document("entry"), key="explicit_scope", actor=admin)
-    with system_context(reason="test.workflow_actor"):
-        Workflow.objects.filter(pk=workflow.pk).update(created_by=actor)
+    with actor_context(admin):
+        workflow.with_actor(admin).transfer_ownership(actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
 
     class ScopedRecordReader(Echo):
