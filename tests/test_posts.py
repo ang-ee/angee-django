@@ -613,3 +613,20 @@ def test_post_metrics_read_derives_from_the_message(posts_tables: None) -> None:
         visible = PostMetrics.objects.filter(pk=row.pk).exists()
 
     assert visible is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_metrics_snapshot_keeps_its_creator(posts_tables: None) -> None:
+    """A later snapshot overwrites the counters but never the row's creator."""
+
+    del posts_tables
+    feed = _feed("metrics-creator")
+    StubFeedBackend.queue(feed, [_post("p1", metrics=ParsedMetrics(view_count=1))])
+    later = create_user("metrics-later-writer")
+    with system_context(reason="test metrics creator"):
+        feed.sync()
+        message = Message._base_manager.get(external_id="p1")
+        row = PostMetrics.objects.upsert(message=message, metrics=ParsedMetrics(view_count=5), created_by_id=later.pk)
+
+    assert feed.owner_id is not None
+    assert (row.view_count, row.created_by_id) == (5, feed.owner_id)
