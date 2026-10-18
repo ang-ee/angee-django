@@ -1,5 +1,14 @@
 import * as React from "react";
-import { ResourceQuery, refineResourceName, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import {
+  ResourceQuery,
+  modelFieldForPath,
+  refineResourceName,
+  rowPublicId,
+  rowValueAtPath,
+  useModelMetadata,
+  useSchemaFieldMetadata,
+  type Row,
+} from "@angee/metadata";
 import {
   useList,
   useOne,
@@ -22,6 +31,9 @@ import type {
 } from "../../widgets/RelationField";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { DEFAULT_PAGE_SIZE } from "../resource/page-size";
+import { enumValueLabel, statusLabel } from "../../lib/labels";
+import { isTone, type Tone } from "../../lib/tones";
+import { useStatusTone } from "../../widgets/use-status-tone";
 
 export const RELATION_OPTION_LIMIT = 200;
 
@@ -31,6 +43,10 @@ export interface RelationOptionsConfig {
   labelField?: string;
   /** Additional scalar fields a composing surface needs from each option row. */
   fields?: readonly string[];
+  /** Related-row field rendered as secondary option text. */
+  optionDescriptionField?: string;
+  /** Related-row enum/status field rendered as a shared-tone badge. */
+  optionStatusField?: string;
   /** One-based server page, shared by pickers and row catalogues. */
   page?: number;
   pageSize?: number;
@@ -189,6 +205,8 @@ export function useRelationOptions(
     filters,
     where,
     labelField: optionLabelField,
+    optionDescriptionField,
+    optionStatusField,
     page = 1,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
@@ -200,6 +218,18 @@ export function useRelationOptions(
   // A model's record colour rides along with its label, so its chips can wear it.
   const colorField = optionLabelField ? undefined : relation?.colorField;
   const metadata = useModelMetadata(relation?.resource ?? "");
+  const schemaMetadata = useSchemaFieldMetadata();
+  const resolveStatusTone = useStatusTone();
+  const statusMetadata = React.useMemo(
+    () => metadata && optionStatusField
+      ? modelFieldForPath(optionStatusField, metadata, schemaMetadata)?.field
+      : undefined,
+    [metadata, optionStatusField, schemaMetadata],
+  );
+  const statusTones = React.useMemo<Record<string, Tone> | undefined>(() => {
+    const entries = Object.entries(statusMetadata?.tones ?? {}).filter((entry): entry is [string, Tone] => isTone(entry[1]));
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }, [statusMetadata]);
   const activeSearchFields = metadata
     ? ResourceQuery.from(metadata).textSearchFields(searchFields)
     : [];
@@ -227,19 +257,26 @@ export function useRelationOptions(
       : [];
   const stableFilters = useValueStable([...(filters ?? []), ...searchFilters]);
   const stableSorters = useValueStable(sorters);
-  const stableFields = useValueStable(extraFields);
+  const stableFields = useValueStable([...new Set([
+    ...(extraFields ?? []),
+    ...(optionDescriptionField ? [optionDescriptionField] : []),
+    ...(optionStatusField ? [optionStatusField] : []),
+  ])]);
   const stableWhere = useValueStable(where);
   const resource = metadata?.resource ?? null;
+  const selectionPaths = React.useMemo(() => [...new Set([
+    "id", labelField, ...(colorField ? [colorField] : []), ...stableFields,
+  ])], [stableFields, labelField, colorField]);
   const fields = React.useMemo(
-    () => refineFieldsFromPaths(["id", labelField, ...(colorField ? [colorField] : []), ...(stableFields ?? [])]),
-    [stableFields, labelField, colorField],
+    () => refineFieldsFromPaths(selectionPaths),
+    [selectionPaths],
   );
   const meta = React.useMemo(() => {
     if (!stableWhere) return { fields };
     const target = resource && listBatchTarget(resource);
     if (!target) throw new Error("A filtered relation requires a list query contract.");
-    return listQueryMeta(target, ["id", labelField, ...(stableFields ?? [])], stableWhere);
-  }, [fields, resource, labelField, stableFields, stableWhere]);
+    return listQueryMeta(target, selectionPaths, stableWhere);
+  }, [fields, resource, selectionPaths, stableWhere]);
   const run = useList<RowRecord, HttpError>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
@@ -273,11 +310,22 @@ export function useRelationOptions(
     [run.query.isFetching, run.query.error?.message, refetch, run.result.total],
   );
   const options = React.useMemo(() => {
-    const options = relationOptionsFromRows(rows, labelField, { sort, colorField });
+    const options = relationOptionsFromRows(rows, labelField, {
+      sort,
+      colorField,
+      descriptionField: optionDescriptionField,
+      statusField: optionStatusField,
+      statusLabel: (value) => {
+        const option = statusMetadata?.values?.find((item) => item.value === value);
+        return option ? enumValueLabel(option) : statusLabel(value);
+      },
+      statusTone: (value) => resolveStatusTone(value, statusTones),
+    });
     return labelSearch
-      ? options.filter((option) => option.label.toLocaleLowerCase().includes(labelSearch))
+      ? options.filter((option) => `${option.label} ${option.description ?? ""} ${option.status?.label ?? ""}`
+        .toLocaleLowerCase().includes(labelSearch))
       : options;
-  }, [colorField, labelField, labelSearch, rows, sort]);
+  }, [colorField, labelField, labelSearch, optionDescriptionField, optionStatusField, resolveStatusTone, rows, sort, statusMetadata, statusTones]);
   return React.useMemo(() => ({ list, options, rows }), [list, options, rows]);
 }
 
@@ -305,12 +353,32 @@ export function relationSelectedOption(
 export function relationOptionsFromRows(
   rows: readonly Row[],
   labelField: string,
-  config: Pick<RelationOptionsConfig, "sort"> & { colorField?: string } = {},
+  config: Pick<RelationOptionsConfig, "sort"> & {
+    colorField?: string;
+    descriptionField?: string;
+    statusField?: string;
+    statusLabel?: (value: string) => string;
+    statusTone?: (value: string) => Tone;
+  } = {},
 ): readonly RelationOption[] {
   const options = rows.flatMap((row) => {
     const value = rowPublicId(row) ?? "";
     if (!value) return [];
-    return [{ value, label: relationOptionLabel(row, labelField, value), ...relationOptionColor(row, config.colorField) }];
+    const descriptionValue = config.descriptionField ? rowValueAtPath(row, config.descriptionField) : undefined;
+    const description = descriptionValue == null ? "" : String(descriptionValue).trim();
+    const statusValue = config.statusField ? rowValueAtPath(row, config.statusField) : undefined;
+    const status = statusValue == null ? "" : String(statusValue).trim();
+    return [{
+      value,
+      label: relationOptionLabel(row, labelField, value),
+      ...relationOptionColor(row, config.colorField),
+      ...(description ? { description } : {}),
+      ...(status ? { status: {
+        value: status,
+        label: config.statusLabel?.(status) ?? statusLabel(status),
+        tone: config.statusTone?.(status) ?? "brand",
+      } } : {}),
+    }];
   });
   return config.sort
     ? [...options].sort((left, right) => left.label.localeCompare(right.label))
@@ -320,7 +388,7 @@ export function relationOptionsFromRows(
 type RowRecord = BaseRecord & Row;
 
 function relationOptionColor(row: Row, colorField: string | undefined): { color?: string } {
-  const color = colorField ? hexColor(row[colorField]) : undefined;
+  const color = colorField ? hexColor(rowValueAtPath(row, colorField)) : undefined;
   return color ? { color } : {};
 }
 
@@ -329,6 +397,6 @@ function relationOptionLabel(
   labelField: string,
   fallback: string,
 ): string {
-  const label = String(row[labelField] ?? "").trim();
+  const label = String(rowValueAtPath(row, labelField) ?? "").trim();
   return label || fallback;
 }

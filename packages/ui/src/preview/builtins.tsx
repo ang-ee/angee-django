@@ -108,7 +108,7 @@ function TextPreview({ file, mime }: PreviewProviderProps): ReactElement {
   return (
     <FileText url={file.url}>
       {(text) => (
-        <pre className="h-full overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
+        <pre className="h-full whitespace-pre-wrap break-words overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
           {isJsonMime(mime) ? prettyJson(text) : text}
         </pre>
       )}

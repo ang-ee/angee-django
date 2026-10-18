@@ -55,6 +55,8 @@ export interface ResourcePageRoutesOptions {
   recordMatch?: AddonRoute["recordMatch"];
   /** Named shipped view to seed this collection and its record navigation. */
   defaultResourceView?: string;
+  /** Initial editable filter for this collection and its record navigation. */
+  defaultFilter?: AddonRoute["defaultFilter"];
 }
 
 export function resourcePageRoutes(
@@ -77,6 +79,7 @@ export function resourcePageRoutes(
       ...(options.recordMatch ? { recordMatch: options.recordMatch } : {}),
       ...(options.menu ? { menu: options.menu } : {}),
       ...(options.defaultResourceView ? { defaultResourceView: options.defaultResourceView } : {}),
+      ...(options.defaultFilter !== undefined ? { defaultFilter: options.defaultFilter } : {}),
     },
     {
       name: options.detailName ?? `${name}.record`,

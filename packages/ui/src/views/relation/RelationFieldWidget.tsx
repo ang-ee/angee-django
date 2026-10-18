@@ -31,6 +31,10 @@ export interface RelationFieldWidgetProps {
    */
   create?: RelationCreateConfig | null;
   searchFields?: readonly string[];
+  /** Related-row field rendered as secondary picker-option text. */
+  optionDescriptionField?: string;
+  /** Related-row enum/status field rendered as a shared-tone picker badge. */
+  optionStatusField?: string;
   /**
    * The already-loaded selected record as a picker option (id + folded label),
    * derived by `FormView` from the parent read. Shows the trigger label before
@@ -74,6 +78,8 @@ function EditableRelationFieldWidget(
   where,
   create,
   searchFields,
+  optionDescriptionField,
+  optionStatusField,
   selectedOption,
   placeholder,
   "aria-label": ariaLabel,
@@ -88,6 +94,8 @@ function EditableRelationFieldWidget(
     filters,
     where,
     searchFields,
+    optionDescriptionField,
+    optionStatusField,
   });
 
   const forms = useRelationForms(relation, create);

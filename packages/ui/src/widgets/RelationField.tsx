@@ -8,6 +8,7 @@ import { Skeleton } from "../ui/skeleton";
 import { inputVariants } from "../ui/input";
 import { widgetControlPresentationProps } from "../ui/widget-control";
 import type { WidgetControlProps } from "./types";
+import type { Tone } from "../lib/tones";
 import {
   PopoverContent,
   PopoverPortal,
@@ -26,6 +27,10 @@ export interface RelationOption {
   label: string;
   /** The related record's own `#rrggbb` colour, when its model has a record colour. */
   color?: string;
+  /** Secondary option text projected from a caller-declared related-row field. */
+  description?: string;
+  /** Status value presented with the shared status vocabulary and tone owner. */
+  status?: { value: string; label: string; tone: Tone };
 }
 
 export interface RelationSearchState {

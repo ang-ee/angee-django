@@ -57,3 +57,26 @@ test.each([true, false])("a filter option's fields are selected only while its f
   expect(requested.length).toBeGreaterThan(0);
   expect(requested.every((fields) => fields.includes("revision"))).toBe(active);
 });
+
+test("the active route's model-scoped default filter composes with the page's default filter", async () => {
+  const getList = vi.fn(async (_request: GetListParams) => (
+    { data: [{ id: "note-1", title: "Held note", revision: 3 }], total: 1 }
+  ));
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<Provider dataProvider={{ getList }}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{
+      widgets: defaultWidgets,
+      defaultResourceFilter: { resource: resource.modelLabel, filter: HELD },
+    }}>
+      <ResourceList resource={resource.modelLabel} scope="local" hideCreate columns={[{ field: "title" }]}
+        defaultFilter={{ title: { exact: "Held note" } }}
+        filterOptions={[{ id: "held", label: "Held", filter: HELD, fields: ["revision"] }]} />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
+
+  await screen.findByText("Held note");
+  expect(getList.mock.calls.every(([request]) => request.meta?.fields?.includes("revision"))).toBe(true);
+  const where = JSON.stringify(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where);
+  expect(where).toContain('"is_held":{"_eq":true}');
+  expect(where).toContain('"title":{"_eq":"Held note"}');
+});

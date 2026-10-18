@@ -27,7 +27,7 @@ import {
 } from "../runtime";
 import { Chatter, useChatterPresentation } from "./Chatter";
 import { CHATTER_CONTAINERS } from "./chatter-containers";
-import { ChatterProvider, useChatter, useChatterContent, type ChatterContent } from "./chatter-context";
+import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 import { useRecordPeek } from "./record-peek";
 import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
 

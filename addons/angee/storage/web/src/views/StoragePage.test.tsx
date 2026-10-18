@@ -433,6 +433,9 @@ describe("StoragePage explorer wiring", () => {
   test("renders a directly shared file when no drive is visible", () => {
     routerMocks.params = { id: "file-a" };
     storageData = { ...storageData, drives: [] };
+    storageData.files[0]!.mime_type = {
+      mime_type: "text/xml", category: "text", label: "XML", icon_key: "file",
+    };
 
     render(pageTree());
 
@@ -441,6 +444,7 @@ describe("StoragePage explorer wiring", () => {
       "file-a",
     );
     expect(screen.getByTestId("preview-pane").textContent).toBe("alpha.txt");
+    expect(screen.getByText("XML · 128 B")).toBeTruthy();
   });
 
   test("uses the open file drive for a direct link", () => {

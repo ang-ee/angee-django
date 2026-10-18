@@ -212,9 +212,13 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
 ];
 
 describe("React architecture guardrails", () => {
-  test("framework and tooling imports follow layering and declared dependencies", () => {
-    expect(importViolations(repositoryPackageRoots())).toEqual([]);
-  });
+  test(
+    "framework and tooling imports follow layering and declared dependencies",
+    () => {
+      expect(importViolations(repositoryPackageRoots())).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
 
   test(
     "framework, tooling, and addon imports follow layering and declared dependencies",
