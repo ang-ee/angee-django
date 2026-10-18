@@ -26,8 +26,8 @@ from angee.base.models import (
     AngeeQuerySet,
     AppendOnlyModel,
     AppendOnlyQuerySet,
-    AuditMixin,
     HistoryMixin,
+    OwnerMixin,
     update_fields_with_auto_now,
 )
 from angee.base.refs import MergePolicy, RecordRefMixin
@@ -141,8 +141,14 @@ class _NodeFailureRoute(models.Func):
         )
 
 
-class Workflow(ResourceLoadMixin, AuditMixin, HistoryMixin, AngeeDataModel):
-    """Editable identity and draft, pointing to one immutable published version."""
+class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
+    """Editable identity and draft, pointing to one immutable published version.
+
+    A workflow is a grant root with transferable ownership
+    (:class:`~angee.base.models.OwnerMixin`); ``created_by`` stays attribution.
+    An install without a user-backed actor leaves it ownerless, for platform
+    administrators to manage or transfer.
+    """
 
     runtime = True
     resource_class = WorkflowDefinitionResource
