@@ -21,6 +21,7 @@ import {
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
 import { CHATTER_TAB_SEARCH_KEY, useChatter, type ChatterTab } from "./chatter-context";
+import { ACTIVITY_TAB_ID } from "./Activity";
 
 export interface ChatterProps {
   tabs?: readonly ChatterTab[];
@@ -192,14 +193,15 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
   return { context, visible: tabs.length > 0, tabs };
 }
 
-/** Visit lazily, then retain this record's draft input while peeking at sources. */
+/** Activity stays eager for attention; other tabs mount on first visit and retain drafts. */
 function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: string }): React.ReactElement {
   const [visited, setVisited] = React.useState<readonly string[]>([active]);
   React.useEffect(() => {
     setVisited((current) => current.includes(active) ? current : [...current, active]);
   }, [active]);
   return <>{tabs.map((tab) => (
-    <Tabs.Panel key={tab.id} value={tab.id} keepMounted={visited.includes(tab.id)} className="min-h-0 flex-1">
+    <Tabs.Panel key={tab.id} value={tab.id}
+      keepMounted={tab.id === ACTIVITY_TAB_ID || visited.includes(tab.id)} className="min-h-0 flex-1">
       {/* base-ui's ScrollArea.Content sets inline `min-width: fit-content`; only an
           inline `contentStyle` override lets long content shrink and wrap instead of
           overflowing horizontally, since a `min-w-0` class can never beat that inline

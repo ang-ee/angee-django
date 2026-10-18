@@ -181,6 +181,8 @@ export interface ChatterRoute {
   /** The model's resource `recordEdges`: edge model labels (`storage.FileAttachment`) its records can
    *  carry, plus `<label>:<role>` for each role of a role-bearing edge (`messaging.ThreadAttachment:chatter`). */
   recordEdges?: readonly string[];
+  /** Whether the canonical resource keeps native provenance history. */
+  history?: boolean;
   recordParam?: string;
 }
 

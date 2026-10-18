@@ -20,8 +20,8 @@ export const StepDecisionDocument = graphql(`
 `);
 
 export const RecordTimelineDocument = graphql(`
-  query RecordTimeline($records: [TimelineRecordInput!]!) {
-    record_timeline(records: $records) {
+  query RecordTimeline($records: [TimelineRecordInput!]!, $runLimit: Int = 20) {
+    record_timeline(records: $records, run_limit: $runLimit) {
       open_decision_count
       records {
       record_model record_id
@@ -67,6 +67,17 @@ export const RecordTimelineAttentionDocument = graphql(`
     record_timeline(records: $records, include_runs: false) {
       open_decision_count has_runs
       records { record_model record_id decisions { id is_open proposal } }
+    }
+  }
+`);
+
+export const RecordRunStatusDocument = graphql(`
+  query RecordRunStatus($records: [TimelineRecordInput!]!) {
+    record_timeline(records: $records, run_limit: 1) {
+      records {
+        record_model record_id
+        runs { id status }
+      }
     }
   }
 `);

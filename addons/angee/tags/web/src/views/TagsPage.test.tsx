@@ -55,11 +55,13 @@ describe("TagsPage", () => {
     expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual([
       "name",
       "color",
+      "attention",
       "updated_at",
     ]);
     expect(parsePageFields(formChildren).map((field) => field.name)).toEqual([
       "name",
       "color",
+      "attention",
       "is_archived",
     ]);
   });
@@ -71,7 +73,7 @@ describe("TagsPage", () => {
     };
     const { listChildren, formChildren } = pageDeclarationChildren();
 
-    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "color", "scope", "updated_at"]);
-    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "color", "scope", "is_archived"]);
+    expect(parsePageColumns(listChildren).map((column) => column.field)).toEqual(["name", "color", "attention", "scope", "updated_at"]);
+    expect(parsePageFields(formChildren).map((field) => field.name)).toEqual(["name", "color", "attention", "scope", "is_archived"]);
   });
 });

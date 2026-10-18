@@ -15,10 +15,11 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_permiss
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.data.hasura import with_filter_aliases
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")
@@ -93,8 +94,28 @@ class DecisionMutation:
         return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
 
 
+@strawberry.type
+class DecisionQuery:
+    @strawberry_django.field
+    def record_decision_answers(
+        self, info: strawberry.Info, model: str, id: PublicID, limit: int = 25,
+    ) -> list[DecisionType]:
+        """Newest answered decisions attached to one actor-readable record."""
+
+        actor = request_from_info(info).user
+        record_model = apps.get_model(model)
+        record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
+        queryset = (
+            Decision.objects.with_actor(actor)
+            .for_records(record)
+            .exclude(answered_at=None)
+            .order_by("-answered_at", "-pk")[: max(1, min(limit, 100))]
+        )
+        return list(DecisionType.get_queryset(queryset, info))
+
+
 schemas = {"console": {
-    "query": [_DECISIONS.query, _RECORDS.query],
+    "query": [DecisionQuery, _DECISIONS.query, _RECORDS.query],
     "mutation": [DecisionMutation],
     "subscription": [changes(Decision, field="decisionChanged")],
     "types": [DecisionType, DecisionRecordType, *_DECISIONS.types, *_RECORDS.types],

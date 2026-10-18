@@ -59,6 +59,7 @@ def hasura_pydantic_resource(
     node_name: str | None = None,
     id_field: str = "id",
     frontend_row_model: Literal["client", "server"] = "client",
+    context_fields: Sequence[str] = (),
 ) -> HasuraResource:
     """Build a read-only Hasura resource from a pydantic row model.
 
@@ -109,6 +110,7 @@ def hasura_pydantic_resource(
                 filter_fields=tuple(filterable),
                 order_fields=tuple(sortable),
                 group_by_fields=tuple(groupable),
+                context_fields=tuple(context_fields),
                 query_axes=(
                     hasura_query_axes(resource.row_model, tuple(groupable), tuple(filterable))
                     if resource.row_model is not None

@@ -1,13 +1,14 @@
 import { defineBaseAddon } from "@angee/app";
-import { Tab } from "@angee/ui";
+import type { ActivityEntrySource } from "@angee/ui";
 
 import { FieldProvenanceMarks } from "./FieldProvenanceMarks";
-import { HISTORY_TAB_ID, HistoryPane } from "./RecordHistory";
+import { useRecordHistoryEntries } from "./RecordHistory";
 import { enProvenanceMessages } from "./i18n";
 
 /**
- * The provenance addon's console surface: field-statement marks on saved forms
- * and one History tab when the resource keeps native history.
+ * Provenance contributes field-statement marks to saved forms and one detailed
+ * change source to the framework Activity stream. The source itself declines
+ * resources without native history.
  */
 const provenance = defineBaseAddon({
   id: "provenance",
@@ -19,28 +20,19 @@ const provenance = defineBaseAddon({
         content: <FieldProvenanceMarks />,
       },
     },
-    "form#sections": {
+    "record#activity": {
       "provenance.history": {
-        sequence: 90,
-        content: (
-          <Tab
-            id={HISTORY_TAB_ID}
-            label={{ namespace: "provenance", key: "history.title", fallback: enProvenanceMessages["history.title"] }}
-            visibleWhen={(_record, resource) => resource?.history === true}
-          >
-            <HistoryPane />
-          </Tab>
-        ),
+        content: { kinds: ["change", "source-event"], useEntries: useRecordHistoryEntries } satisfies ActivityEntrySource,
       },
     },
   },
 });
 
 export {
-  HISTORY_TAB_ID,
   HistoryEntrySummary,
   RecordHistoryTimeline,
   useRecordHistory,
+  useRecordHistoryEntries,
 } from "./RecordHistory";
 
 export default provenance;

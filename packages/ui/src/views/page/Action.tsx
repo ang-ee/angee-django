@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
-import type { ActionOutcome } from "@angee/refine";
+import type { ActionOutcome, ListQueryFieldArgument } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
 import type { Resolver } from "react-hook-form";
 
@@ -112,6 +112,8 @@ export interface ActionRelationArg extends ActionArgBase {
   optionDescriptionField?: string;
   /** Related-row enum/status field rendered as a shared-tone picker badge. */
   optionStatusField?: string;
+  /** Context values required by a computed status field, such as the active company. */
+  optionStatusArguments?: readonly ListQueryFieldArgument[];
   /**
    * Inline create forwarded to the picker (`RelationPicker.create`): a no-match
    * typed query offers "Create …", `actionLabel` also exposes the form as a

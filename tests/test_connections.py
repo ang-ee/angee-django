@@ -16,6 +16,7 @@ from django.db import IntegrityError, connection, connections, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import actor_context, system_context
+from rebac.models import active_relationship_model
 
 from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
@@ -225,6 +226,50 @@ def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
     assert oauth_client.email_from_claims(claims) == "claude@example.com"
     assert oauth_client.display_name_from_claims(claims, "fallback@example.com") == "Claude User"
     assert oauth_client.avatar_url_from_claims(claims) == "https://avatar.example/claude.png"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_p6_ownership_data_moves_external_account_tuple_once(composed_tables: None) -> None:
+    """The post-migrate step copies the legacy tuple, removes it, and is repeatable."""
+
+    del composed_tables
+    user = get_user_model().objects.create_user(username="p6-owner")
+    with system_context(reason="test P6 ownership data fixture"):
+        oauth_client = OAuthClient.objects.create(
+            slug="p6-owner",
+            display_name="P6 owner",
+            client_id="p6-owner",
+        )
+        account = ExternalAccount.objects.create(
+            oauth_client=oauth_client,
+            external_id="legacy-owner",
+        )
+        # Seed the pre-P6 ledger shape directly: the current public writer
+        # correctly refuses tuples for a relation that is now field-backed.
+        active_relationship_model().objects.create(
+            resource_type="integrate/external_account",
+            resource_id=str(account.pk),
+            relation="owner",
+            subject_type="auth/user",
+            subject_id=str(user.pk),
+            optional_subject_relation="",
+            caveat_context={},
+        )
+
+    call_command("p6_ownership_data", verbosity=0)
+    account.refresh_from_db()
+    assert account.owner_id == user.pk
+    assert not active_relationship_model().objects.filter(
+        resource_type="integrate/external_account",
+        resource_id=str(account.pk),
+        relation="owner",
+        subject_type="auth/user",
+        subject_id=str(user.pk),
+    ).exists()
+
+    call_command("p6_ownership_data", verbosity=0)
+    account.refresh_from_db()
+    assert account.owner_id == user.pk
 
 
 @pytest.mark.django_db(transaction=True)

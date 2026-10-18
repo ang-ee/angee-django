@@ -83,6 +83,7 @@ class DataResourcePolicy:
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] | None = None
+    context_fields: tuple[str, ...] | None = None
     public_id_field: str | None = None
     subject_field: str | None = None
     row_model: str | None = None
@@ -272,6 +273,7 @@ def finalize_data_resources(
                 _single_policy_value(model_label, contributions, "record_representation"),
             ),
             record_search_fields=_single_sequence(model_label, contributions, "record_search_fields"),
+            context_fields=_single_sequence(model_label, contributions, "context_fields"),
             public_id_field=cast(
                 str,
                 _single_policy_value(model_label, contributions, "public_id_field") or PUBLIC_ID_FIELD_NAME,
@@ -441,6 +443,7 @@ def _finalize_data_resource(
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None,
     record_representation: str | None = None,
     record_search_fields: tuple[str, ...] = (),
+    context_fields: tuple[str, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     subject_field: str | None = None,
@@ -473,6 +476,7 @@ def _finalize_data_resource(
     aggregate_fields = _require_unique(exposed_model_label, "aggregate field", aggregate_fields)
     group_by_fields = _require_unique(exposed_model_label, "group axis", group_by_fields)
     record_search_fields = _require_unique(exposed_model_label, "search field", record_search_fields)
+    context_fields = _require_unique(exposed_model_label, "context field", context_fields)
     label_axes = _relation_label_axes(model, group_by_fields) if model is not None else {}
     if model is not None and order_fields and not default_sort:
         default_sort = _default_sort(model, order_fields)
@@ -610,6 +614,13 @@ def _finalize_data_resource(
         fields=active_fields,
         query=query,
     )
+    active_context_fields = _validated_context_fields(
+        model_label=exposed_model_label,
+        graphql_schema=graphql_schema,
+        node_name=type_names.node,
+        declared=context_fields,
+        fields=active_fields,
+    )
     return data_contract.DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
@@ -624,6 +635,7 @@ def _finalize_data_resource(
         row_model=row_model,
         record_representation=active_record_representation,
         record_search_fields=active_record_search_fields,
+        context_fields=active_context_fields,
         subject_field=active_subject_field,
         subtitle=active_subtitle,
         impl_fields=_impl_fields(model, active_fields),
@@ -641,6 +653,32 @@ def _finalize_data_resource(
         revision_fields=revision_fields,
         lines=lines,
     )
+
+
+def _validated_context_fields(
+    *,
+    model_label: str,
+    graphql_schema: GraphQLSchema,
+    node_name: str | None,
+    declared: tuple[str, ...],
+    fields: tuple[data_contract.DataResourceFieldMetadata, ...],
+) -> tuple[str, ...]:
+    """Resolve header facts against the final readable node surface."""
+
+    if not declared:
+        return ()
+    if node_name is None:
+        raise ImproperlyConfigured(
+            f"resource metadata for {model_label} declares context_fields without a node type."
+        )
+    resolved = final_wire_field_names(graphql_schema, node_name, declared)
+    readable = {field.name for field in fields if field.readable}
+    unavailable = tuple(name for name in resolved if name not in readable)
+    if unavailable:
+        raise ImproperlyConfigured(
+            f"resource metadata for {model_label} declares unreadable context_fields {unavailable!r}."
+        )
+    return resolved
 
 
 def _mutation_arguments(
@@ -681,7 +719,7 @@ def _record_edges(
     model: type[models.Model] | None,
     edges_by_target: Mapping[type[models.Model], tuple[type[models.Model], ...]],
 ) -> tuple[str, ...]:
-    """Project the edge models whose schema declares this resource's canonical type a target.
+    """Project the edge models accepting this resource's canonical type as a target.
 
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An

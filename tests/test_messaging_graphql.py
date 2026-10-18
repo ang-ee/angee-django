@@ -2188,47 +2188,6 @@ def test_record_chatter_notifications_can_be_marked_read(composed_tables: None) 
         assert follower.last_read_message_id == latest.pk
 
 
-def test_record_thread_unread_count_is_record_read_scoped(composed_tables: None) -> None:
-    """The count-only chatter badge resolver uses the same parent-record read gate."""
-
-    reader = User.objects.create_user(username="msg-count-reader", email="msg-count-reader@example.com")
-    outsider = User.objects.create_user(username="msg-count-outsider", email="msg-count-outsider@example.com")
-    with system_context(reason="test.messaging.record_unread_count.seed"):
-        doc = messaging_models.ChatterDoc.objects.create(title="Gated count", status="open")
-        _grant(doc, "reader", reader)
-        doc.message_subscribe(user=reader)
-        doc.message_post("Unread for the reader.")
-    schema = _schema()
-    query = """
-        query RecordThreadUnreadCount($model: String!, $id: ID!) {
-          record_thread_unread_count(model_label: $model, record_id: $id)
-        }
-    """
-    variables = {"model": "chatterdemo.ChatterDoc", "id": doc.sqid}
-
-    visible = _data(
-        execute_schema(
-            schema,
-            query,
-            variables,
-            request=_request(reader),
-        )
-    )["record_thread_unread_count"]
-    hidden = _data(
-        execute_schema(
-            schema,
-            query,
-            variables,
-            request=_request(outsider),
-        )
-    )["record_thread_unread_count"]
-    anonymous = _data(execute_schema(schema, query, variables))["record_thread_unread_count"]
-
-    assert visible == 1
-    assert hidden == 0
-    assert anonymous == 0
-
-
 def test_record_chatter_marks_one_message_done(composed_tables: None) -> None:
     """The record chatter API clears needaction positionally, up to one message.
 

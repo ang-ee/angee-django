@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Controller, get, useFormState, useWatch, type Control } from "react-hook-form";
+import { rowValueAtPath } from "@angee/metadata";
 
 // Render-only bindings for the headless FormView surface.
 
@@ -141,6 +142,8 @@ export function FormViewRecordHeader({
     titleFieldMessages,
     displayRecord,
     modelMetadata,
+    contextFields,
+    attributionFields,
     relationByField,
     loading,
     subtitleParts,
@@ -164,6 +167,9 @@ export function FormViewRecordHeader({
   const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
     && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
     ? resolvedStatusField : undefined;
+  const statusRestricted = Boolean(currentStatusField && fieldIsRedacted(displayRecord, currentStatusField.name));
+  const titleRestricted = Boolean(currentTitleField && fieldIsRedacted(displayRecord, currentTitleField.name));
+  const titlePlacementRestricted = Boolean(titlePlacementField && fieldIsRedacted(displayRecord, titlePlacementField.name));
   const statusbar = currentStatusField && fieldWidgetId(currentStatusField) === "statusbar";
   const statusOnTitleRow = statusbar && !compact;
   const compactStatus = statusbar && compact;
@@ -198,12 +204,14 @@ export function FormViewRecordHeader({
       </header>
     );
   }
-  const statusMark = currentStatusField ? <RecordFieldMarkControl field={currentStatusField.name} label={currentStatusField.label} /> : null;
+  const statusMark = currentStatusField ? <RecordFieldMarkControl field={currentStatusField.name} label={currentStatusField.label}
+    restricted={statusRestricted} /> : null;
   const status = currentStatusField ? <><div ref={compactStatus ? undefined : statusContainerRef} className={cn(
     compactStatus ? "contents" : "flex min-w-0 flex-wrap items-center gap-3",
     statusOnTitleRow ? "flex-auto justify-end" : "w-full",
   )}>
-    <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
+    {statusRestricted ? <span className="text-13 text-fg-muted">{currentStatusField.label}</span>
+      : <Controller control={form.control} name={currentStatusField.name} render={({ field: controller }) =>
       compactStatus ? (
         typeof controller.value === "string" && controller.value ? <Badge
           tone={statusTone(controller.value)} density="compact" shape="pill" className="justify-self-start"
@@ -222,7 +230,7 @@ export function FormViewRecordHeader({
         }}
         onCommit={() => commitFieldInteraction(currentStatusField.name)}
       />
-    } />
+    } />}
     {statusOnTitleRow ? statusMark : null}
   </div>{!statusOnTitleRow ? statusMark : null}</> : null;
   return (
@@ -239,7 +247,11 @@ export function FormViewRecordHeader({
             control={form.control}
             name={currentTitleField.name}
             render={({ field: controller }) =>
-              fieldReadOnly(currentTitleField) ? (
+              titleRestricted ? (
+                <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
+                  {currentTitleField.label ?? t("form.record")}
+                </h1>
+              ) : fieldReadOnly(currentTitleField) ? (
                 <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
                   {titleText(
                     titleRelation
@@ -297,22 +309,30 @@ export function FormViewRecordHeader({
           </h1>
         )}
           </div>
-          {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label} /> : null}
-          {titlePlacementField && displayRecord ? <FieldDescriptorControl
+          {currentTitleField ? <RecordFieldMarkControl field={currentTitleField.name} label={currentTitleField.label}
+            restricted={titleRestricted} /> : null}
+          {titlePlacementField && displayRecord && !titlePlacementRestricted ? <FieldDescriptorControl
             field={titlePlacementField}
             value={displayRecord[titlePlacementField.name]}
             row={displayRecord}
             readOnly={fieldReadOnly(titlePlacementField)}
           /> : null}
+          {titlePlacementField && titlePlacementRestricted ? <span className="inline-flex items-center gap-2 text-13 text-fg-muted">
+            <span>{titlePlacementField.label ?? titlePlacementField.name}</span>
+            <RecordFieldMarkControl field={titlePlacementField.name} label={titlePlacementField.label} restricted />
+          </span> : null}
         </div>
         {titleField && titleFieldMessages.length > 0 ? (
           <p className="mt-1 text-xs leading-5 text-danger-text">
             {titleFieldMessages.join(", ")}
           </p>
         ) : null}
-        {/* A declared context line is the record's one compact subtitle; the
-            generic id/created/updated line is the fallback for forms without one. */}
-        {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
+        {/* The metadata-owned facts line is the default. A declared context line
+            remains the deliberate escape hatch for a domain-specific sentence. */}
+        {!compact && !contextLine ? <RecordFactsLine resource={modelMetadata?.resource.modelLabel}
+          record={displayRecord} fields={contextFields} attributionFields={attributionFields}
+          technicalParts={subtitleParts} loading={loading} loadingLabel={t("form.loading")}
+          createdByLabel={t("form.createdBy")} updatedByLabel={t("form.updatedBy")} /> : null}
         {contextLine ? <div className="mt-1 break-words text-xs text-fg-muted">{contextLine}</div> : null}
       </div>
       {statusOnTitleRow ? status : null}
@@ -401,6 +421,7 @@ export function FormViewSheet({
   const currentBodyField = bodyField
     ? resolveField(bodyField, bodyValues)
     : undefined;
+  const bodyRestricted = Boolean(currentBodyField && fieldIsRedacted(surface.displayRecord, currentBodyField.name));
   const renderField = boundFieldRenderer(surface);
   // A declared `lines` group holds the editable lines in its place in the sheet.
   const sheetSections = sections.map((section) => section.key === EDITABLE_LINES_SECTION
@@ -418,9 +439,10 @@ export function FormViewSheet({
         <section className="grid gap-2">
           {currentBodyField.label ? (
             <div className="flex items-center gap-2"><SectionHeading as="h2" label={currentBodyField.label} />
-              <RecordFieldMarkControl field={currentBodyField.name} label={currentBodyField.label} /></div>
+              <RecordFieldMarkControl field={currentBodyField.name} label={currentBodyField.label}
+                restricted={bodyRestricted} /></div>
           ) : null}
-          <Controller
+          {!bodyRestricted ? <Controller
             control={form.control}
             name={currentBodyField.name}
             render={({ field: controller, fieldState }) => (
@@ -440,7 +462,7 @@ export function FormViewSheet({
                 }}
               />
             )}
-          />
+          /> : null}
         </section>
       ) : null}
       <div className="grid gap-6">
@@ -513,6 +535,7 @@ function BoundFormField({
           value={value}
           row={values}
           readOnly={readOnly}
+          restricted={fieldIsRedacted(surface.displayRecord, field.name)}
           errors={fieldState.error ? [fieldState.error] : []}
           onCommit={() => surface.commitFieldInteraction(field.name)}
           onChange={(picked) => {
@@ -545,32 +568,72 @@ export function FormViewRail({ surface }: { surface: FormViewSurface }): React.R
   </aside>;
 }
 
-function RecordSubtitle({
+function RecordFactsLine({
+  resource,
+  record,
+  fields,
+  attributionFields,
+  technicalParts,
   loading,
   loadingLabel,
-  parts,
+  createdByLabel,
+  updatedByLabel,
 }: {
+  resource?: string;
+  record: FormValues | null;
+  fields: readonly FieldDescriptor[];
+  attributionFields: readonly FieldDescriptor[];
+  technicalParts: readonly React.ReactNode[];
   loading: boolean;
   loadingLabel: React.ReactNode;
-  parts: readonly React.ReactNode[];
+  createdByLabel: React.ReactNode;
+  updatedByLabel: React.ReactNode;
 }): React.ReactElement | null {
+  const valueParts = record == null ? [] : fields.flatMap((field) => {
+    if (fieldIsRedacted(record, field.name)) return [
+      <span key={field.name} className="inline-flex min-w-0 items-center gap-1">
+        <span>{field.label ?? field.name}</span>
+        <RecordFieldMarkControl field={field.name} label={field.label} restricted />
+      </span>,
+    ];
+    const value = rowValueAtPath(record, field.name);
+    return value == null || value === "" ? [] : [
+      <FieldDescriptorControl key={field.name} resource={resource} field={field}
+        value={value} row={record} readOnly />,
+    ];
+  });
+  const labels = {
+    created_by: createdByLabel,
+    created_by_label: createdByLabel,
+    updated_by: updatedByLabel,
+    updated_by_label: updatedByLabel,
+  } as const;
+  const attributionParts = record == null ? [] : attributionFields.flatMap((field) => {
+    const value = rowValueAtPath(record, field.name);
+    if (value == null || value === "") return [];
+    return [<span key={field.name} className="inline-flex min-w-0 items-center gap-1">
+      <span>{labels[field.name as keyof typeof labels]}</span>
+      <FieldDescriptorControl resource={resource} field={field} value={value} row={record} readOnly />
+    </span>];
+  });
+  const parts = [...valueParts, ...attributionParts, ...technicalParts];
   if (!loading && parts.length === 0) return null;
   return (
     <div
       className={cn(
         textRoleVariants({ role: "meta" }),
-        "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono",
+        "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 [&_[data-slot=field-control]]:min-h-0",
       )}
     >
       {parts.map((part, index) => (
         <React.Fragment key={index}>
-          {index > 0 ? <span aria-hidden="true">/</span> : null}
+          {index > 0 ? <span aria-hidden="true">·</span> : null}
           <span>{part}</span>
         </React.Fragment>
       ))}
       {loading ? (
         <>
-          {parts.length > 0 ? <span aria-hidden="true">/</span> : null}
+          {parts.length > 0 ? <span aria-hidden="true">·</span> : null}
           <SkeletonStatus label={loadingLabel} className="inline-flex min-w-20 items-center">
             <Skeleton className="h-3 w-20" shape="text" />
           </SkeletonStatus>
@@ -646,6 +709,7 @@ function BoundFieldRow({
   value,
   row,
   readOnly,
+  restricted = false,
   errors,
   serverMessages,
   onChange,
@@ -660,6 +724,7 @@ function BoundFieldRow({
   value: unknown;
   row: FormValues;
   readOnly?: boolean;
+  restricted?: boolean;
   errors: readonly unknown[];
   serverMessages?: readonly string[];
   onChange: (value: unknown) => void;
@@ -682,8 +747,8 @@ function BoundFieldRow({
         title={developerTitle(field.name, field.widget)}>
         {field.label ?? field.name}
       </FieldLabel>
-      <RecordFieldMarkControl field={field.name} label={field.label} /></div>
-      <div
+      <RecordFieldMarkControl field={field.name} label={field.label} restricted={restricted} /></div>
+      {!restricted ? <div
         className={cn(
           FIELD_CONTROL_CLASS,
           effectiveReadOnly
@@ -729,10 +794,15 @@ function BoundFieldRow({
           />
         )}
         </DescriptorPresenceControl>
-      </div>
+      </div> : null}
       <FieldFooter description={field.description} errors={displayedMessages} />
     </FieldRoot>
   );
+}
+
+function fieldIsRedacted(record: FormValues | null | undefined, field: string): boolean {
+  const redacted = record?.redacted_fields;
+  return Array.isArray(redacted) && redacted.includes(field.split(".", 1)[0]);
 }
 
 function BodyFieldControl({

@@ -10,13 +10,13 @@ from django.db import models, transaction
 from rebac import ObjectRef
 
 from angee.fields import StateField
+from angee.messaging.models import ThreadedModelMixin
 from angee.models import (
     AngeeDataModel,
     AuditMixin,
     HistoryMixin,
     OwnerMixin,
 )
-from angee.messaging.models import ThreadedModelMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 

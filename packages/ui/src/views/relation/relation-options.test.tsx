@@ -6,6 +6,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { gql } from "graphql-tag";
 import {
   ModelMetadataProvider,
   schemaFieldMetadataFromDataResources,
@@ -25,7 +26,7 @@ const sdkMocks = vi.hoisted(() => ({
     filters?: readonly unknown[];
     sorters?: readonly unknown[];
     pagination?: unknown;
-    meta?: { fields?: unknown };
+    meta?: { fields?: unknown; gqlQuery?: ReturnType<typeof gql>; gqlVariables?: Record<string, unknown> };
   } | null,
   rows: [
     { id: "rev_1", display_name: "Acme" },
@@ -43,7 +44,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       filters?: readonly unknown[];
       sorters?: readonly unknown[];
       pagination?: unknown;
-      meta?: { fields?: unknown };
+      meta?: { fields?: unknown; gqlQuery?: ReturnType<typeof gql>; gqlVariables?: Record<string, unknown> };
     }) => {
       sdkMocks.useListOptions = options ?? null;
       return {
@@ -104,6 +105,21 @@ describe("useRelationOptions", () => {
       "id", "display_name", "description", "verification_state",
     ]);
     expect(screen.getByText("rev_1: Acme Bank | Checking •••• 4242 | Verified (success)")).toBeTruthy();
+  });
+
+  test("binds a computed option status to its surrounding context", () => {
+    sdkMocks.rows = [{ id: "rev_1", display_name: "Acme Bank", verification_state: "VERIFIED" }];
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe relation={reviewerRelation}
+          optionStatusField="verification_state"
+          optionStatusArguments={[{ name: "company_id", type: "ID!", value: "company_7" }]} />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.meta?.gqlVariables).toEqual({ selection_0_0: "company_7" });
+    expect(sdkMocks.useListOptions!.meta!.gqlQuery!.loc?.source.body)
+      .toContain("verification_state(company_id: $selection_0_0)");
   });
 
   test("returns relation options in server order without client label sorting", () => {
@@ -272,6 +288,7 @@ function RelationOptionsProbe({
   sorters,
   optionDescriptionField,
   optionStatusField,
+  optionStatusArguments,
 }: {
   relation: RelationFieldInfo;
   searchFields?: readonly string[];
@@ -279,9 +296,10 @@ function RelationOptionsProbe({
   sorters?: readonly { field: string; order: "asc" | "desc" }[];
   optionDescriptionField?: string;
   optionStatusField?: string;
+  optionStatusArguments?: readonly { name: string; type: string; value: unknown }[];
 }) {
   const { options } = useRelationOptions(relation, {
-    searchFields, searchText, sorters, optionDescriptionField, optionStatusField,
+    searchFields, searchText, sorters, optionDescriptionField, optionStatusField, optionStatusArguments,
   });
   return (
     <ul>
@@ -344,6 +362,8 @@ const displayField = (
 
 const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
   testDataResource("example.Reviewer", {
+    roots: { aggregate: "reviewers_aggregate" },
+    typeNames: { filter: "ReviewerBoolExp", order: "ReviewerOrderBy" },
     recordRepresentation: "display_name",
     recordSearchFields: ["username"],
     fields: [

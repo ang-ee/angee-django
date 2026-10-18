@@ -63,6 +63,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   fields,
   list: ListRenderer = ListView as ListComponent<TRow>,
   returning,
+  contextFields,
   recordSmartButtons = [],
   hideCreate = false,
   createAction,
@@ -133,6 +134,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   };
   const formRenderProps = {
     returning,
+    contextFields,
     ...(declarations.form
       ? formElementRenderProps(declarations.form.props)
       : {}),

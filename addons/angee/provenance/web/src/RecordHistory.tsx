@@ -14,19 +14,21 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingPanel,
-  MessageRow,
   RecordActionBar,
   RecordReference,
   StepList,
+  ACTIVITY_TAB_ID,
   optionToken,
   titleCase,
   useActionResultMutation,
-  useRecordChromeContext,
+  type ActivityEntry,
+  type ActivityRecord,
+  type ActivityWindow,
   type ActionDescriptor,
   type ComparisonRow,
   type StepListItem,
 } from "@angee/ui";
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import {
   RecordHistoryDocument,
@@ -38,8 +40,6 @@ import {
 import { entryTone, historyValue, statementVerb } from "./history-entries";
 import { useProvenanceT, type ProvenanceT } from "./i18n";
 
-/** The History tab's id; `?recordTab=history` opens it on any record. */
-export const HISTORY_TAB_ID = "history";
 /** Changesets per page; the server caps a page at 100. */
 export const HISTORY_PAGE_SIZE = 25;
 
@@ -71,7 +71,7 @@ export interface RecordHistoryTimelineProps {
   model: string;
   id: string | null | undefined;
   dataProviderName?: string;
-  /** One line per changeset linking to the History tab: the chatter rendering. */
+  /** One line per changeset linking to the record's Activity tab. */
   compact?: boolean;
 }
 
@@ -134,12 +134,6 @@ export function RecordHistoryTimeline({
   );
 }
 
-/** The saved-record tab body: the open record's own history. */
-export function HistoryPane(): ReactElement {
-  const { resource, recordId, dataProviderName } = useRecordChromeContext();
-  return <RecordHistoryTimeline model={resource} id={recordId} dataProviderName={dataProviderName} />;
-}
-
 export interface HistoryTimelineProps {
   history: RecordHistory;
   compact?: boolean;
@@ -169,7 +163,7 @@ export function HistoryTimeline({
     ...(optionToken(entry.outcome) === "failure" ? { outcome: t("history.outcome.failure") } : {}),
     timestamp: entry.recorded_at,
     detail: compact
-      ? <RecordReference model={history.model} id={history.id} tab={HISTORY_TAB_ID} label={t("history.openTab")} />
+      ? <RecordReference model={history.model} id={history.id} search={{ chatterTab: ACTIVITY_TAB_ID }} label={t("history.openTab")} />
       : <EntrySummary entry={entry} t={t} />,
     ...(compact ? {} : {
       children: <EntryDetails entry={entry} record={history} onRevert={onRevert} reverting={reverting} t={t} />,
@@ -195,32 +189,63 @@ export function HistoryTimeline({
   );
 }
 
-/** Compact changeset line for an already paged Comments entry; no second read or pager. */
+/** Compact facts for a changeset already loaded by Activity; no second read or pager. */
 export function HistoryEntrySummary({ entry, model, id }: {
   entry: HistorySummaryEntry;
   model: string;
   id: string;
 }): ReactElement {
   const t = useProvenanceT();
-  return (
-    <MessageRow
-      author={<EntryTitle entry={entry} t={t} />}
-      timestamp={entry.recorded_at}
-      meta={<RecordReference model={model} id={id} tab={HISTORY_TAB_ID} label={t("history.openTab")} />}
-    >
-      {entry.change_reason || null}
-    </MessageRow>
-  );
+  return <div className="grid gap-1">{entry.change_reason ? <p className="text-fg">{entry.change_reason}</p> : null}
+    <span className="text-xs text-fg-muted"><RecordReference model={model} id={id}
+      search={{ chatterTab: ACTIVITY_TAB_ID }} label={t("history.openTab")} /></span></div>;
+}
+
+/** Provenance's `record#activity` hook: detailed changes, statements and Revert stay together. */
+export function useRecordHistoryEntries(record: ActivityRecord, window: ActivityWindow): readonly ActivityEntry[] {
+  const query = useRecordHistory(record.model, record.id, { enabled: record.history, limit: window.limit });
+  const [revert, revertState] = useActionResultMutation<ActionFieldName>("revert_changeset", {
+    invalidateModels: [record.model],
+  });
+  const history = query.data?.history ?? null;
+  const onRevert = useCallback((entry: HistoryEntry) =>
+    revert(record.id, { model: record.model, changeset: entry.id }), [record.id, record.model, revert]);
+  return useMemo(() => history?.entries.map((entry): ActivityEntry => ({
+    at: entry.recorded_at,
+    kind: entry.source_kind && optionToken(entry.source_kind) !== "person" ? "source-event" : "change",
+    actor: <EntryActor entry={entry} />,
+    title: <ActivityEntryTitle entry={entry} />,
+    body: <div className="grid gap-2"><HistoryEntrySummary entry={entry} model={history.model} id={history.id} />
+      <ActivityHistoryDetails entry={entry} record={history} onRevert={onRevert} reverting={revertState.fetching} /></div>,
+    reference: null,
+  })) ?? [], [history, onRevert, revertState.fetching]);
+}
+
+function ActivityHistoryDetails(props: Omit<Parameters<typeof EntryDetails>[0], "t">): ReactElement | null {
+  return <EntryDetails {...props} t={useProvenanceT()} />;
+}
+
+function EntryActor({ entry }: { entry: HistorySummaryEntry }): ReactElement {
+  const t = useProvenanceT();
+  return entry.actor_model && entry.actor_id
+    ? <RecordReference model={entry.actor_model} id={entry.actor_id} />
+    : <span>{entry.actor ?? t("history.system")}</span>;
+}
+
+function ActivityEntryTitle({ entry }: { entry: HistorySummaryEntry }): ReactElement {
+  const t = useProvenanceT();
+  return <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+    <span>{activityLabel(t, entry.activity)}</span>
+    <Badge tone="neutral">{actionLabel(t, entry.action)}</Badge>
+    {entry.source_kind ? <Chip size="sm" tone="info">{titleCase(optionToken(entry.source_kind))}</Chip> : null}
+  </span>;
 }
 
 /** "<actor> <activity> · <action>": who wrote, how the write came about, what it did. */
 function EntryTitle({ entry, t }: { entry: HistorySummaryEntry; t: ProvenanceT }): ReactElement {
-  const actor = entry.actor_model && entry.actor_id
-    ? <RecordReference model={entry.actor_model} id={entry.actor_id} />
-    : <span>{entry.actor ?? t("history.system")}</span>;
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-      {actor}
+      <EntryActor entry={entry} />
       <span className="font-normal text-fg-muted">{activityLabel(t, entry.activity)}</span>
       <Badge tone="neutral">{actionLabel(t, entry.action)}</Badge>
       {entry.source_kind ? <Chip size="sm" tone="info">{titleCase(optionToken(entry.source_kind))}</Chip> : null}
@@ -297,7 +322,7 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
               afterLabel={t("history.after")}
             />
           ) : null}
-          {entry.statements.length ? <StatementVersions statements={entry.statements} t={t} /> : null}
+          {entry.statements.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}
           {entry.merge ? <MergeFacts merge={entry.merge} t={t} /> : null}
           {revertable ? <RecordActionBar record={{ id: record.id }} actions={[revertAction]} blocked={reverting} /> : null}
         </div>
@@ -306,7 +331,11 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
   );
 }
 
-function StatementVersions({ statements, t }: { statements: readonly HistoryStatement[]; t: ProvenanceT }): ReactElement {
+function StatementVersions({ statements, record, t }: {
+  statements: readonly HistoryStatement[];
+  record: RecordHistory;
+  t: ProvenanceT;
+}): ReactElement {
   return (
     <section className="grid gap-1" aria-label={t("history.statementsTitle")}>
       <h4 className="text-13 font-semibold text-fg">{t("history.statementsTitle")}</h4>
@@ -318,14 +347,30 @@ function StatementVersions({ statements, t }: { statements: readonly HistoryStat
             </Badge>
             <span className="font-medium text-fg">{statement.aspect}</span>
             <Chip size="sm" tone="info">{titleCase(optionToken(statement.source_kind))}</Chip>
-            <span className="text-fg-muted">{statement.asserted_by}</span>
+            {statement.source ? <StatementReference reference={statement.source} record={record} />
+              : <span className="text-fg-muted">{statement.asserted_by}</span>}
             <span className="text-fg-muted">{t("history.statement.confidence", { confidence: statement.confidence })}</span>
             <Code truncate>{JSON.stringify(statement.values)}</Code>
+            {statement.evidence.map((reference) => <StatementReference key={`${reference.model}:${reference.id}:${reference.pointer}`}
+              reference={reference} record={record} />)}
           </li>
         ))}
       </ul>
     </section>
   );
+}
+
+function StatementReference({ reference, record }: {
+  reference: HistoryStatement["evidence"][number];
+  record: RecordHistory;
+}): ReactElement {
+  const sourceLink = reference.model.toLowerCase() === "integrate.recordlink";
+  return <span className="text-fg-muted"><RecordReference
+    model={sourceLink ? record.model : reference.model}
+    id={sourceLink ? record.id : reference.id}
+    label={reference.label}
+    search={sourceLink ? { chatterTab: "integrate.sources", source: reference.id } : undefined}
+  />{reference.pointer ? <Code>{reference.pointer}</Code> : null}</span>;
 }
 
 function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t: ProvenanceT }): ReactElement {

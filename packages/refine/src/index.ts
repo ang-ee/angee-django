@@ -1,5 +1,10 @@
 export { refineFieldsFromPaths } from "./selections";
-export { listQueryMeta, type ListQueryTarget } from "./list-query";
+export {
+  listQueryMeta,
+  type ListQueryFieldArgument,
+  type ListQueryFieldBinding,
+  type ListQueryTarget,
+} from "./list-query";
 // Story/test consumers that pair these bindings with providers returned by this
 // package must resolve Refine's provider types through the same package identity.
 export { Refine, ResourceContext, type DataProvider, type ResourceProps } from "@refinedev/core";

@@ -4,13 +4,16 @@ import {
   MenuTree,
   resolveContainer,
   type BaseMenuItem,
+  type ChatterTabContent,
   type ChromeMenuItem,
+  type ContainerChild,
 } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
 import { INTEGRATION_MODEL, INTEGRATION_RESUME_ACTION_ID } from "./IntegrationLifecycleActions";
 import { INTEGRATION_STREAMS_TAB_ID } from "./IntegrationStreams";
+import { RECORD_LINK_MODEL, RECORD_SOURCE_SEARCH_KEY, RECORD_SOURCES_TAB_ID } from "./RecordSourcesPane";
 
 const composed = composeAddons([integrate], { canonicalModelLabel: (model) => model }).containers;
 /** The child ids one form container resolves for a subtype record. */
@@ -207,5 +210,16 @@ describe("integrate addon manifest", () => {
     expect((integrate.routes ?? []).some((route) => /stream|failure|record-link/.test(route.name)))
       .toBe(false);
     expect(integrate.widgets?.["angee.integrate.integrationSyncCursor"]).toBeDefined();
+  });
+
+  test("contributes Sources for records that admit RecordLink edges", () => {
+    const source = (integrate.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>> | undefined)?.[RECORD_SOURCES_TAB_ID];
+    expect(source).toMatchObject({ sequence: 70, content: { icon: "link" } });
+    expect(source && "content" in source && source.content.when?.({
+      pathname: "/notes/nte_1", params: { id: "nte_1" },
+      route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", modelLabel: "notes.Note", recordEdges: [RECORD_LINK_MODEL] },
+      view: { kind: "record", type: "notes/note", sqid: "nte_1" },
+    })).toBe(true);
+    expect(integrate.recordSearchKeys).toContain(RECORD_SOURCE_SEARCH_KEY);
   });
 });

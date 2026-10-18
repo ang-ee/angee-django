@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 import type { DocumentType } from "@angee/gql/console";
 import * as v from "valibot";
 import { DecisionCard } from "@angee/decisions";
@@ -17,9 +17,11 @@ export interface TimelineRecord { model: string; id: string }
 export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[] }
 export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
 export type TimelineData = TimelineSelection["records"];
+export type TimelineDecision = TimelineData[number]["decisions"][number];
 type TimelineRun = TimelineData[number]["runs"][number];
 type TimelineStep = NonNullable<TimelineRun["graph"]["nodes"][number]["step_run"]>;
 type MappedStep = TimelineStep["map_steps"][number];
+export interface TimelineNote { tone: string; message: string }
 const EMPTY_TIMELINE: TimelineData = [];
 const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) => step_run ? [step_run, ...step_run.map_steps] : []);
 
@@ -32,12 +34,27 @@ export function RecordTimeline({ record }: RecordTimelineProps): ReactElement {
   return <RecordTimelineView data={query.data?.record_timeline?.records ?? EMPTY_TIMELINE} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} />;
 }
 
-export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true) {
+export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20) {
   const records = useMemo(() => Array.isArray(record) ? record : [record as TimelineRecord], [record]);
-  return useAuthoredQuery(RecordTimelineDocument, { records }, {
+  return useAuthoredQuery(RecordTimelineDocument, { records, runLimit }, {
     models: [...RUN_MODELS, "decisions.Decision", "decisions.DecisionRecord"],
     records, relatedModels: [...RUN_MODELS, "decisions.Decision"], enabled: enabled && records.length > 0 && records.every((item) => Boolean(item.id)),
   });
+}
+
+/** The one waiting-decision rendering shared by RecordTimeline and Activity. */
+export function RecordTimelineDecisionCard({ decision, recordId, compact = false, records, actions }: {
+  decision: TimelineDecision;
+  recordId: string;
+  compact?: boolean;
+  records?: readonly string[];
+  actions?: ReactNode;
+}): ReactElement {
+  const form = useActiveRecordForm();
+  return <DecisionCard decision={decision} selfId={recordId} compact={compact}
+    inStep={records ? { records } : undefined}
+    onEditField={form?.id === recordId ? form.focusField : undefined}
+    actions={actions} />;
 }
 
 /** Presentation over the same generated read, used by stories and interaction tests. */
@@ -46,17 +63,15 @@ export function RecordTimelineView({ data, openCount, set = false }: {
 }): ReactElement {
   const t = useWorkflowsT();
   const [grouping, setGrouping] = useState<"record" | "question">("record");
-  const form = useActiveRecordForm();
   const retryActions = useStepRetryActions(true);
   const cancelActions = useRunCancelActions(data.map((entry) => entry.record_model));
   const cancelRun = (run: TimelineRun) => <RecordActionBar record={run} actions={cancelActions} />;
   const link = (model: string, id: string, label?: string) => <Chip tone="info" size="sm"><RecordReference model={model} id={id} label={label} /></Chip>;
-  const card = (decision: TimelineData[number]["decisions"][number], id: string, compact = false, records?: readonly string[], runId?: string) =>
-    <DecisionCard key={decision.id} decision={decision} selfId={id}
-      compact={compact} inStep={records ? { records } : undefined}
-      onEditField={form?.id === id ? form.focusField : undefined}
-      actions={runId ? cancelRun(runs.find((run) => run.id === runId)!) : null} />;
   const runs = [...new Map(data.flatMap(({ runs }) => runs).map((run) => [run.id, run])).values()];
+  const card = (decision: TimelineDecision, id: string, compact = false, records?: readonly string[], runId?: string) =>
+    <RecordTimelineDecisionCard key={decision.id} decision={decision} recordId={id}
+      compact={compact} records={records}
+      actions={runId ? cancelRun(runs.find((run) => run.id === runId)!) : null} />;
   const count = openCount;
   const active = runs.filter((run) => run.can_cancel);
   const held = (run: TimelineRun) => runSteps(run).filter((step) => step.hold && step.hold !== "decision");
@@ -152,6 +167,15 @@ function stepState(status: string): StepListItem["state"] {
 
 const NoteTone = v.picklist(["info", "success", "warning", "danger"]);
 
+/** The retained-note renderer shared by RecordTimeline and Activity entries. */
+export function TimelineNotes({ notes }: { notes: readonly TimelineNote[] }): ReactElement | null {
+  if (!notes.length) return null;
+  return <RecordIssues items={notes.map((note, index) => {
+    const tone = v.safeParse(NoteTone, note.tone);
+    return { id: String(index), ...note, tone: tone.success ? tone.output : "info" };
+  })} />;
+}
+
 function RunSteps({ run, recordId, card, link, retry }: {
   run: TimelineRun; recordId: string;
   card: (decision: TimelineData[number]["decisions"][number], id: string, compact?: boolean, records?: readonly string[]) => ReactElement;
@@ -177,10 +201,7 @@ function RunSteps({ run, recordId, card, link, retry }: {
     const records = [...new Map((step?.records ?? []).map((record) => [`${record.record_model}:${record.record_id}`, record])).values()];
     const notes = step?.notes.filter((note) => note.message !== title) ?? [];
     return <>
-      {notes.length ? <RecordIssues items={notes.map((note, index) => {
-        const tone = v.safeParse(NoteTone, note.tone);
-        return { id: String(index), ...note, tone: tone.success ? tone.output : "info" };
-      })} /> : null}
+      <TimelineNotes notes={notes} />
       {records.length ? <div className="flex min-w-0 flex-wrap gap-1">{records.map((record) => record.record_model && record.record_id ? <span key={record.id}>{link(record.record_model, record.record_id, record.label || undefined)}</span> : null)}</div> : null}
       {step?.child_runs.map((child) => <div key={child.id}>{link("workflows.WorkflowRun", child.id, child.display_name)}</div>)}
       {step?.hold === "run" && step.awaited_run ? <div className="text-13 font-medium text-warning-text">{t("timeline.waitingFor", { name: step.awaited_run.display_name })}{link("workflows.WorkflowRun", step.awaited_run.id, t("timeline.openRun"))}</div> : null}

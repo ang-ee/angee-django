@@ -2690,6 +2690,11 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         abstract = True
 
+    def source_url(self, link: Any) -> str | None:
+        """Delegate a retained remote identity URL to the selected connector."""
+
+        return cast(Any, self).capability_impl.source_url(link)
+
     @classmethod
     def live_implementation_field(cls) -> ImplClassField | None:
         """Return this bridge's explicitly declared live implementation field."""
@@ -4236,6 +4241,7 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     """
 
     merge_policy = MergePolicy.MOVE
+    accepts_any_record_target = True
     runtime = True
     sqid_prefix = "rlk_"
     authority_related = ("stream",)

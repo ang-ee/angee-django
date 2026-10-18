@@ -80,6 +80,8 @@ class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
 
     name = models.CharField(max_length=128)
     color = ColorField(max_length=32, blank=True, default="")
+    attention = models.BooleanField(default=False, db_index=True)
+    """Whether assignments of this tag belong in a record's attention cluster."""
 
     objects = TagManager()
 

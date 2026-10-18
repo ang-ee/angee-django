@@ -21,6 +21,7 @@ import { useDebounce } from "use-debounce";
 import {
   refineFieldsFromPaths,
   listQueryMeta,
+  type ListQueryFieldArgument,
   } from "@angee/refine";
 import { listBatchTarget } from "../resource/resource-operations";
 import { hexColor } from "../../lib/hex-color";
@@ -47,6 +48,8 @@ export interface RelationOptionsConfig {
   optionDescriptionField?: string;
   /** Related-row enum/status field rendered as a shared-tone badge. */
   optionStatusField?: string;
+  /** Context values required by the computed status field. */
+  optionStatusArguments?: readonly ListQueryFieldArgument[];
   /** One-based server page, shared by pickers and row catalogues. */
   page?: number;
   pageSize?: number;
@@ -207,6 +210,7 @@ export function useRelationOptions(
     labelField: optionLabelField,
     optionDescriptionField,
     optionStatusField,
+    optionStatusArguments,
     page = 1,
     pageSize = RELATION_OPTION_LIMIT,
     sort = false,
@@ -263,6 +267,7 @@ export function useRelationOptions(
     ...(optionStatusField ? [optionStatusField] : []),
   ])]);
   const stableWhere = useValueStable(where);
+  const stableStatusArguments = useValueStable(optionStatusArguments);
   const resource = metadata?.resource ?? null;
   const selectionPaths = React.useMemo(() => [...new Set([
     "id", labelField, ...(colorField ? [colorField] : []), ...stableFields,
@@ -272,11 +277,14 @@ export function useRelationOptions(
     [selectionPaths],
   );
   const meta = React.useMemo(() => {
-    if (!stableWhere) return { fields };
+    if (!stableWhere && (!optionStatusField || !stableStatusArguments?.length)) return { fields };
     const target = resource && listBatchTarget(resource);
-    if (!target) throw new Error("A filtered relation requires a list query contract.");
-    return listQueryMeta(target, selectionPaths, stableWhere);
-  }, [fields, resource, selectionPaths, stableWhere]);
+    if (!target) throw new Error("A filtered or context-bound relation requires a list query contract.");
+    return listQueryMeta(target, selectionPaths, stableWhere, undefined,
+      optionStatusField && stableStatusArguments?.length
+        ? [{ path: optionStatusField, arguments: stableStatusArguments }]
+        : []);
+  }, [fields, optionStatusField, resource, selectionPaths, stableStatusArguments, stableWhere]);
   const run = useList<RowRecord, HttpError>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,

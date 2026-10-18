@@ -633,8 +633,16 @@ shared UI copy through an addon bundle.
   with the addon. Add `fill` when it should use the measured hero width; the
   widget receives `field.fill` and `field.containerWidth`. Do not repeat that
   state as another strip.
-  Keep the one metadata-owned subtitle line and place operational fields in a
-  collapsed Details group when their create-default behavior must remain available.
+  The resource's `contextFields` metadata owns the facts line beneath the title:
+  name fields whose native read widgets should render there (relation labels,
+  money with its declared currency field, dates), separated by middle dots.
+  `FormView` and `ResourceList` accept the same prop as an explicit override.
+  The framework appends readable `created_by` and `updated_by` attribution,
+  preferring each audit field's existing `*_label` projection;
+  public ids and raw created/updated timestamps appear only in developer mode.
+  `contextLine` remains the deliberate custom-rendering escape hatch. Place
+  operational fields in a collapsed Details group when their create-default
+  behavior must remain available.
   Projects exports its [standard declarations](../../addons/angee/projects/README.md)
   so consumer routes compose the same forms, lists and record tabs.
 - **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
@@ -649,9 +657,9 @@ shared UI copy through an addon bundle.
   inherited by concrete child forms; contribute once at the owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
   which evaluates the loaded record and the form's data resource; fields omitted
   by a child projection are read from the canonical resource. A tab for every
-  record kind is a `form#sections` child gated on the resource fact it reads,
-  as the provenance [History tab](../../addons/angee/provenance/web/src/index.tsx)
-  is on `resource.history`. Inside the panel, use
+  record kind is a `form#sections` child gated on the resource fact it reads.
+  History and attached work are Activity sources, not saved-record sections.
+  Inside a section panel, use
   `useRecordChromeContext()` and scope a related collection with a base filter
   on a `presentation="embedded"` list, which brings compact chrome and local
   state. The model's Hasura resource owns filter/order/group/facet capabilities;
@@ -694,14 +702,24 @@ shared UI copy through an addon bundle.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
-- **Records use one timeline pane.** Workflows contributes `RecordTimeline`
-  to `record#aside`; pages choose left or right with `useRecordTimelinePane`.
-  The same `DecisionCard` serves the inbox, record and record-set timeline.
-  Forms consume the shared field-mark bridge; marks reveal the corresponding
-  card. Lists may opt into the decisions attention column and filter.
-  Eager attention selects the timeline for records with runs and opens it for
-  waiting decisions; the tab count uses the same read. Run, step and question
-  change feeds retain concern identities for scoped invalidation, without polling.
+- **Records use one timeline pane.** The framework owns the `Activity` tab at
+  `record#aside/activity`; addons contribute model-scoped `record#activity`
+  sources. Activity merges comments, changes, runs, decisions, attached
+  conversations and source events newest-first, with one kind filter, empty
+  state and pager. The same `DecisionCard` serves the inbox, Activity and
+  record-set timeline. `useRecordTimelinePane` remains the left-pane seam for
+  pages; it does not publish a second record-aside tab. Forms consume the shared
+  field-mark bridge, and marks reveal Activity's waiting decision. Lists may opt
+  into `attentionColumn`, which combines open decisions and tags marked for
+  attention in one badge cluster. An attention tag's normalized name is its
+  `statusTones` key, declared once by the addon that owns that vocabulary; there
+  is no attention-column tone map.
+  Run, step and question feeds retain concern identities for scoped
+  invalidation, without polling.
+- **Unreadable projected fields remain legible as restrictions.** A record row's
+  existing `redacted_fields` ledger lets `RecordFieldMarkControl` show the field
+  label and a lock without its value. Compose that projection; never issue a
+  field-by-field permission query or render a misleading empty value.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
@@ -894,12 +912,12 @@ Any other key alters a child an addon this one depends on declared:
 `hide: false` shows again what a dependency hid. The framework's own children
 are every addon's to adjust. Two unrelated layers setting one field fail.
 [Messaging](../../addons/angee/messaging/web/src/index.tsx) contributes the
-Comments and Conversations tabs it implements:
+comment and related-conversation entry sources it implements:
 
 ```tsx
-"record#aside": {
-  "messaging.comments": recordCommentsTab({ submitKey }),
-  // messaging.related …
+"record#activity": {
+  "messaging.comments": { content: recordCommentActivitySource(submitKey) },
+  "messaging.related": { content: recordConversationActivitySource },
 },
 ```
 
@@ -938,7 +956,7 @@ containers: {
   "form#chrome": { only: ["iam.share-record"] },
   "shell#drawers-bottom": { only: [] },
   "record#aside": [
-    { only: ["messaging.comments", "storage.files"] },
+    { only: ["activity", "storage.files"] },
     { only: [], when: { route: "projects.my-work" } },
   ],
 },
@@ -1007,6 +1025,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
 | `record#aside` | chatter tabs | `ChatterTabContent` |
+| `record#activity` | model-scoped entry sources merged by Activity | `ActivityEntrySource` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
@@ -1026,23 +1045,39 @@ The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
 `record#aside` tab shows on record views; a model-level tab shows on that
 model's pages and may narrow itself further with its content's `when`. A
 `ChatterTabContent` carries `label`, `icon` and `render`, and optionally
-`when`, `count`/`useCount` and `panelClassName`. The framework
-declares the container without placeholder tabs. Addons contribute only implemented
-capabilities. Tab ids are namespaced like every child.
+`when`, `count`/`useCount` and `panelClassName`. The framework contributes the
+implemented Activity owner first; addons contribute only implemented capabilities.
+Tab ids are namespaced like every child except the framework-owned `activity` id.
 
-The record's own state and history belong in its `#sections`; attached work,
-files, pages and conversations belong in its `#aside`. The default order is
-Comments 10, Tasks 20, Runs 30, Files 40, Pages 50, Conversations 60. Agents use
-the shell's right drawer so conversation state survives navigation independently
-of the record aside.
+The record's own state belongs in the header and sheet; history and attached
+work belong in Activity and the aside. The default order is Activity 10, Tasks
+20, Files 40, Pages 50, Sources 70. Activity is the single chronological stream;
+comments and linked conversations are entries rather than separate panes. Agents
+use the shell's right drawer so conversation state survives navigation
+independently of the record aside.
 
-A tab that lists one polymorphic edge (files, pages, related conversations)
+A tab that lists one polymorphic edge (files, pages, sources)
 shows only where the record's type can carry it: its `when` checks the edge's
 model label in `context.route.recordEdges`, the resource metadata the backend
-derives from each edge's schema target relations. Workflow run evidence accepts
-any canonical REBAC record, so its Runs tab uses that native capability instead
-of a target-restricted edge declaration. Never let a pane report the
+derives from each edge's schema target relations. Entry sources use the same
+fact to decline unsupported records. Workflow run evidence accepts any canonical
+REBAC record, so its Activity source uses that native capability instead of a
+target-restricted edge declaration. Never let a pane report the
 edge "unavailable" or offer writes on a type whose schema declares no arm.
+
+Each `record#activity` child has exactly this content shape:
+
+```ts
+interface ActivityEntrySource {
+  kinds: readonly ActivityKind[];
+  useEntries(record: ActivityRecord, window: ActivityWindow): readonly ActivityEntry[];
+}
+```
+
+`ActivityEntry` carries `at`, `kind`, `actor`, `title`, `body` and `reference`.
+The hook reads through its owning addon, observes `window.limit`, and may publish
+that owner's existing composer through `window.publishComposer`; Activity alone
+owns merging, filtering, empty state and paging.
 
 Tabs a page publishes with `useChatterContent` are runtime children of the same
 container. They follow the composed tabs and take the same narrowing. To keep

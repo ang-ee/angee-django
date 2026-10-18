@@ -82,9 +82,9 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
 
     The parent owns the common contact identity — the public id, ownership, the
     display name, avatar, notes and tags. Ownership is the transferable ``owner``
-    (:class:`~angee.models.OwnerMixin`), which an insert defaults to the creator;
-    ``created_by`` stays attribution. RecordLink owns directory payloads. The
-    concrete kind (and its kind-specific fields) lives on the :class:`Person` /
+    (:class:`~angee.models.OwnerMixin`), which an insert defaults to the
+    creator; ``created_by`` stays attribution. RecordLink owns directory payloads.
+    The concrete kind (and its kind-specific fields) lives on the :class:`Person` /
     :class:`Organization` child row, which inherits the owner; a child's tags key
     on its party.
     """

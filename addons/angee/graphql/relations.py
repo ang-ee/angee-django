@@ -87,7 +87,9 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
         raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
     reference = queryset.model.record_ref_field()
     key_field = queryset.model._meta.get_field(reference.fk_field)
-    content_types = ContentType.objects.filter(pk__in=queryset.scoped_for_aggregate().order_by().values(
+    scoped_for_aggregate = getattr(queryset, "scoped_for_aggregate", None)
+    reference_rows = scoped_for_aggregate() if callable(scoped_for_aggregate) else queryset
+    content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values(
         reference.ct_field,
     )).order_by("app_label", "model")
     actor = relation_actor(queryset)

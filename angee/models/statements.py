@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
@@ -33,7 +34,13 @@ from simple_history.models import HistoricalRecords
 
 from angee.actors import instance_actor, source_kind_for
 from angee.changesets import current_changeset
-from angee.evidence import EvidenceReference, FactAuthority, readable_evidence, readable_records
+from angee.evidence import (
+    EvidenceReference,
+    FactAuthority,
+    readable_evidence,
+    readable_evidence_records,
+    readable_records,
+)
 from angee.fields import StateField
 from angee.lineage import most_derived_concrete
 from angee.models.history import HistoryMixin, ModelHistory, _ChangesetHistory
@@ -59,7 +66,7 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         super()._fetch_all()
         reader = getattr(self, "_statement_reader", None)
         if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
-            _prime_readable_statement_sources(self._result_cache, reader)
+            prime_readable_statement_records(self._result_cache, reader)
 
     def update(self, **kwargs: Any) -> int:
         """Attribute the rows to the writing changeset, as ``Statement.save`` does.
@@ -102,6 +109,13 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         rows._statement_reader = actor
         return rows
 
+    def with_readable_records(self, actor: Any) -> Any:
+        """Batch evidence and asserting-source admission for the evaluated page."""
+
+        rows = self._chain()
+        rows._statement_reader = actor
+        return rows
+
     def applied(self) -> Any:
         """Standing value assertions selected by survivorship."""
 
@@ -123,32 +137,55 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         raise ValidationError("Statements are retained; withdraw them instead.")
 
 
-def _prime_readable_statement_sources(rows: list[Any], actor: Any) -> None:
-    """Resolve a page's asserting principals through each principal's read gate."""
+def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
+    """Resolve a statement page's evidence and asserting principals by model."""
 
-    sources_by_model: dict[tuple[type[models.Model], str], set[str]] = {}
+    evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
+    refs: list[EvidenceReference] = []
+    sources_by_model: dict[tuple[type[models.Model], str], set[str]] = defaultdict(set)
     sources_by_row: list[tuple[Any, tuple[type[models.Model], str, str] | None]] = []
     for row in rows:
+        evidence = tuple(
+            EvidenceReference.model_validate(value) for value in row.evidence[: Statement.EVIDENCE_LIMIT]
+        )
+        evidence_by_row.append((row, evidence))
+        refs.extend(evidence)
         source = SubjectRef.parse(row.asserted_by)
         resolved = model_for_subject_type(source.subject_type)
         if resolved is None:
             sources_by_row.append((row, None))
             continue
         model, id_attr = resolved
-        sources_by_model.setdefault((model, id_attr), set()).add(source.subject_id)
+        sources_by_model[(model, id_attr)].add(source.subject_id)
         sources_by_row.append((row, (model, id_attr, source.subject_id)))
 
-    readable_sources: set[tuple[type[models.Model], str, str]] = set()
+    evidence_records = readable_evidence_records(refs, actor)
+    readable_evidence = {
+        (ref.model.lower(), ref.id, ref.pointer): record for ref, record in evidence_records
+    }
+    for row, evidence in evidence_by_row:
+        row._readable_evidence = tuple(
+            ref for ref in evidence if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
+        )
+        row._readable_evidence_records = tuple(
+            (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
+            for ref in evidence
+            if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
+        )
+
+    readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
     for (model, id_attr), sources in sources_by_model.items():
         visible = (
             model.objects.with_actor(actor)
             .with_action("read")
             .filter(**{f"{id_attr}__in": sources})
-            .values_list(id_attr, flat=True)
         )
-        readable_sources.update((model, id_attr, str(value)) for value in visible)
+        readable_sources.update({
+            (model, id_attr, str(getattr(row, id_attr))): row for row in visible
+        })
     for row, source in sources_by_row:
         row._asserting_source_readable = source in readable_sources
+        row._readable_asserting_source = readable_sources.get(source) if source is not None else None
 
 
 class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type: ignore[misc]

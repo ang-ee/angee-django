@@ -145,8 +145,8 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
-    (:class:`~angee.models.OwnerMixin`); ``created_by`` stays attribution. An
-    install without a user-backed actor leaves it ownerless, for platform
+    (:class:`~angee.models.OwnerMixin`); ``created_by`` stays attribution.
+    An install without a user-backed actor leaves it ownerless, for platform
     administrators to manage or transfer.
     """
 

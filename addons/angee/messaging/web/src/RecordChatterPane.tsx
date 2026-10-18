@@ -14,15 +14,14 @@ import {
 export interface RecordChatterPaneProps {
   context: ChatterViewContext;
   submitKey?: RecordThreadConversationProps["submitKey"];
+  composerOnly?: boolean;
+  messageLimit?: RecordThreadConversationProps["messageLimit"];
 }
 
-/** The Comments chatter tab: the record-thread conversation (the shared
- *  `RecordThreadConversation` owner — transcript + composer + mark-read) framed by
- *  the chatter-specific chrome the pane keeps (the attachment/unread meta
- *  strip, the Following toggle, and the notification-subtype filters). The transcript
- *  itself is not re-implemented here; a discuss room composes the same owner without
- *  this chrome. */
-export function RecordChatterPane({ context, submitKey }: RecordChatterPaneProps): React.ReactElement {
+/** The record-thread conversation owner used by Activity and full conversation views.
+ *  Activity can request only the shared composer and record chrome; full views also
+ *  render the transcript. Discuss rooms compose the same conversation owner. */
+export function RecordChatterPane({ context, submitKey, composerOnly = false, messageLimit }: RecordChatterPaneProps): React.ReactElement {
   const t = useMessagingT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
@@ -41,6 +40,8 @@ export function RecordChatterPane({ context, submitKey }: RecordChatterPaneProps
       modelLabel={modelLabel}
       recordId={recordId}
       submitKey={submitKey}
+      composerOnly={composerOnly}
+      messageLimit={messageLimit}
       header={(chrome) => (
         <ChatterConversationHeader
           {...chrome}

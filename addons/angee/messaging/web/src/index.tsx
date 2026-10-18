@@ -1,24 +1,14 @@
 export { messageFeedRows, messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import { useAuthoredQuery } from "@angee/refine";
-import type { ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
 import { enMessagingMessages } from "./i18n";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
-import { RecordChatterPane } from "./RecordChatterPane";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
-import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
-import {
-  RECORD_UNREAD_COUNT_MODELS,
-  RecordThreadUnreadCountDocument,
-  THREAD_ATTACHMENT_MODEL,
-  THREAD_CHATTER_EDGE,
-} from "./documents";
+import { recordCommentActivitySource, recordConversationActivitySource } from "./record-activity";
 
 export { CHANNEL_MODEL } from "./documents";
 export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
@@ -76,32 +66,8 @@ export { MessageReader, type MessageReaderProps } from "./MessageReader";
 export type { MessageReaderData } from "./documents";
 
 export interface MessagingAddonOptions {
-  /** Composer shortcut for this app's built-in Comments tab. */
+  /** Composer shortcut for this app's Activity comment source. */
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
-}
-
-/** Whether the viewed record's type keeps chatter: its resource lists the thread attachment edge's chatter role. */
-export function recordKeepsChatter(context: ChatterViewContext): boolean {
-  return context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false;
-}
-
-/** Whether the viewed record's type retains source conversations: its schema names it a thread attachment target. */
-export function recordCarriesThreads(context: ChatterViewContext): boolean {
-  return context.route?.recordEdges?.includes(THREAD_ATTACHMENT_MODEL) ?? false;
-}
-
-/** The shared Comments tab, for an addon's `record#aside` or `<model>#aside`, configurable without another addon. */
-export function recordCommentsTab({ submitKey = "enter" }: MessagingAddonOptions = {}): ContainerChild<ChatterTabContent> {
-  return {
-    sequence: 10,
-    content: {
-      label: "Comments", icon: "comments",
-      // Per role, not per edge: a file is a thread attachment target only for its source conversations.
-      when: recordKeepsChatter,
-      useCount: useRecordCommentsUnread,
-      render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
-    },
-  };
 }
 
 /** Configure messaging's app contribution through the existing addon manifest. */
@@ -141,43 +107,15 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    // Messaging contributes record comments and retained source conversations.
-    "record#aside": {
-      "messaging.comments": recordCommentsTab({ submitKey }),
-      "messaging.related": {
-        sequence: 60,
-        content: {
-          label: "Conversations", icon: "inbox",
-          // Only on types whose schema lets a record retain source conversations.
-          when: recordCarriesThreads,
-          render: (context) => <RecordSourceThreadsPane context={context} />,
-        },
-      },
+    // Messaging owns both entry adapters; the framework owns their one stream.
+    "record#activity": {
+      "messaging.comments": { sequence: 10, content: recordCommentActivitySource(submitKey) },
+      "messaging.related": { sequence: 20, content: recordConversationActivitySource },
     },
   },
 
 });
 
 const messaging = defineMessagingAddon();
-
-function useRecordCommentsUnread(
-  context: ChatterViewContext,
-): number | undefined {
-  const modelLabel = context.route?.modelLabel;
-  const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
-  const enabled = Boolean(modelLabel && recordId);
-  const variables = React.useMemo(
-    () => ({
-      modelLabel: modelLabel ?? "",
-      recordId: recordId ?? "",
-    }),
-    [modelLabel, recordId],
-  );
-  const query = useAuthoredQuery(RecordThreadUnreadCountDocument, variables, {
-    enabled,
-    models: RECORD_UNREAD_COUNT_MODELS,
-  });
-  return query.data?.record_thread_unread_count || undefined;
-}
 
 export default messaging;

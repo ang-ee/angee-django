@@ -116,8 +116,6 @@ function threadPayload(
       error_code: null,
       thread: { id: "thr_1", title: { text: "Room" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
-      timeline_count: messages.length,
-      timeline: messages.map((message) => ({ ...message, __typename: "RecordMessageType" as const })),
       audience_label: "People with access to this record" as string | null,
       post_kinds: ["COMMENT", "NOTE"],
       messages,

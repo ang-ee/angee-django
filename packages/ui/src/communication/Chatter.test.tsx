@@ -67,10 +67,16 @@ const tab = (content: ChatterTabContent, sequence?: number): ContainerChild<Chat
 const onRoute = (...routes: string[]) => ({ apps: [], routes });
 
 describe("Chatter", () => {
-  test("the framework contributes no placeholder tabs", async () => {
+  test("the framework contributes Activity as the record aside's first tab", async () => {
     renderChatter({ containers: aside({}, { examples: false }) });
-    expect(await screen.findByText("Aside hidden")).toBeTruthy();
-    expect(screen.queryByRole("tab")).toBeNull();
+    expect(await screen.findByText("Aside available")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+  });
+
+  test("Activity stays mounted as the attention owner while another tab is selected", async () => {
+    renderChatter({ containers: aside() }, { defaultTab: "notes.history" });
+    expect((await screen.findByRole("tab", { name: "History" })).getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText("No activity yet")).toBeTruthy();
   });
 
   test("a layer's only on the route narrows the tabs before they render or count", async () => {
@@ -120,7 +126,7 @@ describe("Chatter", () => {
   });
 
   test("an aside whose every tab a layer excepts is absent", async () => {
-    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["notes.comments", "notes.history"] }] }) });
+    renderChatter({ containers: aside({}, { rules: [{ layer: "notes", except: ["activity", "notes.comments", "notes.history"] }] }) });
     expect(await screen.findByText("Aside hidden")).toBeTruthy();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
@@ -223,7 +229,11 @@ describe("Chatter", () => {
 
     const historyTab = await screen.findByRole("tab", { name: "History" });
     // Unsequenced siblings across the model addresses resolve in id order.
-    expect(screen.getAllByRole("tab").map((node) => node.textContent)).toEqual(["Perks", "History"]);
+    expect(screen.getAllByRole("tab")).toEqual([
+      screen.getByRole("tab", { name: "Activity" }),
+      screen.getByRole("tab", { name: "Perks" }),
+      screen.getByRole("tab", { name: "History" }),
+    ]);
     fireEvent.click(historyTab);
     expect(screen.getByText("History for rec_1")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Wrong model" })).toBeNull();

@@ -28,7 +28,6 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
-from django.db.models.query import ModelIterable
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
 from rebac import (
@@ -40,7 +39,7 @@ from rebac import (
 from rebac.actors import to_subject_ref
 
 from angee.actors import actor_user_id
-from angee.evidence import EvidenceReference, readable_evidence
+from angee.evidence import EvidenceReference
 from angee.identity import instances_from_public_ids
 from angee.impl import resolve_hooks
 from angee.models import (
@@ -561,19 +560,6 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 class PartyStatementQuerySet(StatementQuerySet):
     """Party handle scopes; serving callers explicitly authorize both endpoints."""
 
-    def _clone(self) -> Self:
-        clone = super()._clone()
-        clone._reference_reader = getattr(self, "_reference_reader", None)
-        return clone
-
-    def _fetch_all(self) -> None:
-        fresh = self._result_cache is None
-        super()._fetch_all()
-        reader = getattr(self, "_reference_reader", None)
-        # Aggregation and values() pages carry no rows to prime.
-        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
-            _prime_readable_statement_evidence(self._result_cache, reader)
-
     def handles(self) -> Any:
         return self.current().filter(aspect="handle")
 
@@ -627,39 +613,6 @@ class PartyStatementQuerySet(StatementQuerySet):
                 | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
-
-    def with_readable_records(self, actor: Any) -> Self:
-        """Batch independently readable evidence for the evaluated page."""
-
-        rows = self._chain()
-        rows._reference_reader = actor
-        return rows
-
-
-def _prime_readable_statement_evidence(rows: list[Any], actor: Any) -> None:
-    """Resolve a page's evidence references by model."""
-
-    evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
-    refs: list[EvidenceReference] = []
-    for row in rows:
-        evidence = tuple(
-            EvidenceReference.model_validate(value) for value in row.evidence[: row.EVIDENCE_LIMIT]
-        )
-        evidence_by_row.append((row, evidence))
-        refs.extend(evidence)
-
-    readable_refs = {
-        (ref.model.lower(), ref.id, getattr(ref, "pointer", ""))
-        for ref in readable_evidence(refs, actor)
-    }
-    for row, evidence in evidence_by_row:
-        row._readable_evidence = tuple(
-            ref
-            for ref in evidence
-            if (ref.model.lower(), ref.id, getattr(ref, "pointer", "")) in readable_refs
-        )
-
-
 
 @dataclass(frozen=True, slots=True)
 class SameAsPair:

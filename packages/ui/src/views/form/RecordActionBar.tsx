@@ -75,10 +75,10 @@ export function RecordActionBar({
   const [formAction, setFormAction] = React.useState<{ action: RecordActionDescriptor; fromMenu: boolean } | null>(
     null,
   );
-  // A reason that reads the record applies once a record is loaded; a static reason applies with `disabled`.
+  // A reason that reads the record applies once a record is loaded; a static reason applies directly.
   const disabledReason = (action: ActionDescriptor): React.ReactNode =>
     typeof action.disabledReason === "function" ? (record != null ? action.disabledReason(record) : undefined)
-      : action.disabled ? action.disabledReason : undefined;
+      : action.disabledReason;
   const actionMutation = useMutation<
     ActionResult,
     unknown,
@@ -195,14 +195,20 @@ export function RecordActionBar({
       {t("actions.delete")}
     </ActionTrigger>
   ) : null;
-  const renderAction = (action: RecordActionDescriptor) => (
-    <ActionTrigger key={action.id} glyph={action.icon}
-      variant={action.danger ? "danger" : "secondary"}
-      disabled={disabled(action)} loading={pendingId === action.id}
-      onClick={() => void runAction(action)}>
-      {action.label}
-    </ActionTrigger>
-  );
+  const renderAction = (action: RecordActionDescriptor) => {
+    const reason = disabledReason(action);
+    const reasonId = reason ? `${descriptionId}-${action.id}` : undefined;
+    return <React.Fragment key={action.id}>
+      <ActionTrigger glyph={action.icon}
+        variant={action.danger ? "danger" : "secondary"}
+        disabled={disabled(action)} aria-describedby={reasonId}
+        loading={pendingId === action.id}
+        onClick={() => void runAction(action)}>
+        {action.label}
+      </ActionTrigger>
+      {reason ? <div id={reasonId} className="px-2 pb-1 text-xs text-fg-muted">{reason}</div> : null}
+    </React.Fragment>;
+  };
 
   return (
     <>

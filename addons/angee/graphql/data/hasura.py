@@ -1418,6 +1418,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     subtitle: DataResourceSubtitleMetadata | None = None,
     record_representation: str | None = None,
     record_search_fields: Sequence[str] | None = None,
+    context_fields: Sequence[str] | None = None,
 ) -> HasuraResource:
     """Build a Hasura resource and attach Angee's model-resource metadata.
 
@@ -1447,6 +1448,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``record_search_fields`` declares the readable filterable String fields relation
     pickers search together; resources that omit it retain the standard single
     representation-field search.
+    ``context_fields`` declares the readable fields whose native widgets render
+    the compact record-header facts line.
 
     Model ``hasura_aliases`` mappings contribute named Django expression
     sorts automatically, including from extension bases. They use native lazy
@@ -1744,6 +1747,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         subtitle=subtitle,
         record_representation=record_representation,
         record_search_fields=(tuple(record_search_fields) if record_search_fields is not None else None),
+        context_fields=(tuple(context_fields) if context_fields is not None else None),
         compile_filter=compile_filter,
     )
 
@@ -1914,6 +1918,7 @@ def attach_hasura_resource_metadata(
     subtitle: DataResourceSubtitleMetadata | None = None,
     record_representation: str | None = None,
     record_search_fields: tuple[str, ...] | None = None,
+    context_fields: tuple[str, ...] | None = None,
     compile_filter: Callable[[Any], Callable[[Any], Any]] | None = None,
 ) -> HasuraResource:
     """Attach the native bundle and Angee-only policy for final projection."""
@@ -1947,6 +1952,7 @@ def attach_hasura_resource_metadata(
             subtitle=subtitle,
             record_representation=record_representation,
             record_search_fields=record_search_fields,
+            context_fields=context_fields,
             lines_declaration=lines,
             save_argument_names=("expected_revision",) if lines is not None else (),
         ),

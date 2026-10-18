@@ -175,8 +175,11 @@ containers: {
     "desk.review": { sequence: 40, content: reviewSection },
   },
   "form#chrome": { only: ["iam.share-record"] },
+  "record#activity": {
+    "messaging.comments": { sequence: 10 },
+  },
   "record#aside": [
-    { "messaging.comments": { sequence: 10 } },
+    { only: ["activity", "storage.files"] },
     { only: [], when: { route: "notes.detail" } }, // may be owned by another addon
   ],
 },

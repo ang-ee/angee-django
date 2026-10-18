@@ -1,5 +1,4 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { HistoryEntrySummary } from "@angee/provenance";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
@@ -39,7 +38,7 @@ import {
 
 const RECIPIENT_MODELS = ["iam.User"] as const;
 const SEARCH_DEBOUNCE_MS = 300;
-const TIMELINE_PAGE_SIZE = 50;
+const MESSAGE_PAGE_SIZE = 50;
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉"] as const;
 const FINISHED_UPLOAD_STATUSES = new Set<UploadTask["status"]>([
   "done",
@@ -84,6 +83,10 @@ export interface RecordThreadConversationProps {
   composerCopy?: { audience?: string; help?: string };
   /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
   submitKey?: "enter" | "mod-enter";
+  /** Render only the shared record chrome and composer for an Activity footer. */
+  composerOnly?: boolean;
+  /** Let Activity share this query exactly with its bounded entry source. */
+  messageLimit?: number;
   /** The stream is the same thread owner with quieter, declaration-driven chrome. */
   stream?: {
     /** Child items inherit their audience from the server-selected child row. */
@@ -120,6 +123,8 @@ export function RecordThreadConversation({
   header,
   composerCopy,
   submitKey = "enter",
+  composerOnly = false,
+  messageLimit = MESSAGE_PAGE_SIZE,
   stream,
 }: RecordThreadConversationProps): React.ReactElement {
   const t = useMessagingT();
@@ -130,20 +135,15 @@ export function RecordThreadConversation({
   const [search, setSearch] = React.useState("");
   const [debouncedSearch] = useDebounce(search.trim(), SEARCH_DEBOUNCE_MS);
   const activeSearch = stream && !stream.search ? "" : debouncedSearch;
-  const pageKey = JSON.stringify([modelLabel, recordId, activeSearch]);
-  const [page, setPage] = React.useState({ key: pageKey, offset: 0 });
-  const timelineOffset = page.key === pageKey ? page.offset : 0;
   const variables = React.useMemo(
     () => ({
       modelLabel,
       recordId,
       search: activeSearch,
-      messageLimit: TIMELINE_PAGE_SIZE,
-      includeHistory: !stream,
-      timelineOffset: stream ? 0 : timelineOffset,
+      messageLimit,
       messageTypes: stream ? [...(stream.messageTypes ?? [])] : [],
     }),
-    [modelLabel, recordId, activeSearch, stream?.messageTypes, Boolean(stream), timelineOffset],
+    [modelLabel, recordId, activeSearch, messageLimit, stream?.messageTypes, Boolean(stream)],
   );
   const threadQuery = useAuthoredQuery(RecordThreadDocument, variables, {
     enabled,
@@ -225,9 +225,7 @@ export function RecordThreadConversation({
       t,
     ],
   );
-  const timelineCount = threadPayload?.timeline_count ?? 0;
-  const messageResultCount = stream ? threadPayload?.message_result_count ?? 0 : timelineCount;
-  const timeline = threadPayload?.timeline ?? [];
+  const messageResultCount = threadPayload?.message_result_count ?? 0;
   // Messages arrive server-ordered (chronological ascending); render them verbatim.
   const messages = threadPayload?.messages ?? [];
 
@@ -235,14 +233,13 @@ export function RecordThreadConversation({
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
   // An older page is a window, not the feed: browsing it for context keeps the intent.
   React.useEffect(() => {
-    if (timelineOffset > 0) return;
     if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
       setEditingMessageId(null);
     }
     setReplyToMessage((current) =>
       current && !messages.some((message) => message.id === current.id) ? null : current,
     );
-  }, [messages, editingMessageId, timelineOffset]);
+  }, [messages, editingMessageId]);
 
   const handleStartEdit = React.useCallback((messageId: string) => {
     setError(null);
@@ -383,8 +380,6 @@ export function RecordThreadConversation({
         await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
         if (postAttempt.current === attempt) postAttempt.current = null;
         setReplyToMessage(null);
-        // The new entry lands on the newest page.
-        setPage({ key: pageKey, offset: 0 });
         return true;
       } catch (cause) {
         setError(
@@ -396,7 +391,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, pageKey, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, t],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {
@@ -432,6 +427,29 @@ export function RecordThreadConversation({
     markReadPending: markReadState.fetching,
     reportError: setError,
   };
+  const composer = canPost ? (
+    <ChatterComposer
+      t={t}
+      copy={composerCopy}
+      submitKey={submitKey}
+      readOnly={readOnly}
+      selectedPostKind={selectedPostKind ?? "COMMENT"}
+      offeredKinds={offeredKinds}
+      stream={stream ? { ...stream, audience: stream.audience ?? threadPayload?.audience_label ?? undefined } : undefined}
+      onPostKindChange={setPostKind}
+      replyToMessage={replyToMessage}
+      onClearReply={() => setReplyToMessage(null)}
+      recipientOptions={recipientOptions}
+      recipientsLoading={recipientUsersQuery.isFetching}
+      posting={postState.fetching}
+      onPost={handlePost}
+      onError={setError}
+    />
+  ) : null;
+  const errorBanner = <ErrorBanner description={error} dismissLabel={t("error.dismiss")}
+    onDismiss={() => setError(null)} />;
+
+  if (composerOnly) return <div className="grid min-w-0 gap-3">{header?.(chrome)}{composer}{errorBanner}</div>;
 
   return (
     <div className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
@@ -443,7 +461,7 @@ export function RecordThreadConversation({
         placeholder={t("chatter.search")}
         aria-label={t("chatter.search")}
       /> : null}
-      {timeline.length > 0 ? (
+      {messages.length > 0 ? (
         <div className="space-y-3">
           {activeSearch ? (
             <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
@@ -451,12 +469,7 @@ export function RecordThreadConversation({
             </div>
           ) : null}
           <MessageFeed label={t("chatter.feedLabel")}>
-            {timeline.map((entry) => {
-              if (entry.__typename === "HistorySummaryType") {
-                return <HistoryEntrySummary key={`change:${entry.id}`} entry={entry} model={modelLabel} id={recordId} />;
-              }
-              const message = entry;
-              return <MessageFeedRow
+            {messages.map((message) => <MessageFeedRow
                 key={`message:${message.id}`}
                 message={message}
                 editing={editingMessageId === message.id}
@@ -476,8 +489,7 @@ export function RecordThreadConversation({
                 onToggleReaction={handleToggleReaction}
                 onToggleStarred={handleToggleStarred}
                 onMarkDone={handleMarkMessageDone}
-              />;
-            })}
+              />)}
           </MessageFeed>
         </div>
       ) : (
@@ -490,19 +502,6 @@ export function RecordThreadConversation({
           className="min-h-40 p-4"
         />
       )}
-          {!stream && (timelineOffset > 0 || timelineCount > TIMELINE_PAGE_SIZE) ? (
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="ghost" disabled={timelineOffset === 0 || threadQuery.isFetching}
-                onClick={() => setPage({ key: pageKey, offset: Math.max(0, timelineOffset - TIMELINE_PAGE_SIZE) })}>
-                {t("timeline.newer")}
-              </Button>
-              <Button size="sm" variant="ghost"
-                disabled={timelineOffset + TIMELINE_PAGE_SIZE >= timelineCount || threadQuery.isFetching}
-                onClick={() => setPage({ key: pageKey, offset: timelineOffset + TIMELINE_PAGE_SIZE })}>
-                {t("timeline.older")}
-              </Button>
-            </div>
-          ) : null}
       {threadPayload?.removed_message_count ? (
         <RemovedMessages
           modelLabel={modelLabel}
@@ -513,32 +512,10 @@ export function RecordThreadConversation({
           onRestore={handleRestoreMessage}
         />
       ) : null}
-      {canPost ? (
-        <ChatterComposer
-          t={t}
-          copy={composerCopy}
-          submitKey={submitKey}
-          readOnly={readOnly}
-          selectedPostKind={selectedPostKind ?? "COMMENT"}
-          offeredKinds={offeredKinds}
-          stream={stream ? { ...stream, audience: stream.audience ?? threadPayload?.audience_label ?? undefined } : undefined}
-          onPostKindChange={setPostKind}
-          replyToMessage={replyToMessage}
-          onClearReply={() => setReplyToMessage(null)}
-          recipientOptions={recipientOptions}
-          recipientsLoading={recipientUsersQuery.isFetching}
-          posting={postState.fetching}
-          onPost={handlePost}
-          onError={setError}
-        />
-      ) : null}
+      {composer}
       {/* The shared danger banner announces via role="alert" and is dismissable —
           `description={null}` renders nothing, so this is the "no error" state too. */}
-      <ErrorBanner
-        description={error}
-        dismissLabel={t("error.dismiss")}
-        onDismiss={() => setError(null)}
-      />
+      {errorBanner}
     </div>
   );
 }

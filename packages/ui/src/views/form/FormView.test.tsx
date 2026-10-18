@@ -728,6 +728,61 @@ describe("FormView", () => {
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
   });
 
+  test("shows a lock and label without a value for actor-redacted fields", async () => {
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Visible title",
+      secret: null,
+      redacted_fields: ["secret"],
+      permissions: ["read"],
+    };
+    const note = defaultModel("NoteType", "notes.Note");
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" fields={[
+        { name: "title", title: true },
+        { name: "secret", label: "Private note" },
+      ]} />,
+      { types: { NoteType: { ...note, fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+        secret: { name: "secret", kind: "scalar", scalar: "String" },
+        redacted_fields: { name: "redacted_fields", kind: "list", scalar: "String" },
+      } } } },
+    );
+
+    expect(await screen.findByRole("heading", { name: "Visible title" })).toBeTruthy();
+    expect(screen.getByText("Private note")).toBeTruthy();
+    expect(screen.getByLabelText("Restricted: Private note")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Private note" })).toBeNull();
+    expect(sdkMocks.recordSelection).toContain("redacted_fields");
+  });
+
+  test("keeps a redacted context fact visible as its label and lock", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Visible title",
+      secret: null,
+      redacted_fields: ["secret"],
+    };
+    const note = defaultModel("NoteType", "notes.Note");
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />,
+      { types: { NoteType: {
+        ...note,
+        fields: {
+          title: { name: "title", kind: "scalar", scalar: "String" },
+          secret: { name: "secret", label: "Private context", kind: "scalar", scalar: "String" },
+          redacted_fields: { name: "redacted_fields", kind: "list", scalar: "String" },
+        },
+        resource: { ...note.resource, contextFields: ["secret"] },
+      } } },
+    );
+
+    expect(await screen.findByRole("heading", { name: "Visible title" })).toBeTruthy();
+    expect(screen.getByText("Private context")).toBeTruthy();
+    expect(screen.getByLabelText("Restricted: Private context")).toBeTruthy();
+  });
+
   test("refuses an absent record without record chrome or fallback title", () => {
     renderWithProviders(<FormView resource="notes.Note" id="missing"
       fields={[{ name: "title", title: true }]}
@@ -748,6 +803,49 @@ describe("FormView", () => {
     const heading = await screen.findByRole("heading", { name: String(sdkMocks.record.title) });
     expect(heading.className).toContain("break-words");
     expect(heading.className).not.toContain("truncate");
+  });
+
+  test("renders metadata context fields with native widgets and readable attribution", async () => {
+    window.sessionStorage.setItem("angee:developer-mode", "0");
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Invoice 104",
+      amount: "1234.50",
+      currency: { id: "cur_usd", code: "USD" },
+      due_on: "2026-10-31",
+      created_by: "user_ada",
+      created_by_label: "Ada",
+      updated_by: "user_grace",
+      updated_by_label: "Grace",
+      created_at: "2026-10-01T10:11:12Z",
+      updated_at: "2026-10-18T13:14:15Z",
+      permissions: ["read"],
+    };
+    const money = {
+      read: ({ value, row, field }: { value?: unknown; row?: unknown; field?: { currencyField?: string } }) => {
+        const currency = (row as { currency?: { code?: string } } | undefined)?.currency?.code;
+        return <span>{String(value)} {currency ?? field?.currencyField}</span>;
+      },
+    };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />,
+      factsMetadata(),
+      undefined,
+      { widgets: { ...defaultWidgets, money } },
+    );
+
+    expect(await screen.findByRole("heading", { name: "Invoice 104" })).toBeTruthy();
+    expect(screen.getByText("1234.50 USD")).toBeTruthy();
+    expect(screen.getByText(/Oct 31, 2026/)).toBeTruthy();
+    expect(screen.getByText("created by").parentElement?.textContent).toContain("Ada");
+    expect(screen.getByText("updated by").parentElement?.textContent).toContain("Grace");
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "amount", "currency.id", "currency.code", "due_on",
+      "created_by_label", "updated_by_label",
+    ]));
+    expect(screen.queryByText("note-1")).toBeNull();
+    expect(screen.queryByText("2026-10-01T10:11:12Z")).toBeNull();
   });
 
   test("uses a wrapping editor for a writable title", async () => {
@@ -4116,6 +4214,40 @@ function teamMetadata(): TestSchemaMetadata {
         ...defaultModel("UserType", "iam.User"),
         fields: { display_name: { name: "display_name", kind: "scalar", scalar: "String" } },
         resource: { ...defaultResource("UserType", "iam.User"), recordRepresentation: "display_name" },
+      },
+    },
+  };
+}
+
+function factsMetadata(): TestSchemaMetadata {
+  const note = defaultModel("NoteType", "notes.Note");
+  return {
+    types: {
+      NoteType: {
+        ...note,
+        fields: {
+          title: { name: "title", kind: "scalar", scalar: "String" },
+          amount: { name: "amount", kind: "scalar", scalar: "Decimal", widget: "money", currencyField: "currency" },
+          currency: { name: "currency", kind: "relation", relationModelLabel: "money.Currency", relationObject: true },
+          due_on: { name: "due_on", kind: "scalar", scalar: "Date", widget: "date" },
+          created_by: { name: "created_by", kind: "scalar", scalar: "ID" },
+          created_by_label: { name: "created_by_label", kind: "scalar", scalar: "String" },
+          updated_by: { name: "updated_by", kind: "scalar", scalar: "ID" },
+          updated_by_label: { name: "updated_by_label", kind: "scalar", scalar: "String" },
+          created_at: { name: "created_at", kind: "scalar", scalar: "DateTime" },
+          updated_at: { name: "updated_at", kind: "scalar", scalar: "DateTime" },
+        },
+        resource: {
+          ...note.resource,
+          recordRepresentation: "title",
+          contextFields: ["amount", "due_on"],
+          subtitle: { created: "created_at", updated: "updated_at" },
+        },
+      },
+      CurrencyType: {
+        ...defaultModel("CurrencyType", "money.Currency"),
+        fields: { code: { name: "code", kind: "scalar", scalar: "String" } },
+        resource: { ...defaultResource("CurrencyType", "money.Currency"), recordRepresentation: "code" },
       },
     },
   };

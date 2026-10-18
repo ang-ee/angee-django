@@ -29,7 +29,8 @@ test("registers read-only workflow and run pages with additive record and decisi
   expectValidBaseAddon(addon);
   expect(addon.routes?.map((route) => route.name)).toContain("workflows.runs.record");
   expect(Object.keys(addon.containers?.["decisions#origin"] ?? {})).toEqual(["workflows.run"]);
-  expect(Object.keys(addon.containers?.["record#aside"] ?? {})).toEqual(["workflows.runs"]);
+  expect(Object.keys(addon.containers?.["record#activity"] ?? {})).toEqual(["workflows.activity"]);
+  expect(addon.containers?.["record#aside"]).toBeUndefined();
   expect(Object.keys(addon.containers?.["form#actions-menu"] ?? {})).toEqual(["workflows.run-workflow"]);
 });
 

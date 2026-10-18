@@ -18,7 +18,7 @@ import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
 import {
-  EMPTY_CONTAINERS, composedContainerChildren, modelChain, useAppRuntime, useContainer, useFormOverride,
+  EMPTY_CONTAINERS, composedContainerChildren, modelChain, useAppRuntime, useContainer, useDeveloperMode, useFormOverride,
 } from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
@@ -143,6 +143,8 @@ export interface UseFormViewSurfaceProps {
   children?: React.ReactNode;
   actions?: readonly RecordActionDescriptor[];
   returning?: readonly string[];
+  /** Override the resource metadata fields rendered in the header facts line. */
+  contextFields?: readonly string[];
   defaultValues?: Record<string, unknown>;
   acknowledgedSource?: FormViewAcknowledgedSource;
   onSaved?: (row: Row) => void;
@@ -186,6 +188,10 @@ export interface FormViewSurface
   isCreate: boolean;
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
+  /** Metadata-backed fields rendered in the record header, outside the form. */
+  contextFields: readonly FieldDescriptor[];
+  /** Readable audit principals appended to the header facts line. */
+  attributionFields: readonly FieldDescriptor[];
   relationByField: ReadonlyMap<string, RelationFieldInfo>;
   /** Fields rendered by the relation multi-select, with the related model it lists. */
   relationListByField: ReadonlyMap<string, RelationFieldInfo>;
@@ -233,6 +239,7 @@ export function useFormViewSurface({
   children,
   actions,
   returning,
+  contextFields,
   defaultValues,
   acknowledgedSource,
   onSaved,
@@ -251,6 +258,7 @@ export function useFormViewSurface({
   deleteVisibleWhen,
 }: UseFormViewSurfaceProps): FormViewSurface {
   const t = useUiT();
+  const developerMode = useDeveloperMode();
   // The viewer's own choice on this record, and the default a rule chose for which record.
   const [localRecordTab, setLocalRecordTab] = React.useState<string | null>(null);
   const [ruledRecordTab, setRuledRecordTab] = React.useState<{ key: string; tab: string | undefined } | null>(null);
@@ -486,6 +494,24 @@ export function useFormViewSurface({
     }))),
     [regularFormFields, railGroups],
   );
+  const resolvedContextFields = React.useMemo(() => fieldsWithMetadataDefaults(
+    (contextFields ?? modelMetadata?.resource.contextFields ?? [])
+      .filter((name) => modelMetadata?.fields[name]?.readable !== false && Boolean(modelMetadata?.fields[name]))
+      .map((name) => ({ name, readOnly: true })),
+    modelMetadata,
+    schemaMetadata,
+  ), [contextFields, modelMetadata, schemaMetadata]);
+  const attributionFields = React.useMemo(() => fieldsWithMetadataDefaults(
+    ["created_by", "updated_by"].flatMap((name) => {
+      const owner = modelMetadata?.fields[name];
+      if (!owner || owner.readable === false) return [];
+      const labelName = `${name}_label`;
+      const label = modelMetadata?.fields[labelName];
+      return [{ name: label && label.readable !== false ? labelName : name, readOnly: true }];
+    }),
+    modelMetadata,
+    schemaMetadata,
+  ), [modelMetadata, schemaMetadata]);
   // `formFields` registers every candidate so any record's values load; one record's form is the
   // groups no row decides plus the row-decided children it admits. Its layout and its save read these.
   const regularFormFieldsFor = React.useCallback(
@@ -535,6 +561,11 @@ export function useFormViewSurface({
     if (!isCreate && modelMetadata?.fields.permissions?.readable !== false && modelMetadata?.fields.permissions) {
       paths.add("permissions");
     }
+    if (!isCreate && modelMetadata?.fields.redacted_fields?.readable !== false && modelMetadata?.fields.redacted_fields) {
+      // The record queryset already owns this actor-specific ledger; selecting
+      // it beside the row avoids a field-by-field permission query.
+      paths.add("redacted_fields");
+    }
     for (const field of formFields) {
       // Write-only inputs (secrets such as OAuth client_secret) are projected
       // into the artifact with readable=false; render them, never select them.
@@ -563,6 +594,38 @@ export function useFormViewSurface({
         resolved?.model.resource.query.fields[fieldMetadata?.name ?? field.name],
       );
     }
+    for (const field of [...resolvedContextFields, ...attributionFields]) {
+      if (!modelMetadata) continue;
+      const resolved = modelFieldForPath(field.name, modelMetadata, schemaMetadata);
+      const fieldMetadata = resolved?.field;
+      if (!fieldMetadata || fieldMetadata.readable === false) continue;
+      addFieldSelection(
+        paths,
+        field,
+        relationFieldInfoForDescriptor(field, modelMetadata, schemaMetadata) ?? undefined,
+        fieldMetadata,
+        resolved.model.resource.query.fields[fieldMetadata.name],
+      );
+      if (field.currencyField) {
+        const [currencyField] = fieldsWithMetadataDefaults(
+          [{ name: field.currencyField, readOnly: true }],
+          modelMetadata,
+          schemaMetadata,
+        );
+        const currency = currencyField
+          ? modelFieldForPath(currencyField.name, modelMetadata, schemaMetadata)
+          : null;
+        if (currencyField && currency && currency.field.readable !== false) {
+          addFieldSelection(
+            paths,
+            currencyField,
+            relationFieldInfoForDescriptor(currencyField, modelMetadata, schemaMetadata) ?? undefined,
+            currency.field,
+            currency.model.resource.query.fields[currency.field.name],
+          );
+        }
+      }
+    }
     const lines = modelMetadata?.resource?.linesResource;
     if (lines?.field) {
       for (const path of lineReadSelectionPaths(lines, schemaMetadata)) {
@@ -582,7 +645,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [canonicalTabFields, contributionFields, formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
+  }, [attributionFields, canonicalTabFields, contributionFields, formFields, isCreate, modelMetadata, relationByField, resolvedContextFields, returning, schemaMetadata]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -724,8 +787,9 @@ export function useFormViewSurface({
         id,
         modelMetadata?.resource?.subtitle,
         t,
+        developerMode,
       ),
-    [id, modelMetadata, save.displayRecord, t],
+    [developerMode, id, modelMetadata, save.displayRecord, t],
   );
   const lineRowErrors = React.useMemo(
     () =>
@@ -829,6 +893,8 @@ export function useFormViewSurface({
     isCreate,
     modelMetadata,
     formFields,
+    contextFields: resolvedContextFields,
+    attributionFields,
     relationByField,
     relationListByField,
     requiredMessage: t("form.required"),

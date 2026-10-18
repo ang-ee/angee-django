@@ -96,6 +96,7 @@ from angee.models.statements import (
     StatementSubjectManager,
     StatementSubjectQuerySet,
     Survivorship,
+    prime_readable_statement_records,
 )
 from angee.models.transitions import (
     Condition,

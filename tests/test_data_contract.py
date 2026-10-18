@@ -51,6 +51,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         update_arguments=(DataMutationArgument("expected_revision", "Int"),),
         save_arguments=(DataMutationArgument("expected_revision", "Int"),),
         fields=(title_field, status_field),
+        context_fields=("status",),
         subtitle=DataResourceSubtitleMetadata(created="created_at", word_count="body.word_count"),
         lines=DataLinesMetadata(field="items", model_label="catalog.line", fields=(title_field,)),
     )
@@ -78,6 +79,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
     assert wire["fields"][1]["statusDisplay"] == "dot"
     assert "modelFieldName" not in wire["fields"][0]
     assert wire["subtitle"] == {"created": "created_at", "updated": None, "wordCount": "body.word_count"}
+    assert wire["contextFields"] == ["status"]
     assert wire["linesResource"]["modelLabel"] == "catalog.line"
     assert wire["linesResource"]["fields"] == [wire["fields"][0]]
     assert wire["linesResource"]["defaults"] == {}

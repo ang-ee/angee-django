@@ -7,7 +7,6 @@ import re
 import shutil
 from pathlib import Path
 
-
 REPOSITORY_NAMES = (
     "angee",
     "angee-arp",

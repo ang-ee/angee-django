@@ -263,7 +263,11 @@ class ThreadedModelMixin(models.Model):
         survivor = thread_model(
             pk=Coalesce(models.OuterRef("thread__merged_into_id"), models.OuterRef("thread_id")),
         )
-        attached = thread_model.system_queryset().redirect_group(survivor).filter(
+        # The thread rows are structural plumbing for an already-authorized
+        # record projection.  The message queryset below is the content-bearing
+        # elevated read; auditing this attachment subquery as a second content
+        # read adds a duplicate bypass event every time the expression runs.
+        attached = thread_model._base_manager.redirect_group(survivor).filter(
             attachments__content_type_id=models.Subquery(content_type),
             attachments__object_id=models.OuterRef("_record_id"),
             attachments__role=cls.thread_attachment_role,

@@ -1,10 +1,12 @@
-import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
 import { Badge } from "../../ui/badge";
 import { Tooltip } from "../../ui/tooltip";
 import { RecordReference } from "../relation/RecordReference";
+import { Glyph } from "../../chrome/Glyph";
+import { useUiT } from "../../i18n";
 
 export interface RecordFieldMark {
   field: string;
@@ -14,6 +16,7 @@ export interface RecordFieldMark {
   origin?: string;
   /** A saved record the mark opens, such as the applied statement. */
   target?: { model: string; id: string };
+  icon?: string;
   /** An owner-supplied reveal action, such as opening a decision pane. */
   onReveal?: () => void;
 }
@@ -85,12 +88,13 @@ export function usePublishActiveRecordForm(form: ActiveRecordForm | null) {
   }, [setForm, form]);
 }
 
-function useRecordFieldControls(field: string) {
+export function useRecordFieldMarksForField(field: string) {
   const bridge = useContext(State);
   const setRevealed = useContext(Dispatch)?.setRevealed;
   const record = useRecordChromeContextMaybe();
   return useMemo(() => (bridge?.marks.flatMap((publication) => {
     if (publication.id !== record?.recordId
+      || !record
       || publication.model.toLowerCase() !== record.canonicalResource.toLowerCase()) return [];
     return publication.marks.filter((mark) => mark.field === field).map((mark) => ({
       ...mark,
@@ -99,17 +103,25 @@ function useRecordFieldControls(field: string) {
         mark.onReveal?.();
       } : undefined,
     }));
-  }) ?? []), [bridge?.marks, field, record?.canonicalResource, record?.recordId, setRevealed]);
+  }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
-/** Every native form field placement uses the same action-or-reference control. */
-export function RecordFieldMarkControl({ field, label }: { field: string; label?: ReactNode }) {
-  const marks = useRecordFieldControls(field);
+/** Every native form field placement composes attention, provenance, and access marks once. */
+export function RecordFieldMarkControl({ field, label, restricted = false }: {
+  field: string;
+  label?: ReactNode;
+  restricted?: boolean;
+}) {
+  const t = useUiT();
+  const published = useRecordFieldMarksForField(field);
+  const marks: readonly RecordFieldMark[] = restricted
+    ? [...published, { field, label: t("form.restricted"), tone: "neutral", icon: "lock" }]
+    : published;
   if (!marks.length) return null;
   return <>
-    {marks.map((mark, index) => <Fragment key={`${mark.label}:${index}`}>
-      <RecordFieldMarkItem mark={mark} field={field} label={label} />
-    </Fragment>)}
+    {marks.map((mark, index) => (
+      <RecordFieldMarkItem key={`${mark.label}:${index}`} mark={mark} field={field} label={label} />
+    ))}
   </>;
 }
 
@@ -118,14 +130,16 @@ function RecordFieldMarkItem({ mark, field, label }: {
   field: string;
   label?: ReactNode;
 }) {
-  const badge = <Badge tone={mark.tone} density="compact">{mark.label}</Badge>;
+  const ariaLabel = `${mark.label}: ${typeof label === "string" ? label : field}`;
+  const badge = <Badge tone={mark.tone} density="compact">
+    {mark.icon ? <Glyph decorative name={mark.icon} /> : null}{mark.label}
+  </Badge>;
   if (mark.target) {
     return <Tooltip label={mark.origin}>
       <span className="inline-flex"><RecordReference {...mark.target} label={badge} /></span>
     </Tooltip>;
   }
-  return mark.reveal ? <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0"
-    onClick={mark.reveal} aria-label={`${mark.label}: ${typeof label === "string" ? label : field}`}>
-    {badge}
-  </Button> : badge;
+  if (!mark.reveal) return <span aria-label={ariaLabel}>{badge}</span>;
+  return <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0"
+    onClick={mark.reveal} aria-label={ariaLabel}>{badge}</Button>;
 }

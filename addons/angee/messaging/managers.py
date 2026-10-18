@@ -625,7 +625,10 @@ class ThreadQuerySet(MergeableQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[A
         """
 
         survivor = self.model(pk=Coalesce(models.OuterRef("merged_into_id"), models.OuterRef("pk")))
-        attached = self.model.system_queryset().redirect_group(survivor).filter(attachments__role="chatter")
+        # This is a structural anti-join inside the already authorized inbox
+        # queryset.  The unscoped base manager supplies the complete redirect
+        # group without opening a separately audited system read at SQL compile.
+        attached = self.model._base_manager.redirect_group(survivor).filter(attachments__role="chatter")
         return cast(ThreadQuerySet, self.alias(_record_attached=models.Exists(attached)).filter(
             _record_attached=False,
         ))

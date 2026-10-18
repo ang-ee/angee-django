@@ -364,6 +364,7 @@ function ActionRelationControl({
       filters={arg.filters}
       optionDescriptionField={arg.optionDescriptionField}
       optionStatusField={arg.optionStatusField}
+      optionStatusArguments={arg.optionStatusArguments}
       create={arg.create ?? null}
       value={relationValueId(value)}
       readOnly={readOnly}

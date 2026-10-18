@@ -186,7 +186,13 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             need.full_clean(validate_unique=False, validate_constraints=False)
             if party is not None:
                 need.validate_party_assignment()
-            return self.with_actor(actor).insert(need)
+            # ``Need.save()`` deliberately persists an authorized party assignment
+            # as a second, elevated write after the actor-scoped insert.  Keep the
+            # actor on the instance rather than wrapping the whole save in the
+            # queryset insertion scope: that scope would also pin the nested write
+            # and defeat the instance-local elevation.
+            need.with_actor(actor).save(force_insert=True, using=self.db)
+            return need
 
     def capture_from_message(
         self,

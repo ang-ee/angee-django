@@ -8,7 +8,6 @@ export const enProvenanceMessages: Record<string, string> = {
   "fieldProvenance.source": "Source",
   "fieldProvenance.correction": "Correction",
   "fieldProvenance.unverified": "Unverified",
-  "history.title": "History",
   "history.openTab": "Open history",
   "history.loading": "Loading history",
   "history.unavailable": "History is unavailable",

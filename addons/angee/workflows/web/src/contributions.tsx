@@ -1,12 +1,12 @@
 import { useDecision } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import { useMemo, type ReactNode } from "react";
-import { ErrorBanner, MetaSection, NavLink, REFINE_CREATE_ID, useRouteHref, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { ErrorBanner, MetaSection, NavLink, RecordReference, useRouteHref, type ActivityEntry, type ActivityEntrySource, type ActivityRecord, type ActivityWindow, type ContainerChild } from "@angee/ui";
 
 import { DecisionWaitingRunsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
-import { RecordTimeline } from "./RecordTimeline";
+import { RecordTimelineDecisionCard, TimelineNotes, useRecordTimelineQuery } from "./RecordTimeline";
 import { useRecordTimelineAttention } from "./timeline-pane";
 
 export function DecisionRunOrigin() {
@@ -28,24 +28,92 @@ export function DecisionRunOrigin() {
       {step.run.display_name}</NavLink>{" · "}{step.node_label}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
 }
 
-/** The record aside uses the same timeline a page can publish on the left. */
-export const recordRunsTab: ContainerChild<ChatterTabContent> = {
+/** Workflow lifecycle, notes and waiting decisions join the framework Activity stream. */
+export const workflowActivitySource: ContainerChild<ActivityEntrySource> = {
   sequence: 30,
   content: {
-    icon: "versions", label: <RunsLabel />,
-    useCount: ({ view, route }) => {
-      const record = useMemo(() => ({ model: route!.canonicalLabel!, id: view.sqid! }), [route?.canonicalLabel, view.sqid]);
-      return useRecordTimelineAttention(record);
-    },
-    when: ({ view, route }) => view.kind === "record" && Boolean(
-      view.sqid && route?.canonicalLabel && route.resourceType != null,
-    ) && view.sqid !== REFINE_CREATE_ID,
-    render: ({ view, route }) => view.sqid && route?.canonicalLabel
-      ? <RecordTimeline record={{ model: route.canonicalLabel, id: view.sqid }} /> : null,
+    kinds: ["run", "decision"],
+    useEntries: useWorkflowActivityEntries,
   },
 };
 
 /** The run a decision waits in, as a `decisions#origin` child. */
 export const decisionRunOrigin: ContainerChild<ReactNode> = { content: <DecisionRunOrigin /> };
 
-function RunsLabel() { const t = useWorkflowsT(); return <>{t("runs.title")}</>; }
+function useWorkflowActivityEntries(record: ActivityRecord, window: ActivityWindow): readonly ActivityEntry[] {
+  const t = useWorkflowsT();
+  const timelineRecord = useMemo(() => ({ model: record.model, id: record.id }), [record.id, record.model]);
+  const query = useRecordTimelineQuery(timelineRecord, Boolean(record.model && record.id), window.limit);
+  useRecordTimelineAttention(timelineRecord);
+  return useMemo(() => {
+    const selection = query.data?.record_timeline;
+    const entry = selection?.records[0];
+    if (!entry) return [];
+    const activities: ActivityEntry[] = [];
+    const decisionContexts = new Map<string, { reference: ReactNode; records: readonly string[] }>();
+    for (const run of entry.runs) {
+      const actor = run.run_as?.display_name ?? t("timeline.user");
+      const reference = <RecordReference model="workflows.WorkflowRun" id={run.id} label={run.display_name} />;
+      activities.push({
+        at: run.created_at,
+        kind: "run",
+        actor,
+        title: t("activity.runStarted", { name: run.display_name }),
+        body: null,
+        reference,
+      });
+      for (const node of run.graph.nodes) {
+        const step = node.step_run;
+        if (!step) continue;
+        if (step.decision) decisionContexts.set(step.decision.id, {
+          reference,
+          records: step.records.flatMap((item) => item.record_id ? [item.record_id] : []),
+        });
+        for (const note of step.notes) activities.push({
+          at: step.updated_at,
+          kind: "run",
+          actor,
+          title: t("activity.stepNote", { name: node.label }),
+          body: <TimelineNotes notes={[note]} />,
+          reference,
+        });
+        for (const mapped of step.map_steps) {
+          if (mapped.decision) decisionContexts.set(mapped.decision.id, {
+            reference,
+            records: mapped.records.flatMap((item) => item.record_id ? [item.record_id] : []),
+          });
+          for (const note of mapped.notes) activities.push({
+            at: mapped.updated_at,
+            kind: "run",
+            actor,
+            title: t("activity.stepNote", { name: `${mapped.node_label} · ${mapped.map_index + 1}` }),
+            body: <TimelineNotes notes={[note]} />,
+            reference,
+          });
+        }
+      }
+      const finishedAt = run.stopped_at ?? run.finished_at;
+      if (finishedAt) activities.push({
+        at: finishedAt,
+        kind: "run",
+        actor,
+        title: t("activity.runFinished", { name: run.display_name }),
+        body: run.outcome_label || run.failure_reason || null,
+        reference,
+      });
+    }
+    for (const decision of entry.decisions) {
+      const context = decisionContexts.get(decision.id);
+      activities.push({
+        at: decision.created_at,
+        kind: "decision",
+        actor: decision.requester?.display_name ?? t("timeline.user"),
+        title: decision.kind_label,
+        body: <RecordTimelineDecisionCard decision={decision} recordId={entry.record_id}
+          records={context?.records} />,
+        reference: context?.reference ?? null,
+      });
+    }
+    return activities.sort((left, right) => Date.parse(String(right.at)) - Date.parse(String(left.at))).slice(0, window.limit);
+  }, [query.data?.record_timeline, t, window.limit]);
+}

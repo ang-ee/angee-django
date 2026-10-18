@@ -16,6 +16,7 @@ interface ResourceFacts {
   resourceType?: string | null;
   canonicalLabel?: string | null;
   recordEdges?: readonly string[];
+  history?: boolean;
 }
 
 export function chatterRouteIndex(
@@ -34,6 +35,7 @@ export function chatterRouteIndex(
     const resourceType = facts?.resourceType;
     const canonicalLabel = facts?.canonicalLabel;
     const recordEdges = facts?.recordEdges;
+    const history = facts?.history;
     return {
       name: route.name,
       path,
@@ -47,6 +49,7 @@ export function chatterRouteIndex(
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordEdges ? { recordEdges } : {}),
+      ...(history !== undefined ? { history } : {}),
       ...(recordParam ? { recordParam } : {}),
     };
   });
@@ -86,6 +89,7 @@ function resourceFactsByModelLabel(
       resourceType: resource.resourceType,
       canonicalLabel: resource.canonicalLabel,
       recordEdges: resource.recordEdges,
+      history: resource.history,
     };
     byModel[resource.modelLabel] ??= facts;
   }

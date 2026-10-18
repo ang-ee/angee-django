@@ -3,17 +3,19 @@ import { createElement } from "react";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
-import { decisionRunOrigin, recordRunsTab } from "./contributions";
+import { decisionRunOrigin, workflowActivitySource } from "./contributions";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { RunWorkflowRecordActions } from "./run-workflow-actions";
+import { runStatusWidget } from "./run-status";
 
 export { RecordTimeline, type RecordTimelineProps, type TimelineRecord } from "./RecordTimeline";
 export { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
 export { useRecordTimelineQuery } from "./RecordTimeline";
 export { WORKFLOW_STUDIO_TAB_ID } from "./catalogue/resources";
+export { runStatusColumn } from "./run-status";
 
 export { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 
@@ -35,11 +37,14 @@ export default defineBaseAddon({
   },
   containers: {
     "form#actions-menu": { "workflows.run-workflow": { sequence: 40, content: createElement(RunWorkflowRecordActions) } },
-    "record#aside": { "workflows.runs": recordRunsTab },
+    "record#activity": { "workflows.activity": workflowActivitySource },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },
   statusTones: WORKFLOW_STATUS_TONES,
 
-  widgets: { "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition } },
+  widgets: {
+    "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition },
+    runStatus: runStatusWidget,
+  },
   i18n: { workflows: enWorkflowsMessages },
 });

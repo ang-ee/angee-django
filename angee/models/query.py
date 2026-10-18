@@ -48,6 +48,15 @@ class SystemQuerysetMixin:
             queryset = queryset.system_context(reason=f"{model._meta.label_lower}.system_queryset")
         if lock is None:
             return queryset
+        if "self" in lock:
+            lock = (
+                *lock,
+                *(
+                    path
+                    for path in _parent_link_paths(model._meta.concrete_model)
+                    if path not in lock
+                ),
+            )
         lock_if_supported = getattr(queryset, "lock_if_supported", None)
         return (
             lock_if_supported(of=lock)

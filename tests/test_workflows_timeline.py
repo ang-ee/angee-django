@@ -81,6 +81,15 @@ def test_timeline_bounds_inputs_and_calls_the_set_owner_once(schema, review, mon
     result = timeline(schema, actor, [record])["records"][0]["runs"]
     assert len(result) == 20 and result[-1]["id"] == latest[-1].sqid
     assert run.sqid not in {item["id"] for item in result}
+    limited = result_data(execute_schema(
+        schema,
+        """query($records:[TimelineRecordInput!]!) {
+          record_timeline(records:$records, run_limit:2) { records { runs { id } } }
+        }""",
+        {"records": [{"model": record._meta.label, "id": record.sqid}]},
+        user=actor,
+    ))["record_timeline"]["records"][0]["runs"]
+    assert [item["id"] for item in limited] == [latest[-2].sqid, latest[-1].sqid]
     result = execute_schema(
         schema, "query($records:[TimelineRecordInput!]!) { record_timeline(records:$records) { open_decision_count } }",
         {"records": [{"model": record._meta.label, "id": record.sqid}] * 101}, user=actor,

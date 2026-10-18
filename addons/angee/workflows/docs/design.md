@@ -86,9 +86,9 @@ The manual-start mutation reads the subject in the actor's scope and delegates
 validation and request-key replay to run admission. Success refreshes the run
 models; the timeline's existing attention owner opens it when a question appears.
 
-- **Record timeline:** one component with one input, a record or a set of records. It is a pane beside the
-  content and can be placed left or right.
-  Peeks are passive and publish no pane. The eager contribution alone owns attention:
+- **Record timeline:** one component with one input, a record or a set of records. It is a left pane beside the
+  content; the framework Activity stream owns record-aside chronology.
+  Peeks are passive and publish no pane. Activity's eager workflow source owns attention:
   after initial placement, only a new open question ID on the same record forces it open.
   Counts going down do not reopen it. Stop uses the runs page's confirmed action descriptor.
   - Beside a record: the vertical stepper described above, with decision cards inline.
@@ -99,8 +99,9 @@ models; the timeline's existing attention owner opens it when a question appears
 Not built in the first version: timers on decisions, automatic answers, any consumer-specific timeline.
 
 `RecordTimeline` receives only `record`, a `{model, id}` or array of those.
-`useRecordTimelinePane({record, side})` publishes it through the existing right
-chatter or left primary-pane host; the default contribution is `record#aside`.
+`useRecordTimelinePane({record})` publishes it through the existing left
+primary-pane host. The model-scoped `record#activity/workflows.activity` source
+contributes run lifecycle, step-note and waiting-decision entries to Activity.
 
 Each step body opens a fresh run changeset whose origin is the WorkflowRun. Actor
 attribution follows the step actor; a handled failure marks that boundary failed.

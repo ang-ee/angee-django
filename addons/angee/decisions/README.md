@@ -69,7 +69,7 @@ only when selected, and the resource owner prepares its filter only when request
 permission compilation. There is no custom expression or separate scoping path.
 
 The [web fragment](web/README.md) exports `DecisionCard`,
-`decisionFieldMarks`, `decisionAttentionColumn` and `openDecisionFilter`. Cards show each alternative and its per-record
+`decisionFieldMarks`, `attentionColumn` and `openDecisionFilter`. Cards show each alternative and its per-record
 changes, select radio buttons or checkboxes, and display the chosen verdict and
 answer attribution after closure. The `decisions#origin` seam is supplied by
 askers.

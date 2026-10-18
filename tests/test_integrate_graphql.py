@@ -311,6 +311,33 @@ def test_record_link_target_uses_shared_public_reference(composed_tables: None) 
     }
 
 
+def test_record_sources_filter_by_readable_target_and_project_connector_url(composed_tables: None) -> None:
+    """The Sources pane gets retained identities without a target-read oracle."""
+
+    del composed_tables
+    bridge = make_integration("record-sources", model=Channel)
+    outsider_bridge = make_integration("record-sources-outsider", model=Channel)
+    with system_context(reason="test record sources"):
+        stream = current_stream(bridge, "messages", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "message:1", target=stream)
+    query = """
+      query Sources($model: String!, $id: String!) {
+        record_links(where: {model_label: {_eq: $model}, record_id: {_eq: $id}}) {
+          id external_key source_url stream { key integration { display_name } }
+        }
+      }
+    """
+    variables = {"model": "integrate.SyncStream", "id": _public_id(stream)}
+    visible = _data(_execute(_schema(), query, variables, user=bridge.owner))["record_links"]
+    assert visible == [{
+        "id": _public_id(link),
+        "external_key": "message:1",
+        "source_url": None,
+        "stream": {"key": "messages", "integration": {"display_name": bridge.record_display_label}},
+    }]
+    assert _data(_execute(_schema(), query, variables, user=outsider_bridge.owner))["record_links"] == []
+
+
 @pytest.mark.parametrize(
     ("mutation", "model", "verb"),
     [
