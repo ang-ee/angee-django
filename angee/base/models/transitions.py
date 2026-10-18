@@ -477,6 +477,19 @@ class StateTransitions:
     def _state_key(self, value: Any) -> str:
         return _state_key(self.field, value)
 
+    def write_state(self, instance: models.Model, target: Any, *, reason: str) -> None:
+        """Write ``target`` in memory, bypassing the declared graph; the caller owns the save.
+
+        The in-memory half of :meth:`force_state`, for an owner that already
+        persists the row itself in one write with the other facts it applies: an
+        aspect apply mirroring a system of record's state. ``reason`` keeps every
+        graph bypass greppable and intentional.
+        """
+
+        if not str(reason).strip():
+            raise ValueError("StateTransitions.write_state() requires a reason.")
+        self._write_target(instance, self.field.to_python(target))
+
     def _write_target(self, instance: models.Model, target: Any) -> None:
         with self._allow_write(instance, {self.field.attname}):
             setattr(instance, self.field.attname, target)
