@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from copy import copy
@@ -502,9 +502,17 @@ def _apply_page(
     advance_cursor: bool = True,
     reconcile_state: dict[str, Any] | None = None,
     force_apply: frozenset[str] = frozenset(),
-    reapply: frozenset[str] = frozenset(),
+    reapply: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> PageResult:
-    """Apply page or identity observations through the same fenced transaction."""
+    """Apply page or identity observations through the same fenced transaction.
+
+    ``reapply`` maps each due identity a rescan selected to the link state it was
+    selected at. An identity whose link moved since (another attempt healed it, a
+    newer page applied it) is skipped: its read is stale, as a page whose cursor
+    moved during extraction is.
+    """
+
+    reapply = reapply or {}
 
     page = replace(page, cursor=_validated_cursor(page.cursor))
     adopting = _baseline_adoption(stream)
@@ -579,6 +587,15 @@ def _apply_page(
                             else evidence.get(record.external_key)
                         )
                         seen.add(record.external_key)
+                        selected = reapply.get(record.external_key)
+                        current = evidence.get(record.external_key)
+                        if (
+                            selected is not None
+                            and current is not None
+                            and record.external_key not in force_apply
+                            and current.sync_precondition != selected
+                        ):
+                            continue
                         link = links.observe(
                             locked,
                             record.external_key,
@@ -999,7 +1016,9 @@ def begin_stream_cycle(
 
     Call once per cycle before advance_stream, outside any transaction. Adapters
     declaring supports_identity_reads return RecordChange observations through
-    read_keys without moving the stream cursor.
+    read_keys without moving the stream cursor. The reads happen outside the
+    stream lock, so a due identity is applied only while its link is still as it
+    was selected; one that another attempt or page moved first keeps that result.
     Conflicts require explicit resolution. Event feeds have no replica rescan.
     """
 
@@ -1053,12 +1072,12 @@ def begin_stream_cycle(
                 .select_related("parent")
                 .order_by("external_key")
             )
-            keys, reapply = set(force_apply), set()
+            keys, reapply = set(force_apply), {}
             for link in links:
                 parent = link.parent
                 owner = parent if parent is not None else link
                 keys.add(owner.external_key)
-                reapply.add(owner.external_key)
+                reapply[owner.external_key] = owner.sync_precondition
             if not keys:
                 return stream
             original_cursor = _validated_cursor(stream.cursor)
@@ -1070,7 +1089,7 @@ def begin_stream_cycle(
             original_cursor=original_cursor,
             advance_cursor=False,
             force_apply=force_apply,
-            reapply=frozenset(reapply),
+            reapply=reapply,
         ).stream
 
 

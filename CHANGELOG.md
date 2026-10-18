@@ -45,7 +45,18 @@ native history".
 
 ## Unreleased — django-zed-rebac 0.27
 
-- Require django-zed-rebac 0.27.1. Its read guards refuse filtering or ordering
+- The `angee.graphql` manifest declares `django-zed-rebac[strawberry-django]`
+  with a release floor; the core wheel alone pins the exact release. Two exact
+  pins made every bump break a host whose generated `addons` group still held the
+  old one: `uv` refused to resolve before `angee build` could rewrite the group.
+  A host that took 0.27.3 before this change runs `manage.py angee build` once
+  with its existing environment to regenerate the group.
+- Require django-zed-rebac 0.27.3. Point checks on a type backed by a
+  `GenericForeignKey` compile only the arms of the row's content type, so
+  SQLite no longer fails with "Expression tree is too large" on polymorphic
+  edges, and an exclusion nested in another exclusion no longer raises
+  `FieldError` when it is evaluated at an identity that is not a model row.
+- Since 0.27.1, read guards refuse filtering or ordering
   on a gated field under an actor; filters and sorts over a gated field use the
   queryset's `readable(field)`, and Angee's `gated_field_expression` is removed.
 - IAM declares its deliberate disclosures in Zed: filtered constants on the

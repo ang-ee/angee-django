@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
 
 @pytest.mark.parametrize("case", ("NotesOwnerCampaign", "NotesOwnerDenormalizedCampaign"))
 def test_example_note_owner_gate(tmp_path, case):
@@ -33,7 +35,7 @@ def test_example_note_owner_gate(tmp_path, case):
         env=env,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=COMPOSED_TEST_TIMEOUT,
         check=False,
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

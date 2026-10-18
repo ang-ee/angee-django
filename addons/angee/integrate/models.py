@@ -3692,15 +3692,22 @@ class SyncStreamManager(AngeeManager):
                 raise RuntimeError("The extracted page belongs to a retired stream generation.")
             return locked
 
-    def current_for_bridge(self, bridge: models.Model, key: str) -> Any:
-        """Return one current epoch per partition for the bridge's named stream."""
+    def current_for_bridge(self, bridge: models.Model, key: str | None = None) -> Any:
+        """Return one current epoch per partition of the bridge's named stream, or of every stream.
 
-        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(
-            integration_id=bridge.pk,
-            key=key,
+        Without ``key`` this is one query over every (key, partition) the bridge
+        has opened, so a caller resolving across streams reads them once.
+        """
+
+        rows = self.sudo(reason="integrate.stream.current_for_bridge").filter(integration_id=bridge.pk)
+        if key is not None:
+            rows = rows.filter(key=key)
+        latest = (
+            rows.filter(key=OuterRef("key"), partition=OuterRef("partition"))
+            .order_by("-generation")
+            .values("generation")[:1]
         )
-        latest = rows.filter(partition=OuterRef("partition")).order_by("-generation").values("generation")[:1]
-        return rows.filter(generation=Subquery(latest)).order_by("partition")
+        return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
 
     def current(
         self,
@@ -4010,8 +4017,8 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
             for row in link.failures(open_only=True)
         )
 
-    def rescan(self, *, limit: int) -> tuple[SyncFailure, ...]:
-        """Bound due inbound failures after excluding every conflicted aggregate."""
+    def rescan(self, *, limit: int, due_by: datetime | None = None) -> tuple[SyncFailure, ...]:
+        """Bound inbound failures due by ``due_by`` (now) after excluding every conflicted aggregate."""
         if limit < 1:
             raise ValueError("A failure rescan limit must be positive.")
         links = self.with_open_failures().select_related("stream")
@@ -4020,7 +4027,7 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
             for link in links.iterator(chunk_size=500)
             if any(row.kind == SyncFailureKind.CONFLICT for row in link.failures(open_only=True))
         }
-        now = timezone.now()
+        due_by = due_by or timezone.now()
         due = []
         for link in links.iterator(chunk_size=500):
             if (link.parent_id or link.pk) in conflicts:
@@ -4029,7 +4036,7 @@ class RecordLinkQuerySet(AngeeQuerySet[Any]):
                 if (
                     row.slot is not None
                     and row.kind != SyncFailureKind.REMOTE_REJECTED
-                    and (row.retry_at is None or row.retry_at <= now)
+                    and (row.retry_at is None or row.retry_at <= due_by)
                 ):
                     due.append(row)
                     if len(due) == limit:

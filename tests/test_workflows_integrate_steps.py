@@ -16,6 +16,7 @@ from angee.base.mixins import SourceKind
 from angee.base.scoping import system_queryset
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
+from angee.integrate.net import AddressResolutionError
 from angee.integrate.states import ConflictKeep, StreamDirection, StreamKind, StreamPhase, SyncFailureKind
 from angee.integrate.streams import (
     ApplyResult,
@@ -53,7 +54,6 @@ def cycle(execution, register_step, monkeypatch):
         identity_reads=True,
         partitions=("",),
         size=2,
-        fail=False,
         pages=None,
         direction=StreamDirection.PULL,
         authoritative=False,
@@ -90,8 +90,6 @@ def cycle(execution, register_step, monkeypatch):
 
         def extract(self, stream, page_bound, *, deadline=None):
             assert not connection.in_atomic_block
-            if transport.fail:
-                raise ConnectionError("The transport is unavailable.")
             offset = stream.cursor.get("offset", 0)
             extracted.append((stream.partition, stream.generation, offset, page_bound))
             if transport.pages is not None:
@@ -280,14 +278,16 @@ def test_map_keeps_each_partition_cursor_and_collects_its_counts(cycle):
     assert cycle.bridge.last_sync_items == 4
 
 
-def test_transport_failure_uses_native_retry_without_advancing_cursor(cycle):
-    cycle.transport.fail = True
+# A resolver that is briefly offline can answer "no such host" (macOS does), so that is transport too.
+@pytest.mark.parametrize("failure", [ConnectionError("The transport is unavailable."), AddressResolutionError()])
+def test_transport_failure_uses_native_retry_without_advancing_cursor(cycle, failure):
+    cycle.transport.pages = [failure]
     run = cycle.start(StreamStage, {"key": "records", "page_bound": 1})
     assert runner.execute(step_row(run).pk)
     row = step_row(run)
     assert row.status == "waiting" and row.retries == 1
     assert SyncStream.objects.current_for_bridge(cycle.bridge, "records").get().cursor == {}
-    cycle.transport.fail = False
+    cycle.transport.pages = None
     wake(run)
 
     run_until(run)
@@ -374,7 +374,7 @@ def test_rescan_completes_requested_baseline_one_page_per_attempt(cycle, fallbac
     assert replacement.cursor == {"offset": 2} and replacement.phase == StreamPhase.DELTA
 
 
-def test_rescan_waits_for_conflicts_without_applying_them(cycle):
+def test_rescan_leaves_conflicts_to_review_without_applying_them(cycle):
     stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
     advance_stream(stream, cycle.adapter)
     failure = conflict(cycle, stream, 0)
@@ -383,10 +383,31 @@ def test_rescan_waits_for_conflicts_without_applying_them(cycle):
 
     run_until(run)
 
-    assert run.status == "waiting" and step_row(run).waiting_kind == "time"
+    assert run.status == "succeeded"
     assert cycle.rescanned == [] and cycle.applied == []
     failure = failure_state(failure)
     assert failure.is_open
+    assert run.output["failure_ids"] == [failure.id]
+
+
+def test_rescan_finishes_when_the_remaining_failures_back_off_past_its_interval(cycle):
+    stream = open_stream(cycle.bridge, "records", "", cycle.adapter)
+    advance_stream(stream, cycle.adapter)
+    with system_context(reason="test a permanent refusal"):
+        failure = failure_state(
+            RecordLink.objects.get(stream=stream, external_key=":0").record_failure(
+                kind=SyncFailureKind.SEMANTIC, code="invalid_vat", source_hash="source-0"
+            ),
+            retry_at=timezone.now() + timedelta(minutes=2),
+        )
+    run = cycle.start(Rescan, {"streams": [{"key": "records"}]}, config={"reconcile_seconds": 60})
+
+    run_until(run)
+
+    assert run.status == "succeeded"
+    assert cycle.rescanned == []
+    assert failure_state(failure).is_open
+    assert run.output["failure_ids"] == [failure.id]
 
 
 def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):

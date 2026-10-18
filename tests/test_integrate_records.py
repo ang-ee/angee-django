@@ -402,6 +402,11 @@ def test_current_partition_query_returns_latest_generation_only(composed_tables:
             sent.pk,
         ]
         assert SyncStream.objects.current(bridge, "messages", "inbox", cursor={"uid": 999}).cursor == {}
+        contacts = SyncStream.objects.current(bridge, "contacts")
+        other = SyncStream.objects.current(make_integration("partition-other", model=Channel), "messages", "inbox")
+        every_key = list(SyncStream.objects.current_for_bridge(bridge).values_list("pk", flat=True))
+        assert every_key == [contacts.pk, current.pk, sent.pk]
+        assert other.pk not in every_key
 
 
 def test_stream_uses_a_protected_integration_foreign_key(composed_tables: None) -> None:

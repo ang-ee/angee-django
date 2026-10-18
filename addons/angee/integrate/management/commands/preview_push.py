@@ -44,17 +44,10 @@ class Command(BaseCommand):
                 integration = integration_model.objects.filter(sqid=sqid).first()
                 if integration is None:
                     raise CommandError(f"There is no integration {sqid}.")
-                stream_keys = (
-                    stream_model.objects.filter(integration_id=integration.pk)
-                    .order_by("key")
-                    .values_list("key", flat=True)
-                    .distinct()
-                )
                 adapter = integration.concrete_capability().backend
                 try:
-                    for key in stream_keys:
-                        for stream in stream_model.objects.current_for_bridge(integration, key):
-                            self._report(sqid, stream, preview_push(stream, adapter), keys=options["keys"])
+                    for stream in stream_model.objects.current_for_bridge(integration):
+                        self._report(sqid, stream, preview_push(stream, adapter), keys=options["keys"])
                 finally:
                     adapter.close()
 
