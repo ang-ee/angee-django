@@ -15,6 +15,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import Exists, F, OuterRef, Q
+from django.db.models.query import ModelIterable
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
@@ -26,13 +27,13 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.actors import is_sudo
-from rebac.resources import model_resource_type
+from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import instance_actor, source_kind_for
 from angee.base.changesets import current_changeset
-from angee.base.evidence import EvidenceReference, readable_evidence, readable_records
+from angee.base.evidence import EvidenceReference, FactAuthority, readable_evidence, readable_records
 from angee.base.fields import StateField
 from angee.base.lineage import most_derived_concrete
 from angee.base.models.history import HistoryMixin, ModelHistory, _ChangesetHistory
@@ -47,6 +48,18 @@ from angee.base.validation import validate_value
 
 class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
     """Chainable assertion scopes; the manager owns subject admission."""
+
+    def _clone(self) -> Any:
+        clone = super()._clone()
+        clone._statement_reader = getattr(self, "_statement_reader", None)
+        return clone
+
+    def _fetch_all(self) -> None:
+        fresh = self._result_cache is None
+        super()._fetch_all()
+        reader = getattr(self, "_statement_reader", None)
+        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
+            _prime_readable_statement_sources(self._result_cache, reader)
 
     def update(self, **kwargs: Any) -> int:
         """Attribute the rows to the writing changeset, as ``Statement.save`` does.
@@ -86,6 +99,7 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
                 Q(**{f"{field.attname}__isnull": True})
                 | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
             )
+        rows._statement_reader = actor
         return rows
 
     def applied(self) -> Any:
@@ -107,6 +121,34 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
 
     def delete(self) -> Any:
         raise ValidationError("Statements are retained; withdraw them instead.")
+
+
+def _prime_readable_statement_sources(rows: list[Any], actor: Any) -> None:
+    """Resolve a page's asserting principals through each principal's read gate."""
+
+    sources_by_model: dict[tuple[type[models.Model], str], set[str]] = {}
+    sources_by_row: list[tuple[Any, tuple[type[models.Model], str, str] | None]] = []
+    for row in rows:
+        source = SubjectRef.parse(row.asserted_by)
+        resolved = model_for_subject_type(source.subject_type)
+        if resolved is None:
+            sources_by_row.append((row, None))
+            continue
+        model, id_attr = resolved
+        sources_by_model.setdefault((model, id_attr), set()).add(source.subject_id)
+        sources_by_row.append((row, (model, id_attr, source.subject_id)))
+
+    readable_sources: set[tuple[type[models.Model], str, str]] = set()
+    for (model, id_attr), sources in sources_by_model.items():
+        visible = (
+            model.objects.with_actor(actor)
+            .with_action("read")
+            .filter(**{f"{id_attr}__in": sources})
+            .values_list(id_attr, flat=True)
+        )
+        readable_sources.update((model, id_attr, str(value)) for value in visible)
+    for row, source in sources_by_row:
+        row._asserting_source_readable = source in readable_sources
 
 
 class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type: ignore[misc]
@@ -1080,6 +1122,22 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
         link = self.link if self.statement_link else None
         return link is not None and bool(link.authoritative)
+
+    @property
+    def fact_authority(self) -> FactAuthority:
+        """Classify this applied fact with the shared decision-context vocabulary."""
+
+        if self.source_kind == SourceKind.PERSON:
+            return FactAuthority.CORRECTION
+        if self.source_kind in (SourceKind.EXTRACTION, SourceKind.RULE):
+            return FactAuthority.UNVERIFIED
+        return FactAuthority.SOURCE
+
+    @property
+    def readable_asserting_source(self) -> SubjectRef | None:
+        """Return the asserting principal only when ``for_reader`` admitted it."""
+
+        return SubjectRef.parse(self.asserted_by) if self.__dict__.get("_asserting_source_readable") else None
 
     @property
     def is_confirmed(self) -> bool:

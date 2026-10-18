@@ -54,6 +54,14 @@ mutation Revert($model: String!, $id: ID!, $changeset: ID!) {
 }
 """
 
+FIELD_PROVENANCE = """
+query FieldProvenance($model: String!, $id: ID!) {
+  field_provenance(model: $model, id: $id) {
+    field authority origin statement_model statement_id
+  }
+}
+"""
+
 
 def _schema() -> Any:
     return addon_schema(provenance_schema.schemas, "console")
@@ -62,6 +70,11 @@ def _schema() -> Any:
 def _history(schema: Any, user: Any, model: str, record: Any, **page: Any) -> Any:
     result = execute_schema(schema, HISTORY, {"model": model, "id": public_id_of(record), **page}, user=user)
     return result_data(result)["history"]
+
+
+def _field_provenance(schema: Any, user: Any, model: str, record: Any) -> Any:
+    result = execute_schema(schema, FIELD_PROVENANCE, {"model": model, "id": public_id_of(record)}, user=user)
+    return result_data(result)["field_provenance"]
 
 
 def _changes(entry: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
@@ -258,6 +271,33 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     assert {row["source_kind"] for row in identity} == {"PERSON"}
     assert {row["status"] for row in identity} == {"ASSERTED"}
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
+
+
+def test_field_provenance_decorates_a_partys_stated_field_through_the_statement_read_gate() -> None:
+    person = create_user("field-provenance-person")
+    outsider = create_user("field-provenance-outsider")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Ada Lovelace")
+    statement = Party.statements.model._base_manager.get(subject=party, aspect="identity")
+    schema = _schema()
+
+    assert _field_provenance(schema, person, "parties.Party", party) == [
+        {
+            "field": "display_name",
+            "authority": "CORRECTION",
+            "origin": str(public_subject_ref(to_subject_ref(person))),
+            "statement_model": "parties.PartyStatement",
+            "statement_id": public_id_of(statement),
+        }
+    ]
+    assert _field_provenance(schema, outsider, "parties.Party", party) is None
+
+
+def test_field_provenance_is_empty_for_a_readable_record_without_statements() -> None:
+    person = create_user("field-provenance-history-only")
+    _vault, page = _titled_page(person)
+
+    assert _field_provenance(_schema(), person, "knowledge.Page", page) == []
 
 
 @pytest.mark.parametrize("row_count", [1, 25])

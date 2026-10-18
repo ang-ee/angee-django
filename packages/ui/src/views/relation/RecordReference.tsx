@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useModelMetadata } from "@angee/metadata";
 
 import { useResourceRecordHrefLookup } from "../../runtime";
@@ -12,7 +12,7 @@ export interface RecordReferenceProps extends RecordTargetSearch {
   model: string;
   id: string;
   /** A retained display label avoids another record read. */
-  label?: string;
+  label?: ReactNode;
 }
 
 /** Display a record through its metadata and follow its registered record route. */

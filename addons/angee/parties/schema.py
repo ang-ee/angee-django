@@ -16,9 +16,8 @@ import strawberry_django
 from django.apps import apps
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch
-from rebac import SubjectRef, system_context
+from rebac import system_context
 from rebac.graphql.strawberry_django import optimize
-from rebac.resources import model_for_subject_type
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
@@ -245,7 +244,7 @@ class PartyStatementType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(only=["asserted_by", "source_kind"])
-    def asserted_by(self, info: strawberry.Info) -> str:
+    def asserted_by(self) -> str:
         """The asserting principal when the reader may read it; otherwise only its source kind.
 
         A statement read never widens what the party reader sees: the principal
@@ -253,14 +252,8 @@ class PartyStatementType(AngeeNode):
         """
 
         row = cast(Any, self)
-        source = SubjectRef.parse(row.asserted_by)
-        readable = row.__dict__.get("_asserting_source_readable")
-        if readable is None:
-            resolved = model_for_subject_type(source.subject_type)
-            if resolved is not None:
-                model, id_attr = resolved
-                readable = model.objects.with_actor(session_user(info)).filter(**{id_attr: source.subject_id}).exists()
-        if readable:
+        source = row.readable_asserting_source
+        if source is not None:
             return str(public_subject_ref(source))
         return str(row.source_kind)
 
