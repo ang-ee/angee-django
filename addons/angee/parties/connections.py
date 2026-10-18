@@ -24,8 +24,9 @@ from django.db import transaction
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
+from angee.base.actors import source_kind_for
 from angee.base.evidence import EvidenceReference
-from angee.base.mixins import SourceKind, StatementSourceMixin
+from angee.base.models import SourceKind
 
 
 class ConnectionHandle(Protocol):
@@ -80,7 +81,7 @@ def ingest_connections(
     in separate transactions, so one bad record fails alone.
     """
 
-    if StatementSourceMixin.kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
+    if source_kind_for(to_subject_ref(asserted_by)) != SourceKind.IMPORT:
         raise ValidationError("Connection exports require an identified IMPORT integration.")
     party_model = apps.get_model("parties", "Party")
     kind_model = apps.get_model("parties", "RelationshipKind")

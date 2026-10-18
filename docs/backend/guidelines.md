@@ -155,11 +155,13 @@ Use these owners instead of maintaining another contract in an addon:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
-- **Database routing:** Django routers own database selection, including the
-  native fallback to an instance's `_state.db`. Do not thread database aliases
-  through Angee methods or hooks. Use native relation access, `refresh_from_db`
-  when deferred or stale fields need reloading, and ordinary `atomic` and
-  `on_commit` boundaries while preserving locks and batching. A declared
+- **Database routing:** a persisted row's database is `row._state.db`; bind a
+  manager for an unsaved or row-relative operation with
+  `Model._base_manager.db_manager(hints={"instance": row})` and use that
+  manager's `db`. Do not thread database aliases through Angee instance methods
+  or hooks. Use native relation access, `refresh_from_db` when deferred or stale
+  fields need reloading, and ordinary `atomic` and `on_commit` boundaries while
+  preserving locks and batching. A declared
   read-only external import source may select its database explicitly.
   Multi-database support extends Django with a router for static model placement;
   add operation scoping only for a concrete need. REBAC-managed models must write
@@ -436,7 +438,7 @@ Use these owners instead of maintaining another contract in an addon:
   [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) writes
   values naming model fields with the row and, in the same transaction, passes
   the rest to the written row's cooperative
-  [`AngeeModel.apply_input_extensions`](../../angee/base/models.py), nested line
+  [`AngeeModel.apply_input_extensions`](../../angee/base/models/base.py), nested line
   rows included. Its consumer (a mixin or `extends` donor on the model) takes
   each value it owns as a keyword-only parameter and delegates the rest once
   through `super()`; the terminal fails fast on a value no consumer took. A
@@ -621,7 +623,7 @@ data through REBAC, never a queryset bypass.
   then match by primary key against that permission's rows, as IAM's
   `active_account` and `UserQuerySet.active_people` do. No bypass, no audit row.
   Uniqueness and constraint validation compare a row with every row, so
-  [`AngeeModel`](../../angee/base/models.py) runs them under a named system context
+  [`AngeeModel`](../../angee/base/models/base.py) runs them under a named system context
   once the actor holds the write's access (`create` on the unsaved candidate,
   `write` on a saved row). A field gate is not creation policy: the library enforces `write__<field>` on
   update only, so keep a protected creation value out of generated insert inputs
@@ -673,11 +675,11 @@ data through REBAC, never a queryset bypass.
   a user factory merely because it inserts a row.
 - **Merge re-points references as named system work.** This is a deliberate
   exception to the actor-scope rule above.
-  - [`MergeableMixin.merge`](../../angee/base/merge.py) first authorizes the actor:
+  - [`MergeableMixin.merge`](../../angee/base/models/merge.py) first authorizes the actor:
     it finds the merged records through the actor's read scope, even inside an
     outer system context, and needs `write` on the survivor and `delete` on each
     merged record.
-  - Only then does it call the system fold, [`fold_records`](../../angee/base/merge.py),
+  - Only then does it call the system fold, [`fold_records`](../../angee/base/models/merge.py),
     which moves references under `system_context(reason="merge")`, including
     deleting a merged record's copy of an identity row the survivor already
     holds. Under an actor, REBAC only deletes and recreates an edge, which would
@@ -689,18 +691,19 @@ data through REBAC, never a queryset bypass.
     actor's own delete. Readers resolve a redirect through `canonical()`; a
     `merged_from` row stays visible as such.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
-    the system entry [`MergeableMixin.fold`](../../angee/base/merge.py), which
-    joins the open changeset and runs the same hooks under a system boundary, as
-    a `merge_contract` redirecting chatter threads and
-    [`Handle.objects.merge`](../../addons/angee/parties/managers.py), the bridge
-    compatibility entry, do.
+    the system entry [`MergeableMixin.fold`](../../angee/base/models/merge.py),
+    which joins the open changeset and runs the same hooks under a system
+    boundary. Before core row locks, both entries call `lock_for_merge(using)`
+    so a domain can acquire its earlier lock class. Querysets use
+    `redirect_group(survivor)` for the survivor plus its flattened one-hop
+    redirects.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
   [`AgentSessionManager.start`](../../addons/angee/agents/models.py) does.
-  Manual factories needing an explicit relationship preflight use
-  [`AngeeManager.check_create`](../../angee/base/models.py); restore the
-  authorized actor after any required per-instance elevated insert.
+  Manual factories needing an explicit relationship preflight call native
+  `rebac.check_new`; prepared rows use the manager's native `insert` path and
+  retain the verified actor on the instance.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
@@ -881,14 +884,14 @@ and current contracts before applying a historical example to a new deployment.
 ### Migrations and runtime
 
 - History snapshots retain stored values even when the actor's view is redacted.
-  [`ModelHistory`](../../angee/base/mixins.py) gives native history construction a
+  [`ModelHistory`](../../angee/base/models/history.py) gives native history construction a
   detached snapshot and records deletion inside the delete transaction before
   the source row disappears; it never unredacts the caller's instance.
 - **Review enrolled local rows before enabling two-way record sync.** The
   [record-sync driver](../../addons/angee/integrate/README.md) may publish targeted
   links after the first baseline. Directory membership belongs to RecordLink;
   creating a Party never enrolls it in a remote address book.
-- [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
+- [`HistoryMixin`](../../angee/base/models/history.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
   row. A queryset update that writes only columns the history excludes (a
   counter), with at most auto-now stamps, records no version. A multi-table
@@ -1027,7 +1030,7 @@ and current contracts before applying a historical example to a new deployment.
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
-  [`StateTransitions`](../../angee/base/transitions.py) owns one transaction around
+  [`StateTransitions`](../../angee/base/models/transitions.py) owns one transaction around
   the body and success hook, including `save_state`; consumer outer transactions
   compose through Django savepoints. Since the body runs inside that transaction, follow the
   [two-phase side-effect rule](#rules): defer non-database effects to
@@ -1065,7 +1068,7 @@ and current contracts before applying a historical example to a new deployment.
   use `pre_delete`; service-user deactivation uses `post_delete`. See the
   [agents receivers](../../addons/angee/agents/signals.py).
 - **Deletion refusals have one model owner.** Override
-  [`AngeeModel.delete_blocker()`](../../angee/base/models.py) with a public-safe
+  [`AngeeModel.delete_blocker()`](../../angee/base/models/base.py) with a public-safe
   message. [`DeletePreview`](../../addons/angee/graphql/deletion.py) reports each
   distinct refusal before deleting, without row counts or hidden identities.
   A model overriding the hook must bind a `pre_delete` receiver enforcing that
@@ -1073,7 +1076,7 @@ and current contracts before applying a historical example to a new deployment.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
   When deleting a model needs locks in a domain order (a parent before the row),
-  override its [`lock_for_delete()`](../../angee/base/models.py); its `pre_delete`
+  override its [`lock_for_delete()`](../../angee/base/models/base.py); its `pre_delete`
   receiver and every confirmed-delete caller of that model then lock through the
   hook, callers only after their permission preflight.
 - **Never a database trigger or function.** Business rules, immutability and
@@ -1107,7 +1110,7 @@ and current contracts before applying a historical example to a new deployment.
   instance deletion overrides do not protect against every collector path; choose
   FK policies deliberately, including generic relations that can cascade into
   retained rows. This is a modelling rule, not a mechanical system check. Shared
-  retained models compose [`AppendOnlyModel`](../../angee/base/mixins.py) and
+  retained models compose [`AppendOnlyModel`](../../angee/base/models/append_only.py) and
   their default managers compose `AppendOnlyQuerySet`. The model closes ordinary instance
   writes and declares a guarded base manager through `Meta.base_manager_name`;
   `angee.E034` checks its default manager's queryset composition. The queryset
@@ -1165,7 +1168,7 @@ and current contracts before applying a historical example to a new deployment.
 - <a id="seeded-transition-state"></a>**Transition-owned state in a seed is an initial value, applied on create and never on update.**
   Seed initial state through model construction.
   This covers only fields guarded by a
-  [`StateTransitions`](../../angee/base/transitions.py) declaration; the
+  [`StateTransitions`](../../angee/base/models/transitions.py) declaration; the
   [resource loader](../../addons/angee/resources/loader.py) validates seeded state
   before discarding it on updates. Companion fields written by transitions
   (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
@@ -1186,9 +1189,9 @@ and current contracts before applying a historical example to a new deployment.
   re-declare the column. The field is NULL-safe by design, because a sqid can be
   selected through a nullable join where `django_sqids.SqidsField` crashes on a
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
-- **Row locks must keep the SQLite floor.** `angee.base.scoping.lock_if_supported()`
-  names lock intent for both native querysets and the Angee queryset/manager
-  method, delegating `of`, `skip_locked` and `no_key` to `select_for_update`.
+- **Row locks must keep the SQLite floor.** Call the Angee queryset/manager
+  `lock_if_supported()` method to name lock intent, delegating `of`,
+  `skip_locked` and `no_key` to `select_for_update`.
   Django owns write routing and backend feature checks: SQLite emits no lock SQL,
   including when `of` is requested. Backends
   supporting row locks still enforce their supported lock options. Do not set
@@ -1245,7 +1248,8 @@ and current contracts before applying a historical example to a new deployment.
 - **Pydantic declarations own implementation config defaults.**
   [`ImplBase.config_defaults()`](../../angee/base/impl.py) reads static input
   suggestions from Pydantic's validation JSON Schema independently of FormSpec
-  support; forms project the same declaration downstream. Dynamic factories
+  support; [`angee.data.form_specs`](../../angee/data/form_specs.py) projects the
+  same declaration for transport-neutral forms. Dynamic factories
   resolve through `parse_config()` at runtime; `normalize_config()` serializes
   that parsed model with its wire aliases. Typed implementation values share
   [`get_type_adapter`](../../angee/base/validation.py)'s cached native adapter
@@ -1320,7 +1324,7 @@ and current contracts before applying a historical example to a new deployment.
   stay their own resource. The child writes run elevated because the parent
   write authorizes them, which never makes them system work. A child whose
   invariants separate users from system writers composes
-  [`RowLockMixin`](../../angee/base/mixins.py): `locked_fields()` names what its
+  [`RowLockMixin`](../../angee/base/models/locks.py): `locked_fields()` names what its
   state locks, user writes may not change those fields, delete the row or create
   one, and `HasuraLines` checks the same lock before each elevated child write.
   Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
@@ -1781,11 +1785,11 @@ bridge advisory lock as polling and delivery settlement.
 
 ### Persistence primitives
 
-[Base mixins](../../angee/base/mixins.py) own these row contracts and their
+[Base models](../../angee/base/models/) own these row contracts and their
 system checks; compose them instead of a local column, comparison, or guard.
 Their docstrings own the exact behavior.
 
-[`StatementRecords`](../../angee/base/mixins.py) composes simple-history's field
+[`StatementRecords`](../../angee/base/models/statements.py) composes simple-history's field
 copying into typed statement models. Their [manager](../../angee/base/managers.py)
 owns locked assertion writes and survivorship; the canonical subject owns source
 eligibility and application. Like history tables, statements have no independent
@@ -1832,7 +1836,7 @@ preferred no-value clears the aspect's operational values so a dismissal sticks.
 Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
 the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
 
-[`MergeableMixin`](../../angee/base/merge.py) owns operational redirects, actor
+[`MergeableMixin`](../../angee/base/models/merge.py) owns operational redirects, actor
 admission and the system fold. Models declare domain refusals and carry/retire
 hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
 entry in `merge_policies` where its `on_delete` implies the wrong one) and their
@@ -1843,11 +1847,15 @@ operational identities; statement querysets use `applied()` for winning value
 assertions. Source-copy identity remains reversible pair evidence and never
 chooses a transport or moves channel occurrences.
 
-[`HistoryMixin.history_relations`](../../angee/base/mixins.py) declares owned
+[`HistoryMixin.history_relations`](../../angee/base/models/history.py) declares owned
 reverse-FK collections, such as dashboard widgets or project milestones. These
 rows keep their own history and read gates; document history groups their deltas
-with record identity. An entry may revert from that record only when its complete
-write boundary belongs to the document, or it is the record's operational merge.
+with record identity. `history_tables()` is the one concrete-table inventory.
+`HistoryMixin.admits_revert(changeset)` is the one document-membership admission;
+`Changeset.revertable(record, actor=...)` then checks the record's declared
+`history_revert_permission`. An entry may revert from that record only when its
+complete write boundary belongs to the document, or it is the record's
+operational merge.
 Changes spanning independent documents require their wider owner. Native FK
 relationships order restoration of missing rows. Hierarchy parents are ordered
 also when present, so restoring an earlier tree does not create a temporary cycle;
@@ -1888,9 +1896,13 @@ exception closes the rows as failed. Tests inherit a boundary from the root
 - **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
   accepts a client's `expected_revision` passes it to `save()` and maps
   `StaleRevisionError` to its conflict result; queryset updates never bump.
-- **Creation keys:** `CreationKeyMixin` stores a scoped client creation key and
-  content fingerprint. Replays go through `CreationKeyQuerySet.for_creation_key`;
-  `angee.E023` requires the declared uniqueness constraint.
+- **Idempotent creation:** the concrete changeset manager owns
+  `Changeset.objects.claim(scope, key, *, fingerprint)`. A new claim returns
+  `None`; a matching replay returns its changeset and `created_row`; reusing the
+  key for different content raises `CreationKeyConflict`. Product rows carry no
+  client-key or fingerprint columns. A keyed operation opens a fresh changeset
+  inside its transaction and claims before writing; nested keyed operations
+  therefore receive distinct claim rows without leaving the enclosing boundary.
 - **Ownership:** a grant root composes `OwnerMixin`, so `owner` is transferable
   access and `created_by` remains attribution. Its Zed backs `owner` with that
   column and declares its transfer permission (`angee.E022`); its
@@ -1906,7 +1918,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
 - **Owning containers:** a container composing `ItemOwnershipMixin` can own its
   newly inserted items, which then reach access through it; items name it with
   `owner_container` (`angee.E025`) and ask
-  [`OwnerMixin.container_owns_items()`](../../angee/base/mixins.py) for its policy.
+  [`OwnerMixin.container_owns_items()`](../../angee/base/models/ownership.py) for its policy.
   Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
@@ -1950,13 +1962,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   user); it has no HTTP headers or view-as preview lifecycle.
 - **Concurrency and replay tokens are GraphQL root arguments.** On models
   composing `OptimisticLockMixin`, `update_<resource>_by_pk` accepts
-  `expected_revision: Int`; a stale value fails with `STALE_REVISION`. On models
-  composing `CreationKeyMixin`, `insert_<resource>_one` accepts
-  `client_creation_key: String`; replaying the same scoped key and content
-  returns the readable original, and changed content fails with
+  `expected_revision: Int`; a stale value fails with `STALE_REVISION`.
+  `insert_<resource>_one` accepts `idempotency_key: String`; replaying the same
+  actor/resource-scoped key and content returns the readable original, and
+  changed content fails with
   `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
   The [Hasura adapter](../../addons/angee/graphql/data/hasura.py) declares and
-  consumes both arguments through the [base owners](../../angee/base/mixins.py).
+  consumes them through the changeset claim and optimistic-lock owners.
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../addons/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,
@@ -1969,6 +1981,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 [`RecordRefMixin`](../../angee/base/refs.py) owns the canonical content-type
 and public-ID projection for a generic record pointer.
+Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`;
+the core target-delete receiver is the single teardown owner for instance and
+queryset deletion paths.
 [`RecordReferenceNode`](../../addons/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current
 reader's scope. A hidden target yields null identity fields; its model and ID

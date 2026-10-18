@@ -64,7 +64,7 @@ class FreshnessTask(TaskWork, AbstractTask):
     class Meta(AbstractTask.Meta):
         abstract = False
         app_label = "scopedemo"
-        # The subject pair check and both rank uniqueness rules; the creation key is not mirrored.
+        # The subject pair check and both rank uniqueness rules; the idempotency key is not mirrored.
         constraints = _local_constraints(AbstractTask.Meta.constraints[:3])
         # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_task"

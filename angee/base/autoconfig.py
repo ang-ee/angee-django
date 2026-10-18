@@ -9,7 +9,7 @@ SETTINGS = {
     "ANGEE_CHANGESET_MODEL": "provenance.Changeset",
     "ANGEE_IMPL_REGISTRIES": [],
     "ANGEE_HOOKS": ["ANGEE_MERGE_GUARDS"],
-    # Dotted callables that refuse merging away one record (angee.base.merge.fold_records).
+    # Dotted callables that refuse merging away one record (angee.base.models.fold_records).
     "ANGEE_MERGE_GUARDS": [],
     "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": True,
     "REBAC_BACKEND": "local",

@@ -32,11 +32,14 @@ from typing import Any
 
 from django.db import models
 
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
     ArchiveMixin,
     ArchiveQuerySet,
+    role_anchor,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
 
 

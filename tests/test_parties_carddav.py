@@ -8,12 +8,15 @@ from typing import Any
 import httpx2
 import pytest
 import vobject
+from django.core import checks
 from django.db import connection
 from rebac import system_context
 
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
 from angee.messaging.testing.models import Directory, Handle, Party, Person
+from angee.parties_integrate_carddav import apps as carddav_apps
+from angee.parties_integrate_carddav.apps import check_expat_version
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
@@ -67,6 +70,22 @@ ANNIVERSARY:18350101
 PHOTO;ENCODING=b;TYPE=PNG:QUJD
 NOTE:First programmer.
 END:VCARD"""
+
+
+@pytest.mark.parametrize("version", [(2, 7, 1), (2, 7, 2), (3, 0, 0)])
+def test_carddav_requires_expat_amplification_protections(
+    monkeypatch: pytest.MonkeyPatch,
+    version: tuple[int, int, int],
+) -> None:
+    monkeypatch.setattr(carddav_apps.pyexpat, "version_info", version)
+    errors = check_expat_version()
+    if version >= (2, 7, 2):
+        assert errors == []
+    else:
+        [error] = errors
+        assert isinstance(error, checks.Error)
+        assert "Expat 2.7.2 or later" in error.msg
+        assert ".".join(str(part) for part in version) in error.msg
 
 
 def _backend_with_http(http: Any) -> CardDavDirectoryBackend:

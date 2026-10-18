@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -64,14 +65,11 @@ from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
-from angee.base.changesets import changeset
+from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.base.identity import instances_from_public_ids
-from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet, TrashQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeQuerySet, MergeableQuerySet, OwnerQuerySet, TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import generic_pointer_model, generic_pointer_target
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
 from angee.graphql.publishing import mute_changes
@@ -2296,25 +2294,8 @@ class ReactionManager(AngeeManager):
         return len(rows)
 
 
-class MessageQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+class MessageQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
-
-    def for_creation_key(self, scope: Any, key: str | None, fingerprint: str) -> Any | None:
-        """Refuse a discarded own receipt explicitly instead of reinserting its key."""
-
-        existing = super().for_creation_key(scope, key, fingerprint)
-        if existing is not None or scope is None or key is None:
-            return existing
-        actor = self.actor() or current_actor()
-        if actor is not None and scope == str(to_subject_ref(actor)):
-            with system_context(reason="messaging.reply.discarded_receipt"):
-                discarded = self.model._base_manager.filter(
-                    creation_actor=scope, client_creation_key=key, is_trashed=True,
-                ).first()
-            if discarded is not None:
-                discarded.require_creation_fingerprint(fingerprint)
-                raise ValidationError("This reply creation key belongs to a discarded reply.")
-        return None
 
     def trash_targets(self) -> MessageQuerySet:
         """Keep record chatter off the shared trash verbs; its record moderates it."""
@@ -2637,7 +2618,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
     def compose_reply(
         self, parent: Any, *, body: str, sender: Any, actor: Any,
-        local: Mapping[str, Any] | None = None, creation_key: str | None = None,
+        local: Mapping[str, Any] | None = None, idempotency_key: str | None = None,
         scheduled_at: datetime | None = None, queued: bool = False,
         admit: Callable[[Any], None] | None = None,
     ) -> Any:
@@ -2646,14 +2627,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         Hold facts are final at insert. Every retained reply advances its thread
         counter once; queueing does not change the count. Callers may contribute provenance, but not
         messaging's delivery state. ``admit(parent)`` checks domain eligibility
-        only on insertion, after creation-key replay and fingerprint validation.
+        only on insertion, after idempotency replay and fingerprint validation.
         Admission and replay run under actor even for an elevated caller.
         """
 
         if is_sudo():
             return Context().run(
                 self.compose_reply, parent, body=body, sender=sender, actor=actor,
-                local=local, creation_key=creation_key, scheduled_at=scheduled_at, queued=queued, admit=admit,
+                local=local, idempotency_key=idempotency_key,
+                scheduled_at=scheduled_at, queued=queued, admit=admit,
             )
         parent = parent.with_actor(actor)
         body = strip_null_bytes(body).strip()
@@ -2669,40 +2651,49 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         values = dict(local or {})
         if any(key.startswith("delivery_") for key in values):
             raise ValidationError({"local": "Delivery facts are owned by messaging."})
-        scope = None
-        fingerprint = ""
-        if creation_key is not None:
-            self.model._meta.get_field("client_creation_key").clean(creation_key, None)
-            if not creation_key.strip() or "\x00" in creation_key:
-                raise ValidationError({"creation_key": "Creation key must be nonblank and contain no null bytes."})
-            scope = str(to_subject_ref(actor))
-            fingerprint = self.model.creation_fingerprint_for({
+        fingerprint = (
+            creation_fingerprint({
                 "parent": parent, "body": body, "sender": sender, "local": values,
             })
-        created_by_id = actor_user_id(to_subject_ref(actor))
-        with actor_context(actor), transaction.atomic():
-            def insert() -> Any:
-                if admit is not None:
-                    admit(parent)
-                with system_context(reason="messaging.reply.compose"):
-                    return self.create(
-                        parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
-                        platform=parent.platform, direction=self.model.Direction.OUTBOUND,
-                        status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
-                        scheduled_at=scheduled_at, message_type=parent.message_type,
-                        external_id=str(uuid4()), preview=body[: self.model._meta.get_field("preview").max_length],
-                        metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
-                        creation_actor=scope, client_creation_key=creation_key, creation_fingerprint=fingerprint,
-                    )
-            reply, created = self.with_actor(actor).replay_or_insert(scope, creation_key, fingerprint, insert)
-            if created:
-                with system_context(reason="messaging.reply.compose"):
-                    self._build_parts(
-                        reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id,
-                    )
-                    self._bump_thread(reply)
-                    if queued:
-                        reply.deliver()
+            if idempotency_key is not None
+            else ""
+        )
+        actor_ref = to_subject_ref(actor)
+        created_by_id = actor_user_id(actor_ref)
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with actor_context(actor), claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                replay = changeset_model().objects.claim(
+                    f"messaging.reply:{actor_ref}",
+                    idempotency_key,
+                    fingerprint=fingerprint,
+                )
+                if replay is not None:
+                    reply = replay.created_row
+                    if not isinstance(reply, self.model):
+                        raise ValidationError({"idempotency_key": "The claimed reply is unavailable."})
+                    if reply.is_trashed:
+                        raise ValidationError("This idempotency key belongs to a discarded reply.")
+                    return reply.with_actor(actor)
+            if admit is not None:
+                admit(parent)
+            with system_context(reason="messaging.reply.compose"):
+                reply = self.create(
+                    parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
+                    platform=parent.platform, direction=self.model.Direction.OUTBOUND,
+                    status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
+                    scheduled_at=scheduled_at, message_type=parent.message_type,
+                    external_id=str(uuid4()), preview=body[: self.model._meta.get_field("preview").max_length],
+                    metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
+                )
+                self._build_parts(
+                    reply, ParsedPart(text=body), parent=None, position=0, created_by_id=created_by_id,
+                )
+                self._bump_thread(reply)
+                if queued:
+                    reply.deliver()
+            if idempotency_key is not None:
+                current_changeset(required=True).record_created(reply)
         return reply.with_actor(actor)
 
     def cancel_delivery(self, message: Any, *, using: str | None = None) -> None:
@@ -2872,7 +2863,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         A collision is a successful publish with evidence, never a resend cue.
         The already ingested provider row owns the visible identity and payload;
         retain the local attempt as a trashed SENT audit row, with delivery_conflict
-        pointing to that provider id. Its creation key and operator provenance
+        pointing to that provider id. Its idempotency key and operator provenance
         remain available, but it contributes no second visible message or count.
         Acceptance racing with trash is still sent: removal cannot undo a publish.
         A settlement must carry its committed claim marker. Native transient
@@ -3256,8 +3247,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         recipient_user_ids: tuple[Any, ...] = (),
         autofollow_author: bool = False,
         autofollow_recipients: bool = False,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
     ) -> Any:
         """Create an internal user-authored message in ``thread`` and bump thread counters.
 
@@ -3267,26 +3258,21 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         the conversation. The poster's own read receipt advances to the new message,
         so an author never sees their own post as unread.
 
-        Keys belong to the initiating REBAC actor, including non-user actors;
+        Idempotency belongs to the initiating REBAC actor, including non-user actors;
         ``created_by_id`` remains attribution. An exact replay returns the original
         message without repeating posting side effects. Changed posting inputs
-        raise ``CreationKeyConflict``. Keyed calls require an explicit or ambient
-        non-anonymous actor. Hard deletion frees the key for a new message.
+        raise ``CreationKeyConflict``. Idempotent calls require an explicit or ambient
+        non-anonymous actor.
         """
 
         body = strip_null_bytes(body or "").strip()
         kind = strip_null_bytes(message_type or self.model.MessageKind.COMMENT)
-        creation_scope = None
         fingerprint = ""
-        if client_creation_key is not None:
-            self.model._meta.get_field("client_creation_key").clean(client_creation_key, None)
-            if not client_creation_key.strip() or "\x00" in client_creation_key:
-                raise ValidationError({"client_creation_key": "Creation keys must not be blank or contain null bytes."})
-            actor = creation_actor or current_actor()
+        actor = None
+        if idempotency_key is not None:
+            actor = idempotency_actor or current_actor()
             if actor is None or is_anonymous_actor(actor):
-                raise ValueError("A keyed message requires an actor.")
-            creation_scope = str(actor)
-            self.model._meta.get_field("creation_actor").clean(creation_scope, None)
+                raise ValueError("An idempotent message requires an actor.")
             content = {
                 "thread": str(thread.pk),
                 "attachment": str(attachment.pk) if attachment is not None else None,
@@ -3298,7 +3284,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 "recipient_user_ids": sorted({str(user_id) for user_id in recipient_user_ids}),
                 "autofollow_recipients": autofollow_recipients,
             }
-            fingerprint = self.model.creation_fingerprint_for(content)
+            fingerprint = creation_fingerprint(content)
         if not body and not attachments:
             raise ValueError("Message body or attachment is required.")
         if parent is not None and not thread.member_threads().filter(pk=parent.thread_id).exists():
@@ -3309,40 +3295,46 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         fragment_model = apps.get_model("messaging", "Fragment")
         notification_model = apps.get_model("messaging", "ThreadNotification")
         sent_at = timezone.now()
-        with transaction.atomic():
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                replay = changeset_model().objects.claim(
+                    f"messaging.post:{actor}",
+                    idempotency_key,
+                    fingerprint=fingerprint,
+                )
+                if replay is not None:
+                    message = replay.created_row
+                    if not isinstance(message, self.model):
+                        raise ValidationError({"idempotency_key": "The claimed message is unavailable."})
+                    if message.is_trashed:
+                        raise ValidationError("This idempotency key belongs to a discarded message.")
+                    return message
             subtype = _message_subtype(
                 subtype_key=subtype_key,
                 model_label=subtype_model_label,
                 created_by_id=created_by_id,
             )
 
-            def insert() -> Any:
-                sender = None
-                if created_by_id is not None:
-                    user_model = self.model._meta.get_field("created_by").remote_field.model
-                    sender = apps.get_model("parties", "Handle").objects.for_user(
-                        user_model._base_manager.get(pk=created_by_id)
-                    )
-                return self.create(
-                    thread_id=thread.pk,
-                    sender=sender,
-                    platform=thread.platform,
-                    direction=self.model.Direction.INTERNAL,
-                    status=self.model.MessageStatus.SENT,
-                    message_type=kind,
-                    subtype_id=subtype.pk if subtype is not None else None,
-                    parent_id=parent.pk if parent is not None else None,
-                    preview=body[:280],
-                    sent_at=sent_at,
-                    created_by_id=created_by_id,
-                    creation_actor=creation_scope,
-                    client_creation_key=client_creation_key,
-                    creation_fingerprint=fingerprint,
+            sender = None
+            if created_by_id is not None:
+                user_model = self.model._meta.get_field("created_by").remote_field.model
+                sender = apps.get_model("parties", "Handle").objects.for_user(
+                    user_model._base_manager.get(pk=created_by_id)
                 )
-
-            message, created = self.replay_or_insert(creation_scope, client_creation_key, fingerprint, insert)
-            if not created:
-                return message
+            message = self.create(
+                thread_id=thread.pk,
+                sender=sender,
+                platform=thread.platform,
+                direction=self.model.Direction.INTERNAL,
+                status=self.model.MessageStatus.SENT,
+                message_type=kind,
+                subtype_id=subtype.pk if subtype is not None else None,
+                parent_id=parent.pk if parent is not None else None,
+                preview=body[:280],
+                sent_at=sent_at,
+                created_by_id=created_by_id,
+            )
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(
@@ -3397,6 +3389,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 self._advance_thread(thread, message.sent_at)
             message._meta.get_field("thread").set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)
+            if idempotency_key is not None:
+                current_changeset(required=True).record_created(message)
         return message
 
     def set_reaction(self, message: Any, *, reaction: str, action: str = "toggle", user: Any) -> Any:

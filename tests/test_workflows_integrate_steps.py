@@ -12,8 +12,7 @@ from pydantic import ValidationError
 from rebac import system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.mixins import SourceKind
-from angee.base.scoping import system_queryset
+from angee.base.models import SourceKind
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.net import AddressResolutionError
@@ -145,7 +144,7 @@ def cycle(execution, register_step, monkeypatch):
 
 
 def step_row(run):
-    return system_queryset(StepRun).get(run=run)
+    return StepRun.system_queryset().get(run=run)
 
 
 def wake(run):
@@ -251,7 +250,7 @@ def test_lost_lease_resumes_after_the_committed_cursor(cycle, monkeypatch):
     # Settlement counts acknowledge outputs; the first page committed independently.
     assert run.output["counts"]["cycle_items"] == 1
     assert list(
-        system_queryset(StepAttempt).filter(step_run=row).order_by("number").values_list("result", flat=True)
+        StepAttempt.system_queryset().filter(step_run=row).order_by("number").values_list("result", flat=True)
     ) == ["timed_out", "succeeded"]
 
 
@@ -417,7 +416,7 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
     row = step_row(run)
-    decision = system_queryset(Decision).get(pk=row.decision_id)
+    decision = Decision.system_queryset().get(pk=row.decision_id)
     assert decision.records.with_actor(cycle.bridge.owner).count() == 2 and row.waiting_kind == "decision"
     decide(decision, actor=cycle.bridge.owner, chosen=[record.link.public_id for record in conflicts])
     run_until(run)
@@ -428,7 +427,7 @@ def test_conflicts_share_one_multiple_decision_and_retry_with_its_answer(cycle):
     StepRun.objects.retry_step(row, actor=cycle.bridge.owner)
     run_until(run)
     assert run.status == "succeeded" and run.output["failure_ids"] == []
-    assert system_queryset(Decision).count() == 1
+    assert Decision.system_queryset().count() == 1
 
 
 def test_unresolved_conflict_fails_without_asking_another_question(cycle):
@@ -437,10 +436,10 @@ def test_unresolved_conflict_fails_without_asking_another_question(cycle):
     conflict(cycle, stream, 0)
     run = cycle.start(ConflictReview, {"streams": [{"key": "records"}]})
     run_until(run)
-    decision = system_queryset(Decision).get(pk=step_row(run).decision_id)
+    decision = Decision.system_queryset().get(pk=step_row(run).decision_id)
     decide(decision, actor=cycle.bridge.owner, chosen=[decision.proposal["alternatives"][0]["key"]])
     run_until(run)
-    assert run.status == "failed" and system_queryset(Decision).count() == 1
+    assert run.status == "failed" and Decision.system_queryset().count() == 1
     assert len(SyncStream.objects.with_actor(cycle.bridge.owner).get(pk=stream.pk).sync_failures(open_only=True)) == 1
 
 
@@ -457,7 +456,7 @@ def test_sync_cycles_refuse_a_stream_that_writes_back(cycle, step):
 
     assert run.status == "failed"
     assert not cycle.extracted and not cycle.rescanned
-    failure = system_queryset(StepAttempt).filter(step_run=step_row(run)).latest("number")
+    failure = StepAttempt.system_queryset().filter(step_run=step_row(run)).latest("number")
     assert "Workflow sync cycles pull only" in failure.error
 
 
@@ -489,7 +488,7 @@ def test_sync_steps_stop_stalled_pages_and_repeated_baseline_resets(cycle, step,
     assert len(cycle.extracted) == 2
     row = step_row(run)
     assert row.attempt == 2 and row.page_index == 1
-    failure = system_queryset(StepAttempt).get(step_run=row, number=2)
+    failure = StepAttempt.system_queryset().get(step_run=row, number=2)
     assert ("fresh baseline" if fault == "reset" else "repeated a page") in failure.error
     assert "cursor" not in row.state
     cycle.bridge.refresh_from_db()

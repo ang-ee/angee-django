@@ -44,7 +44,7 @@ class ReplyOutput(BaseModel):
 
 
 class ScheduleReply(Step[ConversationOutput, ReplyOutput, None]):
-    """Prepare a completed answer once per run through messaging's creation key."""
+    """Prepare a completed answer once per run through messaging's idempotency claim."""
 
     key = "schedule_reply"
     label = "Schedule reply"
@@ -62,7 +62,7 @@ class ScheduleReply(Step[ConversationOutput, ReplyOutput, None]):
             reply = comment.reply_to_comment(
                 body=ctx.input.text, actor=ctx.actor,
                 local={AGENT_TURN_METADATA_KEY: public_id_of(turn)},
-                creation_key=f"workflow-reply:{public_id_of(ctx.run)}",
+                idempotency_key=f"workflow-reply:{public_id_of(ctx.run)}",
             )
         except CommentAnswered:
             ctx.note("The comment was answered while preparing the reply.")

@@ -60,26 +60,29 @@ from angee.base.actors import actor_user_id, instance_actor
 from angee.base.changesets import current_changeset
 from angee.base.fields import DiagnosticTextField, EncryptedField, StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
-from angee.base.merge import references
-from angee.base.mixins import (
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
+    AngeeUnscopedManager,
     AuditMixin,
     HistoryMixin,
     SourceKind,
     Statement,
     StatementLinkMixin,
     StatementSourceMixin,
+    StateTransitions,
+    references,
+    save_state,
+    transition,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.refs import (
     MergePolicy,
     RecordRefMixin,
-    concrete_child,
-    concrete_child_accessor,
-    concrete_child_models,
     generic_pointer_target,
 )
 from angee.base.serialization import canonical_json
-from angee.base.transitions import StateTransitions, save_state, transition
 from angee.graphql.capabilities import held_permissions
 from angee.integrate.connect import enabled_oauth_client_from_hint, oauth_client_slug_from_hint
 from angee.integrate.constants import DISCOVERY_ATTEMPT_LIMIT, DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES

@@ -18,7 +18,6 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
 from angee.base.checks import (
-    check_expat_version,
     check_hierarchy_queryset_order,
     check_hooks,
     check_impl_registries,
@@ -27,7 +26,9 @@ from angee.base.checks import (
 )
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeManager,
+    AngeeModel,
     AppendOnlyModel,
     AppendOnlyQuerySet,
     HierarchyQuerySet,
@@ -35,26 +36,8 @@ from angee.base.mixins import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeManager, AngeeModel
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
-
-
-@pytest.mark.parametrize("version", [(2, 6, 0), (2, 7, 1), (2, 7, 2), (2, 7, 3), (3, 0, 0)])
-def test_expat_check_requires_amplification_protections(
-    monkeypatch: pytest.MonkeyPatch, version: tuple[int, int, int],
-) -> None:
-    monkeypatch.setattr(base_checks.pyexpat, "version_info", version)
-    errors = checks.run_checks(app_configs=[], tags=[checks.Tags.security])
-    expat_errors = [error for error in errors if error.id == "angee.E035"]
-    if version >= (2, 7, 2):
-        assert expat_errors == []
-    else:
-        [error] = expat_errors
-        assert isinstance(error, checks.Error)
-        assert "Expat 2.7.2 or later" in error.msg
-        assert ".".join(str(part) for part in version) in error.msg
-        assert error.hint == "Upgrade Python or its linked Expat library."
 
 
 @pytest.mark.parametrize("guarded", [False, True])
@@ -238,8 +221,6 @@ def test_rebac_database_check_registered_by_base() -> None:
     assert isinstance(config, BaseConfig)
     config.ready()
     config.ready()
-    assert sum(check is check_expat_version for check in registry.registered_checks) == 1
-    assert checks.Tags.security in check_expat_version.tags
     assert sum(check is check_rebac_database for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_rebac_database.tags
     assert sum(check is check_hierarchy_queryset_order for check in registry.registered_checks) == 1

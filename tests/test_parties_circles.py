@@ -17,7 +17,8 @@ from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.mixins import SourceKind, StatementSourceMixin
+from angee.base.actors import source_kind_for
+from angee.base.models import SourceKind
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
@@ -507,7 +508,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
         directory = make_integration("move-mixed-directory", model=Directory)
-        assert StatementSourceMixin.kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        assert source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
         imported, carded = (
             statements._base_manager.create(
                 subject=party,

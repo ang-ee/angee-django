@@ -5,15 +5,16 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from asgiref.sync import sync_to_async
 from django.apps import apps
@@ -26,6 +27,7 @@ from rebac.actors import current_sudo_reason
 from rebac.errors import MissingActorError
 
 from angee.base.autoconfig import SETTINGS
+from angee.base.serialization import canonical_json_sha256, json_safe
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,12 @@ def changeset_model_label() -> str:
     return cast(str, getattr(settings, "ANGEE_CHANGESET_MODEL", SETTINGS["ANGEE_CHANGESET_MODEL"]) or "")
 
 
+def changeset_model() -> type[models.Model]:
+    """Return the configured concrete changeset model."""
+
+    return cast(type[models.Model], apps.get_model(changeset_model_label()))
+
+
 class ChangesetLike(Protocol):
     """Storage contract supplied by ANGEE_CHANGESET_MODEL."""
 
@@ -51,11 +59,14 @@ class ChangesetLike(Protocol):
     change_reason: str
     touched: list[str]
     counts: dict[str, int]
+    created_row: models.Model | None
     _state: ModelState
 
     def save(self, *, force_insert: bool = False, using: str | None = None) -> None: ...
 
     def close(self, outcome: str) -> None: ...
+
+    def record_created(self, row: models.Model) -> None: ...
 
 
 @dataclass
@@ -116,7 +127,7 @@ class _ChangesetBoundary:
         with self.lock:
             row = self.rows.get(key)
             if row is None:
-                model = apps.get_model(changeset_model_label())
+                model = changeset_model()
                 facts = dict(self.facts)
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
@@ -150,6 +161,15 @@ class _ChangesetBoundary:
                 row.pending_commit = mark_persisted
                 transaction.on_commit(mark_persisted, using=using)
         return instance
+
+    def discard(self, instance: ChangesetLike) -> None:
+        """Forget a claim row whose insert lost a uniqueness race."""
+
+        with self.lock:
+            for key, row in tuple(self.rows.items()):
+                if row.instance is instance:
+                    del self.rows[key]
+                    return
 
     def close(self, outcome: str) -> None:
         with self.lock:
@@ -234,6 +254,31 @@ def mark_changeset_failed() -> None:
         boundary.mark_failed()
 
 
+def discard_changeset_claim(instance: ChangesetLike) -> None:
+    """Remove the current boundary row after a rolled-back claim insert."""
+
+    boundary = _open_boundary()
+    if boundary is not None:
+        boundary.discard(instance)
+
+
+def creation_fingerprint(values: Any) -> str:
+    """Return the canonical fingerprint shared by every idempotent create."""
+
+    def content(value: Any) -> Any:
+        if isinstance(value, Enum):
+            return content(value.value)
+        if isinstance(value, models.Model):
+            return {"model": value._meta.label_lower, "pk": json_safe(value.pk)}
+        if isinstance(value, Mapping):
+            return {key: content(item) for key, item in value.items()}
+        if isinstance(value, (tuple, list)):
+            return [content(item) for item in value]
+        return json_safe(value)
+
+    return canonical_json_sha256(content(values))
+
+
 class _ChangesetScope:
     """One ``changeset()`` entry, usable with ``with`` and ``async with``.
 
@@ -301,7 +346,6 @@ def changeset(
     activity: str | None = None,
     change_reason: str | None = None,
     correlation_id: str | None = None,
-    idempotency_key: str | None = None,
     origin: models.Model | None = None,
     occurred_at: datetime | None = None,
     fresh: bool = False,
@@ -327,7 +371,6 @@ def changeset(
             ("activity", activity),
             ("change_reason", change_reason),
             ("correlation_id", correlation_id),
-            ("idempotency_key", idempotency_key),
             ("origin", origin),
             ("occurred_at", occurred_at),
         )

@@ -30,7 +30,8 @@ from rebac import (
     write_relationships,
 )
 
-from angee.base.mixins import SourceKind, StatementSourceMixin
+from angee.base.actors import source_kind_for
+from angee.base.models import SourceKind
 from angee.integrate import scheduler
 from angee.integrate.testing.integration import Integration
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
@@ -83,7 +84,7 @@ def test_a_feed_is_an_import_statement_source(posts_tables: None) -> None:
     with system_context(reason="test feed statement source"):
         feed = _feed("import-source")
         integration = Integration._base_manager.get(pk=feed.pk)
-    assert StatementSourceMixin.kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
+    assert source_kind_for(to_subject_ref(integration)) == SourceKind.IMPORT
 
 
 def _post(

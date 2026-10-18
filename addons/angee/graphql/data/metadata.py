@@ -14,11 +14,10 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
 from angee.base.impl import ImplClassField
-from angee.base.merge import MergeableMixin
-from angee.base.models import AngeeModel
+from angee.base.lineage import concrete_child_models
+from angee.base.models import AngeeModel, MergeableMixin, record_history
 from angee.base.permissions import effective_rebac_definition
-from angee.base.querysets import record_history
-from angee.base.refs import concrete_child_models, generic_pointer_model, record_edges_by_target
+from angee.base.refs import generic_pointer_model, record_edges_by_target
 from angee.data import metadata as data_contract
 from angee.data.field_classification import is_to_one_relation, model_field_scalar
 from angee.graphql.access import is_gated_read_axis

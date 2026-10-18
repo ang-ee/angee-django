@@ -13,7 +13,6 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import ValidationError as ContractError
 from rebac import actor_context, system_context
 
-from angee.base.scoping import system_queryset
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordActions
 from angee.decisions.testing.models import Decision
@@ -85,7 +84,7 @@ def test_many_to_many_proposals_replace_or_clear_after_the_scalar_save(many_to_m
 
     def relation_changed(sender, instance, action, **kwargs):
         if action.startswith("pre_"):
-            assert system_queryset(DocumentLine).get(pk=instance.pk).label == "After"
+            assert DocumentLine.system_queryset().get(pk=instance.pk).label == "After"
 
     models.signals.m2m_changed.connect(relation_changed, sender=DocumentLine.tags.through, weak=False)
     try:
@@ -318,7 +317,7 @@ def test_proposals_reject_unknown_records_fields_and_malformed_actions(records, 
         proposal = {str(record.sqid) if key == "SELF" else key: value for key, value in proposal.items()}
     with pytest.raises(ContractError):
         admit(records, [record], proposal=proposal)
-    assert not system_queryset(Decision).exists()
+    assert not Decision.system_queryset().exists()
 
 
 @pytest.mark.parametrize("kind", ["person", "service"])
@@ -339,7 +338,7 @@ def test_human_and_agent_answers_close_without_applying_proposals(records, kind)
     assert answered.verdict_label == "Confirm"
     vaults[0].refresh_from_db()
     assert vaults[0].name == before
-    assert system_queryset(type(drives[0])).filter(pk=drives[0].pk).exists()
+    assert type(drives[0]).system_queryset().filter(pk=drives[0].pk).exists()
     with actor_context(reviewer):
         assert not Decision.objects.open_for(vaults[0]).exists()
 

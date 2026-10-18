@@ -41,8 +41,8 @@ from rebac.actors import current_sudo_reason, is_sudo
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
-from angee.base.mixins import AuditMixin, HistoryMixin, SourceKind, SqidMixin, StatementSourceMixin
-from angee.base.models import AngeeModel
+from angee.base.actors import source_kind_for
+from angee.base.models import AngeeModel, AuditMixin, HistoryMixin, SourceKind, SqidMixin
 from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
@@ -162,11 +162,11 @@ def test_channel_source_kind_is_its_backends_declaration(channel: Any, monkeypat
     """A channel is admitted as a statement source only as the kind its protocol declares."""
 
     principal = to_subject_ref(channel.integration_ptr)
-    assert (channel.source_kind, StatementSourceMixin.kind_for(principal)) == (None, None)
+    assert (channel.source_kind, source_kind_for(principal)) == (None, None)
 
     # An import-only protocol declares its channels' classification once, on the backend class.
     monkeypatch.setattr(ManualChannelBackend, "source_kind", SourceKind.IMPORT)
-    assert (channel.source_kind, StatementSourceMixin.kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
+    assert (channel.source_kind, source_kind_for(principal)) == (SourceKind.IMPORT, SourceKind.IMPORT)
 
 
 def _parsed(

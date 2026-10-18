@@ -14,7 +14,7 @@ carries its legal name and domain.
 
 Parties are organised two ways, both human-owned facts: :class:`Circle` is a
 private, overlapping grouping (a party may belong to many circles; circles nest
-as a :class:`~angee.base.mixins.HierarchyMixin` tree), and :class:`Relationship`
+as a :class:`~angee.base.models.HierarchyMixin` tree), and :class:`Relationship`
 is a typed, directed party↔party edge whose vocabulary
 (:class:`RelationshipKind`) is catalogue data seeded from the XFN / vCard
 ``RELATED`` values — never a schema fact.
@@ -45,21 +45,24 @@ from angee.base.actors import instance_actor
 from angee.base.fields import ColorField, StateField
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplClassField
-from angee.base.merge import MergeableMixin
-from angee.base.mixins import (
+from angee.base.lineage import concrete_child, concrete_child_models
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
     Aspect,
     AuditMixin,
     HierarchyMixin,
     HistoryMixin,
+    MergeableMixin,
     ModelHistory,
     PairAspect,
     SourceKind,
     StatementRecords,
     StatementsMixin,
+    StatementSubjectManager,
     TrashMixin,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, StatementSubjectManager
-from angee.base.refs import RetainedGenericRelation, concrete_child, concrete_child_models
+from angee.base.refs import RetainedGenericRelation
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
@@ -1004,7 +1007,7 @@ class Circle(HierarchyMixin, AuditMixin, AngeeDataModel):
     address book): "Family", "Inner Circle", a climbing crew. A party may belong to
     many circles (:class:`CircleMember`), and circles nest as a tree — overlap
     comes from multi-membership, never from multiple parents. The tree is
-    :class:`~angee.base.mixins.HierarchyMixin`'s materialized path, so "everyone in
+    :class:`~angee.base.models.HierarchyMixin`'s materialized path, so "everyone in
     this circle including sub-circles" is an indexed prefix scan
     (``Circle.objects.subtree_of(circle)``), and ``hierarchy_scope_fields`` keeps a
     personal circle tree from straddling owners.

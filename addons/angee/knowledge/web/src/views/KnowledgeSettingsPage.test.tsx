@@ -63,7 +63,7 @@ async function submit(name = "Copy", template = "vlt_template") {
   return mocks.submit({ name }, { record: { id: template }, selectedIds: [] });
 }
 
-test("failed responses and transport retries retain the same client key", async () => {
+test("failed responses and transport retries retain the same idempotency key", async () => {
   render(<KnowledgeSettingsPage />);
   const rejected = await submit(" Copy ");
   expect(rejected).toMatchObject({ ok: false });
@@ -72,7 +72,7 @@ test("failed responses and transport retries retain the same client key", async 
   await submit();
   expect(mocks.key).toHaveBeenCalledTimes(1);
   for (const [variables] of mocks.mutation.mock.calls) {
-    expect(variables).toEqual({ template: "vlt_template", name: "Copy", owned: true, client_creation_key: "clone-key-1" });
+    expect(variables).toEqual({ template: "vlt_template", name: "Copy", owned: true, idempotency_key: "clone-key-1" });
   }
 });
 
@@ -81,8 +81,8 @@ test("success clears the retry identity so another clone gets a new key", async 
   render(<KnowledgeSettingsPage />);
   expect(await submit()).toEqual({ ok: true, id: "vlt_created", message: "Created" });
   await submit();
-  expect(mocks.mutation).toHaveBeenNthCalledWith(1, expect.objectContaining({ client_creation_key: "clone-key-1" }));
-  expect(mocks.mutation).toHaveBeenNthCalledWith(2, expect.objectContaining({ client_creation_key: "clone-key-2" }));
+  expect(mocks.mutation).toHaveBeenNthCalledWith(1, expect.objectContaining({ idempotency_key: "clone-key-1" }));
+  expect(mocks.mutation).toHaveBeenNthCalledWith(2, expect.objectContaining({ idempotency_key: "clone-key-2" }));
 });
 
 test("changing the name or template starts a new creation request", async () => {
@@ -92,7 +92,7 @@ test("changing the name or template starts a new creation request", async () => 
   await submit("Changed", "vlt_other");
   expect(mocks.key).toHaveBeenCalledTimes(3);
   expect(mocks.mutation).toHaveBeenLastCalledWith({
-    template: "vlt_other", name: "Changed", owned: true, client_creation_key: "clone-key-3",
+    template: "vlt_other", name: "Changed", owned: true, idempotency_key: "clone-key-3",
   });
 });
 

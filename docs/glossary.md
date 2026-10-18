@@ -148,7 +148,7 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../angee/base/mixins.py)).
+([owner](../angee/base/models/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
 typed member (a Handle, a counterparty), carrying its survivorship strategy and
@@ -156,8 +156,7 @@ source precedence. The aspect is the unit of resolution; a value field belongs
 to exactly one aspect, and consumer donors contribute aspects additively.
 
 **Survivorship** — how an aspect's asserted normal-rank statements resolve onto
-the operational row: `SOURCE_PRIORITY`, `MOST_RECENT(date_field)`,
-`MOST_COMPLETE`, `HIGHEST_TRUST` (MDM names). Preferred person statements always
+the operational row through `SOURCE_PRIORITY`. Preferred person statements always
 precede it; the winner is marked **applied** and its values materialise on the
 row. A re-derivation, never a migration, when a knob flips.
 

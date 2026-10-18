@@ -24,8 +24,7 @@ from rebac import (
 
 import angee.graphql.actions as actions_module
 from angee.base.errors import RecordAccessSubjectRefused
-from angee.base.mixins import CreationKeyConflict, StaleRevisionError
-from angee.base.transitions import TransitionNotAllowed
+from angee.base.models import CreationKeyConflict, StaleRevisionError, TransitionNotAllowed
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,

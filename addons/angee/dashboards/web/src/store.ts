@@ -116,11 +116,11 @@ function useCreatePersonal() {
   const [create] = useAuthoredMutation(CreatePersonalDashboardDocument, {
     invalidateModels: DASHBOARD_MODELS,
   });
-  return React.useCallback(async (input: { name: string; description?: string; clientCreationKey: string }) => {
+  return React.useCallback(async (input: { name: string; description?: string; idempotencyKey: string }) => {
     const result = await create({
       name: input.name,
       description: input.description ?? "",
-      clientCreationKey: input.clientCreationKey,
+      idempotencyKey: input.idempotencyKey,
     });
     return saveResult(result?.create_personal_dashboard);
   }, [create]);
@@ -156,11 +156,11 @@ function useDashboard(target: DashboardTarget) {
       if (error) throw error;
     }, [resetMutation]),
     createPersonal,
-    duplicate: React.useCallback(async (duplicateTarget: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => {
+    duplicate: React.useCallback(async (duplicateTarget: DashboardTarget, input: { name: string; idempotencyKey: string; snapshot: DashboardSnapshot }) => {
       const result = await duplicateMutation({
         target: targetInput(duplicateTarget),
         name: input.name,
-        clientCreationKey: input.clientCreationKey,
+        idempotencyKey: input.idempotencyKey,
         snapshot: dashboardSnapshotInput(input.snapshot),
       });
       return saveResult(result?.duplicate_dashboard);

@@ -10,8 +10,13 @@ from typing import Any, cast
 
 from django.db import models
 
-from angee.base.mixins import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD
 from angee.data.metadata import StatusDisplay
+
+ARCHIVE_FLAG_FIELD = "is_archived"
+"""Shared model and resource-metadata name for the archive flag."""
+
+TRASH_FLAG_FIELD = "is_trashed"
+"""Shared model and resource-metadata name for the trash flag."""
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list", "object"})
 """Supported resource field kind names."""
@@ -135,10 +140,10 @@ def python_type_scalar(python_type: object) -> str | None:
 
 
 def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
-    """Return whether ``field`` is the :class:`~angee.base.mixins.ArchiveMixin` flag.
+    """Return whether ``field`` is the :class:`~angee.base.models.ArchiveMixin` flag.
 
     The archive vocabulary is name-based — one column name across the platform
-    (:data:`angee.base.mixins.ARCHIVE_FLAG_FIELD`) — so any model composing
+    (:data:`angee.base.models.ARCHIVE_FLAG_FIELD`) — so any model composing
     ``ArchiveMixin`` is recognised by that column and marked ``archivable`` in
     resource metadata. A same-typed boolean under a different contract (the
     trash flag, an enablement ``is_enabled``/``is_active``) is deliberately not
@@ -149,10 +154,10 @@ def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
 
 
 def is_trash_field(field: models.Field[Any, Any] | None) -> bool:
-    """Return whether ``field`` is the :class:`~angee.base.mixins.TrashMixin` flag.
+    """Return whether ``field`` is the :class:`~angee.base.models.TrashMixin` flag.
 
     Like the archive flag, trash is recognised by its one column name
-    (:data:`angee.base.mixins.TRASH_FLAG_FIELD`); resource metadata marks it
+    (:data:`angee.base.models.TRASH_FLAG_FIELD`); resource metadata marks it
     ``trashable`` so shared views offer a removed-records list and the shared
     ``trash_record`` / ``restore_record`` verbs for the resource.
     """

@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import SubjectRef, app_settings, current_actor, to_subject_ref
 from rebac.backends import backend
-from rebac.resources import model_resource_type
+from rebac.resources import model_for_subject_type, model_resource_type
 
 
 def user_subject_type() -> str:
@@ -28,6 +28,23 @@ def instance_actor(instance: models.Model) -> SubjectRef | None:
     actor_getter = getattr(instance, "actor", None)
     actor = actor_getter() if callable(actor_getter) else None
     return actor if actor is not None else current_actor()
+
+
+def source_kind_for(subject: Any) -> str | None:
+    """Return a persisted statement principal's declared source kind."""
+
+    source = to_subject_ref(subject)
+    resolved = model_for_subject_type(source.subject_type)
+    if resolved is None or source.optional_relation or source.subject_id == "*":
+        return None
+    model, id_attr = resolved
+    if not getattr(model, "statement_source", False):
+        return None
+    try:
+        principal = model._base_manager.get(**{id_attr: source.subject_id})
+        return str(principal.source_kind)
+    except (model.DoesNotExist, TypeError, ValueError, ImproperlyConfigured, ValidationError):
+        return None
 
 
 def actor_user_id(actor: Any) -> Any | None:

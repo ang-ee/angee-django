@@ -9,7 +9,6 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
 
-from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
@@ -69,7 +68,7 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
             ]
             if requests:
                 [Decision.objects.ask(request, actor=issuer) for request in requests]
-        decision = system_queryset(Decision).latest("pk")
+        decision = Decision.system_queryset().latest("pk")
         for name, document, variables in (
             ("list", LIST, {"viewer": str(viewer.sqid)}),
             ("groups", GROUPS, {"viewer": str(viewer.sqid)}),

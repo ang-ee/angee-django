@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -33,15 +32,16 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import DEFAULT_DB_ALIAS, models, router
+from django.db import DEFAULT_DB_ALIAS, models
+from django.db.models.deletion import ProtectedError
 from django.utils.text import capfirst
-from rebac import ObjectRef, to_object_ref
+from rebac import ObjectRef, system_context, to_object_ref
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
-from angee.base.mixins import MergeContractMixin
+from angee.base.models.merge import MergePolicy, _RecordRefMergeContract
 from angee.base.permissions import effective_rebac_definition
 
 
@@ -114,85 +114,10 @@ def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     ungated one; see :func:`generic_pointer_model`.
     """
 
-    using = record._state.db or router.db_for_read(type(record), instance=record)
-    content_type = ContentType.objects.db_manager(using).get_for_model(generic_pointer_model(type(record)))
-    return content_type, record.pk
-
-
-def is_record_target_model(model: type[models.Model]) -> bool:
-    """Whether rows of ``model`` can be targets of a polymorphic record edge.
-
-    :func:`rebac.generic_target` names only rows with a REBAC-typed canonical
-    model, so only such models — and their MTI children and proxies — need
-    delete-time care for the edges that name them.
-    """
-
-    return canonical_model(model) is not None
-
-
-def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models.Model], ...]:
-    """Return direct, installed MTI children in stable model-label order."""
-
-    return tuple(
-        sorted(
-            (
-                model
-                for model in parent_model._meta.apps.get_models()
-                if model._meta.managed and not model._meta.proxy and tuple(model._meta.parents) == (parent_model,)
-            ),
-            key=lambda model: model._meta.label_lower,
-        )
+    content_type = ContentType.objects.db_manager(hints={"instance": record}).get_for_model(
+        generic_pointer_model(type(record))
     )
-
-
-def concrete_lineage(model: type[models.Model]) -> tuple[type[models.Model], ...]:
-    """Installed concrete tables sharing a record's primary key, in stable order."""
-
-    owners = {model, *model._meta.get_parent_list()}
-    pending = list(owners)
-    while pending:
-        for child in concrete_child_models(pending.pop()):
-            if child not in owners:
-                owners.add(child)
-                pending.append(child)
-    return tuple(sorted(owners, key=lambda owner: owner._meta.label_lower))
-
-
-def concrete_child_accessor(parent_model: type[models.Model], child_model: type[models.Model]) -> str:
-    """Return Django's reverse accessor for a direct MTI parent link."""
-
-    parent_link = child_model._meta.parents.get(parent_model)
-    if parent_link is None:
-        raise ImproperlyConfigured(f"{child_model._meta.label} is not a direct child of {parent_model._meta.label}.")
-    return str(parent_link.remote_field.get_accessor_name())
-
-
-def concrete_child(
-    parent: models.Model,
-    child_model: type[models.Model],
-    *,
-    queryset: models.QuerySet[Any] | None = None,
-    cache_attr: str | None = None,
-) -> models.Model | None:
-    """Read one child through a prefetch cache or its supplied base/scoped queryset.
-
-    The caller owns access policy. The default base manager reads structural MTI
-    identity; an actor-scoped queryset can instead restrict the returned row.
-    """
-
-    if queryset is None and isinstance(parent, child_model):
-        return parent
-    parent_model = next((model for model in child_model._meta.parents if isinstance(parent, model)), type(parent))
-    accessor = concrete_child_accessor(parent_model, child_model)
-    if cache_attr is not None and hasattr(parent, cache_attr):
-        cached = getattr(parent, cache_attr)
-        if isinstance(cached, (list, tuple)):
-            return cached[0] if cached else None
-        return cached
-    if queryset is None and accessor in parent._state.fields_cache:
-        return parent._state.fields_cache[accessor]
-    rows = queryset if queryset is not None else child_model._base_manager.all()
-    return rows.filter(pk=parent.pk).first()
+    return content_type, record.pk
 
 
 def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]]:
@@ -240,28 +165,17 @@ def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
     return tuple(links)
 
 
-class MergePolicy(StrEnum):
-    """What merging a record does to the rows that point at it (see :mod:`angee.base.merge`)."""
-
-    MOVE = "move"
-    """Re-point the row to the survivor."""
-
-    KEEP = "keep"
-    """Leave the row pointing at the merged record, as history."""
-
-    BLOCK = "block"
-    """Refuse the merge while such a row exists."""
-
-
-class RecordRefMixin(MergeContractMixin, models.Model):
+class RecordRefMixin(_RecordRefMergeContract):
     """Project a row reference from the model's single declared generic foreign key.
 
     Its collision declarations (``merge_identity``, ``merge_collapse``) are the
-    pointing model's own, on :class:`~angee.base.mixins.MergeContractMixin`.
+    pointing model's own, on :class:`~angee.base.models.MergeContractMixin`.
     """
 
     merge_policy: ClassVar[MergePolicy] = MergePolicy.BLOCK
     """What merging the referenced record does to this edge's rows; an edge that declares none blocks."""
+    on_target_delete: ClassVar[Any] = models.PROTECT
+    """What deleting the referenced record does to this edge's rows."""
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -270,11 +184,13 @@ class RecordRefMixin(MergeContractMixin, models.Model):
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Reject ambiguous generic pointers and the obsolete prefix declaration."""
+        """Reject ambiguous generic pointers and invalid deletion policy."""
 
         errors = super().check(**kwargs)
         references = [field for field in cls._meta.private_fields if isinstance(field, GenericForeignKey)]
-        if len(references) != 1:
+        try:
+            reference = cls.record_ref_field()
+        except ImproperlyConfigured:
             errors.append(
                 checks.Error(
                     f"{cls._meta.label} must declare exactly one GenericForeignKey for RecordRefMixin; "
@@ -283,15 +199,25 @@ class RecordRefMixin(MergeContractMixin, models.Model):
                     id="angee.E029",
                 )
             )
-        if hasattr(cls, "record_ref_field_prefix"):
+            reference = None
+        if cls.on_target_delete not in (models.CASCADE, models.PROTECT, models.SET_NULL):
             errors.append(
                 checks.Error(
-                    f"{cls._meta.label}.record_ref_field_prefix is obsolete; "
-                    "the GenericForeignKey owns its field names.",
+                    f"{cls._meta.label}.on_target_delete must be CASCADE, PROTECT, or SET_NULL.",
                     obj=cls,
-                    id="angee.E030",
+                    id="angee.E039",
                 )
             )
+        elif cls.on_target_delete is models.SET_NULL and reference is not None:
+            pointer = reference
+            if not cls._meta.get_field(pointer.ct_field).null or not cls._meta.get_field(pointer.fk_field).null:
+                errors.append(
+                    checks.Error(
+                        f"{cls._meta.label}.on_target_delete = SET_NULL requires nullable pointer fields.",
+                        obj=cls,
+                        id="angee.E039",
+                    )
+                )
         return errors
 
     @property
@@ -453,6 +379,32 @@ def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMix
         for target in edge.declared_target_models().values():
             index.setdefault(target, []).append(edge)
     return {target: tuple(edges) for target, edges in index.items()}
+
+
+def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
+    """Apply each edge owner's declared policy before its target is deleted."""
+
+    del kwargs
+    target = canonical_model(type(instance))
+    if target is None:
+        return
+    content_type, object_id = generic_pointer_target(instance)
+    for edge in record_edges_by_target().get(target, ()):
+        pointer = edge.record_ref_field()
+        rows = edge._base_manager.using(using).filter(
+            **{pointer.ct_field: content_type, pointer.fk_field: object_id}
+        )
+        policy = edge.on_target_delete
+        if policy is models.PROTECT:
+            protected = list(rows)
+            if protected:
+                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", protected)
+            continue
+        with system_context(reason="record_ref.target_delete"):
+            if policy is models.CASCADE:
+                rows.delete()
+            elif policy is models.SET_NULL:
+                rows.update(**{pointer.ct_field: None, pointer.fk_field: None})
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

@@ -10,7 +10,7 @@ from django.db import models, transaction
 from rebac import ObjectRef
 
 from angee.base.fields import StateField
-from angee.base.mixins import (
+from angee.base.models import (
     AuditMixin,
     HistoryMixin,
     OwnerMixin,

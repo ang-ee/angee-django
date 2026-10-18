@@ -93,8 +93,8 @@ disabling before enabling preview in a host.
 
 `FormView` consumes advertised root mutation arguments: updates use the loaded
 edit baseline's revision and create retries reuse one key until acceptance or a
-creation-key conflict. A stale revision keeps local edits until an explicit reload
-and discard. Custom submit owners receive `baselineRecord` and `clientCreationKey`
+`CREATION_KEY_CONFLICT`. A stale revision keeps local edits until an explicit reload
+and discard. Custom submit owners receive `baselineRecord` and `idempotencyKey`
 and retain responsibility for their own operation arguments.
 
 `GraphView` automatically lays out unpositioned nodes using measured sizes and

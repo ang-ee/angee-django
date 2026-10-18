@@ -21,7 +21,7 @@ the new error until a successful read replaces them.
 `createAngeeHasuraDataProvider` accepts executable `mutations` keyed by list
 resource name. The app projects `{name, type}` argument descriptors from resource
 metadata; unknown argument names fail before transport. Advertised
-`client_creation_key` and `expected_revision` values travel in
+`idempotency_key` and `expected_revision` values travel in
 `meta.gqlVariables`, separately from editable `variables`. The provider builds
 the corresponding native CRUD document; an authored `meta.gqlMutation` is kept.
 `ResourceSaveVariables.expected_revision` also forwards the precondition to a

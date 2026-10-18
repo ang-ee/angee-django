@@ -19,7 +19,7 @@ from rebac.schema import parse_zed
 
 from angee.base.changesets import changeset
 from angee.base.identity import public_id_of
-from angee.base.mixins import SourceKind
+from angee.base.models import SourceKind
 from angee.knowledge import schema as knowledge_schema
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema

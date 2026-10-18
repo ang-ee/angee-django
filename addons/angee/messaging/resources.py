@@ -77,12 +77,13 @@ class MessageResource(_ChatterResource):
 
     Columns: ``record`` and ``author`` (xrefs), ``body``, ``kind`` (``comment``,
     the default, posts like a person; ``note`` logs a note), and the native
-    ``parent`` and ``client_creation_key``. ``edited: true`` records one edit by
+    ``parent`` and ``idempotency_key``. ``edited: true`` records one edit by
     the author through the edit verb, keeping the same body.
     """
 
     body = fields.Field(column_name="body", readonly=True)
     kind = fields.Field(column_name="kind", readonly=True, default="comment")
+    idempotency_key = fields.Field(column_name="idempotency_key", readonly=True)
     edited = fields.Field(column_name="edited", readonly=True, default=False, widget=widgets.BooleanWidget())
 
     def write(self, record: Any, author: Any, instance: Any, row: Mapping[str, Any]) -> models.Model:
@@ -93,10 +94,9 @@ class MessageResource(_ChatterResource):
         if kind not in {"comment", "note"}:
             raise ValidationError({"kind": "Choose comment or note."})
         verb = record.message_post if kind == "comment" else record.message_log
-        message = verb(body, parent=instance.parent, client_creation_key=instance.client_creation_key or None)
+        message = verb(body, parent=instance.parent, idempotency_key=str(row.get("idempotency_key") or "") or None)
         edited = row.get("edited") not in (None, "") and self.fields["edited"].widget.clean(row["edited"])
         if edited and not message.edit_history:
             type(message).objects.update_content(message, body=body, edited_by_id=author.pk)
             message.refresh_from_db()
         return message
-

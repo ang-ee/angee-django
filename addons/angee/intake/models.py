@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from types import NotImplementedType
 from typing import Any, ClassVar, Self, cast
 
+from angee.base.scoping import bind_actor, system_queryset
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -19,12 +20,11 @@ from rebac.backends import backend
 from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id, instance_actor
+from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, HistoryMixin, OptimisticLockMixin
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
 from angee.base.refs import MergePolicy
-from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
@@ -64,7 +64,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
         title: str,
         body: str,
         party: Any,
-        client_creation_key: str,
+        idempotency_key: str,
         due_date: Any = None,
         estimate: float | None = None,
         importance: str = "normal",
@@ -77,29 +77,28 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             raise PermissionDenied("Party read access is required to file a request.")
         task_model = apps.get_model("projects", "Task")
         actor = current_actor()
-        scope = task_model.creation_key_actor_scope(actor, {})
+        scope = actor_user_id(actor)
+        if scope is None:
+            raise PermissionDenied("Filing a task requires a user actor.")
         values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
-        fingerprint = task_model.creation_fingerprint_for(
+        fingerprint = creation_fingerprint(
             {"task": values, "party": party, "importance": importance},
         )
 
-        def insert() -> Any:
-            task = task_model.objects.create(
-                **values,
-                created_by_id=scope,
-                client_creation_key=client_creation_key,
-                creation_fingerprint=fingerprint,
+        with changeset(fresh=True), transaction.atomic():
+            replay = changeset_model().objects.claim(
+                f"intake.file-task:{scope}",
+                idempotency_key,
+                fingerprint=fingerprint,
             )
+            if replay is not None:
+                created = replay.created_row
+                if not isinstance(created, task_model):
+                    raise ValidationError({"idempotency_key": "The claimed task is unavailable."})
+                return task_model.objects.with_actor(actor).get(pk=created.pk)
+            task = task_model.objects.with_actor(actor).create(**values, created_by_id=scope)
             self.capture(target=task, party=party, body=body, importance=importance)
-            return task
-
-        with transaction.atomic():
-            task, _created = task_model.objects.with_actor(actor).replay_or_insert(
-                scope,
-                client_creation_key,
-                fingerprint,
-                insert,
-            )
+            current_changeset(required=True).record_created(task)
             return task
 
     @classmethod

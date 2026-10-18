@@ -27,7 +27,7 @@ from rebac.resources import model_resource_type
 from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
-from angee.base.querysets import record_history
+from angee.base.models import record_history
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -1445,7 +1445,7 @@ class MessagingMutation:
         self,
         info: strawberry.Info,
         input: RecordMessagePostInput,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> RecordMessagePostPayload:
         """Post an internal comment to the record's chatter thread."""
 
@@ -1463,7 +1463,7 @@ class MessagingMutation:
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
                 message = cast(Any, record).message_log(
-                    input.body, attachments=attachments, parent=parent, client_creation_key=client_creation_key
+                    input.body, attachments=attachments, parent=parent, idempotency_key=idempotency_key
                 )
             else:
                 message = cast(Any, record).message_post(
@@ -1472,7 +1472,7 @@ class MessagingMutation:
                     recipient_user_ids=recipient_user_ids,
                     autofollow_recipients=input.autofollow_recipients,
                     parent=parent,
-                    client_creation_key=client_creation_key,
+                    idempotency_key=idempotency_key,
                 )
         except (PermissionDenied, ValueError, ValidationError) as error:
             return RecordMessagePostPayload.from_error(error, invalid_code="BAD_MESSAGE")

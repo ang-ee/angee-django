@@ -15,7 +15,6 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.impl import impl_choices_enum
-from angee.base.scoping import system_queryset
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
 from angee.jobs.enqueue import celery_app
@@ -117,11 +116,11 @@ class MessageTriggerTests(TransactionTestCase):
         self.trigger(channel=self.make_channel("other-channel"))
         self.trigger(enabled=False)
         message = self.ingest()
-        self.assertEqual(set(system_queryset(TriggerEvent).values_list("trigger_id", flat=True)), {
+        self.assertEqual(set(TriggerEvent.system_queryset().values_list("trigger_id", flat=True)), {
             scoped.pk,
         })
         self.assertEqual(
-            set(system_queryset(TriggerEvent).values_list("record_object_id", flat=True)), {message.pk},
+            set(TriggerEvent.system_queryset().values_list("record_object_id", flat=True)), {message.pk},
         )
 
     def test_channel_grant_is_listable_and_disable_revokes_it(self):
@@ -173,7 +172,7 @@ class MessageTriggerTests(TransactionTestCase):
         trigger = self.trigger(enabled=False)
         with self.assertRaisesMessage(PermissionDenied, "channel"):
             Trigger.objects.enable(trigger, actor=self.other)
-        trigger = system_queryset(Trigger).get(pk=trigger.pk)
+        trigger = Trigger.system_queryset().get(pk=trigger.pk)
         self.assertFalse(trigger.enabled)
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
         trigger = Trigger.objects.enable(trigger, actor=self.owner)
@@ -186,14 +185,14 @@ class MessageTriggerTests(TransactionTestCase):
         trigger = self.trigger(enabled=False)
         with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
             Trigger.objects.enable(trigger, actor=self.other)
-        self.assertFalse(system_queryset(Trigger).get(pk=trigger.pk).enabled)
+        self.assertFalse(Trigger.system_queryset().get(pk=trigger.pk).enabled)
         granted = Trigger.objects.enable(trigger, actor=self.admin)
         with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
             Trigger.objects.revoke_grant(
                 granted, actor=self.other, resource_type="messaging/channel",
                 resource_id=str(self.channel.pk), relation="reader",
             )
-        self.assertTrue(system_queryset(Trigger).get(pk=trigger.pk).enabled)
+        self.assertTrue(Trigger.system_queryset().get(pk=trigger.pk).enabled)
 
     def test_unscoped_message_trigger_cannot_enable_without_a_grant_target(self):
         """A message trigger must name the channel its principal may read."""
@@ -201,7 +200,7 @@ class MessageTriggerTests(TransactionTestCase):
             trigger = Trigger.objects.create(workflow=self.workflow, source="message_ingested", channel=None)
         with self.assertRaisesMessage(ValidationError, "channel grant scope"):
             Trigger.objects.enable(trigger, actor=self.admin)
-        self.assertFalse(system_queryset(Trigger).get(pk=trigger.pk).enabled)
+        self.assertFalse(Trigger.system_queryset().get(pk=trigger.pk).enabled)
 
     def test_admission_rechecks_channel_read_under_workflow_principal(self):
         """The standing channel grant survives a change in the enabler's reach."""
@@ -213,24 +212,24 @@ class MessageTriggerTests(TransactionTestCase):
             self.channel.save(update_fields=("owner",))
         # Attribution does not retain read access after channel ownership moves.
         self.assertFalse(Message.objects.with_actor(self.owner).filter(pk=message.pk).exists())
-        for event in system_queryset(TriggerEvent):
+        for event in TriggerEvent.system_queryset():
             self.assertTrue(Trigger.objects.admit(event))
             event.refresh_from_db()
             self.assertIsNotNone(event.admitted_at)
             self.assertFalse(event.rejection)
-        self.assertEqual(system_queryset(WorkflowRun).get().run_as_id, self.workflow.user_id)
+        self.assertEqual(WorkflowRun.system_queryset().get().run_as_id, self.workflow.user_id)
 
     def test_readable_channel_admits_once_for_non_admin(self):
         """The workflow principal owns the run and retained admission survives replays."""
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
         trigger = self.trigger(actor=self.owner)
         message = self.ingest()
-        event = system_queryset(TriggerEvent).get(trigger=trigger)
+        event = TriggerEvent.system_queryset().get(trigger=trigger)
         self.assertTrue(Trigger.objects.admit(event))
         self.assertFalse(Trigger.objects.admit(event))
         message_ingested.send(sender=Message, instance=message)
         self.assertFalse(Trigger.objects.admit(event))
-        run = system_queryset(WorkflowRun).get()
+        run = WorkflowRun.system_queryset().get()
         self.assertEqual(run.run_as_id, self.workflow.user_id)
         self.assertEqual(run.trigger_event_id, event.pk)
         self.assertEqual(run.record_ref.public_id, message.sqid)
@@ -265,16 +264,16 @@ class MessageTriggerTests(TransactionTestCase):
         message = self.ingest()
         with system_context(reason="message source move"):
             Message.objects.filter(pk=message.pk).update(channel=self.make_channel("moved-channel"))
-        event = system_queryset(TriggerEvent).get()
+        event = TriggerEvent.system_queryset().get()
         self.assertFalse(Trigger.objects.admit(event))
         event.refresh_from_db()
         self.assertIn("channel", event.rejection.lower())
         trigger.refresh_from_db()
         self.assertTrue(trigger.enabled)
         later = self.ingest("message-after-rejection")
-        later_event = system_queryset(TriggerEvent).get(record_object_id=later.pk)
+        later_event = TriggerEvent.system_queryset().get(record_object_id=later.pk)
         self.assertTrue(Trigger.objects.admit(later_event))
-        self.assertEqual(system_queryset(WorkflowRun).count(), 1)
+        self.assertEqual(WorkflowRun.system_queryset().count(), 1)
 
     def test_protection_and_preview_name_the_retaining_trigger(self):
         """Disabled scopes retain their channel; names respect trigger visibility."""
@@ -290,8 +289,8 @@ class MessageTriggerTests(TransactionTestCase):
             self.assertEqual(preview.root.children[0].children[0].object_id, trigger.sqid)
             with self.assertRaises(ProtectedError):
                 Channel.objects.purge(self.channel)
-        self.assertTrue(system_queryset(Message).filter(pk=message.pk).exists())
-        self.assertTrue(system_queryset(Channel).filter(pk=self.channel.pk).exists())
+        self.assertTrue(Message.system_queryset().filter(pk=message.pk).exists())
+        self.assertTrue(Channel.system_queryset().filter(pk=self.channel.pk).exists())
         with actor_context(self.owner):
             hidden = DeletePreview.from_counts(self.channel, {}, blockers=self.channel.purge_blockers())
         self.assertTrue(hidden.has_blockers)
@@ -315,18 +314,18 @@ class MessageTriggerTests(TransactionTestCase):
             self.assertEqual(result_preview["root"]["children"][0]["children"], [{
                 "object_id": trigger.sqid, "object_label": str(trigger),
             }])
-        self.assertTrue(system_queryset(Message).filter(pk=message.pk).exists())
+        self.assertTrue(Message.system_queryset().filter(pk=message.pk).exists())
 
     def test_explicit_bulk_write_notification_rearms_the_same_ledger(self):
         """Queryset writes notify through the native source signal inside the write."""
         self.trigger()
         message = self.ingest()
-        changed = system_queryset(TriggerEvent).get().changed_at
+        changed = TriggerEvent.system_queryset().get().changed_at
         with system_context(reason="message source explicit write"), transaction.atomic():
             Message.objects.filter(pk=message.pk).update(status="failed")
             message.refresh_from_db()
             message_ingested.send(sender=Message, instance=message)
-        self.assertGreater(system_queryset(TriggerEvent).get().changed_at, changed)
+        self.assertGreater(TriggerEvent.system_queryset().get().changed_at, changed)
 
     def test_native_message_event_feeds_ledger_and_watches_in_one_transaction(self):
         """The fixed source wakes once after commit; a rolled-back event is inert."""
@@ -339,26 +338,26 @@ class MessageTriggerTests(TransactionTestCase):
         workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
         run = WorkflowRun.objects.start(workflow, actor=self.owner, subject=message)
         run_until(run)
-        step = system_queryset(StepRun).get(run=run)
+        step = StepRun.system_queryset().get(run=run)
         self.assertEqual((step.status, step.waiting_kind), ("waiting", "record"))
-        self.assertEqual(system_queryset(StepWatch).get(step_run=step).record_ref.public_id, message.sqid)
-        changed = system_queryset(TriggerEvent).get().changed_at
+        self.assertEqual(StepWatch.system_queryset().get(step_run=step).record_ref.public_id, message.sqid)
+        changed = TriggerEvent.system_queryset().get().changed_at
 
         with self.assertRaisesMessage(ValueError, "rollback"), transaction.atomic():
             message_ingested.send(sender=Message, instance=message)
             raise ValueError("rollback")
         self.assertEqual(runner.wake_records(), 0)
-        self.assertEqual(system_queryset(TriggerEvent).get().changed_at, changed)
+        self.assertEqual(TriggerEvent.system_queryset().get().changed_at, changed)
 
         with transaction.atomic():
             message_ingested.send(sender=Message, instance=message)
-        self.assertEqual(system_queryset(TriggerEvent).count(), 1)
-        self.assertGreater(system_queryset(TriggerEvent).get().changed_at, changed)
+        self.assertEqual(TriggerEvent.system_queryset().count(), 1)
+        self.assertGreater(TriggerEvent.system_queryset().get().changed_at, changed)
         self.assertEqual(runner.wake_records(), 1)
         self.assertEqual(runner.wake_records(), 0)
         run_until(run)
         self.assertEqual(run.status, "succeeded")
-        self.assertFalse(system_queryset(StepWatch).filter(step_run=step).exists())
+        self.assertFalse(StepWatch.system_queryset().filter(step_run=step).exists())
 
     def test_refined_source_shares_the_one_capture_of_each_ingested_message(self):
         """One ingested message is locked and observed once while both keys admit it."""
@@ -383,26 +382,26 @@ class MessageTriggerTests(TransactionTestCase):
             self.ingest()
         self.assertEqual([call.args[0].model for call in locked.call_args_list], [Message])
         self.assertEqual(observed.call_count, 1)
-        events = system_queryset(TriggerEvent).order_by("trigger_id")
+        events = TriggerEvent.system_queryset().order_by("trigger_id")
         self.assertEqual([event.trigger_id for event in events], [base.pk, refined.pk])
         for event in events:
             self.assertTrue(Trigger.objects.admit(event))
-        self.assertEqual(system_queryset(WorkflowRun).count(), 2)
+        self.assertEqual(WorkflowRun.system_queryset().count(), 2)
 
     def test_live_signal_rolls_back_and_historical_replay_stays_silent(self):
         """Capture follows message commits and the messaging owner's replay rules."""
         self.trigger()
         with self.assertRaisesMessage(ValueError, "rollback"), transaction.atomic():
             self.ingest("rolled-back-message")
-            self.assertEqual(system_queryset(TriggerEvent).count(), 1)
+            self.assertEqual(TriggerEvent.system_queryset().count(), 1)
             raise ValueError("rollback")
-        self.assertFalse(system_queryset(TriggerEvent).exists())
+        self.assertFalse(TriggerEvent.system_queryset().exists())
         self.ingest("historical-message", historical=True)
-        self.assertFalse(system_queryset(TriggerEvent).exists())
+        self.assertFalse(TriggerEvent.system_queryset().exists())
         self.ingest()
-        changed = system_queryset(TriggerEvent).get().changed_at
+        changed = TriggerEvent.system_queryset().get().changed_at
         self.ingest()
-        self.assertEqual(system_queryset(TriggerEvent).get().changed_at, changed)
+        self.assertEqual(TriggerEvent.system_queryset().get().changed_at, changed)
 
     def test_channel_scope_resource_composes_relation_write_filter_and_read(self):
         """The satellite's field declaration extends the canonical resource input."""

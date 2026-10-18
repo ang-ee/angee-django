@@ -34,7 +34,7 @@ from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
 from angee.base.errors import DomainError, classify_error, validation_error
-from angee.base.mixins import StaleRevisionError
+from angee.base.models import StaleRevisionError
 from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_contributions,

@@ -6,8 +6,7 @@ from django.db import IntegrityError, transaction
 from pydantic import ValidationError as ContractError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.base.mixins import StaleRevisionError
-from angee.base.scoping import system_queryset
+from angee.base.models import StaleRevisionError
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.decisions.testing.models import Decision
@@ -54,7 +53,7 @@ def test_one_question_lifecycle_and_audit(people):
     assert answered.verdict == ["complete"] and not answered.is_open
     assert answered.answered_by_id == reviewer.pk and answered.answered_at
     assert answered.revision == question.revision + 1
-    assert system_queryset(Decision).count() == 1
+    assert Decision.system_queryset().count() == 1
 
 
 @pytest.mark.parametrize("assignments", [{}, {"assignees": ()}])
@@ -82,7 +81,7 @@ def test_unassigned_actorless_question_still_requires_an_admission_reader(people
     request = DecisionRequest(kind="note_review", records=(subject,), proposal=request_for(people).proposal)
     with system_context(reason="test.actorless_question"), pytest.raises(ValidationError, match="requires a reader"):
         Decision.objects.ask(request, actor=None)
-    assert not system_queryset(Decision).exists()
+    assert not Decision.system_queryset().exists()
 
 
 @pytest.mark.parametrize("chosen", [[], ["unknown"], ["complete", "complete"], ["complete", "decline"], "complete"])
@@ -140,7 +139,7 @@ def test_readers_requesters_and_removed_assignees_cannot_answer(people):
         with pytest.raises(PermissionDenied):
             Decision.objects.decide(question, actor=person, chosen=["complete"])
     with system_context(reason="test.remove_assignee"):
-        system_queryset(Decision).get(pk=question.pk).assignees.remove(reviewer)
+        Decision.system_queryset().get(pk=question.pk).assignees.remove(reviewer)
     with pytest.raises(PermissionDenied):
         Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
     subject.with_actor(requester).name = "A direct edit"
@@ -155,14 +154,14 @@ def test_two_assignees_still_answer_one_question(people):
     Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
     with pytest.raises(StaleRevisionError):
         Decision.objects.decide(question, actor=other, chosen=["decline"], revision=question.revision)
-    assert system_queryset(Decision).get(pk=question.pk).answered_by_id == reviewer.pk
+    assert Decision.system_queryset().get(pk=question.pk).answered_by_id == reviewer.pk
 
 
 def test_named_assignee_who_cannot_answer_rolls_back_admission(people):
     requester, *_ = people
     with pytest.raises(ValidationError, match="At least one assignee must be allowed to answer"):
         Decision.objects.ask(request_for(people, assignees=(requester,)), actor=requester)
-    assert not system_queryset(Decision).exists()
+    assert not Decision.system_queryset().exists()
 
 
 def test_inactive_assignee_is_not_admitted(people):
@@ -171,7 +170,7 @@ def test_inactive_assignee_is_not_admitted(people):
         type(reviewer).objects.filter(pk=reviewer.pk).update(is_active=False)
     with pytest.raises(PermissionDenied):
         Decision.objects.ask(request_for(people), actor=requester)
-    assert not system_queryset(Decision).exists()
+    assert not Decision.system_queryset().exists()
 
 
 def test_unreadable_concern_rolls_back_admission(people):
@@ -179,7 +178,7 @@ def test_unreadable_concern_rolls_back_admission(people):
     private = vault_for(outsider)
     with pytest.raises(PermissionDenied):
         Decision.objects.ask(request_for(people, records=(private,)), actor=requester)
-    assert not system_queryset(Decision).exists()
+    assert not Decision.system_queryset().exists()
 
 
 def test_empty_and_duplicate_alternatives_are_rejected():
@@ -215,7 +214,7 @@ def test_verdict_audit_is_database_consistent(people):
     requester, *_ = people
     question = Decision.objects.ask(request_for(people), actor=requester)
     with pytest.raises(IntegrityError), transaction.atomic():
-        system_queryset(Decision).filter(pk=question.pk).owner_update(verdict=["complete"])
+        Decision.system_queryset().filter(pk=question.pk).owner_update(verdict=["complete"])
 
 
 @pytest.mark.parametrize("withdrawn", [False, True])
@@ -226,7 +225,7 @@ def test_supplied_values_cannot_be_stored_on_open_or_withdrawn_decisions(people,
         with system_context(reason="test.withdraw"):
             question = Decision.objects.withdraw(question, actor=requester)
     with pytest.raises(IntegrityError), transaction.atomic():
-        system_queryset(Decision).filter(pk=question.pk).owner_update(verdict_values={"record": {"name": "value"}})
+        Decision.system_queryset().filter(pk=question.pk).owner_update(verdict_values={"record": {"name": "value"}})
     question.refresh_from_db()
     assert question.verdict_values is None
 

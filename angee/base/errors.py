@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, PermissionDenied, ValidationError
 from rebac import MissingActorError
 
-from angee.base.transitions import TransitionNotAllowed
-
 INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
 
 
@@ -36,6 +34,8 @@ def validation_error(error: BaseException | None) -> ValidationError | None:
 
 def classify_error(error: BaseException | None) -> ErrorClassification:
     """Share domain, authentication, permission and validation wire policy."""
+
+    from angee.base.models.transitions import TransitionNotAllowed
 
     if isinstance(error, DomainError):
         return ErrorClassification(error.code, error.code)
@@ -86,6 +86,15 @@ class DomainError(Exception):
 
     def __init__(self) -> None:
         super().__init__(self.code)
+
+
+class CreationKeyConflict(DomainError):
+    """An idempotency key was already claimed for different content."""
+
+    code = "CREATION_KEY_CONFLICT"
+
+    def __init__(self, *args: object) -> None:
+        Exception.__init__(self, *args or (self.code,))
 
 
 class RecordAccessSubjectRefused(DomainError, ValidationError):

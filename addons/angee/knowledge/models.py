@@ -12,12 +12,14 @@ import hashlib
 import logging
 import re
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
 from graphlib import CycleError, TopologicalSorter
 from itertools import islice
 from typing import Any, ClassVar, cast
 
+from angee.base.scoping import lock_if_supported
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -29,20 +31,24 @@ from rebac import (
     PermissionDenied,
     SubjectRef,
     actor_context,
+    check_new,
     generic_target,
     system_context,
     to_subject_ref,
 )
 from rebac.mixins import RebacModelBase
+from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
-from angee.base.changesets import write_group
+from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset, write_group
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import (
+from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
+from angee.base.models import (
+    AngeeDataModel,
+    AngeeManager,
+    AngeeQuerySet,
     AuditMixin,
-    CreationKeyMixin,
-    CreationKeyQuerySet,
     HierarchyMixin,
     HierarchyQuerySet,
     HistoryMixin,
@@ -50,16 +56,11 @@ from angee.base.mixins import (
     TrashMixin,
     TrashQuerySet,
 )
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import (
     MergePolicy,
     RecordRef,
     RecordRefMixin,
-    concrete_child,
-    concrete_child_accessor,
-    concrete_child_models,
 )
-from angee.base.scoping import lock_if_supported
 from angee.knowledge.retrieval import RetrievalBackend
 from angee.messaging.models import ThreadedModelMixin
 from angee.tags.models import TaggedModel
@@ -113,8 +114,8 @@ def parse_wikilinks(body: str) -> dict[str, str]:
     return found
 
 
-class VaultQuerySet(CreationKeyQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
-    """Actor-scoped vault reads with caller-scoped creation replay."""
+class VaultQuerySet(TrashQuerySet[Any], AngeeQuerySet[Any]):
+    """Actor-scoped vault reads and search helpers."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
         """Search at most 100 readable vaults, once per selected backend class.
@@ -160,27 +161,31 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         *,
         name: str,
         owned: bool = True,
-        client_creation_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Vault:
         """Clone a readable vault's page tree and markdown bodies for the actor.
 
         Requires vault create and, for a new clone, template read. New identities and attribution
         belong to the actor; grants and record bindings are never copied. Unknown
         page kinds are refused rather than copied without their content.
-        ``owned=False`` inserts the clone without an owner. A replay
-        key belongs to the creating actor, even after ownership is transferred or
-        cleared; changing template, name or ownership intent conflicts. Template
-        edits, loss of access or deletion do not change an already completed clone.
+        ``owned=False`` inserts the clone without an owner. An idempotency key
+        belongs to the creating actor, even after ownership is transferred or
+        cleared; changing template, name, or ownership intent conflicts. Template
+        edits, loss of access, or deletion do not change a completed clone.
         """
 
-        actor = self.check_create()
+        actor, _ = self.effective_actor(strict=True)
+        resource_type = model_resource_type(self.model)
+        if resource_type is None or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
         user_id = actor_user_id(actor)
         if user_id is None:
             raise PermissionDenied("Cloning a vault requires a user actor.")
-        fingerprint = self.model.creation_fingerprint_for([template.pk, name, owned])
-        # A successful ownerless clone is not necessarily readable by its caller.
-        # Resolve only this actor's creation receipt, then rebind the returned row.
-        replays = self.system_context(reason="knowledge.vault.clone.replay")
+        fingerprint = creation_fingerprint([template.pk, name, owned])
 
         def insert() -> Vault:
             source = self.with_actor(actor).get(pk=template.pk)
@@ -220,15 +225,28 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
                 icon=source.icon,
                 accent=source.accent,
                 retrieval_class=source.retrieval_class,
-                client_creation_key=client_creation_key,
-                creation_fingerprint=fingerprint,
             )
             copies = page_model._default_manager._copy_tree_in(vault, pages, actor=actor)
             markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
             return cast(Vault, vault)
 
-        vault, _created = replays.replay_or_insert(user_id, client_creation_key, fingerprint, insert)
-        return cast(Vault, vault.with_actor(actor))
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                replay = changeset_model().objects.claim(
+                    f"knowledge.vault.clone:{user_id}",
+                    idempotency_key,
+                    fingerprint=fingerprint,
+                )
+                if replay is not None:
+                    vault = replay.created_row
+                    if not isinstance(vault, self.model):
+                        raise ValidationError({"idempotency_key": "The claimed clone result is unavailable."})
+                    return cast(Vault, vault.with_actor(actor))
+            vault = insert()
+            if idempotency_key is not None:
+                current_changeset(required=True).record_created(vault)
+            return cast(Vault, vault.with_actor(actor))
 
     def _create_for_actor(self, actor: SubjectRef, *, owned: bool = True, **fields: Any) -> Any:
         """Persist a vault after its caller's create preflight."""
@@ -256,7 +274,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         return vault.with_actor(actor)
 
 
-class Vault(OwnerMixin, CreationKeyMixin, TrashMixin, AngeeDataModel, HistoryMixin):
+class Vault(OwnerMixin, TrashMixin, AngeeDataModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
     Trashing a vault withholds its pages while retaining their independent trash
@@ -289,7 +307,6 @@ class Vault(OwnerMixin, CreationKeyMixin, TrashMixin, AngeeDataModel, HistoryMix
         rebac_resource_type = "knowledge/vault"
         constraints = (
             models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),
-            CreationKeyMixin.creation_key_constraint(),
         )
 
     def __str__(self) -> str:

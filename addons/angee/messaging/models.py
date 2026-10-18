@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, ClassVar, cast
 
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -62,9 +63,9 @@ from angee.base.errors import DomainError
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplClassField
-from angee.base.mixins import (
+from angee.base.models import (
+    AngeeDataModel,
     AuditMixin,
-    CreationKeyMixin,
     HistoryMixin,
     ModelHistory,
     OptimisticLockMixin,
@@ -72,9 +73,7 @@ from angee.base.mixins import (
     SourceKind,
     TrashMixin,
 )
-from angee.base.models import AngeeDataModel
 from angee.base.refs import MergePolicy, RecordRefMixin, RetainedGenericRelation, generic_pointer_model
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
@@ -104,7 +103,7 @@ def _actor_user_id(instance: models.Model) -> Any | None:
     """Return attribution for the record-bound actor, falling back to ambient.
 
     Posting uses the same precedence for replay identity unless the caller supplies
-    ``creation_actor`` explicitly. That override does not change attribution or access.
+    ``idempotency_actor`` explicitly. That override does not change attribution or access.
     """
 
     actor_getter = getattr(instance, "actor", None)
@@ -411,15 +410,15 @@ class ThreadedModelMixin(models.Model):
         message_type: Message.MessageKind | None = None,
         subtype_key: str = "comment",
         parent: models.Model | None = None,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Post an internal comment on this row's chatter thread.
 
         ``message_type`` defaults to :attr:`Message.MessageKind.COMMENT` (resolved by
         the message write path), keeping the enum the single source of truth. A chatter
         comment carries no title of its own — the thread's title fragment is the label.
-        ``creation_actor`` supplies replay identity for a keyed system job; otherwise
+        ``idempotency_actor`` supplies replay identity for a keyed system job; otherwise
         the record-bound actor takes precedence over the ambient actor.
         """
 
@@ -432,8 +431,8 @@ class ThreadedModelMixin(models.Model):
             subtype_key=subtype_key,
             parent=parent,
             autofollow_author=self.thread_autofollow_author,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     def message_log(
@@ -444,13 +443,13 @@ class ThreadedModelMixin(models.Model):
         message_type: Message.MessageKind | None = None,
         attachments: tuple[models.Model, ...] = (),
         parent: models.Model | None = None,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Log a structured system note on this row's chatter thread.
 
         Defaults to the :attr:`Message.MessageKind.NOTIFICATION` kind.
-        ``creation_actor`` sets replay identity with the same precedence as
+        ``idempotency_actor`` sets replay identity with the same precedence as
         :meth:`message_post`, including named non-user subjects for system jobs.
         """
 
@@ -464,8 +463,8 @@ class ThreadedModelMixin(models.Model):
             recipient_user_ids=(),
             autofollow_recipients=False,
             autofollow_author=False,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     def _require_thread_message(self, message: models.Model) -> models.Model:
@@ -619,8 +618,8 @@ class ThreadedModelMixin(models.Model):
         recipient_user_ids: tuple[Any, ...],
         autofollow_recipients: bool,
         autofollow_author: bool,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Post one user-authored chatter message after enforcing this row's post policy.
 
@@ -643,8 +642,8 @@ class ThreadedModelMixin(models.Model):
             recipient_user_ids=recipient_user_ids,
             autofollow_author=autofollow_author,
             autofollow_recipients=autofollow_recipients,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     @transaction.atomic
@@ -659,8 +658,8 @@ class ThreadedModelMixin(models.Model):
         recipient_user_ids: tuple[Any, ...] = (),
         autofollow_author: bool = False,
         autofollow_recipients: bool = False,
-        client_creation_key: str | None = None,
-        creation_actor: SubjectRef | None = None,
+        idempotency_key: str | None = None,
+        idempotency_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Write one automatic system message on this row's chatter thread.
 
@@ -673,7 +672,7 @@ class ThreadedModelMixin(models.Model):
         through :meth:`_message_post`, which adds the post gate and autofollow policy.
         """
 
-        scope_actor = creation_actor or self.actor() or current_actor()
+        scope_actor = idempotency_actor or self.actor() or current_actor()
         attachment = self.message_thread_attachment(create=True)
         if attachment is None:
             raise ValueError("Cannot post a message without a thread.")
@@ -695,8 +694,8 @@ class ThreadedModelMixin(models.Model):
                 recipient_user_ids=recipient_user_ids,
                 autofollow_author=autofollow_author,
                 autofollow_recipients=autofollow_recipients,
-                client_creation_key=client_creation_key,
-                creation_actor=scope_actor,
+                idempotency_key=idempotency_key,
+                idempotency_actor=scope_actor,
             )
 
     def _system_post_pipeline(
@@ -712,8 +711,8 @@ class ThreadedModelMixin(models.Model):
         recipient_user_ids: tuple[Any, ...],
         autofollow_author: bool,
         autofollow_recipients: bool,
-        client_creation_key: str | None,
-        creation_actor: SubjectRef | None,
+        idempotency_key: str | None,
+        idempotency_actor: SubjectRef | None,
     ) -> models.Model:
         """Run the elevated system-post write; split out for readability only."""
 
@@ -732,8 +731,8 @@ class ThreadedModelMixin(models.Model):
             recipient_user_ids=recipient_user_ids,
             autofollow_author=autofollow_author,
             autofollow_recipients=autofollow_recipients,
-            client_creation_key=client_creation_key,
-            creation_actor=creation_actor,
+            idempotency_key=idempotency_key,
+            idempotency_actor=idempotency_actor,
         )
 
     def message_subscribe(
@@ -1812,7 +1811,7 @@ class WebformSubmission:
 
 
 class Message(
-    SourceCopyMixin, ResourceLoadMixin, TaggedModel, TrashMixin, CreationKeyMixin,
+    SourceCopyMixin, ResourceLoadMixin, TaggedModel, TrashMixin,
     OptimisticLockMixin, AuditMixin, AngeeDataModel,
 ):
     """One message — the unit of a thread. The root post is itself a Message.
@@ -1835,7 +1834,7 @@ class Message(
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
 
-    Moderation is trash (:class:`~angee.base.mixins.TrashMixin`): a trashed
+    Moderation is trash (:class:`~angee.base.models.TrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """
@@ -1843,10 +1842,6 @@ class Message(
     runtime = True
     resource_class = MessageResource
     rebac_grantable = {"reader": "write"}
-    creation_key_scope = "creation_actor"
-    creation_actor = models.CharField(max_length=512, null=True, blank=True, editable=False)
-    """REBAC actor identity for keyed posts, independent of nullable user attribution."""
-
     class Direction(models.TextChoices):
         """Whether a message came in, went out, or is internal."""
 
@@ -2071,7 +2066,6 @@ class Message(
         ordering = ("-sent_at", "sqid")
         rebac_resource_type = "messaging/message"
         constraints = (
-            CreationKeyMixin.creation_key_constraint(scope="creation_actor"),
             # Channel-scoped idempotency over a fixed digest: the ingest manager
             # looks rows up through the same MD5 expression so this index serves
             # both the constraint and the hot resync lookup.

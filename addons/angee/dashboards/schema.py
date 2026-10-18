@@ -19,7 +19,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id
-from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from angee.base.models import CreationKeyConflict, StaleRevisionError
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import hasura_model_resource
@@ -316,7 +316,7 @@ class DashboardMutation:
         self,
         info: strawberry.Info,
         name: str,
-        client_creation_key: str,
+        idempotency_key: str,
         description: str = "",
     ) -> DashboardPayload:
         user = session_user(info)
@@ -325,7 +325,7 @@ class DashboardMutation:
                 user,
                 name=name,
                 description=description,
-                client_creation_key=client_creation_key,
+                idempotency_key=idempotency_key,
             )
         except CreationKeyConflict as error:
             return DashboardPayload(status="conflict", message=str(error))
@@ -410,7 +410,7 @@ class DashboardMutation:
         info: strawberry.Info,
         target: DashboardTargetInput,
         name: str,
-        client_creation_key: str,
+        idempotency_key: str,
         snapshot: JSON,
     ) -> DashboardPayload:
         user = session_user(info)
@@ -432,7 +432,7 @@ class DashboardMutation:
                 created = Dashboard.objects.create_personal(
                     user,
                     name=name,
-                    client_creation_key=client_creation_key,
+                    idempotency_key=idempotency_key,
                 )
                 if created.revision > 1:
                     return _payload(created)

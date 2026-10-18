@@ -659,14 +659,14 @@ class ProjectTaskActionMutation:
     @strawberry.mutation
     @action_guard("Project setup failed.")
     def setup_project(
-        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, client_creation_key: str,
+        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, idempotency_key: str,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Complete the composed project setup under its owning transaction."""
 
         task = authorized_action_target(info, Task, id, "write")
         project = Project.objects.setup_from_task(
-            task, configuration=input_values(info, configuration), client_creation_key=client_creation_key,
+            task, configuration=input_values(info, configuration), idempotency_key=idempotency_key,
             expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Project set up.", id=project.sqid)

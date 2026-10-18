@@ -17,7 +17,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.base.mixins import CreationKeyConflict
+from angee.base.models import CreationKeyConflict
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import AdapterContractError
@@ -35,7 +35,7 @@ class ReplyJoins(DeliveryFixtures):
     def test_reply_evidence_covers_active_states_and_excludes_failed_or_discarded(self):
         comment = self.comment()
         self.assertFalse(comment.reply_state())
-        reply = comment.reply_to_comment(body="Answer", actor=self.agent, creation_key="answer")
+        reply = comment.reply_to_comment(body="Answer", actor=self.agent, idempotency_key="answer")
         with system_context(reason="reply evidence states"):
             for status, trashed, expected in (
                 ("draft", False, True),
@@ -60,20 +60,20 @@ class ReplyJoins(DeliveryFixtures):
             land_posts(self.feed, [native], owner_id=self.operator.pk)
             self.assertTrue(comment.reply_state())
             with self.assertRaisesMessage(CommentAnswered, "already answered"):
-                comment.reply_to_comment(body="Stale inference", actor=self.agent, creation_key="late-run")
+                comment.reply_to_comment(body="Stale inference", actor=self.agent, idempotency_key="late-run")
             Message.objects.filter(pk=comment.pk).update(sender_id=self.feed.handle_id)
             comment.refresh_from_db()
             self.assertTrue(comment.reply_state())
 
     def test_replay_precedes_another_runs_admission_and_checks_the_fingerprint(self):
         comment = self.comment()
-        first = comment.reply_to_comment(body="Answer", actor=self.agent, creation_key="first-run")
-        replay = comment.reply_to_comment(body="Answer", actor=self.agent, creation_key="first-run")
+        first = comment.reply_to_comment(body="Answer", actor=self.agent, idempotency_key="first-run")
+        replay = comment.reply_to_comment(body="Answer", actor=self.agent, idempotency_key="first-run")
         self.assertEqual(first.pk, replay.pk)
         with self.assertRaisesMessage(CommentAnswered, "already answered"):
-            comment.reply_to_comment(body="Another", actor=self.agent, creation_key="second-run")
+            comment.reply_to_comment(body="Another", actor=self.agent, idempotency_key="second-run")
         with self.assertRaises(CreationKeyConflict) as refusal:
-            comment.reply_to_comment(body="Changed", actor=self.agent, creation_key="first-run")
+            comment.reply_to_comment(body="Changed", actor=self.agent, idempotency_key="first-run")
         self.assertNotIsInstance(refusal.exception, CommentAnswered)
 
     def test_unreadable_comment_refuses_with_permission_denied(self):
@@ -81,7 +81,7 @@ class ReplyJoins(DeliveryFixtures):
         with system_context(reason="unreadable comment actor"):
             visitor = get_user_model().objects.create_user(username="comment-visitor")
         with self.assertRaisesMessage(PermissionDenied, "Comment read access"):
-            comment.reply_to_comment(body="Answer", actor=visitor, creation_key="unreadable")
+            comment.reply_to_comment(body="Answer", actor=visitor, idempotency_key="unreadable")
 
     def test_discovery_applies_identity_and_empty_discovery_preserves_it(self):
         with system_context(reason="feed identity discovery"):
@@ -572,7 +572,7 @@ class PostgreSQLJoins(DeliveryFixtures):
                 barrier.wait(timeout=10)
                 row = Message._base_manager.get(pk=comment.pk)
                 try:
-                    return row.reply_to_comment(body="Answer", actor=self.agent, creation_key=key).pk
+                    return row.reply_to_comment(body="Answer", actor=self.agent, idempotency_key=key).pk
                 except ValidationError:
                     return None
             finally:

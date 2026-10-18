@@ -9,7 +9,6 @@ from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import actor_context
 
 from angee.base.refs import RecordRefMixin
-from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
@@ -33,7 +32,7 @@ def referenced_decisions(composed_tables):
     decisions = []
     for record in records:
         decision = seed_decision(actor=owner, assignees=(owner,), reference=record, requester=None)
-        decisions.append(system_queryset(DecisionRecord).get(decision=decision))
+        decisions.append(DecisionRecord.system_queryset().get(decision=decision))
     return owner, outsider, records, decisions
 
 
@@ -67,11 +66,11 @@ def test_record_model_filter_composes_with_identity_and_decision_filter(referenc
     for position, record in enumerate(records):
         assert result_data(execute_schema(schema, query, {
             "model": record._meta.label, "id": record.sqid,
-            "decision": system_queryset(Decision).get(pk=decisions[position].decision_id).sqid,
+            "decision": Decision.system_queryset().get(pk=decisions[position].decision_id).sqid,
         }, user=owner)) == {"decision_records": [{"id": decisions[position].sqid}]}
     assert result_data(execute_schema(schema, query, {
         "model": records[0]._meta.label, "id": records[1].sqid,
-        "decision": system_queryset(Decision).get(pk=decisions[0].decision_id).sqid,
+        "decision": Decision.system_queryset().get(pk=decisions[0].decision_id).sqid,
     }, user=owner)) == {"decision_records": []}
 
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 from django.apps import apps
 
-from angee.base.scoping import lock_if_supported
-
 
 def _multi_table_models():
     return sorted(
@@ -20,7 +18,7 @@ def test_self_lock_names_every_parent_link() -> None:
     if not models:
         pytest.skip("These test settings compose no multi-table model.")
     for model in models:
-        of = lock_if_supported(model._base_manager.all()).query.select_for_update_of
+        of = model._base_manager.all().lock_if_supported().query.select_for_update_of
         parents = {
             ancestor
             for ancestor in model._meta.get_parent_list()
@@ -32,5 +30,5 @@ def test_self_lock_names_every_parent_link() -> None:
 
 def test_explicit_relation_lock_is_left_unchanged() -> None:
     model = next(iter(apps.get_models()))
-    of = lock_if_supported(model._base_manager.all(), of=("owner",)).query.select_for_update_of
+    of = model._base_manager.all().lock_if_supported(of=("owner",)).query.select_for_update_of
     assert of == ("owner",)

@@ -24,6 +24,10 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
     seen = []
 
     class ReadableQueues:
+        def with_action(self, action):
+            assert action == "read"
+            return self
+
         def filter(self, **lookup):
             assert lookup == {"slug__in": ["incoming"]}
             return self
@@ -32,11 +36,11 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
             assert (key, flat) == ("slug", True)
             return ["incoming"]
 
-    def readable(model, actor):
-        seen.append((model, actor))
+    def readable(actor):
+        seen.append((projects_models.Queue, actor))
         return ReadableQueues()
 
-    monkeypatch.setattr("angee.dashboards.models.read_scoped_queryset", readable)
+    monkeypatch.setattr(projects_models.Queue.objects, "with_actor", readable)
     actor = object()
     assert widget_visibility_answers(
         [{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}], actor
@@ -46,7 +50,9 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
 
 def test_declared_task_queue_scope_validates_in_a_widget_snapshot(monkeypatch):
     monkeypatch.setattr(
-        "angee.dashboards.models.read_scoped_queryset", lambda model, _actor: model._base_manager.none(),
+        projects_models.Queue.objects,
+        "with_actor",
+        lambda _actor: projects_models.Queue.objects.none(),
     )
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,

@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict
 
 from angee.base.identity import public_id_of
 from angee.base.jsonschema import schemas_match, validator
-from angee.base.scoping import system_queryset
 from angee.workflows.awaits import AwaitRun, AwaitRunConfig, AwaitRunInput, _AwaitedRun
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
@@ -183,7 +182,7 @@ def test_await_requires_published_expected_workflow(execution):
     with pytest.raises(ValidationError):
         Workflow.objects.publish(
             parent,
-            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=parent.pk),
+            expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=parent.pk),
             actor=actor,
         )
 
@@ -294,7 +293,7 @@ def test_await_map_body_preserves_error_label_and_child_output(execution, regist
     run_until(run)
     assert run.status == "succeeded", run.error
     assert run.output == [{"index": 0, "outcome": "error", "output": {} if failed else {"value": 3}}]
-    assert system_queryset(StepRun).get(run=run, node_key="each.body").awaited_run_id == child.pk
+    assert StepRun.system_queryset().get(run=run, node_key="each.body").awaited_run_id == child.pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -343,17 +342,17 @@ def test_observing_already_failed_owned_child_preserves_its_open_rows(execution,
         "finish": {"step": Branch.key},
     }}, key="await_failed_parent", actor=actor)
     parent = start_run(parent_workflow, actor=actor)
-    runner.execute(system_queryset(StepRun).get(run=parent, node_key="start").pk)
+    runner.execute(StepRun.system_queryset().get(run=parent, node_key="start").pk)
     child = admitted[0]
     for key in ("branch", "park", "fail"):
-        runner.execute(system_queryset(StepRun).get(run=child, node_key=key).pk)
+        runner.execute(StepRun.system_queryset().get(run=child, node_key=key).pk)
     child.refresh_from_db()
     assert child.status == "failed"
-    parked = system_queryset(StepRun).get(run=child, node_key="park")
+    parked = StepRun.system_queryset().get(run=child, node_key="park")
     assert parked.status == "waiting"
     run_until(parent)
     assert parent.status == "succeeded"
-    observed = system_queryset(StepRun).get(run=parent, node_key="await")
+    observed = StepRun.system_queryset().get(run=parent, node_key="await")
     assert observed.attempt == 1 and observed.awaited_run_id == child.pk
     parked.refresh_from_db()
     assert parked.status == "waiting"
@@ -384,7 +383,7 @@ def test_parent_retains_child_contract_and_reports_republish_dependency(executio
     assert not saved.issues
     published = Workflow.objects.publish(
         child,
-        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=child.pk),
+        expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=child.pk),
         actor=actor,
     )
     assert published.dependents == (parent.key,)
@@ -397,9 +396,9 @@ def test_parent_retains_child_contract_and_reports_republish_dependency(executio
     run_until(run)
     observer = start_run(parent, actor=actor, input={"run_id": public_id_of(run), "empty": {}})
     run_until(observer)
-    awaited = system_queryset(StepRun).get(run=observer, node_key="awaited")
+    awaited = StepRun.system_queryset().get(run=observer, node_key="awaited")
     assert awaited.status == "failed"
-    assert "outside this published await contract" in system_queryset(StepAttempt).get(step_run=awaited).error
+    assert "outside this published await contract" in StepAttempt.system_queryset().get(step_run=awaited).error
 
 
 @pytest.mark.django_db(transaction=True)
@@ -421,7 +420,7 @@ def test_draft_author_cannot_resolve_unreadable_child_contract(execution):
     with pytest.raises(ValidationError, match="readable and published"):
         Workflow.objects.publish(
             parent,
-            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=parent.pk),
+            expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=parent.pk),
             actor=author,
         )
     child.with_actor(admin).grant_record_access("viewer", author)
@@ -435,7 +434,7 @@ def test_draft_author_cannot_resolve_unreadable_child_contract(execution):
     assert (
         Workflow.objects.publish(
             parent,
-            expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=parent.pk),
+            expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=parent.pk),
             actor=author,
         ).version.pk
         == parent.published_id
@@ -465,7 +464,7 @@ def test_historical_await_contract_never_recurses_into_current_publications(exec
     assert saved.revision > 0
     Workflow.objects.publish(
         workflow,
-        expected_revision=system_queryset(Workflow).values_list("draft_revision", flat=True).get(pk=workflow.pk),
+        expected_revision=Workflow.system_queryset().values_list("draft_revision", flat=True).get(pk=workflow.pk),
         actor=actor,
     )
     assert parent.published.definition.node("awaited").parsed_config.outcomes == old_schemas
