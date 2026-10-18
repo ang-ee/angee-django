@@ -893,15 +893,13 @@ Any other key alters a child an addon this one depends on declared:
 `remove: true` takes it out at composition, `hide: true` hides it at render and
 `hide: false` shows again what a dependency hid. The framework's own children
 are every addon's to adjust. Two unrelated layers setting one field fail.
-[Messaging](../../addons/angee/messaging/web/src/index.tsx) replaces the
-framework's placeholder chatter tabs this way:
+[Messaging](../../addons/angee/messaging/web/src/index.tsx) contributes the
+Comments and Conversations tabs it implements:
 
 ```tsx
 "record#aside": {
-  "chatter.comments": { remove: true },
-  "chatter.history": { remove: true },
   "messaging.comments": recordCommentsTab({ submitKey, aliases: ["comments"] }),
-  // messaging.history, messaging.sources …
+  // messaging.related …
 },
 ```
 
@@ -940,7 +938,7 @@ containers: {
   "form#chrome": { only: ["iam.share-record"] },
   "shell#drawers-bottom": { only: [] },
   "record#aside": [
-    { only: ["messaging.comments", "messaging.history", "storage.files"] },
+    { only: ["messaging.comments", "storage.files"] },
     { only: [], when: { route: "projects.my-work" } },
   ],
 },
@@ -1029,15 +1027,23 @@ The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
 model's pages and may narrow itself further with its content's `when`. A
 `ChatterTabContent` carries `label`, `icon` and `render`, and optionally
 `when`, `count`/`useCount`, `panelClassName` and `aliases`. The framework
-declares placeholder `chatter.comments` and `chatter.history` tabs until an
-addon that supplies the real ones removes them, as messaging does. Tab ids are
+declares the container without placeholder tabs. Addons contribute only implemented
+capabilities. Tab ids are
 namespaced like every child; `aliases` keeps a tab's former id working in
 `?chatterTab=` links for one release.
 
-A tab that lists one polymorphic edge (files, pages, source conversations)
+The record's own state and history belong in its `#sections`; attached work,
+files, pages and conversations belong in its `#aside`. The default order is
+Comments 10, Tasks 20, Runs 30, Files 40, Pages 50, Conversations 60. Agents use
+the shell's right drawer so conversation state survives navigation independently
+of the record aside.
+
+A tab that lists one polymorphic edge (files, pages, related conversations)
 shows only where the record's type can carry it: its `when` checks the edge's
 model label in `context.route.recordEdges`, the resource metadata the backend
-derives from each edge's schema target relations. Never let a pane report the
+derives from each edge's schema target relations. Workflow run evidence accepts
+any canonical REBAC record, so its Runs tab uses that native capability instead
+of a target-restricted edge declaration. Never let a pane report the
 edge "unavailable" or offer writes on a type whose schema declares no arm.
 
 Tabs a page publishes with `useChatterContent` are runtime children of the same

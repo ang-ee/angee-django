@@ -43,6 +43,8 @@ from angee.base.mixins import (
     AuditMixin,
     CreationKeyMixin,
     CreationKeyQuerySet,
+    HierarchyMixin,
+    HierarchyQuerySet,
     HistoryMixin,
     OwnerMixin,
     TrashMixin,
@@ -59,6 +61,7 @@ from angee.base.refs import (
 )
 from angee.base.scoping import lock_if_supported
 from angee.knowledge.retrieval import RetrievalBackend
+from angee.messaging.models import ThreadedModelMixin
 from angee.tags.models import TaggedModel
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
@@ -110,7 +113,7 @@ def parse_wikilinks(body: str) -> dict[str, str]:
     return found
 
 
-class VaultQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+class VaultQuerySet(CreationKeyQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
     """Actor-scoped vault reads with caller-scoped creation replay."""
 
     def search_pages(self, query: str, *, first: int = 20) -> list[Any]:
@@ -123,7 +126,7 @@ class VaultQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
         if not limit:
             return []
         groups: dict[str, list[Any]] = {}
-        for vault in self.scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
+        for vault in self.untrashed().scoped().order_by("name", "sqid")[:MAX_SEARCH_VAULTS]:
             groups.setdefault(vault.retrieval_class, []).append(vault)
         field = self.model._meta.get_field("retrieval_class")
         pages: list[Any] = []
@@ -253,11 +256,11 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         return vault.with_actor(actor)
 
 
-class Vault(OwnerMixin, CreationKeyMixin, AngeeDataModel, HistoryMixin):
+class Vault(OwnerMixin, CreationKeyMixin, TrashMixin, AngeeDataModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
-    Deleting a vault cascade-deletes every page inside it; the crud delete
-    mutation previews that blast radius before confirming. Ownership can be
+    Trashing a vault withholds its pages while retaining their independent trash
+    flags, so restoring the vault never restores a separately removed page. Ownership can be
     transferred or cleared without changing attribution; deleting a user clears
     ownership and retains their vaults. Whoever may ``share`` the vault manages
     its direct ``viewer`` shares; editor and role reach stay administrative.
@@ -319,7 +322,7 @@ class Vault(OwnerMixin, CreationKeyMixin, AngeeDataModel, HistoryMixin):
         return backend_class(self)
 
 
-class PageQuerySet(TrashQuerySet[Any], AngeeQuerySet[Any]):
+class PageQuerySet(HierarchyQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
     """Actor-scoped page reads; ``untrashed()`` is every page's default surface."""
 
 
@@ -361,10 +364,10 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         """Copy template pages within the authorized vault-cloning transaction.
 
         The clone owner supplies actor-readable source pages. Their unchanged
-        scalar values retain source validation; tree edges are checked here and
-        database constraints still apply. Insert all pages, restore their parent
-        links, then notify lifecycle subscribers. History capture belongs to the
-        shared write owner.
+        scalar values retain source validation. The hierarchy owner inserts the
+        tree level by level and derives each path (``create_forest``), recording
+        each page's creation once; lifecycle subscribers then hear of each page.
+        A cloned tree is a copy, not authored pages: nobody is made to follow them.
         """
 
         user_id = actor_user_id(actor)
@@ -376,39 +379,32 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
             for pk, page in pages.items()
         })
         try:
-            tree.prepare()
+            order = tuple(tree.static_order())
         except CycleError as error:
             raise ValidationError("Template page parents must form a tree.") from error
-        copies = {
-            pk: self.model(
+        copies: dict[Any, Page] = {}
+        for pk in order:
+            source = pages[pk]
+            copies[pk] = self.model(
                 vault=vault,
-                title=page.title,
-                icon=page.icon,
+                parent=copies.get(source.parent_id),
+                title=source.title,
+                icon=source.icon,
                 created_by_id=user_id,
                 updated_by_id=user_id,
             )
-            for pk, page in pages.items()
-        }
-        batch = list(copies.values())
         elevated = self.sudo(reason="knowledge.page.clone")
         with write_group():
-            elevated.bulk_create(batch)
-            children = []
-            for pk, page in copies.items():
+            elevated.create_forest(list(copies.values()))
+            for page in copies.values():
                 page.with_actor(actor)
-                if pages[pk].parent_id is not None:
-                    page.parent = copies[pages[pk].parent_id]
-                    children.append(page)
-            if children:
-                elevated.bulk_update(children, ["parent"])
-            for page in batch:
                 post_save.send(
                     sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
                 )
         return copies
 
 
-class Page(TaggedModel, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
+class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
     """Universal addressable content node inside a vault.
 
     A page owns title and hierarchy. A concrete child owns each content shape;
@@ -422,6 +418,7 @@ class Page(TaggedModel, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
     rebac_grantable = {"viewer": "write"}
 
     sqid_prefix = "pg_"
+    hierarchy_scope_fields = ("vault",)
 
     class PageKind(models.TextChoices):
         """Built-in page kinds.
@@ -438,19 +435,15 @@ class Page(TaggedModel, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
         on_delete=models.CASCADE,
         related_name="pages",
     )
-    parent = models.ForeignKey(
-        "self",
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name="children",
-    )
+    # A page's subtree is its content: deleting a folder page deletes the pages
+    # below it, where the hierarchy's default protects a parent with children.
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="children")
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
 
     objects = PageManager()
 
-    class Meta:
+    class Meta(HierarchyMixin.Meta):
         """Django model options."""
 
         abstract = True
@@ -496,11 +489,9 @@ class Page(TaggedModel, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
         db = using or router.db_for_write(type(self), instance=self)
         with transaction.atomic(using=db):
             super().trash(reason=reason, using=db)
-            below = self._subtree_pks(db)
-            if below:
-                type(self).system_queryset().using(db).filter(pk__in=below).trash(
-                    reason=self.trash_reason, at=self.trashed_at,
-                )
+            type(self).system_queryset().using(db).subtree_of(self).exclude(pk=self.pk).trash(
+                reason=self.trash_reason, at=self.trashed_at,
+            )
 
     def restore(self, *, using: str | None = None) -> None:
         """Restore this page and the pages below it that were trashed with it.
@@ -514,25 +505,13 @@ class Page(TaggedModel, TrashMixin, AuditMixin, AngeeDataModel, HistoryMixin):
             pages = type(self).system_queryset(lock=("self",)).using(db)
             if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
                 raise ValidationError({"parent": "Restore the folder that contains this page first."})
-            together = pages.filter(pk__in=self._subtree_pks(db, trashed_at=self.trashed_at)).trashed()
+            together = pages.subtree_of(self).exclude(pk=self.pk).filter(trashed_at=self.trashed_at).trashed()
             titles = [self.title, *together.values_list("title", flat=True)]
             if pages.filter(vault_id=self.vault_id, title__in=titles).untrashed().exists():
                 raise ValidationError({"title": "Another page in this vault already uses a restored title."})
             super().restore(using=db)
             together.restore()
 
-    def _subtree_pks(self, using: str, *, trashed_at: Any = None) -> set[Any]:
-        """Return the primary keys below this page, optionally only those trashed together with it."""
-
-        pages = type(self)._base_manager.using(using)
-        if trashed_at is not None:
-            pages = pages.filter(is_trashed=True, trashed_at=trashed_at)
-        found: set[Any] = set()
-        frontier = {self.pk}
-        while frontier:
-            frontier = set(pages.filter(parent_id__in=frontier).values_list("pk", flat=True)) - found
-            found |= frontier
-        return found
 
 
 class RecordBindingManager(AngeeManager):
@@ -752,7 +731,7 @@ class RecordBindingManager(AngeeManager):
         return {owner_field: knowledge, **canonical.lookups(self.model, "target"), "role": self._role(role)}
 
 
-class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
+class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
@@ -762,6 +741,7 @@ class RecordBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     administrators, and cannot be bound under an actor.
     """
 
+    history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("page", "content_type", "object_id", "role"), ("vault", "content_type", "object_id", "role"))
     runtime = True
@@ -848,7 +828,7 @@ class AmbiguousMatchError(StructuredEditError):
     """Raised when a heading path (or replace target) matches more than once."""
 
 
-class MarkdownPageManager(AngeeManager):
+class MarkdownPageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[misc]
     """Factories for actor-scoped markdown body writes."""
 
     def _copy_bodies(

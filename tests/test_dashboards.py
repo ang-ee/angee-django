@@ -88,11 +88,14 @@ def test_for_target_preserves_authored_precedence_with_scoped_installed_reads(
     bob = create_user("dashboard-bob")
     with system_context(reason="test.dashboards.target.seed"):
         authored = DashboardTarget.objects.create(owner=alice, name="Authored", scope=scope, scope_key="target")
-        installed = DashboardTarget.objects.create(owner=None, name="Installed", scope=scope, scope_key="target")
+        installed = DashboardTarget.objects.create(
+            is_baseline=True, name="Installed", scope=scope, scope_key="target",
+        )
         DashboardTarget.objects.create(owner=bob, name="Other", scope=scope, scope_key="other-owner")
-        DashboardTarget.objects.create(owner=None, name="Other key", scope=scope, scope_key="other-key")
+        DashboardTarget.objects.create(is_baseline=True, name="Other key", scope=scope, scope_key="other-key")
         DashboardTarget.objects.create(
-            owner=None, name="Other scope", scope="resource" if scope == "addon" else "addon", scope_key="missing"
+            is_baseline=True, name="Other scope", scope="resource" if scope == "addon" else "addon",
+            scope_key="missing",
         )
         DashboardTargetWidget.objects.create(
             dashboard=installed, widget_key="welcome", kind="markdown", title="Welcome", data={}
@@ -125,53 +128,95 @@ def test_for_target_preserves_authored_precedence_with_scoped_installed_reads(
             assert [widget["id"] for widget in selected.snapshot()["widgets"]] == ["welcome"]
 
 
-def test_dashboard_owner_changes_use_only_persisted_eligibility(dashboard_tables: None) -> None:
-    """Dirty and deferred owners never change readers until ownership is saved."""
+def test_dashboard_owner_changes_never_share_an_authored_snapshot(dashboard_tables: None) -> None:
+    """Dirty and cleared owners cannot turn authored content into a baseline."""
 
     owner = create_user("dashboard-owner")
     outsider = create_user("dashboard-outsider")
     with system_context(reason="test.dashboards.owner"):
-        dashboard = DashboardTarget.objects.create(name="Baseline", scope="addon", scope_key="owner-change")
-        dashboard.owner = owner
+        dashboard = DashboardTarget.objects.create(
+            owner=owner, name="Authored", scope="addon", scope_key="owner-change",
+        )
+        baseline = DashboardTarget.objects.create(
+            is_baseline=True, name="Baseline", scope="addon", scope_key="owner-change",
+        )
+        dashboard.owner = None
         dashboard.name = "Renamed"
         dashboard.save(update_fields=["name"])
     with actor_context(outsider):
+        assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()
+        assert DashboardTarget.objects.for_target(outsider, "addon", "owner-change") == baseline
+    with actor_context(owner):
         assert DashboardTarget.objects.filter(pk=dashboard.pk).exists()
-    with system_context(reason="test.dashboards.owner.persist"):
-        dashboard.save(update_fields=["owner"])
+    with actor_context(owner):
+        dashboard.with_actor(owner).transfer_ownership(None)
+        dashboard.refresh_from_db()
+        assert dashboard.owner_id is None
+        assert not dashboard.is_baseline
     with actor_context(outsider):
         assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()
-    with system_context(reason="test.dashboards.owner.defer"):
-        dashboard = DashboardTarget.objects.defer("owner").get(pk=dashboard.pk)
-        dashboard.name = "Deferred owner"
-        dashboard.save(update_fields=["name"])
-        dashboard.owner = None
-        dashboard.save(update_fields=["owner"])
+        assert DashboardTarget.objects.for_target(outsider, "addon", "owner-change") == baseline
+
+
+def test_shared_baseline_creation_requires_the_resource_system_path(dashboard_tables: None) -> None:
+    owner = create_user("dashboard-baseline-candidate")
+    with actor_context(owner):
+        candidate = DashboardTarget(is_baseline=True, name="Shared", scope="addon", scope_key="candidate")
+        assert not candidate.has_access("create")
+        assert DashboardTarget(name="Personal", scope="personal").is_baseline is False
+
+
+def test_dashboard_owner_deletion_preserves_private_content_and_baseline(dashboard_tables: None) -> None:
+    owner = create_user("dashboard-deleted-owner")
+    outsider = create_user("dashboard-deleted-reader")
+    with system_context(reason="test.dashboards.owner.delete"):
+        dashboard = DashboardTarget.objects.create(owner=owner, name="Private", scope="resource", scope_key="same")
+        baseline = DashboardTarget.objects.create(is_baseline=True, name="Public", scope="resource", scope_key="same")
+        owner.delete()
+        dashboard.refresh_from_db()
+        assert dashboard.owner_id is None
+        assert not dashboard.is_baseline
     with actor_context(outsider):
-        assert DashboardTarget.objects.filter(pk=dashboard.pk).exists()
+        assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()
+        assert DashboardTarget.objects.for_target(outsider, "resource", "same") == baseline
 
 
-def test_dashboard_policy_bulk_writes_change_readers_without_tuples(dashboard_tables: None) -> None:
-    """Bulk ownership changes and inserts use the same live column policy."""
-
+def test_dashboard_policy_bulk_writes_keep_baseline_separate_from_ownership(dashboard_tables: None) -> None:
     owner = create_user("dashboard-bulk-owner")
     outsider = create_user("dashboard-bulk-reader")
     with system_context(reason="test.dashboards.bulk"):
-        dashboard = DashboardTarget.objects.create(owner=owner, name="Baseline", scope="addon", scope_key="bulk")
-    with actor_context(outsider):
-        assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()
-    with system_context(reason="test.dashboards.bulk.share"):
+        dashboard = DashboardTarget.objects.create(owner=owner, name="Authored", scope="addon", scope_key="bulk")
         assert DashboardTarget.objects.filter(pk=dashboard.pk).update(owner_id=None) == 1
-        (bulk,) = DashboardTarget.objects.bulk_create([
-            DashboardTarget(name="Bulk", scope="addon", scope_key="other"),
+        (baseline,) = DashboardTarget.objects.bulk_create([
+            DashboardTarget(is_baseline=True, name="Baseline", scope="addon", scope_key="other"),
         ])
     with actor_context(outsider):
-        assert set(DashboardTarget.objects.values_list("pk", flat=True)) == {dashboard.pk, bulk.pk}
+        assert list(DashboardTarget.objects.values_list("pk", flat=True)) == [baseline.pk]
     with system_context(reason="test.dashboards.bulk.own"):
         assert DashboardTarget.objects.filter(pk=dashboard.pk).update(owner=owner) == 1
-    with actor_context(outsider):
-        assert list(DashboardTarget.objects.values_list("pk", flat=True)) == [bulk.pk]
+    with actor_context(owner):
+        assert set(DashboardTarget.objects.values_list("pk", flat=True)) == {dashboard.pk, baseline.pk}
     assert not active_relationship_model().objects.filter(resource_type="dashboards/dashboard").exists()
+
+
+def test_personal_dashboard_trash_retains_widgets_and_restores_under_revision(dashboard_tables: None) -> None:
+    owner = create_user("dashboard-trash-owner")
+    with system_context(reason="test.dashboards.trash.seed"):
+        dashboard = DashboardTarget.objects.create(owner=owner, name="Personal", scope="personal")
+        widget = DashboardTargetWidget.objects.create(
+            dashboard=dashboard, widget_key="body", kind="markdown", title="Body", data={},
+        )
+    with actor_context(owner):
+        removed = DashboardTarget.objects.trash_targets().get(pk=dashboard.pk)
+        removed.trash()
+        assert removed.is_trashed
+        assert removed.trashed_by_id == owner.pk
+        assert DashboardTargetWidget.objects.filter(pk=widget.pk).exists()
+        removed.restore()
+        assert not removed.is_trashed
+        assert removed.trashed_at is None
+        assert removed.revision > dashboard.revision
+        assert DashboardTargetWidget in removed.history_scope()
 
 
 def test_resource_reload_preserves_unchanged_installed_reads_without_tuples(

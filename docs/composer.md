@@ -202,6 +202,12 @@ participants inherit the resources-owned
 `super()`. The renderer has no generic decorator/attribute language or resource
 hook aggregator.
 
+Adding native history to an existing model emits only Django's schema changes:
+the first tracked write after the upgrade is the row's first version. An addon
+whose upgrade needs earlier snapshots declares that in its own runtime migration
+(simple-history's `bulk_history_create` on the historical model); the composer
+emits no checkpoint of its own.
+
 The composer emits package/model files, static web projections and effective
 permission extensions, and explicitly materializes addon-owned migrations.
 Django owns the resulting model and migration graphs, `makemigrations`, execution,

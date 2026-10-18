@@ -158,11 +158,12 @@ class PublicationCases(TransactionTestCase):
             self.as_user(question, self.manager).set_visibility("inherited")
         self.post(question, self.asker)
 
-    def test_asker_attributed_tracking_message_also_blocks_widening(self) -> None:
+    def test_an_askers_visibility_change_alone_does_not_block_widening(self) -> None:
+        # A field change is a history line, not a message: only an asker's message blocks widening.
         question = self.question(restricted=False)
         with actor_context(self.asker):
             self.as_user(question, self.asker).set_visibility("restricted")
-        with actor_context(self.manager), self.assertRaises(ClarificationWidenBlocked):
+        with actor_context(self.manager):
             self.as_user(question, self.manager).set_visibility("inherited")
 
     def test_other_threads_and_other_authors_do_not_block(self) -> None:

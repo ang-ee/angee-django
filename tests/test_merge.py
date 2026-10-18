@@ -1,7 +1,7 @@
 """Record merge: the shared template, its declared reference policies and the shared verb.
 
-Tags are the first mergeable model: merging one tag into another moves its
-assignments, a record tagged with both keeps one, and the merged tag goes away.
+Tags exercise shared reference movement and retained identity: assignments
+follow the survivor, collisions keep one live edge, and history keeps aliases.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models import DO_NOTHING
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from rebac import PermissionDenied, RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
@@ -57,14 +58,14 @@ def _curator(username: str) -> Any:
     return user
 
 
-def _vocabulary() -> tuple[Any, Any, Any, Any]:
+def _vocabulary(*, owner: Any = None) -> tuple[Any, Any, Any, Any]:
     """Two tags for one meaning: Ada carries both, Bob only the one to merge away."""
 
     with system_context(reason="merge test vocabulary"):
         mobile = Tag.objects.create(name="Mobile")
         mobil = Tag.objects.create(name="Mobil")
-        ada = Party.objects.create(display_name="Ada")
-        bob = Party.objects.create(display_name="Bob")
+        ada = Party.objects.create(display_name="Ada", created_by=owner)
+        bob = Party.objects.create(display_name="Bob", created_by=owner)
         party_type = ContentType.objects.get_for_model(Party)
         for tag, party in ((mobile, ada), (mobil, ada), (mobil, bob)):
             TagAssignment.objects.create(tag=tag, content_type=party_type, object_id=party.pk)
@@ -86,14 +87,16 @@ def _tag_on_tag(tag: Any, target: Any) -> Any:
 
 
 def test_merging_a_tag_moves_its_assignments_and_collapses_a_duplicate() -> None:
-    """Ada keeps one Mobile, Bob gains it, and Mobil is gone."""
+    """Ada keeps one Mobile, Bob gains it, and Mobil remains a historical alias."""
 
     mobile, mobil, ada, bob = _vocabulary()
     with actor_context(_curator("merge-curator")):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
 
     with system_context(reason="merge test read"):
-        assert not Tag._base_manager.filter(pk=mobil.pk).exists()
+        assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
+        assert TagAssignment.history.filter(tag_id=mobil.pk).exists()
+        assert not Tag.objects.canonical().filter(pk=mobil.pk).exists()
         assert TagAssignment._base_manager.filter(tag__in=(mobile, mobil)).count() == 2
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
@@ -106,7 +109,69 @@ def test_several_records_merge_into_one_survivor() -> None:
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil), public_id_of(cell)])
 
     with system_context(reason="merge test read"):
-        assert not Tag._base_manager.filter(pk__in=(mobil.pk, cell.pk)).exists()
+        assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
+        assert not Tag._base_manager.filter(pk=cell.pk).exists()
+    assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
+
+
+def test_a_retained_alias_protects_its_survivor_from_deletion() -> None:
+    mobile, mobil, ada, bob = _vocabulary()
+    with actor_context(_curator("merge-protected")):
+        survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+        with pytest.raises(ProtectedError):
+            survivor.delete()
+        assert Tag.objects.get(pk=mobil.pk).canonical().pk == mobile.pk
+    assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
+
+
+def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_alias() -> None:
+    curator = _curator("merge-revert")
+    mobile, mobil, _ada, _bob = _vocabulary(owner=curator)
+    before = set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id"))
+    with actor_context(curator):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        changed_assignments = set(
+            TagAssignment.history.filter(changeset=boundary).values_list("id", flat=True)
+        )
+        assert changed_assignments == {pk for pk, tag, _kind, _record in before if tag == mobil.pk}
+        reverted = boundary.with_actor(curator).revert()
+    assert reverted.activity == "revert"
+    assert Tag._base_manager.get(pk=mobil.pk).merged_into_id is None
+    assert set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id")) == before
+
+
+def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_survivor() -> None:
+    curator = _curator("merge-flatten")
+    mobile, mobil, ada, bob = _vocabulary(owner=curator)
+    with system_context(reason="merge test next survivor"):
+        phones = Tag.objects.create(name="Phones")
+    with actor_context(curator):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+        Tag.objects.get(pk=phones.pk).merge(records=[public_id_of(mobile)])
+        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().changeset
+        assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == phones.pk
+        assert Tag.history.filter(id=mobil.pk, changeset=boundary, merged_into_id=phones.pk).exists()
+        assert Tag.objects.get(pk=mobil.pk).canonical().pk == phones.pk
+        boundary.with_actor(curator).revert()
+        assert Tag.objects.get(pk=mobil.pk).canonical().pk == mobile.pk
+    assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
+    assert Tag._base_manager.get(pk=mobile.pk).merged_into_id is None
+    assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
+    assert _tagged_parties(phones) == []
+
+
+def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None:
+    curator = _curator("merge-revert-later-write")
+    mobile, mobil, ada, bob = _vocabulary(owner=curator)
+    with actor_context(curator):
+        survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        survivor.name = "Mobile phones"
+        survivor.save(update_fields=("name",))
+        with pytest.raises(ValidationError, match="later write prevents revert"):
+            boundary.with_actor(curator).revert()
+    assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
 
@@ -228,7 +293,9 @@ def test_references_include_hidden_foreign_keys_and_each_edges_policy() -> None:
     assert edges["workflows.StepWatch"] == MergePolicy.MOVE
     assert edges["workflows.WorkflowRun"] == MergePolicy.KEEP
     assert edges["integrate.RecordLink"] == MergePolicy.MOVE
-    assert edges["messaging.ThreadAttachment"] == MergePolicy.BLOCK
+    # A merge folds the merged record's chatter into the survivor's (the edge's merge contract).
+    assert edges["messaging.ThreadAttachment"] == MergePolicy.MOVE
+    assert edges["projects.Task"] == MergePolicy.MOVE
 
 
 def test_a_generic_pointer_no_edge_declares_blocks() -> None:
@@ -322,6 +389,18 @@ def test_a_history_key_keeps_pointing_at_the_merged_record() -> None:
     assert {ref.policy for ref in history} == {MergePolicy.KEEP}
 
 
+def test_a_declared_lineage_key_keeps_pointing_at_the_merged_record() -> None:
+    """A pointing model's ``merge_policies`` names a key whose policy its ``on_delete`` does not imply."""
+
+    lineage = [
+        ref for ref in references(Task)
+        if isinstance(ref, ForeignKeyReference) and ref.model is Project and ref.field.name == "converted_from"
+    ]
+    assert Project.merge_policies == {"converted_from": MergePolicy.KEEP}
+    assert [ref.policy for ref in lineage] == [MergePolicy.KEEP]
+    assert Project._meta.get_field("converted_from").remote_field.on_delete is not DO_NOTHING
+
+
 def test_a_key_to_a_multi_table_child_points_and_moves_by_the_shared_key() -> None:
     """``Task.queue`` points at ``Queue``, a child of ``Group``: a group merge reads and moves it by the shared key."""
 
@@ -345,8 +424,8 @@ def test_a_key_to_a_multi_table_child_points_and_moves_by_the_shared_key() -> No
             reference.move(reference.rows(survivor), survivor=plain)
 
 
-def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A direct share is a stored row the retired record would take with it."""
+def test_a_record_named_in_stored_relationships_is_retained_by_its_merge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A direct share is a stored row the retired record would take with it, so the record stays as a redirect."""
 
     owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
     with system_context(reason="merge test share"):
@@ -357,8 +436,12 @@ def test_a_record_named_in_stored_relationships_refuses_its_merge(monkeypatch: p
 
     mobile, mobil, _ada, _bob = _vocabulary()
     monkeypatch.setattr(merge_module, "named_in_relationships", lambda record: record.pk == mobil.pk)
-    with actor_context(_curator("merge-shared")), pytest.raises(ValidationError, match="shared"):
+    # A record with evidence (`retained()`) is kept as a redirect instead of deleted,
+    # so the stored relationship outlives the merge and nothing refuses it.
+    with actor_context(_curator("merge-shared")):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+    with system_context(reason="merge test read"):
+        assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
 
 
 def test_a_many_to_many_to_its_own_model_moves_the_links_other_records_hold() -> None:

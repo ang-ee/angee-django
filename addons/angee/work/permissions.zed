@@ -25,7 +25,6 @@ definition work/stage {
     permission read   = queue->read
     permission write  = queue->write
     permission delete = queue->write
-    permission conceal = authenticated
 }
 
 definition work/cycle {

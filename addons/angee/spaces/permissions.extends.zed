@@ -4,7 +4,7 @@
 definition messaging/thread {
     relation selected_group: spaces/group // rebac:field=groups
 
-    permission read = selected_group->read
+    permission read_granted = selected_group->read
     permission write = selected_group->post
 }
 
@@ -25,7 +25,7 @@ definition messaging/channel {
 definition knowledge/vault {
     relation team: spaces/group // rebac:field=team
 
-    permission read = team->post
-    permission write = team->write
+    permission read_granted = team->post
+    permission write_granted = team->write
     permission write__team = share
 }

@@ -10,19 +10,16 @@ describe("messaging addon manifest", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
   });
 
-  test("replaces the framework's placeholder tabs with its own, keeping their old ids as aliases", () => {
+  test("contributes gated Comments and Conversations; provenance owns History", () => {
     const aside = messaging.containers?.["record#aside"] as Record<string, unknown>;
     expect(aside).toMatchObject({
-      "chatter.comments": { remove: true },
-      "chatter.history": { remove: true },
       "messaging.comments": { sequence: 10, content: { aliases: ["comments"] } },
-      "messaging.history": { sequence: 20, content: { aliases: ["history", "activity", "messaging.activity"] } },
-      "messaging.sources": { sequence: 30, content: { aliases: ["sources"] } },
+      "messaging.related": { sequence: 60, content: { aliases: ["messaging.sources", "sources"] } },
     });
   });
 
-  test("offers the Sources tab only where the record's type can retain source conversations", () => {
-    const sources = (messaging.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.sources"]!;
+  test("offers the Conversations tab only where the record's type can retain source conversations", () => {
+    const sources = (messaging.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.related"]!;
     const record = (recordEdges?: readonly string[]): ChatterViewContext => ({
       pathname: "/records/rec_1", params: { id: "rec_1" },
       route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", ...(recordEdges ? { recordEdges } : {}) },
@@ -31,6 +28,18 @@ describe("messaging addon manifest", () => {
     expect(sources.content.when?.(record(["messaging.ThreadAttachment"]))).toBe(true);
     expect(sources.content.when?.(record(["storage.FileAttachment"]))).toBe(false);
     expect(sources.content.when?.(record())).toBe(false);
+  });
+
+  test("offers Comments only where the record's type keeps chatter, not on every thread attachment target", () => {
+    const comments = (messaging.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["messaging.comments"]!;
+    const record = (recordEdges: readonly string[]): ChatterViewContext => ({
+      pathname: "/records/rec_1", params: { id: "rec_1" },
+      route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", recordEdges },
+      view: { kind: "record", type: "example/record", sqid: "rec_1" },
+    });
+    expect(comments.content.when?.(record(["messaging.ThreadAttachment", "messaging.ThreadAttachment:chatter"]))).toBe(true);
+    // A file retains source conversations but keeps no chatter of its own.
+    expect(comments.content.when?.(record(["messaging.ThreadAttachment", "tags.TagAssignment"]))).toBe(false);
   });
 
   test("registers the message resources", () => {

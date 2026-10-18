@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 SETTINGS = {
-    "ANGEE_HOOKS:append": ["ANGEE_WORK_MERGE_CONTRIBUTORS"],
-    # Downstream addons append dotted ``(source, canonical)`` movers. Work sorts
-    # the paths before invoking them in the row-locked duplicate transaction.
-    "ANGEE_WORK_MERGE_CONTRIBUTORS": [],
     "CELERY_BEAT_SCHEDULE:append": {
         "work.wake_due_snoozes": {
             "task": "work.wake_due_snoozes",

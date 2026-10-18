@@ -173,7 +173,7 @@ containers: {
   },
   "form#chrome": { only: ["iam.share-record"] },
   "record#aside": [
-    { "chatter.comments": { remove: true } },
+    { "messaging.comments": { sequence: 10 } },
     { only: [], when: { route: "notes.detail" } }, // may be owned by another addon
   ],
 },

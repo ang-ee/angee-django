@@ -50,10 +50,9 @@ from angee.base.changesets import changeset, current_changeset
 from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
-from angee.base.merge import fold_records, references
-from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, Statement, TrashQuerySet
-from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.querysets import StatementQuerySet
+from angee.base.mixins import ArchiveQuerySet, HierarchyQuerySet, SourceKind, Statement
+from angee.base.models import AngeeManager, AngeeQuerySet, StatementSubjectQuerySet
+from angee.base.querysets import MergeableQuerySet, StatementQuerySet
 from angee.base.scoping import by_key, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
@@ -209,7 +208,7 @@ class CircleManager(AngeeManager.from_queryset(CircleQuerySet)):  # type: ignore
     """Manager for circles — subtree scopes ride in through :class:`CircleQuerySet`."""
 
 
-class HandleQuerySet(AngeeQuerySet):
+class HandleQuerySet(MergeableQuerySet, AngeeQuerySet):
     """Handle read scopes over the Angee base."""
 
     def confirmed(self, platform: str, value: str) -> Self:
@@ -271,7 +270,7 @@ class HandleQuerySet(AngeeQuerySet):
             .objects.handle_statements(
                 actor=self.actor() or current_actor(),
             )
-            .canonical()
+            .applied()
             .filter(subject_id=OuterRef("party_id"), handle_id=OuterRef("pk"))
         )
         return Subquery(rows.values("confidence")[:1])
@@ -434,10 +433,10 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 
         handles = self.filter(platform=platform)
         handle = handles.filter(external_id=external_id).first() if external_id else None
-        if handle is not None and handle.value == value:
-            return handle
-        owner = handles.filter(value=value).exclude(pk=getattr(handle, "pk", None)).first()
-        return owner or handle
+        if handle is None or handle.value != value:
+            owner = handles.filter(value=value).exclude(pk=getattr(handle, "pk", None)).first()
+            handle = owner or handle
+        return handle.canonical() if handle is not None else None
 
     @staticmethod
     def _refresh(handle: Any, fields: dict[str, Any]) -> None:
@@ -531,13 +530,14 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
     def resolve(self, handle: Any) -> None:
         """Materialize the applied, eligible cross-party winner and both counters."""
         handle_id = handle.pk if isinstance(handle, models.Model) else handle
-        owner = apps.get_model("parties", "Party").objects
-        with transaction.atomic(), system_context(reason="parties.handle.resolve"):
+        using = (handle._state.db if isinstance(handle, models.Model) else None) or self.db
+        owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        with transaction.atomic(using=using), system_context(reason="parties.handle.resolve"):
             handles, parties = owner.lock_identity_rows(party_ids=(), handle_ids=(handle_id,))
             handle = handles[handle_id]
             candidates = list(
                 owner.handle_statements()
-                .canonical()
+                .applied()
                 .filter(
                     handle=handle,
                     subject__is_trashed=False,
@@ -550,21 +550,22 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             confirmed = bool(winner and winner.is_confirmed)
             if handle.party_id != resolved or handle.party_link_confirmed != confirmed:
                 handle.party_id, handle.party_link_confirmed = resolved, confirmed
-                handle.save(update_fields=("party", "party_link_confirmed", "updated_at"))
+                handle.save(using=using, update_fields=("party", "party_link_confirmed", "updated_at"))
             for pk in sorted({value for value in (previous, resolved) if value is not None}):
                 self.recount(parties[pk])
             handle._party_links_resolved()
 
     def recount(self, party: Any) -> None:
-        count = self.filter(party=party).count()
+        using = party._state.db or self.db
+        count = self.using(using).filter(party=party).count()
         if party.handle_count != count:
             party.handle_count = count
-            party.save_without_historical_record(update_fields=("handle_count",))
+            party.save_without_historical_record(using=using, update_fields=("handle_count",))
 
     def resolve_stale_owners(self) -> int:
-        owner = apps.get_model("parties", "Party").objects
+        owner = apps.get_model("parties", "Party").objects.db_manager(self.db)
         decisive = (
-            owner.handle_statements().canonical().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
+            owner.handle_statements().applied().filter(handle_id=OuterRef("pk"), subject_id=OuterRef("party_id"))
         )
         stale = self.filter(party__isnull=False).exclude(Exists(decisive)).order_by("pk")
         repaired = 0
@@ -582,12 +583,13 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         """
 
         avatar_id = getattr(avatar, "pk", None)
-        with system_context(reason="parties.handle.set_avatar"), transaction.atomic():
-            locked = self.filter(pk=handle.pk).lock_if_supported().first()
+        using = handle._state.db or self.db
+        with system_context(reason="parties.handle.set_avatar"), transaction.atomic(using=using):
+            locked = self.using(using).filter(pk=handle.pk).lock_if_supported().first()
             if locked is None or locked.avatar_id == avatar_id:
                 return False
             locked.avatar_id = avatar_id
-            locked.save(update_fields=["avatar", "updated_at"])
+            locked.save(using=using, update_fields=["avatar", "updated_at"])
         handle.avatar_id = avatar_id
         return True
 
@@ -616,57 +618,32 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         return self.set_avatar(handle, avatar)
 
     def merge(self, source: Any, *, into: Any) -> Any | None:
-        """Fold ``source`` into ``into``, the handle owning the same contact point; return the survivor.
+        """Compatibility entry for bridge alias resolution; Handle owns the fold.
 
-        For a handle that turned out to be another's spelling (a resolved
-        messenger alias), so it refuses handles on different platforms. Under the
-        identity lock order, the record fold (:func:`angee.base.merge.fold_records`)
-        runs as system work in one merge changeset whose origin is ``into``. It
-        refuses before anything moves while a row that cannot move (a ``BLOCK``
-        reference) points at ``source``, stored relationships name it or a merge
-        guard holds it: deleting it would lose them. ``into`` keeps every value it
-        has and takes the ones it lacks from ``source``: the control owner, the
-        label, display name and verification, the avatar (through
-        :meth:`set_avatar`) and transport metadata keys. ``source``'s handle
-        statements move through ``Party.objects.move_handle_statements``, which
-        re-resolves both handles; the fold moves every other row pointing at it —
-        messages, participations, reactions, tags — dropping a moved copy of a
-        fact ``into`` already holds (the pointing model's ``merge_identity``).
-        Then ``source`` is deleted. A handle a concurrent fold already removed
-        leaves nothing to do and returns ``None``.
+        Removed in 0.4.0: the bridges then call ``into.fold([source])`` under their
+        own identity locks. A repeated fold of the same retained alias returns ``None``, as the
+        former delete-based entry did after its alias had gone. Alias keys stay
+        reserved so a later sync still lands on the operational survivor.
         """
 
+        if source.pk is None or into.pk is None:
+            raise ValidationError("Both handles must be saved before merging.")
         if source.pk == into.pk:
             raise ValidationError("A handle cannot be merged into itself.")
-        owner = apps.get_model("parties", "Party").objects
-        with transaction.atomic(), system_context(reason="parties.handle.merge"):
+        using = into._state.db or self.db
+        if source._state.db != using:
+            raise ValidationError("Merged handles must belong to the same database.")
+        owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        with transaction.atomic(using=using), system_context(reason="parties.handle.merge"):
             handles, _parties = owner.lock_identity_rows(party_ids=(), handle_ids=(source.pk, into.pk))
             merged, survivor = handles.get(source.pk), handles.get(into.pk)
-            if merged is None or survivor is None:
+            if merged is None or survivor is None or survivor.merged_into_id is not None:
                 return None
-            if merged.platform != survivor.platform:
-                raise ValidationError("Only handles on the same platform can be merged.")
-
-            def carry() -> None:
-                filled = []
-                for name in ("owner", "label", "display_name", "is_verified"):
-                    attname = self.model._meta.get_field(name).attname
-                    if not getattr(survivor, attname) and getattr(merged, attname):
-                        setattr(survivor, attname, getattr(merged, attname))
-                        filled.append(name)
-                metadata = {**(merged.metadata or {}), **(survivor.metadata or {})}
-                if metadata != survivor.metadata:
-                    survivor.metadata = metadata
-                    filled.append("metadata")
-                if filled:
-                    survivor.save(update_fields=[*filled, "updated_at"])
-                if survivor.avatar_id is None and merged.avatar_id is not None:
-                    self.set_avatar(survivor, merged.avatar)
-                owner.move_handle_statements(merged, survivor)
-
-            fold_records(survivor, [merged], carry=carry, retire=lambda record: record.delete())
-        survivor.refresh_from_db()
-        return survivor
+            if merged.merged_into_id is not None:
+                if merged.canonical().pk == survivor.canonical().pk:
+                    return None
+                raise ValidationError("This handle already resolves to a different survivor.")
+            return survivor.fold([merged])
 
 
 class PartyStatementQuerySet(StatementQuerySet):
@@ -720,7 +697,7 @@ class PartyStatementQuerySet(StatementQuerySet):
     def asserted(self) -> Any:
         """Publish eligible applied directory/person assertions or confirmations."""
         return (
-            self.canonical()
+            self.applied()
             .filter(aspect="handle")
             .filter(
                 Q(rank=self.model.StatementRank.PREFERRED)
@@ -748,18 +725,8 @@ class SameAsPair:
     handles: tuple[Any, ...]
 
 
-class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
+class PartyQuerySet(MergeableQuerySet, StatementSubjectQuerySet):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
-
-    def canonical(self) -> Self:
-        """Return only the canonical (unmerged) parties.
-
-        The merge owner flattens redirects, so a party
-        is canonical exactly when it points nowhere — one indexed filter that stays
-        correct even against a longer chain, since a terminal always points nowhere.
-        """
-
-        return self.untrashed().filter(merged_into__isnull=True)
 
     def with_display_avatars(self, actor: Any) -> Self:
         """Batch :meth:`PartyManager.display_avatar` for these parties, through ``actor``'s readable files.
@@ -919,7 +886,7 @@ class PartyQuerySet(TrashQuerySet, AngeeQuerySet):
             return []
         actor, unscoped = self.effective_actor(strict=True)
         visible = self.canonical().scoped_for_aggregate().values("pk")
-        statements = self.model.same_as.model.statements.canonical()
+        statements = self.model.same_as.model.statements.applied()
         pairs = (
             self.model.same_as.model._base_manager.filter(
                 left_id__in=Subquery(visible),
@@ -1117,7 +1084,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
 
     def handle_statements(self, *, actor: Any = _UNSCOPED) -> Any:
-        rows = apps.get_model("parties", "Party").statements.handles()
+        rows = apps.get_model("parties", "Party").statements.db_manager(self.db).handles()
         return rows if actor is _UNSCOPED else rows.readable(actor)
 
     @staticmethod
@@ -1181,39 +1148,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     list(rows.order_by("pk").lock_if_supported())
         return handles, parties
 
-    def move_handle_statements(self, from_handle: Any, to_handle: Any) -> None:
-        """Move ``from_handle``'s handle statements onto ``to_handle``, keeping every decision and its evidence.
-
-        For a handle that turned out to be another's spelling (a resolved alias).
-        The move is the generic reference move a record merge performs
-        (:func:`angee.base.merge.references` → ``Statement.merge_contract``): a
-        party's statement about ``from_handle`` now states ``to_handle``, and one
-        that collides with the same source's statement about ``to_handle`` is
-        retained as superseded by the stronger of the two, so a confirmation, a
-        dismissal and both evidence lists survive. Runs under the identity lock
-        order, then re-resolves both handles, which recounts the parties each
-        gains or loses: ``from_handle`` is left without statements and so unowned.
-        A handle a concurrent move already removed leaves nothing to move.
-        """
-
-        statement_model = apps.get_model("parties", "PartyStatement")
-        handle_model = apps.get_model("parties", "Handle")
-        with transaction.atomic():
-            handles, _parties = self.lock_identity_rows(party_ids=(), handle_ids=(from_handle.pk, to_handle.pk))
-            if from_handle.pk not in handles or to_handle.pk not in handles:
-                return
-            reference = next(
-                reference
-                for reference in references(handle_model)
-                if reference.model is statement_model and reference.name == "handle"
-            )
-            rows = reference.rows(handles[from_handle.pk])
-            if rows.exists():
-                with system_context(reason="parties.handle.move_statements"):
-                    reference.move(rows, survivor=handles[to_handle.pk])
-            handle_model.objects.resolve(handles[to_handle.pk])
-            handle_model.objects.resolve(handles[from_handle.pk])
-
     def propose_manual_contact(
         self,
         party: Any,
@@ -1273,7 +1207,6 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             handle_owner = handle_model.objects
             handle = (
                 handle_owner.sudo(reason="parties.statement.propose_manual_contact.handle")
-                .lock_if_supported()
                 .filter(platform=normalized_platform, value=contact_value)
                 .first()
             )
@@ -1285,11 +1218,14 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                         value=contact_value,
                         created_by_id=actor_user_id(actor),
                     )
+            handle = handle.canonical()
             handles, parties = self.lock_identity_rows(
                 party_ids=(party.pk,),
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
+            if handle.merged_into_id is not None:
+                raise ValidationError("This contact point was merged concurrently; try again.")
             locked_party = parties[party.pk]
             locked_party.require_access("write", actor)
             if not handle.with_actor(actor).has_access("read"):
@@ -1454,7 +1390,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             return None
         handle_model = apps.get_model("parties", "Handle")
         twins = (
-            handle_model.objects.filter(
+            handle_model.objects.canonical().filter(
                 platform=handle.platform,
                 normalized_value=handle.normalized_value,
                 party__isnull=False,
@@ -1701,7 +1637,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         supported: set[tuple[Any, Any]] = set()
         created = 0
         owner_ids = (
-            handle_model.objects.exclude(created_by_id=None)
+            handle_model.objects.canonical().exclude(created_by_id=None)
             .exclude(display_name="")
             .values_list("created_by_id", flat=True)
             # Clear the model's default ordering: its columns silently join the
@@ -1712,7 +1648,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         )
         for owner_id in owner_ids:
             handles = tuple(
-                handle_model.objects.filter(created_by_id=owner_id)
+                handle_model.objects.canonical().filter(created_by_id=owner_id)
                 .exclude(display_name="")
                 .select_related("party")
                 .order_by("sqid")
@@ -2005,7 +1941,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         """
 
         person_model = apps.get_model("parties", "Person")
-        person, _created = person_model.objects.get_or_create(
+        person, _created = person_model.objects.db_manager(self._db or user._state.db).get_or_create(
             user=user,
             defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
         )

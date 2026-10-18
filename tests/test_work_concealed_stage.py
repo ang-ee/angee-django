@@ -1,4 +1,4 @@
-"""Concealment removes every non-administrator grant in both relationship stores."""
+"""Concealing workflow stages invoke shared trash in both relationship stores."""
 
 from pathlib import Path
 
@@ -30,7 +30,7 @@ class ConcealedStageTests(WorkCase):
             held = self.as_user(task)
             held.stage = self.stages["Removed"]
             held.save(update_fields=("stage", "updated_at"))
-        for user in (self.owner, self.assignee, self.reader, self.member, self.moderator, self.viewer):
+        for user in (self.assignee, self.reader, self.member, self.viewer):
             for permission in ("read", "write", "share", "comment", "delete"):
                 with self.subTest(user=user.username, permission=permission):
                     self.assertFalse(self.as_user(task, user).has_access(permission))
@@ -50,15 +50,17 @@ class ConcealedStageTests(WorkCase):
                 changed.save(update_fields=("title", "updated_at"))
             with actor_context(user), self.assertRaises(PermissionDenied):
                 self.as_user(task, user).delete()
-        for permission in ("read", "write", "share", "comment", "delete"):
-            self.assertTrue(self.as_user(task, self.admin).has_access(permission))
-            self.assertTrue(self.scoped(task, self.admin, permission))
+        for manager in (self.owner, self.manager, self.moderator, self.admin):
+            for permission in ("read", "write", "share", "comment", "delete", "restore"):
+                self.assertTrue(self.as_user(task, manager).has_access(permission))
+                self.assertTrue(self.scoped(task, manager, permission))
         with actor_context(self.admin):
             hidden = self.as_user(task, self.admin)
             update = hidden.message_post("Administrative update")
-            self.assertEqual(self.recipients(update), set())
-            hidden.stage = self.stages["Ready"]
-            hidden.save(update_fields=("stage", "updated_at"))
+            self.assertTrue(
+                self.recipients(update).isdisjoint({self.assignee.pk, self.reader.pk, self.member.pk, self.viewer.pk})
+            )
+            hidden.restore()
         for user in (self.owner, self.assignee, self.reader, self.member, self.moderator):
             self.assertTrue(self.scoped(task, user))
 

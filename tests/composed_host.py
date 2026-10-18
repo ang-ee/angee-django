@@ -297,6 +297,7 @@ def run(args: argparse.Namespace) -> None:
         from django.test.runner import DiscoverRunner
 
         from angee.base.changesets import changeset
+        from angee.messaging.testing.fixtures import load_source_identity
         from angee.parties.testing.fixtures import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
@@ -331,6 +332,7 @@ def run(args: argparse.Namespace) -> None:
                                 # and only loads the Rule/Seed rows instead of syncing a second time.
                                 if isinstance(test, TransactionTestCase):
                                     load_statement_sources()
+                                    load_source_identity()
 
                             setattr(test, "setUp", set_up)
 

@@ -34,8 +34,8 @@ function RowActions() {
   );
 }
 
-/** The record chatter feed: a single left-aligned column interleaving a comment, an audit
- *  field-change (tracking table), and an inbound channel email (direction/channel affordance).
+/** The record chatter feed: a single left-aligned column interleaving a comment, a compact
+ *  change line, and an inbound channel email (direction/channel affordance).
  *  Every actor renders in one column — direction is an inline tag, never an L/R split. */
 export const Feed: Story = {
   render: () => (
@@ -64,19 +64,7 @@ export const Feed: Story = {
           avatar={<Avatar size="sm" initials="SB" />}
           author="Sam Brand"
           timestamp={new Date(now - 90 * 60 * 1000)}
-          meta="· changed a field"
-          tracking={
-            <dl className="space-y-1 rounded-6 bg-inset p-2">
-              <div className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-2 text-13">
-                <dt className="truncate font-medium text-fg-muted">Stage</dt>
-                <dd className="min-w-0 text-fg">
-                  <span className="text-fg-muted">Draft</span>
-                  <span aria-hidden="true"> → </span>
-                  <span>In review</span>
-                </dd>
-              </div>
-            </dl>
-          }
+          meta="· moved the stage to In review"
           actions={<RowActions />}
         />
 

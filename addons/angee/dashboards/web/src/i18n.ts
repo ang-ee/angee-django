@@ -1,7 +1,7 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enDashboardsMessages: Record<string, string> = {
-  "common.archive": "Archive",
+  "common.trash": "Move to trash",
   "common.cancel": "Cancel",
   "common.create": "Create dashboard",
   "common.creating": "Creating…",

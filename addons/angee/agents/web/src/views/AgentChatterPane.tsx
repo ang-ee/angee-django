@@ -15,20 +15,20 @@ import { KeptAliveAgents, useOpenedAgents } from "./useOpenedAgents";
 import { useRunningAgents } from "./useRunningAgents";
 
 // The chat surface is the addon's heaviest tree (assistant-ui + streamdown /
-// react-markdown). It's referenced eagerly here — the chatter contribution is
+// react-markdown). It's referenced eagerly here — the drawer contribution is
 // registered at boot — so lazy-mount it through the shared `LazyBoundary`, the way
 // the spotlight and lazy widgets do, keeping streamdown out of the boot bundle and
-// in its own chunk loaded only when the user opens the agents chatter.
+// in its own chunk loaded only when the user opens the agents drawer.
 const AgentChat = React.lazy(() =>
   import("./AgentChat").then((module) => ({ default: module.AgentChat })),
 );
 
 /**
- * The side-chatter entry: resolves the agent that serves the user (their running agent) and
+ * The docked agent drawer resolves the agent that serves the user (their running agent) and
  * renders the live ACP chat bound to the open record, so the agent sees what the user is
  * looking at and can read/edit it through its MCP tools. Shows a call-to-action when the user
- * has no running agent. The agents addon contributes it as the global chatter "agents"
- * tab, driven by the active page's `view`.
+ * has no running agent. The agents addon contributes it as a shell drawer,
+ * driven by the active page's `view`.
  *
  * The chooser in the chat bar switches between the user's running agents: the effective
  * selection is derived — only the user's explicit pick is state, defaulting to the

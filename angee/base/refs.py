@@ -26,14 +26,14 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import DEFAULT_DB_ALIAS, models, router
 from django.utils.text import capfirst
 from rebac import ObjectRef, to_object_ref
 from rebac.field_backing import canonical_model
@@ -114,7 +114,9 @@ def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     ungated one; see :func:`generic_pointer_model`.
     """
 
-    return ContentType.objects.get_for_model(generic_pointer_model(type(record))), record.pk
+    using = record._state.db or router.db_for_read(type(record), instance=record)
+    content_type = ContentType.objects.db_manager(using).get_for_model(generic_pointer_model(type(record)))
+    return content_type, record.pk
 
 
 def is_record_target_model(model: type[models.Model]) -> bool:
@@ -141,6 +143,19 @@ def concrete_child_models(parent_model: type[models.Model]) -> tuple[type[models
             key=lambda model: model._meta.label_lower,
         )
     )
+
+
+def concrete_lineage(model: type[models.Model]) -> tuple[type[models.Model], ...]:
+    """Installed concrete tables sharing a record's primary key, in stable order."""
+
+    owners = {model, *model._meta.get_parent_list()}
+    pending = list(owners)
+    while pending:
+        for child in concrete_child_models(pending.pop()):
+            if child not in owners:
+                owners.add(child)
+                pending.append(child)
+    return tuple(sorted(owners, key=lambda owner: owner._meta.label_lower))
 
 
 def concrete_child_accessor(parent_model: type[models.Model], child_model: type[models.Model]) -> str:
@@ -328,13 +343,32 @@ class RecordRefMixin(MergeContractMixin, models.Model):
 
     @classmethod
     def declared_target_model(cls, model_label: str) -> type[models.Model]:
-        """Return the declared target model for a ``app_label.model`` label, or a ``ValidationError``."""
+        """Return the declared target a ``app_label.model`` label names, or a ``ValidationError``.
 
-        declared = cls.declared_target_models()
+        A label names its canonical type, as :meth:`declares_target` decides: a
+        multi-table child (a person) addresses its typed parent (a party).
+        """
+
         try:
-            return declared[str(model_label).strip().lower()]
-        except KeyError as error:
-            raise cls._undeclared_target(declared) from error
+            model = apps.get_model(str(model_label).strip())
+        except (LookupError, ValueError) as error:
+            raise cls._undeclared_target(cls.declared_target_models()) from error
+        if not cls.declares_target(model):
+            raise cls._undeclared_target(cls.declared_target_models())
+        return cast(type[models.Model], canonical_model(model))
+
+    @classmethod
+    def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
+        """Return the roles of this edge that records of ``target`` carry, beyond the edge itself.
+
+        An edge whose rows play more than one role (a thread attached as a record's
+        chatter or as a related conversation) names each role a target type admits.
+        The target's resource lists them as ``<edge label>:<role>`` beside the edge
+        label, so a surface gates on the role it serves. The default declares none.
+        """
+
+        del target
+        return ()
 
     @classmethod
     def declares_target(cls, model: type[models.Model]) -> bool:
