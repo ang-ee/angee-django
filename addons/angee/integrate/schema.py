@@ -736,8 +736,8 @@ def apply_integration_patch_fields(
     Lifecycle is guarded by ``Integration.set_lifecycle()``, which eagerly saves
     through the transition hook. It is therefore deliberately omitted from the
     returned set so child update callers do not re-emit the state write.
-    Credential attachment and lifecycle transitions save eagerly, before unsaved
-    patch values are set.
+    Credential attachment, lifecycle transitions and ``transfer_ownership`` save
+    eagerly, before unsaved patch values are set; a null owner clears it.
     """
 
     provided: set[str] = set()
@@ -751,15 +751,14 @@ def apply_integration_patch_fields(
     if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
         lifecycle = IntegrationLifecycle.from_value(data.lifecycle)
         target.set_lifecycle(lifecycle)
+    if data.owner is not strawberry.UNSET:
+        target.transfer_ownership(None if data.owner is None else _user_from_public_id(data.owner))
     if hasattr(data, "display_name") and data.display_name is not strawberry.UNSET:
         target.display_name = data.display_name or ""
         provided.add("display_name")
     if data.vendor is not strawberry.UNSET:
         target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
         provided.add("vendor")
-    if data.owner is not strawberry.UNSET:
-        target.owner = _user_from_public_id(data.owner)
-        provided.add("owner")
     if data.account is not strawberry.UNSET:
         target.account = (
             None
@@ -1007,8 +1006,9 @@ class ConnectionMutation:
         info: strawberry.Info,
         external_account_sqid: str,
     ) -> UnlinkAccountResult:
-        """Remove this session user's credential link to an external account.
+        """Remove this session user's credential link to an external account and release it.
 
+        The verb authorizes the release: only the session user's own ownership is cleared.
         ``Credential.check_disconnect()`` validates the model invariant before
         deletion. The login addon's model contribution vetoes removing a user's
         last sign-in account by raising a coded :class:`ValidationError`, surfaced here
@@ -1025,10 +1025,9 @@ class ConnectionMutation:
                 )
             if credential is None:
                 return UnlinkAccountResult(ok=False)
-            external_account = credential.external_account
             with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
                 Credential.objects.prepare_disconnect(credential)
-                ExternalAccount.objects.revoke_owner(external_account, user)
+                ExternalAccount.objects.filter(pk=credential.external_account_id).release(user)
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except ValidationError as error:
@@ -1058,22 +1057,15 @@ class IntegrateExternalAccountMutation:
 
     @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
     def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Revoke the owner grant, then delete the account (owner is a REBAC tuple)."""
+        """Delete the account; its ownership is a column and leaves with the row."""
 
-        def revoke(account: Any) -> None:
-            owner = ExternalAccount.objects.owner_for(account)
-            if owner is not None:
-                ExternalAccount.objects.revoke_owner(account, owner)
-
-        with transaction.atomic():
-            return delete_by_public_id(
-                ExternalAccount,
-                str(id),
-                reason="integrate.graphql.external_account.delete",
-                confirm=confirm,
-                before_delete=revoke,
-                queryset=ExternalAccount.objects.for_write(),
-            )
+        return delete_by_public_id(
+            ExternalAccount,
+            str(id),
+            reason="integrate.graphql.external_account.delete",
+            confirm=confirm,
+            queryset=ExternalAccount.objects.for_write(),
+        )
 
 
 @strawberry.type
@@ -1452,7 +1444,7 @@ class WebhookSubscriptionType(AngeeNode):
     OAuthClient's revealed ``client_secret``, a webhook secret is never read back.
     """
 
-    owner: UserType
+    owner: UserType | None
     integration_filter: IntegrationType | None
     target_url: auto
     event_kinds: JSON
@@ -1799,18 +1791,17 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "lifecycle",
         "runtime_status",
     ],
-    updatable=["vendor", "credential", "account", "owner"],
+    updatable=["vendor", "credential", "account"],
     insert=False,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
-        "owner": public_pk_decoder(User),
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=IntegrationWriteBackend(
         Integration,
-        public_id_fields=("vendor", "owner", "credential", "account"),
+        public_id_fields=("vendor", "credential", "account"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
@@ -1836,7 +1827,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "consecutive_failures"],
     groupable=["enabled", "last_delivery_status"],
-    insertable=["owner", "target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
+    insertable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
     updatable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
     field_id_decode={
         "owner": public_pk_decoder(User),
@@ -1844,7 +1835,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         WebhookSubscription,
-        public_id_fields=("owner", "integration_filter"),
+        public_id_fields=("integration_filter",),
     ),
 )
 

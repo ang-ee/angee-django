@@ -218,4 +218,5 @@ definition parties/directory {
     permission read   = integration->read + admin->member
     permission write  = integration->write + admin->member
     permission delete = integration->write + admin->member
+    permission write__owner = integration->transfer
 }

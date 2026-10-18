@@ -147,10 +147,8 @@ def complete_external_account_link(
     Credential = cast(Any, apps.get_model("integrate", "Credential"))
     with system_context(reason=reason), transaction.atomic():
         account = Account.objects.filter(oauth_client=oauth_client, external_id=external_id).first()
-        if account is not None:
-            owner = Account.objects.owner_for(account)
-            if owner is not None and owner.pk != user.pk:
-                raise OAuthFlowError("account_already_linked", 409)
+        if account is not None and account.owner_id not in (None, user.pk):
+            raise OAuthFlowError("account_already_linked", 409)
         account = Account.objects.link(
             oauth_client,
             external_id,

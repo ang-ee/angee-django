@@ -191,7 +191,7 @@ class OidcIdentityResolver:
                 # A revoked/expired/disabled account or a deactivated user must not log in.
                 if account.status != AccountStatus.ACTIVE:
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-                owner = manager.owner_for(account)
+                owner = account.owner
                 if owner is None or not can_authenticate_user(owner):
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 return cast(AbstractBaseUser, owner)

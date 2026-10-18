@@ -1,7 +1,7 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 11
+// @rebac_schema_revision: 12
 
 definition integrate/oauth_client {
     relation admin: angee/role // rebac:const=admin
@@ -18,23 +18,28 @@ definition integrate/oauth_client {
 }
 
 definition integrate/external_account {
-    relation owner: auth/user
+    relation owner: auth/user // rebac:field=owner
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
     permission read = owner + admin->member
     permission write = owner + admin->member
     permission delete = owner + admin->member
+    // OIDC sign-in resolves an identity to its owner, so handing it to another
+    // user would sign this identity in as them: only platform admins reassign it.
+    permission transfer = admin->member
+    permission write__owner = transfer
 }
 
 definition integrate/credential {
-    relation owner: auth/user // rebac:field=user
+    // The user whose authority the credential carries, not transferable ownership.
+    relation user: auth/user // rebac:field=user
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = owner + admin->member
-    permission write = owner + admin->member
-    permission delete = owner + admin->member
+    permission read = user + admin->member
+    permission write = user + admin->member
+    permission delete = user + admin->member
 }
 
 definition integrate/vendor {
@@ -57,9 +62,8 @@ definition integrate/integration {
     relation admin: angee/role // rebac:const=admin
 
     // Governs the admin-console Integration CRUD only (run elevated behind
-    // PlatformAdminPermission). Self-service `createIntegrationFromCredential`
-    // also creates elevated but is gated by credential ownership in the resolver,
-    // not by this permission.
+    // PlatformAdminPermission). Self-service connect flows create their concrete
+    // child elevated, owned by the connecting user, not through this permission.
     permission create = admin->member
     // Resume remains a platform operation; owners can recover failed discovery.
     permission resume = admin->member
@@ -68,6 +72,8 @@ definition integrate/integration {
     permission read = owner + reader + admin->member
     permission write = owner + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 definition integrate/webhook_subscription {
@@ -79,6 +85,8 @@ definition integrate/webhook_subscription {
     permission read = owner + admin->member
     permission write = owner + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 definition integrate/sync_stream {

@@ -32,7 +32,6 @@ import httpx2
 from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
@@ -42,19 +41,12 @@ from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
-    RelationshipTuple,
     SubjectRef,
-    app_settings,
-    delete_relationship,
-    subject_id_attr,
     system_context,
-    to_object_ref,
     to_subject_ref,
-    write_relationships,
 )
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
-from rebac.models import active_relationship_model
 from simple_history.signals import post_create_historical_record
 from strawberry_django.descriptors import model_property
 
@@ -70,6 +62,8 @@ from angee.base.models import (
     AngeeUnscopedManager,
     AuditMixin,
     HistoryMixin,
+    OwnerMixin,
+    OwnerQuerySet,
     SourceKind,
     Statement,
     StatementLinkMixin,
@@ -594,8 +588,8 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         return discovery
 
 
-class ExternalAccountQuerySet(AngeeQuerySet[Any]):
-    """REBAC-scoped reads for external accounts."""
+class ExternalAccountQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
+    """REBAC-scoped reads and verb-authorized ownership release for external accounts."""
 
     def console_external_accounts(self) -> ExternalAccountQuerySet:
         """Return admin-visible external accounts with guarded FK joins."""
@@ -629,7 +623,11 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
         owner: Any | None = None,
         **identity: Any,
     ) -> Any:
-        """Create or update one ``(oauth_client, external_id)`` external account."""
+        """Create or update one ``(oauth_client, external_id)`` external account.
+
+        ``owner`` owns a new account and claims an unowned one: the caller has
+        verified that the user controls the identity. An owned account keeps its owner.
+        """
 
         reason = "integrate.connections.link"
         update_values = _validated_manager_values(
@@ -646,72 +644,24 @@ class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)
             "last_error": "",
             "last_error_at": None,
             "last_used_at": None,
+            "owner": owner,
             **update_values,
         }
         with system_context(reason=reason), transaction.atomic():
-            instance, created = self.update_or_create(
+            instance, _created = self.update_or_create(
                 oauth_client_id=oauth_client.pk,
                 external_id=external_id,
                 defaults=update_values,
                 create_defaults=create_values,
             )
-            if owner is not None and (created or self.owner_for(instance) is None):
-                self.grant_owner(instance, owner)
+            if owner is not None and instance.owner_id is None:
+                instance.owner = owner
+                instance.save(update_fields=["owner", "updated_at"])
         return instance
 
-    def grant_owner(self, account: Any, owner: Any) -> None:
-        """Grant ``owner`` direct ownership of an external account."""
 
-        write_relationships(
-            [
-                RelationshipTuple(
-                    resource=to_object_ref(account),
-                    relation="owner",
-                    subject=to_subject_ref(owner),
-                )
-            ]
-        )
-
-    def revoke_owner(self, account: Any, owner: Any) -> None:
-        """Revoke ``owner`` direct ownership of an external account."""
-
-        delete_relationship(
-            RelationshipTuple(
-                resource=to_object_ref(account),
-                relation="owner",
-                subject=to_subject_ref(owner),
-            )
-        )
-
-    def owner_for(self, account: Any) -> Any | None:
-        """Return the user granted owner on ``account``, if one exists."""
-
-        resource_ref = to_object_ref(account)
-        Relationship = active_relationship_model()
-        with system_context(reason="integrate.connections.owner"):
-            row = (
-                Relationship.objects.filter(
-                    resource_type=resource_ref.resource_type,
-                    resource_id=resource_ref.resource_id,
-                    relation="owner",
-                    subject_type=app_settings.REBAC_USER_TYPE,
-                    optional_subject_relation="",
-                )
-                .order_by_subject()
-                .first()
-            )
-            if row is None:
-                return None
-            UserModel = get_user_model()
-            user_id_attr = subject_id_attr(UserModel)
-            try:
-                return UserModel.objects.get(**{user_id_attr: row.subject_id})
-            except UserModel.DoesNotExist:
-                return None
-
-
-class ExternalAccount(AuditMixin, AngeeDataModel):
-    """A user's identity at a provider, shared by principals through REBAC grants.
+class ExternalAccount(OwnerMixin, AngeeDataModel):
+    """A user's identity at a provider, owned by the user it belongs to.
 
     Connection identity only: which client minted it (``oauth_client``), which
     external subject (``external_id``), and the credential that authenticates as
@@ -758,6 +708,15 @@ class ExternalAccount(AuditMixin, AngeeDataModel):
                 name="uniq_integrate_external_account_oauth_client_external_id",
             ),
         )
+
+    def insert_owner_default(self) -> Any:
+        """Leave the identity unowned unless its linking verb names its user.
+
+        OIDC sign-in resolves an identity to its owner, so neither the creator
+        nor the acting user is ever implied.
+        """
+
+        return None
 
     def __str__(self) -> str:
         """Return a stable provider-qualified account label."""
@@ -1650,14 +1609,15 @@ def _save_connected(instance: Integration, source: Any, target: Any, **kwargs: A
     instance.refresh_from_db()
 
 
-class Integration(StatementSourceMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
+class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeDataModel):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a
     ``credential`` (and optionally an ``account``) from the connection substrate to
     authenticate, points at a catalogue ``vendor``, and stores the implementation
     capability. Domain-specific behavior, state, and config live on concrete child
-    models.
+    models. ``owner`` is the user owning a personal connection; a platform-managed
+    install is inserted with ``save(ownerless=True)`` and keeps no owner.
     """
 
     runtime = True
@@ -2093,14 +2053,6 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, AuditMixin, AngeeData
         blank=True,
         related_name="integrations",
     )
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="integrations",
-    )
-    """User owner for personal connections; null marks a platform-managed install resource."""
     lifecycle = StateField(choices_enum=IntegrationLifecycle, default=IntegrationLifecycle.DISCONNECTED)
     """Declared connection intent for this integration.
 
@@ -3500,17 +3452,12 @@ class WebhookSubscriptionManager(AngeeManager):
         return queryset.order_by("pk")
 
 
-class WebhookSubscription(AuditMixin, AngeeDataModel):
+class WebhookSubscription(OwnerMixin, AngeeDataModel):
     """Outbound webhook endpoint owned by one user."""
 
     runtime = True
 
     sqid_prefix = "whs_"
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="webhook_subscriptions",
-    )
     target_url = models.URLField(max_length=2048, validators=(validate_public_url,))
     secret = EncryptedField()
     event_kinds = models.JSONField(default=list, blank=True)

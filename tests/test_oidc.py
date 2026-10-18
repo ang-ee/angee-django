@@ -1739,7 +1739,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(
     account = result.account
 
     with system_context(reason="test oidc assertions"):
-        owner = ExternalAccount.objects.owner_for(account)
+        owner = ExternalAccount.objects.get(pk=account.pk).owner
         start_credential = Credential.objects.filter(user=start_user, external_account=account).exists()
         swapped_credential = Credential.objects.filter(user=swapped_user, external_account=account).exists()
     assert owner is not None

@@ -651,7 +651,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "labelPath": "vendor.display_name",
     }
     assert "groupAliases" not in integration
-    assert integration["updateFields"] == ["vendor", "credential", "account", "owner"]
+    assert integration["updateFields"] == ["vendor", "credential", "account"]
     kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
     assert kind_field["kind"] == "scalar"
     assert integration["query"]["fields"]["concrete_type"]["filter"] is not None
@@ -1103,26 +1103,27 @@ def test_webhook_crud_secret_write_only(
     # ``secret`` is accepted on the input but never rendered on the output type.
     assert "secret" in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     assert "secret" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
+    # The creator owns a new subscription; ownership is never a client-written column.
+    assert "owner" not in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     # The create mutation is contributed to the console mutation root.
     assert "insert_webhook_subscriptions_one(" in _sdl_block(console_sdl, "type Mutation")
 
     plain = User.objects.create_user(username="webhook-plain", email="plain@example.com")
     admin = _platform_admin("webhook-admin")
     owner = User.objects.create_user(username="webhook-owner", email="owner@example.com")
-    # ``createWebhookSubscription`` is admin gated before owner-id resolution.
+    # ``createWebhookSubscription`` is admin gated.
     assert (
         _execute(
             console_schema,
             """
-        mutation CreateWebhook($owner: ID!) {
+        mutation CreateWebhook {
           insert_webhook_subscriptions_one(
-            object: {owner: $owner, target_url: "https://hooks.example/x", secret: "s"}
+            object: {target_url: "https://hooks.example/x", secret: "s"}
           ) {
             target_url
           }
         }
         """,
-            {"owner": str(owner.sqid)},
             user=plain,
         ).errors
         is not None
@@ -1426,6 +1427,33 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
     with system_context(reason="test.integrate.lifecycle.verify"):
         bridge.refresh_from_db()
         assert str(bridge.lifecycle) == "disconnected"
+
+
+def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(composed_tables: None) -> None:
+    """An authored owner patch runs the transfer verb before the caller saves its other values."""
+
+    admin = _platform_admin("owner-patch-admin")
+    bridge = make_integration("owner-patch", model=VcsBridge, backend_class="stub")
+    successor = User.objects.create_user(username="owner-patch-successor", email="successor@example.com")
+    result = _data(
+        _execute(
+            _schema(),
+            """
+            mutation($id: ID!, $owner: ID!) {
+              update_vcs_bridge(data: {id: $id, owner: $owner, display_name: "Handed over"}) {
+                display_name
+                owner { username }
+              }
+            }
+            """,
+            {"id": _public_id(bridge), "owner": str(successor.sqid)},
+            user=admin,
+        )
+    )["update_vcs_bridge"]
+    assert result == {"display_name": "Handed over", "owner": {"username": "owner-patch-successor"}}
+    with system_context(reason="test.integrate.owner_patch.verify"):
+        bridge.refresh_from_db()
+    assert (bridge.owner_id, bridge.display_name) == (successor.pk, "Handed over")
 
 
 def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: None) -> None:
