@@ -435,7 +435,7 @@ def _owned_document(owner: Any, *, title: str = "Document") -> Document:
 
     with system_context(reason="tests.action.seed"):
         document = Document.objects.create(title=title)
-    _grant(document, "owner", owner)
+    _grant(document, "manager", owner)
     return document
 
 

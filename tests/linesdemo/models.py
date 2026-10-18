@@ -1,7 +1,7 @@
 """Demo document + lines models for the F6 editable-lines Hasura tests.
 
 A ``Document`` owns ordered ``DocumentLine`` children.
-The parent is a REBAC resource (``linesdemo/document``, owner-gated write); the
+The parent is a REBAC resource (``linesdemo/document``, manager-gated write); the
 child carries no row policy of its own — its rows are created, updated, and
 deleted under the parent's authorization (the §3.4 elevation the write backend
 applies after the parent write preflight). Both are concrete rows in a real
@@ -45,7 +45,7 @@ class InputStampMixin(models.Model):
 
 
 class Document(InputStampMixin, AngeeDataModel):
-    """An owner-gated document whose lines are edited transactionally."""
+    """A manager-gated document whose lines are edited transactionally."""
 
     sqid_prefix = "doc_"
 
@@ -62,7 +62,7 @@ class Document(InputStampMixin, AngeeDataModel):
 
 
 class Product(AngeeDataModel):
-    """An owner-gated catalogue row a line may reference (visibility target).
+    """A manager-gated catalogue row a line may reference (visibility target).
 
     Its own REBAC policy is what a line's ``product`` public-id decode is scoped
     to: a line may only reference a product the caller can read, so a decode that
@@ -75,7 +75,7 @@ class Product(AngeeDataModel):
     name = models.CharField(max_length=200)
 
     class Meta(AngeeDataModel.Meta):
-        """Concrete owner-gated product model for line-relation visibility tests."""
+        """Concrete manager-gated product model for line-relation visibility tests."""
 
         abstract = False
         app_label = "linesdemo"

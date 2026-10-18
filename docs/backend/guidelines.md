@@ -1911,13 +1911,16 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   client-key or fingerprint columns. A keyed operation opens a fresh changeset
   inside its transaction and claims before writing; nested keyed operations
   therefore receive distinct claim rows without leaving the enclosing boundary.
-- **Ownership:** a grant root composes `OwnerMixin`, so `owner` is transferable
-  access and `created_by` remains attribution. Its Zed backs `owner` with that
-  column and declares its transfer permission (`angee.E022`); its
-  `write__owner` gate names that permission (`angee.E027`). Change it through
-  `transfer_ownership`; bulk release belongs only to an owning verb that already
-  authorized it. See the [example notes](../../examples/addons/example/notes/permissions.zed);
-  remaining `rebac:field=created_by` owner relations are unconverted, not a pattern.
+- **Ownership:** `owner` has one spelling. A grant root composes `OwnerMixin`,
+  so `owner` is transferable access in a column and `created_by` remains
+  attribution. Its Zed backs `owner` with that column and declares its transfer
+  permission (`angee.E022`); its `write__owner` gate names that permission
+  (`angee.E027`). No other relation is named `owner` (`angee.E045`): attribution
+  used as access is `relation creator: auth/user // rebac:field=created_by`, a
+  domain role keeps its own word (`user`, `organizer`, `salesperson`, `buyer`),
+  and ownership is never a stored tuple. Change it through `transfer_ownership`;
+  bulk release belongs only to an owning verb that already authorized it. See the
+  [example notes](../../examples/addons/example/notes/permissions.zed).
 - **Delegated field gates:** a definition that delegates to a parent re-declares
   the parent's field gates through that relation, as enforced for ownership by
   [the base checks](../../angee/base/checks.py). Re-save a fresh, unreloaded

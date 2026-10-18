@@ -174,7 +174,7 @@ def _owned_document(title: str) -> tuple[Document, Any]:
     with system_context(reason="test.input_extensions.seed"):
         document = Document.objects.create(title=title)
     write_relationships([
-        RelationshipTuple(resource=to_object_ref(document), relation="owner", subject=to_subject_ref(owner)),
+        RelationshipTuple(resource=to_object_ref(document), relation="manager", subject=to_subject_ref(owner)),
     ])
     return document, owner
 

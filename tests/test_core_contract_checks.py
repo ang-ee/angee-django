@@ -52,6 +52,10 @@ def test_ownership_requires_transfer_backing_and_the_owner_gate(ownership_schema
     elif mutation == "no-definition":
         assert [error.id for error in errors] == ["angee.E022", "angee.E027"]
         assert all(error.obj is OwnedRow for error in errors)
+    elif mutation in {"stored-owner", "audit-owner"}:
+        # An owner relation off the owner column is also a second spelling of ownership.
+        assert [error.id for error in errors] == ["angee.E045", "angee.E022"]
+        assert all(error.obj is OwnedRow for error in errors)
     else:
         [error] = errors
         assert error.obj is OwnedRow

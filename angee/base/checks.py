@@ -85,7 +85,13 @@ def check_ownership(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Require grant roots to back ownership and gate owner writes on transfer."""
+    """Keep ``owner`` the one spelling of ownership, backed and transferred by OwnerMixin.
+
+    A relation named ``owner`` belongs only to an OwnerMixin model and is backed
+    by its ``owner`` column (``angee.E045``); grant roots back it and declare
+    their transfer permission (``angee.E022``) and gate owner writes on it
+    (``angee.E027``).
+    """
 
     del kwargs
     models = (
@@ -93,6 +99,25 @@ def check_ownership(
     )
     errors: list[checks.CheckMessage] = []
     for model in models:
+        definition = effective_rebac_definition(model)
+        owner_relation = (
+            next((relation for relation in definition.relations if relation.name == "owner"), None)
+            if definition is not None
+            else None
+        )
+        if owner_relation is not None and (
+            not issubclass(model, OwnerMixin) or owner_relation.backing != FieldBinding(path="owner")
+        ):
+            errors.append(
+                checks.Error(
+                    f"{model._meta.label}: definition {model_resource_type(model)!r} names a relation owner "
+                    "that is not the OwnerMixin owner column.",
+                    hint="Compose OwnerMixin and back owner with rebac:field=owner. Name attribution used as "
+                    "access creator (rebac:field=created_by) and a domain role by its own word.",
+                    obj=model,
+                    id="angee.E045",
+                )
+            )
         if not issubclass(model, OwnerMixin):
             continue
         owner_model = model._meta.get_field("owner").model
@@ -113,7 +138,6 @@ def check_ownership(
                         id="angee.E025",
                     )
                 )
-        definition = effective_rebac_definition(model)
         if owner_model is model and (
             definition is None
             or (
@@ -136,7 +160,8 @@ def check_ownership(
         transfer = owner_model.owner_transfer_permission
         expected_gates: tuple[PermRef | PermArrow, ...] = (PermRef(transfer),)
         expected_expression = transfer
-        if owner_model is not model:
+        # A child that shares its owning parent's definition is gated by that definition's own transfer.
+        if owner_model is not model and model_resource_type(model) != model_resource_type(owner_model):
             parent_path = "__".join(path.join_field.name for path in model._meta.get_path_to_parent(owner_model))
             parent_type = model_resource_type(owner_model)
             parent_gates = (
