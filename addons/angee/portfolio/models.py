@@ -35,7 +35,6 @@ from angee.base.models import (
     role_anchor,
 )
 from angee.base.refs import MergePolicy, RecordRefMixin
-from angee.base.scoping import bind_actor, system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 
 
@@ -113,10 +112,11 @@ class ProductManager(AngeeManager):
                 locked_project = type(project).objects.lock_if_supported().get(pk=project.pk)
                 existing = self.filter(originated_from_id=project.pk).first()
             if existing is not None:
-                bind_actor(existing, actor)
+                if actor is not None:
+                    existing.with_actor(actor)
                 return existing
 
-            verified_actor = self.check_create()
+            verified_actor, _ = self.effective_actor(strict=True)
             product = self.model(
                 name=locked_project.title,
                 body=locked_project.body,
@@ -124,14 +124,14 @@ class ProductManager(AngeeManager):
                 originated_from_id=locked_project.pk,
             )
             product.full_clean(validate_unique=False, validate_constraints=False)
-            product.sudo(reason="portfolio.product.promote_from_project")
             try:
                 with transaction.atomic():
-                    product.save()
+                    product = self.insert(product)
             except IntegrityError:
                 with system_context(reason="portfolio.product.promote_from_project.concurrent_lookup"):
                     product = self.get(originated_from_id=project.pk)
-            bind_actor(product, verified_actor)
+            if verified_actor is not None:
+                product.with_actor(verified_actor)
             return product
 
 
@@ -418,7 +418,7 @@ class UpdateManager(AngeeManager):
             raise ValidationError({"target": "A saved project or initiative is required."})
         self.model.validate_target(target)
         with transaction.atomic():
-            locked_target = system_queryset(type(target), lock=("self",)).get(pk=target.pk)
+            locked_target = type(target).system_queryset(lock=("self",)).get(pk=target.pk)
             report = self.model(health=health, body=body, **generic_target(locked_target).lookups(self.model, "target"))
             report.full_clean(validate_unique=False, validate_constraints=False)
             return self.insert(report)

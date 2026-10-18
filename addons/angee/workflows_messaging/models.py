@@ -3,8 +3,6 @@
 from django.apps import apps
 from django.db import models
 
-from angee.base.scoping import system_queryset
-
 
 class TriggerMessaging(models.Model):
     """Declare the protected channel required by a message source."""
@@ -35,5 +33,5 @@ class ChannelWorkflowTriggers(models.Model):
         """Compose other blockers with every trigger retaining this channel."""
         return [
             *super().purge_blockers(),
-            *system_queryset(apps.get_model("workflows", "Trigger")).filter(channel_id=self.pk).order_by("pk"),
+            *apps.get_model("workflows", "Trigger").system_queryset().filter(channel_id=self.pk).order_by("pk"),
         ]

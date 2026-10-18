@@ -13,7 +13,6 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import public_id_for
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
@@ -32,7 +31,7 @@ def _readable_target(field: str) -> Callable[[strawberry.Info], Prefetch]:
 
     def prefetch(info: strawberry.Info) -> Prefetch:
         model = apps.get_model("storage.File" if field == "file" else "messaging.Message")
-        readable = read_scoped_queryset(model, request_from_info(info).user)
+        readable = model.objects.with_actor(request_from_info(info).user).with_action("read")
         return Prefetch(field, queryset=readable, to_attr=f"_readable_{field}")
 
     return prefetch

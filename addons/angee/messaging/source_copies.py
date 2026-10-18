@@ -67,7 +67,7 @@ class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
                 if redirected:
                     row = max(redirected, key=lambda row: row.pk)
                     row.merged_into = None
-                    row.save(using=row._state.db, update_fields=("merged_into",))
+                    row.save(update_fields=("merged_into",))
         return None
 
     def identify_source_copy(self, other: Any, *, same: bool) -> Any:
@@ -79,7 +79,7 @@ class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
         return pair.confirm(aspect="same_as", values={}) if same else pair.dismiss(aspect="same_as")
 
 
-def observe_email_identity(message_id: Any, *, using: str = "default") -> None:
+def observe_email_identity(message: Any) -> None:
     """Assert, once its envelope has committed, that an email's copies in other channels are the same message.
 
     An RFC Message-ID names one email wherever it is received; chat and provider
@@ -89,20 +89,26 @@ def observe_email_identity(message_id: Any, *, using: str = "default") -> None:
     """
 
     message_model = apps.get_model("messaging", "Message")
+    messages = message_model._base_manager.db_manager(hints={"instance": message})
     rule_model = apps.get_model("provenance", "Rule")
     with system_context(reason=SOURCE_IDENTITY_RULE):
         try:
-            source = rule_model.objects.db_manager(using).for_key(SOURCE_IDENTITY_RULE)
+            source = rule_model.objects.db_manager(hints={"instance": message}).get(key=SOURCE_IDENTITY_RULE)
         except rule_model.DoesNotExist:
             # The envelope landed before the install resources (the rule and its grants).
             return
-        message = message_model._base_manager.using(using).select_related("thread").filter(pk=message_id).first()
+        message = messages.select_related("thread").filter(pk=message.pk).first()
     if message is None or message.message_type != "email" or not message.external_id or message.channel_id is None:
         return
     actor = to_subject_ref(source)
-    copies = message_model.objects.using(using).with_actor(actor).with_external_ids((message.external_id,)).filter(
-        platform=message.platform, message_type="email", channel__isnull=False,
-    ).exclude(channel_id=message.channel_id).select_related("thread").order_by("pk")
+    copies = (
+        message_model.objects.db_manager(hints={"instance": message}).with_actor(actor)
+        .with_external_ids((message.external_id,))
+        .filter(platform=message.platform, message_type="email", channel__isnull=False)
+        .exclude(channel_id=message.channel_id)
+        .select_related("thread")
+        .order_by("pk")
+    )
     with changeset(fresh=True, activity="system", change_reason=SOURCE_IDENTITY_RULE, origin=source):
         for copy in copies:
             evidence = [EvidenceReference.of(row) for row in sorted((message, copy), key=lambda row: row.pk)]

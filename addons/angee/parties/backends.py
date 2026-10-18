@@ -21,8 +21,8 @@ from django.db.models.functions import Coalesce
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
-from angee.integrate.states import StreamDirection, StreamKind, SyncFailureKind
-from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamDefinition
+from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
+from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError
 
 
 @dataclass(frozen=True)
@@ -287,10 +287,10 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             link = linked.get(key)
             person = by_id.get(str(link.target_object_id)) if link is not None else None
             projection = projections.get(person.pk) if person is not None else None
-            states[key] = (person, projection, canonical_json_sha256(projection) if projection is not None else "")
+            states[key] = person, projection
         return states
 
-    def _local_state(self, stream: Any, external_key: str) -> tuple[Any, Any, str]:
+    def _local_state(self, stream: Any, external_key: str) -> tuple[Any, Any]:
         links = apps.get_model("integrate", "RecordLink").objects.filter(stream=stream, external_key=external_key)
         return self._local_states(stream, (external_key,), links=links)[external_key]
 
@@ -380,7 +380,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 record,
                 target=states[record.external_key][0],
                 projection=states[record.external_key][1],
-                local_hash=states[record.external_key][2],
             )
             for record in records.values()
         ]
@@ -423,9 +422,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             )
         )
         parties.lock_contact(record.target, parsed=parsed)
-        target, projection, local_hash = self._local_state(stream, record.external_key)
-        if local_hash != record.local_hash:
-            raise SemanticError("local_changed_during_pull", kind=SyncFailureKind.CONFLICT)
+        target, projection = self._local_state(stream, record.external_key)
         if record.tombstone:
             link = apps.get_model("integrate", "RecordLink").objects.get(
                 stream=stream, external_key=record.external_key
@@ -458,7 +455,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         links = tuple(links_query.with_sync_evidence().order_by("pk"))
         states = self._local_states(stream, (link.external_key for link in links), links=links)
         for link in links:
-            target, projection, _ = states[link.external_key]
+            target, projection = states[link.external_key]
             if link.local_changed(projection):
                 yield LocalChange(link.external_key, projection, target=target)
 

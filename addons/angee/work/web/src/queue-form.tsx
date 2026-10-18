@@ -107,7 +107,6 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
     },
     { name: "tone", label: t("common.tone") },
     { name: "rule_owned", label: t("stage.ruleOwned"), description: t("stage.ruleOwned.help") },
-    { name: "conceals", label: t("stage.conceals"), description: t("stage.conceals.help") },
   ], [categories, t]);
   // Each stage's rule behaviour as badges, read from the live row.
   const stageBadges = React.useMemo<readonly EditableLineSupplementalColumn[]>(() => [{
@@ -118,7 +117,6 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
     render: (row) => (
       <div className="flex h-8 flex-wrap items-center gap-1">
         {row.rule_owned ? <Badge tone="info" density="compact">{t("stage.ruleOwned")}</Badge> : null}
-        {row.conceals ? <Badge tone="neutral" density="compact">{t("stage.conceals")}</Badge> : null}
       </div>
     ),
   }], [t]);

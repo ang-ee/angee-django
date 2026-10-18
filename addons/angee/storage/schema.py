@@ -29,7 +29,6 @@ from angee.graphql.ids import (
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
@@ -472,7 +471,7 @@ class StorageMutation:
             File,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(File).all(),
+            queryset=File.objects.for_write(),
         )
 
     @strawberry.mutation(name="delete_folder")
@@ -483,7 +482,7 @@ class StorageMutation:
             Folder,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Folder).all(),
+            queryset=Folder.objects.for_write(),
         )
 
 

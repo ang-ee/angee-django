@@ -465,6 +465,7 @@ class AngeeQuerySet(
 
 
 class AngeeUnscopedQuerySet(
+    MergeableQuerySet[_ModelT],
     _AngeeQuerySetMixin[_ModelT],
     TrackedQuerySet[_ModelT],
 ):

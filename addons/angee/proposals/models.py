@@ -17,7 +17,6 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Self, cast
 
-from angee.base.scoping import bind_actor, system_queryset
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -29,6 +28,7 @@ from django.utils.dateparse import parse_date
 from rebac import (
     PermissionDenied,
     actor_context,
+    check_new,
     current_actor,
     generic_target,
     system_context,
@@ -36,8 +36,10 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 from rebac.backends import backend
+from rebac.errors import MissingActorError
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships
+from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.base.actors import actor_user_id, instance_actor, subject_reaches_user
@@ -256,10 +258,19 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
         target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
         if target_field is None:
             raise ValidationError({"target": "Choose a project or task."})
-        self.check_create({target_field: (target,)})
         actor = current_actor()
+        resource_type = model_resource_type(self.model)
+        if actor is None:
+            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
+        if resource_type is None or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+            relationships={target_field: (to_subject_ref(target),)},
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
         with transaction.atomic():
-            system_queryset(type(target), lock=("self",)).get(pk=target.pk)
+            type(target).system_queryset(lock=("self",)).get(pk=target.pk)
             candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
             project = candidate.target_project()
             values = template.round_values(project)
@@ -327,7 +338,7 @@ class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[m
 
         if project_id is None:
             return None
-        return system_queryset(self.model).filter(proposals__track_id=project_id).order_by("pk").first()
+        return self.model.system_queryset().filter(proposals__track_id=project_id).order_by("pk").first()
 
 
 def _copy_persisted_state(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
@@ -549,7 +560,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def can_open(self) -> bool:
         """Report whether this manager can lift an undisclosed round."""
         return (
-            system_queryset(type(self))
+            type(self).system_queryset()
             .filter(pk=self.pk)
             .annotate(
                 ready=type(self).can_open_expression(instance_actor(self)),
@@ -561,7 +572,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def can_admit(self) -> bool:
         """Report whether this actor may admit a new shell now."""
         return (
-            system_queryset(type(self))
+            type(self).system_queryset()
             .filter(pk=self.pk)
             .annotate(
                 ready=type(self).can_admit_expression(instance_actor(self)),
@@ -573,7 +584,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def current_responders(self) -> models.QuerySet:
         """Return unretired shell holders, including those of a closed round."""
         return (
-            system_queryset(apps.get_model(settings.AUTH_USER_MODEL))
+            apps.get_model(settings.AUTH_USER_MODEL).system_queryset()
             .filter(
                 proposal_responses__round_id=self.pk,
                 proposal_responses__retired_at__isnull=True,
@@ -585,7 +596,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def roster_prefetch(cls) -> models.Prefetch:
         """Batch scalar roster facts without reading each peer's proposal."""
         rows = (
-            system_queryset(apps.get_model("proposals", "Proposal"))
+            apps.get_model("proposals", "Proposal").system_queryset()
             .filter(
                 retired_at__isnull=True,
                 responder__isnull=False,
@@ -619,7 +630,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if self.requester_party_id is None:
             return None
         return (
-            system_queryset(apps.get_model("parties", "Person"))
+            apps.get_model("parties", "Person").system_queryset()
             .filter(
                 pk=self.requester_party_id,
             )
@@ -872,10 +883,10 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
         actor = instance_actor(self)
         with transaction.atomic():
-            locked_round = system_queryset(type(self), lock=("self",)).get(pk=self.pk).with_actor(actor)
+            locked_round = type(self).system_queryset(lock=("self",)).get(pk=self.pk).with_actor(actor)
             if not locked_round.has_access("manage"):
                 raise PermissionDenied("Round management is required to resolve a question.")
-            locked = system_queryset(type(task), lock=("self",)).get(pk=task.pk, clarification_round=locked_round)
+            locked = type(task).system_queryset(lock=("self",)).get(pk=task.pk, clarification_round=locked_round)
             locked.require_revision(expected_revision)
             if locked.status == "done":
                 return locked
@@ -1012,7 +1023,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         previous = (
             {}
             if self._state.adding or not boundaries
-            else (system_queryset(type(self)).filter(pk=self.pk).values(*(f"{name}_id" for name in boundaries)).get())
+            else (type(self).system_queryset().filter(pk=self.pk).values(*(f"{name}_id" for name in boundaries)).get())
         )
         changed_ids = {
             name: getattr(self, f"{name}_id")
@@ -1023,7 +1034,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if changed_ids:
             project = self.target_project()
             valid = set(
-                system_queryset(apps.get_model("projects", "Milestone"))
+                apps.get_model("projects", "Milestone").system_queryset()
                 .filter(
                     pk__in=changed_ids.values(),
                     project_id=project.pk if project else None,
@@ -1057,7 +1068,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.opened_at is None:
-                if not system_queryset(type(self)).filter(type(self).opening_phase_condition(), pk=self.pk).exists():
+                if not type(self).system_queryset().filter(type(self).opening_phase_condition(), pk=self.pk).exists():
                     raise ValidationError({"opens_after": "Lift the round after its opening phase."})
                 if locked.status == RoundStatus.COLLECTING:
                     locked._mark_opened()
@@ -1437,7 +1448,8 @@ class ProposalManager(AngeeManager):
                     and proposal.capture_payload_hash == payload_hash
                     and proposal.capture_parser_version == self.CAPTURE_PARSER_VERSION
                 ):
-                    bind_actor(proposal, actor)
+                    if actor is not None:
+                        proposal.with_actor(actor)
                     return proposal
                 raise ValidationError("Captured proposal does not match the replayed interpretation.")
 
@@ -1445,7 +1457,8 @@ class ProposalManager(AngeeManager):
                 proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
             )
             proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
-        bind_actor(proposal, actor)
+        if actor is not None:
+            proposal.with_actor(actor)
         return proposal
 
     def _locked_capture_proposal(
@@ -1816,7 +1829,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 .get(pk=self.round_id)
             )
             if (
-                not system_queryset(type(locked_round))
+                not type(locked_round).system_queryset()
                 .filter(
                     type(locked_round).admission_condition(),
                     pk=locked_round.pk,
@@ -1855,7 +1868,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def track_status(self) -> str | None:
         """Read the scalar through the same gated expression as a list."""
         return (
-            system_queryset(type(self))
+            type(self).system_queryset()
             .filter(pk=self.pk)
             .annotate(
                 _track_status=type(self).track_status_expression(instance_actor(self)),
@@ -2079,7 +2092,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 ):
                     locked._publish_track_locked()
             with system_context(reason="proposals.proposal.track_drive"):
-                track = system_queryset(project_model).get(pk=track.pk)
+                track = project_model.system_queryset().get(pk=track.pk)
                 drive_model = apps.get_model("storage", "Drive")
                 slug = f"proposal-{locked.pk}"
                 drive = drive_model._base_manager.filter(
@@ -2093,9 +2106,10 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                             name=track.title,
                             owns_items=True,
                         )
-                    drive = system_queryset(drive_model).get(pk=drive.pk)
+                    drive = drive_model.system_queryset().get(pk=drive.pk)
                     apps.get_model("projects", "ProjectBinding").objects.bind(project=track, target=drive)
-        bind_actor(track, actor)
+        if actor is not None:
+            track.with_actor(actor)
         _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
         self._state.fields_cache["track"] = track
         return track
@@ -2442,7 +2456,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             output_field=models.CharField(),
         )
         return models.Subquery(
-            system_queryset(cls).filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
+            cls.system_queryset().filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
         )
 
     @classmethod
@@ -2486,7 +2500,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             return super()._message_post(body, **kwargs)
         with transaction.atomic():
             locked = (
-                system_queryset(type(self), lock=("self",))
+                type(self).system_queryset(lock=("self",))
                 .annotate(
                     _hidden_asker=models.Case(
                         models.When(self._hidden_clarification_asker_condition(), then="clarification_asker_id"),
@@ -2725,7 +2739,7 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
         if self._state.adding and self.shared_with_responders:
             actor = instance_actor(self)
             proposal = (
-                system_queryset(apps.get_model("proposals", "Proposal"))
+                apps.get_model("proposals", "Proposal").system_queryset()
                 .select_related("round")
                 .get(
                     pk=self.proposal_id,

@@ -38,7 +38,6 @@ from angee.base.models import (
     StagedModelMixin,
 )
 from angee.base.models import Stage as StagePrimitive
-from angee.base.scoping import system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 from angee.spaces.managers import GroupManager
 
@@ -356,8 +355,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
         DUPLICATE = "duplicate", "Duplicate"
 
     SYSTEM_CATEGORIES = frozenset((StageCategory.TRIAGE, StageCategory.DUPLICATE))
-    MANUAL_CATEGORY_FILTERS: ClassVar[dict[str, Any]] = {"rule_owned": False, "conceals": False}
-
     queue = models.ForeignKey(
         "work.Queue",
         on_delete=models.CASCADE,
@@ -365,7 +362,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     )
     category = StateField(choices_enum=StageCategory, default=StageCategory.UNSTARTED)
     rule_owned = models.BooleanField(default=False)
-    conceals = models.BooleanField(default=False, help_text="Tasks entering this stage move to shared trash.")
 
     class Meta:
         """Django model options for queue stages."""
@@ -389,13 +385,13 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def ordinary_entry_available(self) -> bool:
         """Whether this stage allows entry by ordinary work verbs."""
 
-        return not self.rule_owned and not self.conceals
+        return not self.rule_owned
 
     @property
     def on_path(self) -> bool:
         """Whether the stage belongs to the queue's ordinary progress path."""
 
-        return not self.conceals and self.category not in (
+        return self.category not in (
             self.StageCategory.CANCELED,
             self.StageCategory.DUPLICATE,
         )
@@ -450,21 +446,21 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def for_manual_category(cls, container: models.Model, category: str) -> models.QuerySet[Any]:
         """Return ordered category candidates available to hand verbs."""
 
-        return cls.for_container(container).filter(category=category, **cls.MANUAL_CATEGORY_FILTERS)
+        return cls.for_container(container).filter(category=category, rule_owned=False)
 
     @classmethod
     def resolve_default_fallback(cls, stages: models.QuerySet[Any]) -> Any | None:
         """Choose an ordinary unstarted stage when the queue has no explicit default."""
 
-        return stages.filter(category=cls.StageCategory.UNSTARTED, **cls.MANUAL_CATEGORY_FILTERS).first()
+        return stages.filter(category=cls.StageCategory.UNSTARTED, rule_owned=False).first()
 
     def validate_rule_stage(self, queue_id: Any | None) -> None:
-        """Require an active-phase mapping to name a non-concealing rule stage in its queue."""
+        """Require an active-phase mapping to name a rule stage in its queue."""
 
         if queue_id is not None and self.queue_id != queue_id:
             raise ValidationError({"active_stage": "Active stage must belong to the source task's queue."})
-        if not self.rule_owned or self.conceals:
-            raise ValidationError({"active_stage": "Active stage must be rule-owned and must not conceal tasks."})
+        if not self.rule_owned:
+            raise ValidationError({"active_stage": "Active stage must be rule-owned."})
 
     def clean(self) -> None:
         """Keep the queue's current default available for ordinary entry."""
@@ -475,14 +471,12 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     def _validate_configuration(self) -> None:
         """Keep stage edits consistent with defaults, phase mappings and promoted tasks."""
 
-        if self.conceals and self.rule_owned:
-            raise ValidationError({"conceals": "A rule-owned stage cannot conceal tasks."})
         if self._state.adding:
             return
         if self.entry_reserved or not self.ordinary_entry_available:
             queue_model = self._meta.get_field("queue").related_model
             if queue_model._base_manager.filter(default_stage_id=self.pk).exists():
-                field = "conceals" if self.conceals else "rule_owned" if self.rule_owned else "category"
+                field = "rule_owned" if self.rule_owned else "category"
                 raise ValidationError({field: "The queue's default stage must allow ordinary entry."})
         # MilestoneWork owns this optional reverse relation in composed model graphs.
         try:
@@ -491,25 +485,14 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
             pass
         else:
             mappings = milestones._base_manager.filter(active_stage_id=self.pk)
-            if (not self.rule_owned or self.conceals) and mappings.exists():
-                raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned and non-concealing."})
+            if not self.rule_owned and mappings.exists():
+                raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned."})
             if (
                 mappings.filter(project__converted_from__queue__isnull=False)
                 .exclude(project__converted_from__queue_id=self.queue_id)
                 .exists()
             ):
                 raise ValidationError({"queue": "A mapped stage must remain in its source task's queue."})
-        if self.conceals:
-            project_model = apps.get_model("projects", "Project")
-            if project_model._base_manager.filter(converted_from__stage_id=self.pk).exists():
-                raise ValidationError({"conceals": "A stage holding a promoted source task cannot conceal tasks."})
-            # Tasks reach the trash by entering a concealing stage (``Task.save``),
-            # each under its own removal authority; a stage edit never trashes
-            # the tasks it already holds behind the editor's back.
-            task_model = apps.get_model("projects", "Task")
-            stored = type(self)._base_manager.filter(pk=self.pk).values_list("conceals", flat=True).first()
-            if stored is False and task_model._base_manager.filter(stage_id=self.pk, is_trashed=False).exists():
-                raise ValidationError({"conceals": "Remove or move the tasks in this stage before it conceals tasks."})
 
     def locked_fields(self) -> tuple[str, ...]:
         """Lock a system stage's identity; its tone, order and rule flags stay editable."""
@@ -1156,10 +1139,6 @@ class TaskWork(StagedModelMixin):
                 kwargs["update_fields"] = update_fields
             super().save(*args, **kwargs)
             object.__setattr__(self, "_work_status_assigned", False)
-            if stage_written and following is not None and following.conceals and not self.is_trashed:
-                # A workflow removal stage invokes the same trash primitive as
-                # Remove; authorization and removed-list state read that owner.
-                self.trash()
         self._work_snapshot_loaded_values(fields=update_fields)
 
     @transaction.atomic
@@ -1247,7 +1226,7 @@ class TaskWork(StagedModelMixin):
     def action_permission(cls, action: str) -> str:
         """Removal uses the same authority in offered actions and shared trash."""
 
-        return "remove" if action == "remove" else super().action_permission(action)
+        return "delete" if action == "remove" else super().action_permission(action)
 
     @classmethod
     def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
@@ -1313,7 +1292,7 @@ class TaskWork(StagedModelMixin):
     def _require_work_action(self, expected_revision: int | None, *, permission: str = "write") -> None:
         """Recheck the locked, fresh row before a hand verb, including no-op replay."""
 
-        system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+        type(self).system_queryset(lock=("self",)).get(pk=self.pk)
         self.refresh_from_db()
         actor, elevated = self.effective_actor(strict=True)
         if not elevated and not self.with_actor(actor).has_access(permission):
@@ -1322,14 +1301,14 @@ class TaskWork(StagedModelMixin):
             self.require_revision(expected_revision)
 
     @classmethod
-    def merge_blockers(cls, *, using: str | None = None) -> tuple[tuple[Q, str], ...]:
+    def merge_blockers(cls) -> tuple[tuple[Q, str], ...]:
         """A fold refuses a task its removal would refuse, before anything moves."""
 
         removal = tuple(
             (condition, "; ".join(str(text) for text in error.values()) if isinstance(error, Mapping) else str(error))
             for condition, error in cls.action_blockers("remove")
         )
-        return (*super().merge_blockers(using=using), *removal)
+        return (*super().merge_blockers(), *removal)
 
     def validate_trash(self) -> None:
         """Check stored work blockers under the shared trash owner's row lock."""
@@ -1342,26 +1321,16 @@ class TaskWork(StagedModelMixin):
     def remove(self, *, reason: str = "", expected_revision: int | None = None) -> Any:
         """Trash an unpromoted task while retaining its workflow stage."""
 
-        self._require_work_action(expected_revision, permission="remove")
-        self.validate_action("remove")
+        self._require_work_action(expected_revision, permission="delete")
         self.trash(reason=reason)
         return self
 
     @transaction.atomic
-    def restore(self, *, expected_revision: int | None = None, using: str | None = None) -> Any:
-        """Restore shared trash; a workflow concealment also leaves its removal stage."""
+    def restore(self, *, expected_revision: int | None = None) -> Any:
+        """Restore the task from shared trash."""
 
         self._require_work_action(expected_revision, permission="restore")
-        if self.stage is not None and self.stage.conceals:
-            target = self._stage_before_removal() or self.resolve_default_stage()
-            if target is None:
-                raise ValidationError({"stage": "Queue has no default stage."})
-            system = target.category in Stage.SYSTEM_CATEGORIES
-            self._reject_reserved_stage_transition(target=target, manual=True, allow_system_entry=system, lock=True)
-            self.stage = target
-            with self._work_verb_write():
-                self.save(update_fields=("stage", "updated_at"))
-        super().restore(using=using)
+        super().restore()
         return self
 
     @classmethod
@@ -1377,30 +1346,6 @@ class TaskWork(StagedModelMixin):
         if parent is not None:
             rows = rows.filter(parent=parent)
         return rows.order_by("-trashed_at", "-pk")
-
-    def _stage_before_removal(self) -> Stage | None:
-        """Return the stage history shows before the latest concealment, if still enterable."""
-
-        earlier = (
-            self.history.exclude(stage_id=self.stage_id)
-            .exclude(stage_id=None)
-            .order_by("-history_date", "-history_id")
-            .values_list("stage_id", flat=True)
-            .first()
-        )
-        if earlier is None:
-            return None
-        return cast(
-            "Stage | None",
-            self.stage_model()
-            ._base_manager.filter(
-                pk=earlier,
-                queue_id=self.queue_id,
-                conceals=False,
-                rule_owned=False,
-            )
-            .first(),
-        )
 
     @transaction.atomic
     def accept(self, stage: models.Model | None = None, *, expected_revision: int | None = None) -> Any:
@@ -1638,11 +1583,7 @@ class TaskWork(StagedModelMixin):
         following = stages.get(target_id)
         changed = previous_id != target_id
         if changed and manual and following is not None and not following.ordinary_entry_available:
-            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned or concealing stage."})
-        if changed and following is not None and following.conceals and not self._state.adding:
-            project_model = apps.get_model("projects", "Project")
-            if project_model._base_manager.filter(converted_from_id=self.pk).exists():
-                raise ValidationError({"stage": "A task with a promoted project cannot enter a concealing stage."})
+            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
         if manual or not (getattr(self, "_work_internal_status", False) or is_sudo()):
             Stage.validate_transition(
                 previous, following, allow_system_entry=allow_system_entry, adding=self._state.adding
@@ -1807,7 +1748,7 @@ class TaskWork(StagedModelMixin):
             Stage | None,
             self.stage_model()
             .for_container(self.queue)
-            .filter(category=category, rule_owned=True, conceals=False)
+            .filter(category=category, rule_owned=True)
             .first(),
         )
 

@@ -26,6 +26,7 @@ from rebac import PermissionDenied, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 
+from angee.base.changesets import changeset_model_label
 from angee.base.identity import instance_from_public_id
 from angee.base.models import record_history
 from angee.graphql.actions import (
@@ -55,7 +56,6 @@ from angee.graphql.relations import (
     with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import write_queryset
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
 from angee.iam.schema import UserType
@@ -65,11 +65,12 @@ from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
 from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.parties.schema import HandleType, PartyType
-from angee.provenance.schema import HistorySummaryType, RecordHistory
+from angee.provenance.schema import HistorySummaryType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Integration = apps.get_model("integrate", "Integration")
+Changeset = apps.get_model(changeset_model_label())
 Handle = apps.get_model("parties", "Handle")
 File = apps.get_model("storage", "File")
 Channel = apps.get_model("messaging", "Channel")
@@ -266,7 +267,7 @@ class MessagingChannelMutation:
         """
 
         with transaction.atomic():
-            channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel).of_concrete_type())
+            channel = require_instance_for_id(Channel, str(id), queryset=Channel.objects.for_write().of_concrete_type())
             preview = DeletePreview.from_counts(
                 channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
             )
@@ -1298,7 +1299,7 @@ class MessagingQuery:
 
         rows = Message.objects.inbox().untrashed()
         survivor = require_instance_for_id(Message, id, queryset=rows).canonical()
-        return rows.filter(models.Q(pk=survivor.pk) | models.Q(merged_into=survivor)).order_by("channel_id", "pk")
+        return rows.redirect_group(survivor).order_by("channel_id", "pk")
 
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
@@ -2272,8 +2273,11 @@ def _record_timeline(
         _timeline_id=models.F("pk"), _timeline_at=models.F("_order_at"),
         _timeline_kind=models.Value("message", output_field=models.CharField()),
     )
-    history = RecordHistory(record, current_actor()) if record_history(type(record)) is not None else None
-    changesets = history.changesets() if history is not None else None
+    changesets = (
+        Changeset.objects.sudo(reason="messaging.record_timeline").touching(record)
+        if record_history(type(record)) is not None
+        else None
+    )
     if changesets is not None:
         for term in strip_null_bytes(search or "").split():
             changesets = changesets.filter(
@@ -2287,10 +2291,13 @@ def _record_timeline(
     selected = list(keys.order_by("-_timeline_at", "-_timeline_kind", "-_timeline_id")[offset:offset + limit])
     message_ids = [row["_timeline_id"] for row in selected if row["_timeline_kind"] == "message"]
     loaded = {("message", row.pk): row for row in messages.filter(pk__in=message_ids)}
-    if changesets is not None and history is not None:
+    if changesets is not None:
         change_ids = [row["_timeline_id"] for row in selected if row["_timeline_kind"] == "change"]
         page = list(changesets.filter(pk__in=change_ids))
-        loaded.update((('change', row.pk), entry) for row, entry in zip(page, history.summaries(page), strict=True))
+        loaded.update(
+            (("change", row.pk), entry)
+            for row, entry in zip(page, HistorySummaryType.from_changesets(page), strict=True)
+        )
     # A row deleted after key selection is omitted, never replaced outside this window.
     timeline = [loaded[key] for row in reversed(selected)
                 if (key := (row["_timeline_kind"], row["_timeline_id"])) in loaded]

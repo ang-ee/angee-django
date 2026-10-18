@@ -4,7 +4,8 @@ import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from pydantic import ValidationError as ContractError
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, current_actor, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac.actors import is_sudo
 
 from angee.base.models import StaleRevisionError
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
@@ -193,19 +194,19 @@ def test_answer_owner_runs_inside_the_verdict_transaction(people):
     received = []
 
     def collect(sender, decision, **kwargs):
-        received.append(decision.pk)
+        received.append((decision.pk, current_actor(), is_sudo()))
 
     decision_answered.connect(collect, weak=False)
     try:
         with pytest.raises(RuntimeError), transaction.atomic():
             Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
-            assert received == [question.pk]
+            assert received == [(question.pk, to_subject_ref(reviewer), False)]
             raise RuntimeError("Roll back")
         question.refresh_from_db()
         assert question.is_open
         received.clear()
         Decision.objects.decide(question, actor=reviewer, chosen=["complete"])
-        assert received == [question.pk]
+        assert received == [(question.pk, to_subject_ref(reviewer), False)]
     finally:
         decision_answered.disconnect(collect)
 

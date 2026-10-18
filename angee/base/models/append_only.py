@@ -163,4 +163,3 @@ class AppendOnlyModel(models.Model):
     def _owner_delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Delete one row after its domain owner has checked retention and locks."""
         return super().delete(*args, **kwargs)
-

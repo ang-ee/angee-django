@@ -43,7 +43,6 @@ from rebac.schema import (
 )
 
 from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
-from angee.base.scoping import read_scoped_queryset
 from angee.iam.identity import user_label
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
@@ -466,7 +465,7 @@ def assignment_subject_labels(subjects: Iterable[str], *, actor: Any) -> dict[st
         if model is None:
             continue
         ids = {ref.subject_id for ref in references.values() if ref.subject_type == subject_type}
-        for row in read_scoped_queryset(model, actor).filter(pk__in=ids):
+        for row in model.objects.with_actor(actor).with_action("read").filter(pk__in=ids):
             labels[to_subject_ref(row)] = user_label(row) if subject_type == "auth/user" else str(row)
     return {value: labels[ref] for value, ref in references.items() if ref in labels}
 

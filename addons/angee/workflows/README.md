@@ -59,12 +59,12 @@ readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
 
-[`RecordWatch`](watches.py) declares watch-only model observations through
-`ANGEE_WORKFLOW_WATCH_CLASSES`. Its `model_label` and optional `fields` select
-saves that notify the transactional `StepWatch` owner. It confers no trigger
-scope or permissions. A step locks and tests its actor-readable predicate, calls
-`ctx.watch(record)`, then returns `ctx.wait(until=deadline, state=...)`.
-Models supported by native trigger sources remain watchable through those sources.
+`TriggerSource.watch_only` declares an observation that wakes `StepWatch` rows
+without contributing trigger scope or permissions. Its `model_label` and
+optional `fields` select saves through the same
+`ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES` registry as admission sources. A step
+locks and tests its actor-readable predicate, calls `ctx.watch(record)`, then
+returns `ctx.wait(until=deadline, state=...)`.
 
 `record_timeline(records: [{model, id}])` is the single authorized GraphQL read.
 It returns per-record graphs, open readable decisions and all-open attention

@@ -34,8 +34,6 @@ class ConnectionHandle(Protocol):
 
     Read-only properties so a frozen adapter DTO (``messaging``'s
     ``ParsedHandle``) satisfies the protocol without parties importing it.
-    ``metadata`` is the adapter's identity evidence for the handle — the one
-    home for that fact.
     """
 
     @property
@@ -52,6 +50,9 @@ class ConnectionHandle(Protocol):
 
     @property
     def metadata(self) -> dict[str, Any]: ...
+
+    @property
+    def confidence(self) -> float | None: ...
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ def ingest_connections(
     with system_context(reason="parties.connection.ingest"):
         user = user_model._base_manager.get(pk=created_by_id)
         owner_party = party_model.objects.for_user(user)
-        kinds: dict[str, Any] = {}
+        kinds: dict[Any, Any] = {}
         return [
             _ingest_one_connection(
                 parsed,
@@ -104,25 +105,13 @@ def ingest_connections(
         ]
 
 
-def ingest_connection(
-    parsed: ParsedConnection,
-    *,
-    link: Any,
-    created_by_id: Any,
-    asserted_by: Any,
-) -> Any:
-    """Idempotently land one parsed connection and return its Person."""
-
-    return ingest_connections([(parsed, link)], created_by_id=created_by_id, asserted_by=asserted_by)[0]
-
-
 def _ingest_one_connection(
     parsed: ParsedConnection,
     *,
     link: Any,
     owner_party: Any,
     kind_model: Any,
-    kinds: dict[str, Any],
+    kinds: dict[Any, Any],
     created_by_id: Any,
     asserted_by: Any,
 ) -> Any:
@@ -222,13 +211,12 @@ def _ingest_one_connection(
 def _identified(parsed: ConnectionHandle, handle_model: Any) -> bool:
     """Whether a connection names its account by a real identifier, not by a display name only.
 
-    An email address, a phone number or a platform id identifies one account; an
-    adapter whose export carries names alone declares ``identity_confidence:
-    name_only``, and a name can match a stranger.
+    An email address, a phone number or a platform id identifies one account.
+    An adapter may override that inference with its typed confidence.
     """
 
-    if (parsed.metadata or {}).get("identity_confidence") == "name_only":
-        return False
+    if parsed.confidence is not None:
+        return parsed.confidence >= 1.0
     return bool(parsed.external_id) or parsed.platform in {handle_model.Platform.EMAIL, handle_model.Platform.PHONE}
 
 
@@ -266,7 +254,7 @@ def _connection_person(
     )
 
 
-def _relationship_kind(kind_model: Any, slug: str, kinds: dict[str, Any]) -> Any:
+def _relationship_kind(kind_model: Any, slug: str, kinds: dict[Any, Any]) -> Any:
     """Return a required parties relationship kind, resolved once per batch."""
 
     if slug in kinds:
@@ -285,7 +273,7 @@ def _land_acquaintance(
     connected_at: date | datetime | None,
     relationship_model: Any,
     kind_model: Any,
-    kinds: dict[str, Any],
+    kinds: dict[Any, Any],
     created_by_id: Any,
     asserted_by: Any,
     link: Any,
@@ -324,7 +312,7 @@ def _land_employment(
     title: str,
     relationship_model: Any,
     kind_model: Any,
-    kinds: dict[str, Any],
+    kinds: dict[Any, Any],
     created_by_id: Any,
     asserted_by: Any,
     link: Any,
@@ -335,7 +323,12 @@ def _land_employment(
     organization = str(organization or "").strip()
     if not organization:
         return
-    kind = _relationship_kind(kind_model, "employee", kinds)
+    accessor = kind_model.employee
+    if accessor not in kinds:
+        kinds[accessor] = accessor()
+    kind = kinds[accessor]
+    if kind is None:
+        raise ValidationError("The employee RelationshipKind master row is required.")
     edge, _ = relationship_model.objects.get_or_create(
         party=person,
         other_party=None,

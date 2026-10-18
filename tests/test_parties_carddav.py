@@ -245,7 +245,7 @@ def test_connect_probe_success_commits_every_owned_row_atomically(
         assert link.asserted_by == f"auth/user:{admin.pk}"
         assert link.rank == link.StatementRank.NORMAL
         assert link.link_id is None
-        assert link.evidence == [{"model": integration._meta.label, "id": integration.public_id}]
+        assert link.evidence == [{"model": integration._meta.label, "id": integration.public_id, "pointer": ""}]
         assert link.confidence == 1.0
         assert link.is_confirmed is False
 

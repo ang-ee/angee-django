@@ -24,7 +24,6 @@ from rebac.actors import is_sudo
 
 from angee.base.changesets import changeset
 from angee.base.errors import exception_text
-from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.publishing import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
@@ -209,7 +208,7 @@ class Runner:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
         from angee.workflows.context import StepContext
 
-        run_id = system_queryset(self.step_model).filter(
+        run_id = self.step_model.system_queryset().filter(
             pk=step_run_id, status=StepRunStatus.READY,
         ).values_list("run_id", flat=True).first()
         if run_id is None:
@@ -356,7 +355,7 @@ class Runner:
 
     def record(self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
-        readable = read_scoped_queryset(type(record), actor)
+        readable = type(record).objects.with_actor(actor)
         if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the step record is required.")
         target = generic_target(record)

@@ -19,10 +19,11 @@ class PartyAspectMixin(StatementsMixin):
     class Meta:
         abstract = True
 
-    def lock_statement_subject(self, members: Mapping[str, Any], *, using: str) -> Any:
-        for manager in self.party.statement_managers():
-            manager.db_manager(using).lock_subject(manager.instance, {})
-        return super().lock_statement_subject(members, using=using)
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
+        """Lock the owning Party before this dependent aspect subject."""
+
+        self.party.lock_subject()
+        return super().lock_subject(members)
 
 
 class MembershipDecisionMixin(models.Model):

@@ -31,7 +31,6 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.refs import canonical_link_path
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -86,8 +85,13 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
 
     actor = current_actor()
     field = cast(StrawberryDjangoField, info._field)
-    tags = optimize(run_type_get_queryset(read_scoped_queryset(Tag, actor), field.django_type, info), info)
-    edges = read_scoped_queryset(TagAssignment, actor).by_tag().prefetch_related(
+    tags = Tag._base_manager.none() if actor is None else Tag.objects.with_actor(actor).with_action("read")
+    tags = optimize(run_type_get_queryset(tags, field.django_type, info), info)
+    edges = (
+        TagAssignment._base_manager.none()
+        if actor is None
+        else TagAssignment.objects.with_actor(actor).with_action("read")
+    ).by_tag().prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )
     links = canonical_link_path(field.origin_django_type.model) if field.origin_django_type else ()

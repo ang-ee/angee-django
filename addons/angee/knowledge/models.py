@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import StrEnum
@@ -19,23 +19,23 @@ from graphlib import CycleError, TopologicalSorter
 from itertools import islice
 from typing import Any, ClassVar, cast
 
-from angee.base.scoping import lock_if_supported
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.signals import post_save
 from markdown_it import MarkdownIt
 from rebac import (
     PermissionDenied,
     SubjectRef,
-    actor_context,
     check_new,
+    current_actor,
     generic_target,
     system_context,
     to_subject_ref,
 )
+from rebac.errors import MissingActorError
 from rebac.mixins import RebacModelBase
 from rebac.resources import model_resource_type
 
@@ -150,7 +150,16 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         else is refused so the row the gate authorized is the row written.
         """
 
-        actor = self.check_create()
+        actor, _ = self.effective_actor(strict=True)
+        resource_type = model_resource_type(self.model)
+        if actor is None:
+            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
+        if resource_type is None or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
         if owner is None or to_subject_ref(owner) != actor:
             raise PermissionDenied(f"Denied: {actor} cannot create a vault owned by {owner!r}")
         return self._create_for_actor(actor, **fields)
@@ -359,10 +368,20 @@ class PageManager(AngeeManager.from_queryset(PageQuerySet)):  # type: ignore[mis
         parent = fields.get("parent")
         if parent is not None and parent.vault_id != vault.pk:
             raise ValueError("Page parent must belong to the same vault.")
-        relationships: dict[str, tuple[Any, ...]] = {"vault": (vault,)}
+        actor = current_actor()
+        if actor is None:
+            raise MissingActorError("Creating a knowledge page requires an actor.")
+        relationships = {"vault": (to_subject_ref(vault),)}
         if parent is not None:
-            relationships["parent"] = (parent,)
-        actor = self.check_create(relationships)
+            relationships["parent"] = (to_subject_ref(parent),)
+        resource_type = model_resource_type(self.model)
+        if resource_type is None or not check_new(
+            subject=to_subject_ref(actor),
+            action="create",
+            resource_type=resource_type,
+            relationships=relationships,
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or 'knowledge/page'}")
         kind = fields.pop("kind", self.model.PageKind.NOTE)
         page_model = self.model
         if kind != self.model.PageKind.FOLDER:
@@ -500,24 +519,24 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
         ).exists():
             raise ValidationError({"parent": "Page parent is in the trash."})
 
-    def trash(self, *, reason: str = "", using: str | None = None) -> None:
+    def trash(self, *, reason: str = "") -> None:
         """Trash this page and, with the same stamp, every untrashed page below it."""
 
-        db = using or router.db_for_write(type(self), instance=self)
+        db = self._state.db
         with transaction.atomic(using=db):
-            super().trash(reason=reason, using=db)
+            super().trash(reason=reason)
             type(self).system_queryset().using(db).subtree_of(self).exclude(pk=self.pk).trash(
                 reason=self.trash_reason, at=self.trashed_at,
             )
 
-    def restore(self, *, using: str | None = None) -> None:
+    def restore(self) -> None:
         """Restore this page and the pages below it that were trashed with it.
 
         Refuses while the containing folder is trashed, and when an untrashed
         page took a restored title meanwhile.
         """
 
-        db = using or router.db_for_write(type(self), instance=self)
+        db = self._state.db
         with transaction.atomic(using=db):
             pages = type(self).system_queryset(lock=("self",)).using(db)
             if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
@@ -526,7 +545,7 @@ class Page(TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMix
             titles = [self.title, *together.values_list("title", flat=True)]
             if pages.filter(vault_id=self.vault_id, title__in=titles).untrashed().exists():
                 raise ValidationError({"title": "Another page in this vault already uses a restored title."})
-            super().restore(using=db)
+            super().restore()
             together.restore()
 
 
@@ -540,32 +559,7 @@ class RecordBindingManager(AngeeManager):
     """
 
     DEFAULT_ROLE = "related"
-    MEMORY_ROLE = "memory"
     KNOWLEDGE_MODELS = frozenset({"knowledge.page", "knowledge.vault"})
-
-    def ensure_page(self, record: models.Model, *, role: str, vault: Any, title: str, actor: Any) -> Any:
-        """Find or create a role's page, serialized on the canonical bound record.
-
-        The first untrashed bound page is authoritative across vaults. An unreadable
-        binding is refused rather than creating a second page behind the caller's
-        scope. Callers supply a vault-unique title for a newly created page.
-        """
-
-        target = generic_target(self._saved(record, "record"))
-        role = self._role(role)
-
-        def page_for_role() -> models.Model:
-            with system_context(reason="knowledge.ensure_page.find"):
-                binding = self.model._base_manager.filter(
-                    **target.lookups(self.model, "target"), role=role, page__is_trashed=False,
-                ).order_by("pk").first()
-            if binding is not None:
-                binding.require_access("read", actor)
-                return apps.get_model("knowledge", "Page").objects.with_actor(actor).get(pk=binding.page_id)
-            return apps.get_model("knowledge", "Page").objects.create_in(vault, title=title)
-
-        with actor_context(actor):
-            return cast(RecordBinding, self.upsert(target=record, page=page_for_role, role=role)).page
 
     def create(self, **kwargs: Any) -> models.Model:
         """Create through the idempotent role-keyed upsert contract."""
@@ -586,28 +580,26 @@ class RecordBindingManager(AngeeManager):
         self,
         *,
         target: models.Model,
-        page: models.Model | Callable[[], models.Model] | None = None,
+        page: models.Model | None = None,
         vault: models.Model | None = None,
         role: str = DEFAULT_ROLE,
     ) -> models.Model:
         """Return one binding per knowledge owner, canonical target, and role.
 
-        Lock and recheck the canonical target before every write, including a
-        lazy page factory. Under PostgreSQL READ COMMITTED, DELETE waits for
-        this transaction and its post-delete teardown sees the committed binding;
-        if DELETE wins, the locked lookup refuses the now-absent target.
+        Lock and recheck the canonical target before every write. If target
+        deletion wins, the locked lookup refuses the now-absent target.
         """
 
         reference = generic_target(self._saved(target, "target"))
         with transaction.atomic():
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
-                lock_if_supported(canonical._base_manager.all(), no_key=True).get(pk=reference.object_id)
-            owner = page() if callable(page) else page
+                canonical._base_manager.all().lock_if_supported(no_key=True).get(pk=reference.object_id)
+            owner = page
             if owner is not None:
-                # Serialize binding admission with memory teardown and page trash.
+                # Serialize binding admission with page trash.
                 with system_context(reason="knowledge.record_binding.page_lock"):
-                    owner = lock_if_supported(type(owner)._base_manager.all(), no_key=True).get(pk=owner.pk)
+                    owner = type(owner)._base_manager.all().lock_if_supported(no_key=True).get(pk=owner.pk)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")
             binding, _created = self.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
@@ -625,39 +617,6 @@ class RecordBindingManager(AngeeManager):
 
         deleted, _by_model = self.filter(**self._key(target, page=page, vault=vault, role=role)).delete()
         return deleted
-
-    def teardown_for_record(self, record: models.Model) -> None:
-        """Remove this record's bindings; trash only memory pages with no remaining memory binding.
-
-        Targets declare no reverse ``GenericRelation``. The global knowledge-owned
-        ``post_delete`` receiver delegates here once, on the canonical sender.
-        The target's DELETE waits for :meth:`upsert` to release its row lock;
-        READ COMMITTED makes that committed binding visible to teardown. Binding
-        deletion is elevated and needs no live target or additional target lock.
-        """
-
-        try:
-            target = generic_target(record)
-        except ValueError:
-            return  # An unsaved or untyped row: no binding can name it.
-        # object_id is an integer column, so a row with a non-integer primary
-        # key (django Session's string key, for one) can never carry bindings —
-        # and coercing its pk into the filter raises on every such delete.
-        if not isinstance(target.object_id, int):
-            return
-        bindings = self.model._base_manager.filter(**target.lookups(self.model, "target"))
-        if not bindings.exists():
-            return
-        with system_context(reason="knowledge.record_binding.teardown"), transaction.atomic():
-            pages = list(lock_if_supported(apps.get_model("knowledge", "Page").objects.filter(
-                pk__in=bindings.filter(role=self.MEMORY_ROLE, page__isnull=False).values("page_id"),
-            ).order_by("pk"), no_key=True))
-            bindings.delete()
-            for page in pages:
-                if not page.is_trashed and not self.model._base_manager.filter(
-                    page=page, role=self.MEMORY_ROLE,
-                ).exists():
-                    page.trash(reason="Bound record deleted.")
 
     def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
         """Return actor-readable bindings on one canonical record."""
@@ -760,6 +719,7 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
 
     history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
+    on_target_delete = models.CASCADE
     merge_identity = (("page", "content_type", "object_id", "role"), ("vault", "content_type", "object_id", "role"))
     runtime = True
     sqid_prefix = "krb_"

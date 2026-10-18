@@ -88,5 +88,3 @@ def most_derived_concrete(row: models.Model) -> models.Model:
         if found is not None:
             return found
     return row
-
-

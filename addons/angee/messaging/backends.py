@@ -29,7 +29,8 @@ from angee.base.models import SourceKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
-from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import ApplyResult, SemanticError, StreamPage
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 

@@ -42,9 +42,9 @@ never permitted. JSON null values are retained.
 `Decision.objects.decide(decision, actor=actor, chosen=keys, revision=revision)`
 validates distinct offered keys and the single/multiple choice rule, stores the
 verdict in authored order, increments the optimistic revision and emits
-`decision_answered` inside the answer transaction. Non-workflow askers apply there,
-so refusal rolls the verdict back. Workflow subscribers schedule their wake after
-commit and apply when the step resumes. The Python revision is optional; the card's
+`decision_answered` under the answerer's actor inside the answer transaction.
+Non-workflow askers apply there, so refusal rolls the verdict back. Workflow
+subscribers schedule their wake after commit and apply when the step resumes. The Python revision is optional; the card's
 GraphQL mutation requires its observed revision. Invalid choices write nothing.
 Decisions execute no proposal actions. The asker consumes the answer through the
 records' owners. Free correction means editing the record and then choosing the

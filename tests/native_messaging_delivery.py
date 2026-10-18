@@ -22,6 +22,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.models.signals import post_save
 from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -42,7 +43,8 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import RedirectOriginError, ResponseTooLargeError
 from angee.integrate.signals import discovery_finished
-from angee.integrate.streams import StreamDefinition, StreamPage
+from angee.integrate.states import StreamDefinition
+from angee.integrate.streams import StreamPage
 from angee.jobs.enqueue import celery_app
 from angee.messaging import delivery
 from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedHandle, ParsedMessage, ParsedPart
@@ -1338,11 +1340,11 @@ class FeedDeliveryContracts(DeliveryFixtures):
             second.save(update_fields=("config", "updated_at"))
             second_provider.consume_quota(1)
             quota.refresh_from_db()
-            self.assertEqual((quota.quota_used, quota.quota_limit), (6, 10000))
+            self.assertEqual(quota.quota_used, 6)
             with self.assertRaises(IntegrationError):
                 first_provider.consume_quota(1, delivery=True)  # This feed still checks its own limit of 5.
             quota.refresh_from_db()
-            self.assertEqual((quota.quota_used, quota.quota_limit), (6, 10000))
+            self.assertEqual(quota.quota_used, 6)
             second_provider.scope = "fake:project:independent"
             second_provider.consume_quota(3)
             self.assertEqual(apps.get_model("posts", "Quota").objects.count(), 2)
@@ -1370,7 +1372,7 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.assertEqual(provider.posts, 0)
         self.assertEqual(provider.lookups, [])
 
-    def test_deleting_a_quota_anchor_preserves_the_shared_scopes_usage(self):
+    def test_quota_authorization_anchor_is_required_and_protected(self):
         with system_context(reason="shared quota anchor lifecycle"):
             second = Feed.objects.create(vendor=self.feed.vendor, owner=self.operator, display_name="Remaining feed",
                                          external_id="remaining", backend_class="feed", feed_backend_class="manual")
@@ -1379,11 +1381,12 @@ class FeedDeliveryContracts(DeliveryFixtures):
             self.addCleanup(first_provider.close)
             self.addCleanup(second_provider.close)
             period = first_provider.consume_quota(3)
-            self.feed.delete()
+            with self.assertRaises(ProtectedError):
+                self.feed.delete()
             period.refresh_from_db()
-            self.assertIsNone(period.integration_id)
             same_period = second_provider.consume_quota(2)
             same_period.refresh_from_db()
+        self.assertEqual(period.integration_id, self.feed.pk)
         self.assertEqual(same_period.pk, period.pk)
         self.assertEqual(same_period.quota_used, 5)
 
@@ -1711,23 +1714,6 @@ class FeedDeliveryContracts(DeliveryFixtures):
                         queues=celery_app.amqp.queues, app=celery_app)
         route = router.route({"queue": "prefork"}, delivery.DELIVER_MESSAGE_TASK, kwargs={})
         self.assertEqual(route["queue"].name, "prefork")
-
-    def test_scoped_quota_cutover_retains_legacy_usage_as_separate_history(self):
-        with system_context(reason="documented upgrade-day quota overlap"):
-            self.feed.config = {"quota_limit": 5, "reply_reserve": 0}
-            self.feed.save(update_fields=("config", "updated_at"))
-            provider = FakeFeedBackend(self.feed)
-            self.addCleanup(provider.close)
-            period = provider.current_quota_period()
-            legacy = apps.get_model("posts", "Quota").objects.create(
-                integration=self.feed, scope=None, period_start=period.period_start,
-                period_end=period.period_end, quota_used=5, quota_limit=5,
-            )
-            provider.consume_quota(5, delivery=True)
-            legacy.refresh_from_db()
-            period.refresh_from_db()
-            self.assertEqual((legacy.quota_used, period.quota_used), (5, 5))
-            self.assertNotEqual(legacy.pk, period.pk)
 
     def test_lost_reconcile_claims_use_the_same_attempt_cap_as_settled_failures(self):
         row = self.queued_reply()

@@ -24,7 +24,6 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.identity import public_subject_ref
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -93,7 +92,7 @@ def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]
     def prefetch(info: strawberry.Info) -> Prefetch:
         actor = session_user(info)
         field = cast(StrawberryDjangoField, info._field)
-        files = read_scoped_queryset(apps.get_model("storage", "File"), actor)
+        files = apps.get_model("storage", "File").objects.with_actor(actor)
         avatars = optimize(run_type_get_queryset(files, field.django_type, info), info)
         return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
 
@@ -134,7 +133,9 @@ class PartyType(AuthoredRefMixin, AngeeNode):
         only=["id"],
         prefetch_related=lambda info: Prefetch(
             "partystatement_set",
-            queryset=Party.objects.handle_statements(actor=session_user(info)).select_related("subject", "handle"),
+            queryset=Party.objects.handle_statements()
+            .for_reader(session_user(info))
+            .select_related("subject", "handle"),
             to_attr="_readable_handle_statements",
         ),
     )
@@ -253,11 +254,14 @@ class PartyStatementType(AngeeNode):
 
         row = cast(Any, self)
         source = SubjectRef.parse(row.asserted_by)
-        resolved = model_for_subject_type(source.subject_type)
-        if resolved is not None:
-            model, id_attr = resolved
-            if read_scoped_queryset(model, session_user(info)).filter(**{id_attr: source.subject_id}).exists():
-                return str(public_subject_ref(source))
+        readable = row.__dict__.get("_asserting_source_readable")
+        if readable is None:
+            resolved = model_for_subject_type(source.subject_type)
+            if resolved is not None:
+                model, id_attr = resolved
+                readable = model.objects.with_actor(session_user(info)).filter(**{id_attr: source.subject_id}).exists()
+        if readable:
+            return str(public_subject_ref(source))
         return str(row.source_kind)
 
     @strawberry_django.field(only=["rank", "snak"])
@@ -270,7 +274,10 @@ class PartyStatementType(AngeeNode):
 
     @strawberry_django.field(only=["subject_id", "evidence"])
     def evidence(self, info: strawberry.Info) -> list[StatementEvidenceType]:
-        refs = cast(Any, self).readable_evidence(session_user(info))
+        row = cast(Any, self)
+        refs = row.__dict__.get("_readable_evidence")
+        if refs is None:
+            refs = row.readable_evidence(session_user(info))
         return [StatementEvidenceType(model=ref.model, id=strawberry.ID(ref.id), pointer=ref.pointer) for ref in refs]
 
     @strawberry_django.field(only=["subject_id", "evidence"])
@@ -519,7 +526,7 @@ class PartiesIdentityMutation:
         link = require_instance_for_id(
             PartyStatement,
             id,
-            queryset=Party.objects.handle_statements(actor=session_user(info)),
+            queryset=Party.objects.handle_statements().for_reader(session_user(info)),
             not_found="party statement not found",
         )
         return cast(PartyStatementType, link.with_actor(session_user(info)).confirm())
@@ -531,7 +538,7 @@ class PartiesIdentityMutation:
         link = require_instance_for_id(
             PartyStatement,
             id,
-            queryset=Party.objects.handle_statements(actor=session_user(info)),
+            queryset=Party.objects.handle_statements().for_reader(session_user(info)),
             not_found="party statement not found",
         )
         return cast(PartyStatementType, link.with_actor(session_user(info)).dismiss())
@@ -878,7 +885,11 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
     delete=False,
     field_id_decode={"subject": public_pk_decoder(Party), "handle": public_pk_decoder(Handle)},
     get_queryset=lambda info: (
-        Party.objects.handle_statements(actor=session_user(info)).members().select_related("subject", "handle")
+        Party.objects.handle_statements()
+        .for_reader(session_user(info))
+        .with_readable_records(session_user(info))
+        .members()
+        .select_related("subject", "handle")
     ),
 )
 _CIRCLE_RESOURCE = hasura_model_resource(

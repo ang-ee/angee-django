@@ -160,8 +160,7 @@ class Rescan(Step[CoverageInput, StreamStageOutput, RescanConfig]):
         stream = streams[index]
         page = None
         with _stream_io(ctx, bridge) as adapter:
-            if stream.phase != StreamPhase.BASELINE:
-                stream = begin_stream_cycle(stream, adapter, page_bound=ctx.config.rescan_bound)
+            stream = begin_stream_cycle(stream, adapter, page_bound=ctx.config.rescan_bound)
             if stream.resync_required or stream.phase == StreamPhase.BASELINE:
                 page = advance_stream(stream, adapter, page_bound=ctx.config.rescan_bound)
         if page is not None:

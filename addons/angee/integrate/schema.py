@@ -25,7 +25,8 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
-from rebac import MissingActorError, PermissionDenied, system_context
+from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
@@ -52,7 +53,7 @@ from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import instance_for_write, write_queryset
+from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -131,9 +132,12 @@ class ConsoleIntegrationCapabilitiesQuery:
             mode = model.integration_create_mode
             if mode is None:
                 continue
-            try:
-                model.objects.check_create()
-            except MissingActorError, PermissionDenied:
+            resource_type = model_resource_type(model)
+            if resource_type is None or not check_new(
+                subject=to_subject_ref(_session_user(info)),
+                action="create",
+                resource_type=resource_type,
+            ).allowed:
                 continue
             capabilities.append(
                 IntegrationCapability(
@@ -1068,7 +1072,7 @@ class IntegrateExternalAccountMutation:
                 reason="integrate.graphql.external_account.delete",
                 confirm=confirm,
                 before_delete=revoke,
-                queryset=write_queryset(ExternalAccount),
+                queryset=ExternalAccount.objects.for_write(),
             )
 
 
@@ -1144,7 +1148,7 @@ class IntegrateCredentialMutation:
                 reason="integrate.graphql.credential.delete",
                 confirm=confirm,
                 before_delete=prepare_delete,
-                queryset=write_queryset(Credential),
+                queryset=Credential.objects.for_write(),
             )
 
 
@@ -1765,7 +1769,7 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
                     else require_instance_for_id(
                         Credential,
                         credential_id,
-                        queryset=write_queryset(Credential),
+                        queryset=Credential.objects.for_write(),
                     )
                 )
                 instance.attach_credential(credential)

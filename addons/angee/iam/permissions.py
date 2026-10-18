@@ -18,7 +18,6 @@ from django.http import HttpRequest
 from rebac import ObjectRef, PermissionDenied, current_actor
 from strawberry.permission import BasePermission
 
-from angee.base.scoping import read_scoped_queryset
 from angee.iam.roles import platform_admin_role, subject_has_role
 
 
@@ -54,7 +53,7 @@ def read_resource_queryset(
     """Bind a read-only GraphQL resource to its signed-in REBAC scope."""
 
     def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
-        return read_scoped_queryset(model, session_user(info), action="read")
+        return model.objects.with_actor(session_user(info)).with_action("read")
 
     return get_queryset
 

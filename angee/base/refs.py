@@ -41,7 +41,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import FieldBinding
 
 from angee.base.identity import public_data_id_field, public_id_for
-from angee.base.models.merge import MergePolicy, _RecordRefMergeContract
+from angee.base.models.merge import EdgeReference, MergePolicy, Reference, _RecordRefMergeContract
 from angee.base.permissions import effective_rebac_definition
 
 
@@ -381,15 +381,72 @@ def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMix
     return {target: tuple(edges) for target, edges in index.items()}
 
 
+def record_ref_cleanup_edges() -> tuple[type[RecordRefMixin], ...]:
+    """Return installed edge models declaring target-specific teardown."""
+
+    return tuple(
+        edge
+        for edge in sorted(apps.get_models(), key=lambda model: model._meta.label)
+        if issubclass(edge, RecordRefMixin) and callable(getattr(edge, "teardown_for_target", None))
+    )
+
+
+def record_ref_cleanup_edges_for_target(
+    target: type[models.Model],
+) -> tuple[type[RecordRefMixin], ...]:
+    """Return cleanup edges named by ``target``'s retained reverse relations."""
+
+    cleanup = record_ref_cleanup_edges()
+    return tuple(
+        edge for edge in cleanup if record_ref_cleanup_target(edge, target)
+    )
+
+
+def record_ref_cleanup_target(edge: type[RecordRefMixin], target: type[models.Model]) -> bool:
+    """Return whether ``target`` declares a retained reverse relation to ``edge``."""
+
+    for field in target._meta.private_fields:
+        if not isinstance(field, GenericRelation):
+            continue
+        related = field.remote_field.model
+        if related is edge:
+            return True
+        if isinstance(related, str) and related.lower() == edge._meta.label_lower:
+            return True
+    return False
+
+
+def reference_blocks_target_delete(reference: Reference, target: type[models.Model]) -> bool:
+    """Return whether a live reference must prevent deleting its target.
+
+    Ordinary foreign keys and undeclared generic pointers remain blockers. A
+    record edge participates only when its schema declares this target, or the
+    target exposes the edge's retained reverse relation for custom teardown.
+    The core receiver applies that same policy to ordinary deletion and creation
+    undo alike.
+    """
+
+    if not isinstance(reference, EdgeReference) or not issubclass(reference.model, RecordRefMixin):
+        return True
+    canonical = canonical_model(target)
+    declared = record_edges_by_target().get(canonical, ()) if canonical is not None else ()
+    controlled = {*declared, *record_ref_cleanup_edges_for_target(target)}
+    return reference.model not in controlled or reference.model.on_target_delete is models.PROTECT
+
+
 def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
     """Apply each edge owner's declared policy before its target is deleted."""
 
     del kwargs
+    cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
+    for edge in cleanup_edges:
+        edge.teardown_for_target(instance)
     target = canonical_model(type(instance))
-    if target is None:
-        return
+    declared = record_edges_by_target().get(target, ()) if target is not None else ()
     content_type, object_id = generic_pointer_target(instance)
-    for edge in record_edges_by_target().get(target, ()):
+    for edge in declared:
+        if edge in cleanup_edges:
+            continue
         pointer = edge.record_ref_field()
         rows = edge._base_manager.using(using).filter(
             **{pointer.ct_field: content_type, pointer.fk_field: object_id}

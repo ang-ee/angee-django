@@ -36,7 +36,6 @@ from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id, public_subject_ref
 from angee.base.models import AngeeModel
-from angee.base.scoping import lock_if_supported
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression
@@ -47,7 +46,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
-from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -128,7 +126,7 @@ def _preference_object(user: Any) -> JSON:
 def _display_label(user: Any, info: strawberry.Info) -> str:
     """Return IAM's label for ``user``, the same one every record carries, whatever the viewer reads."""
 
-    if "username" in getattr(user, "_rebac_redacted_fields", ()):
+    if "username" in user.redacted_fields():
         return user.get_full_name() or user_display_label(user.pk, request=_request(info)) or ""
     return user_label(user)
 
@@ -658,14 +656,14 @@ class IAMUserWriteBackend:
         payload = dict(data)
         password = payload.pop("password", None)
         with transaction.atomic():
-            user = _user_for_resource_id(pk, lock_if_supported(write_queryset(User)))
+            user = _user_for_resource_id(pk, User.objects.for_write().lock_if_supported())
             user.update_account(payload, password=password, expected_revision=expected_revision)
             return user
 
     def delete(self, info: strawberry.Info, pk: str) -> Any | None:
         """Delete one user by public id through its ``delete`` permission and return the deleted row."""
 
-        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=write_queryset(User))
+        preview = delete_by_public_id(User, str(pk), confirm=True, queryset=User.objects.for_write())
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -692,7 +690,7 @@ class IAMGroupWriteBackend:
         require_platform_admin(info)
 
         with transaction.atomic():
-            group = _group_for_resource_id(pk, write_queryset(Group))
+            group = _group_for_resource_id(pk, Group.objects.for_write())
             for field, value in data.items():
                 setattr(group, field, value)
             group.full_clean()
@@ -704,7 +702,7 @@ class IAMGroupWriteBackend:
 
         require_platform_admin(info)
 
-        preview = delete_by_public_id(Group, str(pk), confirm=True, queryset=write_queryset(Group))
+        preview = delete_by_public_id(Group, str(pk), confirm=True, queryset=Group.objects.for_write())
         preview.require_no_blockers()
         return preview.deleted_instance
 
@@ -1098,7 +1096,7 @@ class IAMUserDeletePreviewMutation:
     def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Preview or confirm deletion of one user by public id through its ``delete`` permission."""
 
-        return delete_by_public_id(User, str(id), confirm=confirm, queryset=write_queryset(User))
+        return delete_by_public_id(User, str(id), confirm=confirm, queryset=User.objects.for_write())
 
 
 attach_delete_preview_metadata(

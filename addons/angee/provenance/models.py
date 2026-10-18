@@ -11,8 +11,8 @@ from typing import Any, ClassVar, cast
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connections, models, router, transaction
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import IntegrityError, connections, models, transaction
 from django.utils import timezone
 from rebac import (
     RebacMixin,
@@ -53,17 +53,6 @@ from angee.base.serialization import canonical_json, canonical_json_sha256, json
 ProvenanceRole = role_anchor("provenance/role")
 
 
-class StatementPrincipalManager(AngeeManager):
-    """Resolve a source's durable identity without creating duplicate principals."""
-
-    def for_key(self, key: str) -> Any:
-        """Return the principal bootstrapped by its owning resource declaration."""
-
-        if not key:
-            raise ValueError("A statement principal requires a nonempty key.")
-        return self.get(key=key)
-
-
 class ChangesetManager(AngeeManager.from_queryset(ChangesetQuerySet)):  # type: ignore[misc]
     """Atomic idempotency claims on logical write boundaries."""
 
@@ -100,36 +89,40 @@ class ChangesetManager(AngeeManager.from_queryset(ChangesetQuerySet)):  # type: 
         return None
 
 
-class Rule(StatementSourceMixin, AngeeDataModel):
+class StatementPrincipal(StatementSourceMixin, AngeeDataModel):
+    """Persisted statement-source principal keyed by its declared identity."""
+
+    key = models.CharField(max_length=255, unique=True)
+    statement_source_kind: ClassVar[SourceKind]
+
+    @property
+    def source_kind(self) -> SourceKind:
+        return self.statement_source_kind
+
+    class Meta:
+        abstract = True
+
+
+class Rule(StatementPrincipal):
     """Persisted principal for one registered rule or matcher, keyed by its name."""
 
     runtime = True
     sqid_prefix = "rul_"
-    key = models.CharField(max_length=255, unique=True)
-    objects = StatementPrincipalManager()
+    statement_source_kind = SourceKind.RULE
 
-    @property
-    def source_kind(self) -> SourceKind:
-        return cast(SourceKind, SourceKind.RULE)
-
-    class Meta:
+    class Meta(StatementPrincipal.Meta):
         abstract = True
         rebac_resource_type = "provenance/rule"
 
 
-class Seed(StatementSourceMixin, AngeeDataModel):
+class Seed(StatementPrincipal):
     """Persisted principal for one seed load, keyed by that load's identity."""
 
     runtime = True
     sqid_prefix = "sed_"
-    key = models.CharField(max_length=255, unique=True)
-    objects = StatementPrincipalManager()
+    statement_source_kind = SourceKind.SEED
 
-    @property
-    def source_kind(self) -> SourceKind:
-        return cast(SourceKind, SourceKind.SEED)
-
-    class Meta:
+    class Meta(StatementPrincipal.Meta):
         abstract = True
         rebac_resource_type = "provenance/seed"
 
@@ -238,11 +231,9 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
 
         if not isinstance(record, HistoryMixin):
             return False
-        if actor is not None:
-            record.with_actor(actor)
-        return record.admits_revert(self) and record.has_access(record.history_revert_permission)
+        return self.pk in record.revertable_changesets((self,), actor=actor)
 
-    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
+    def proposed_relationships(self) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert."""
 
         if not self.actor:
@@ -268,12 +259,14 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         """
 
         inserting = self._state.adding
-        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        manager = type(self)._base_manager.db_manager(hints={"instance": self})
+        alias = manager.db
         recording = inserting and current_changeset() is self
         with (
-            transaction.atomic(using=using),
+            transaction.atomic(using=alias),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
+            kwargs["using"] = alias
             super().save(*args, **kwargs)
             if inserting:
                 write_relationships(
@@ -283,7 +276,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                             relation=relation,
                             subject=subject,
                         )
-                        for relation, subjects in self.proposed_relationships(using=using).items()
+                        for relation, subjects in self.proposed_relationships().items()
                         for subject in subjects
                     ]
                 )
@@ -308,7 +301,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
 
-        using = self._state.db or router.db_for_read(type(self), instance=self)
+        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
         for label in sorted(set(self.touched)):
             model = apps.get_model(label)
             if model_history(model) is None:
@@ -362,7 +355,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         detection queues the corrected projection on the next sync.
         """
 
-        using = self._state.db or router.db_for_write(type(self), instance=self)
+        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
         actor = instance_actor(self) or current_actor()
         if self.state != self.State.CLOSED or self.outcome != self.Outcome.SUCCESS:
             raise ValidationError("Only a successfully closed changeset can be reverted.")
@@ -371,26 +364,38 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             transaction.atomic(using=using),
             changeset(fresh=True, activity="revert", origin=self),
         ):
-            states = []
+            histories = []
+            subjects = {}
             for model, _ in self.history_rows():
                 history = model_history(model)
                 if history is None:
                     raise ValidationError(f"{model._meta.label}: no history owner.")
-                # Acquire subject-owned locks before checking later touches.
-                for first in model.history.using(using).filter(changeset_id=self.pk).order_by("history_id").iterator():
-                    history.lock_revert(first, first, None)
+                histories.append((model, history))
+                for version in model.history.using(using).filter(
+                    changeset_id=self.pk,
+                ).order_by("history_id").iterator():
+                    subject = version.history_object
+                    subjects.setdefault((type(subject), subject.pk), subject)
+            for subject in sorted(subjects.values(), key=lambda row: (row._meta.label_lower, str(row.pk))):
+                try:
+                    subject.lock_subject()
+                except ObjectDoesNotExist:
+                    # A deleted row has no operational lock to acquire; its retained
+                    # snapshot remains the restoration input below.
+                    pass
+            states = []
+            for model, history in histories:
                 for first, last, previous in history.changeset_states(model, self, using=using):
-                    history.lock_revert(first, last, previous)
                     history.authorize_revert(first, last, previous, actor)
                     states.append((history, first, last, previous))
-            subjects = {}
+            affected = {}
             with system_context(reason="changeset.revert"):
                 for history, first, last, previous in states:
                     history.stage_revert(first, last, previous)
                 for history, first, last, previous in self._revert_states(states):
                     for subject in history.revert_row(first, last, previous):
-                        subjects[(type(subject), subject.pk)] = subject
-                for subject in subjects.values():
+                        affected[(type(subject), subject.pk)] = subject
+                for subject in affected.values():
                     if type(subject)._base_manager.using(using).filter(pk=subject.pk).exists():
                         for manager in subject.statement_managers():
                             manager.resolve()

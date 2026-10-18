@@ -166,7 +166,7 @@ def test_trash_withholds_record_tasks_from_readers_but_keeps_removal_authority()
 
 @pytest.mark.parametrize("bulk", [False, True])
 def test_a_deleted_record_takes_its_tasks_with_it(bulk: bool) -> None:
-    """A subject pointer has no database cascade; the task owner tears the tasks down on delete."""
+    """The task edge's target-deletion policy tears it down with its record."""
 
     writer = _user("record-deleter")
     doc, other = _doc("Doomed record"), _doc("Surviving record")
