@@ -316,13 +316,13 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
     """Record the signed-in user's own email address as their own handle.
 
     OIDC first login is the earliest Person-establishing path: the parties owner
-    ``Handle.objects.claim_own`` writes both the control fact (``Handle.owner``) and
+    ``Handle.objects.claim_control`` writes both the control fact (``Handle.controller``) and
     the normal person identity statement for ``Person.objects.for_user(user)`` — so the login
     address resolves to the user's own party.
     """
 
     handle_model = apps.get_model("parties", "Handle")
-    handle_model.objects.claim_own(
+    handle_model.objects.claim_control(
         user,
         platform=handle_model.Platform.EMAIL,
         value=email,

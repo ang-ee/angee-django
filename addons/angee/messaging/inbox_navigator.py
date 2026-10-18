@@ -400,9 +400,7 @@ class InboxMembershipGroups:
         if self.axis == "circle":
             return self.memberships.filter(
                 circle__path__startswith=record.path if record is not None else OuterRef(OuterRef("path")),
-                circle__created_by_id=record.created_by_id
-                if record is not None
-                else OuterRef(OuterRef("created_by_id")),
+                circle__owner_id=record.owner_id if record is not None else OuterRef(OuterRef("owner_id")),
             )
         return self.memberships.filter(other_party_id=record.pk if record is not None else OuterRef(OuterRef("pk")))
 

@@ -1,4 +1,4 @@
-"""Every ownership adopter gates raw owner writes, including the queue parent."""
+"""Every ownership adopter gates raw owner writes, including the queue and person parents."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +10,7 @@ from rebac.roles import grant as grant_role
 
 from angee.agents.testing.models import Agent
 from angee.base.checks import check_ownership
-from angee.messaging.testing.models import Person, Thread
+from angee.messaging.testing.models import Folder, Party, Person, Thread
 from angee.projects.testing.models import Project, Queue, Task
 from angee.spaces.testing.models import Group, Membership
 from angee.workflows.testing.models import Workflow
@@ -21,7 +21,9 @@ from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
 
 
-@pytest.fixture(params=(Vault, Thread, Group, Queue, Project, Task, Drive, File, Agent, Workflow))
+@pytest.fixture(
+    params=(Vault, Thread, Group, Queue, Project, Task, Drive, File, Agent, Workflow, Party, Person, Folder)
+)
 def owned_record(request, campaign_access, campaign_user):
     owner, writer, replacement = (campaign_user(role) for role in ("owner", "writer", "replacement"))
     model = request.param
@@ -42,8 +44,10 @@ def owned_record(request, campaign_access, campaign_user):
             )
         else:
             values = {"owner": owner, "created_by": owner}
-            if model in (Vault, Group, Queue, Agent, Workflow):
+            if model in (Vault, Group, Queue, Agent, Workflow, Folder):
                 values["name"] = "Owned row"
+            if model in (Party, Person):
+                values["display_name"] = "Owned row"
             if model is Queue:
                 values["key"] = "GATE"
             if model is Workflow:
@@ -123,7 +127,7 @@ def test_e027_names_the_real_adopter_and_expected_transfer_gate(owned_record, tm
     # No inline JSON occurs after the field gate; delimit on a standalone closing brace.
     end = original.index("\n}", start)
     definition = original[start:end]
-    gate = "group->transfer" if model is Queue else "transfer"
+    gate = {Queue: "group->transfer", Person: "party->transfer"}.get(model, "transfer")
     old = f"permission write__owner = {gate}"
     assert old in definition
     new = {

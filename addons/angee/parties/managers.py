@@ -8,7 +8,8 @@ its observed RecordLink identity, handles dedupe on
 maintained here in the same transaction — so every directory source shares one
 write path (the map lives on the models, not in each backend) and a re-sync
 converges instead of duplicating. The sync runs under ``system_context``, so
-``created_by`` is set explicitly to the directory owner.
+``created_by`` is set explicitly to the directory owner; a new party's owner
+follows it.
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ class Signing(NamedTuple):
     party_id: Any
     """The sender's resolved party, or ``None``."""
     owner_id: Any
-    """The audit owner of the mail the fragment came from."""
+    """The creator of the mail the fragment came from: the user whose parties it may suggest into."""
 
 
 class DisplayAvatarPrefetches(NamedTuple):
@@ -159,7 +160,7 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
             circle_model.objects.all()
             .scoped_for_aggregate()
             .filter(
-                created_by_id=OuterRef(OuterRef("created_by_id")),
+                owner_id=OuterRef(OuterRef("owner_id")),
                 path__startswith=OuterRef(OuterRef("path")),
             )
             .values("pk")
@@ -172,7 +173,7 @@ class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
                 party_id__in=Subquery(visible_person_ids),
             )
             .order_by()
-            .values("circle__created_by_id")
+            .values("circle__owner_id")
             .annotate(total=Count("party_id", distinct=True))
             .values("total")[:1]
         )
@@ -255,11 +256,11 @@ class HandleQuerySet(MergeableQuerySet, AngeeQuerySet):
         return Subquery(rows.values("confidence")[:1])
 
     def excluding_identity_of(self, user_id: Any) -> Self:
-        """Drop the user's own handles: owned by them or confirmed on their Person."""
+        """Drop the user's own handles: controlled by them or confirmed on their Person."""
 
         if user_id is None:
             return self
-        handles = self.exclude(owner_id=user_id)
+        handles = self.exclude(controller_id=user_id)
         identity = apps.get_model("parties", "Party").objects.identity_for_user_id(user_id)
         if identity is not None:
             handles = handles.exclude(party=identity, party_link_confirmed=True)
@@ -278,7 +279,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         username = user.get_username().replace("\x00", "").strip()
         value = email or username or str(user.pk)
         display_name = user.get_full_name().replace("\x00", "").strip() or username or value
-        return self.claim_own(
+        return self.claim_control(
             user,
             platform=self.model.Platform.for_value(value),
             value=value,
@@ -312,17 +313,17 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         transaction. The value-keyed path never rewrites ``external_id`` (it is
         not the key it matched on).
 
-        ``created_by_id`` stamps the audit owner. Control ownership is deliberately
-        excluded from the generic refresh loop; :meth:`claim_own` writes it and
-        handle folding carries a merged alias's owner onto a handle without one, so a
-        routine upsert cannot silently transfer an account between users.
+        ``created_by_id`` stamps the creator, who holds the handle's access. Control
+        is deliberately excluded from the generic refresh loop; :meth:`claim_control`
+        writes it and handle folding carries a merged alias's controller onto a handle
+        without one, so a routine upsert cannot silently move an account between users.
         ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
         on every hit; blank values never clobber. Source display text is truncated
         to its field limit; identifiers are validated without changing their meaning.
         """
 
-        if "owner" in fields or "owner_id" in fields:
-            raise TypeError("Handle control ownership must be written through claim_own().")
+        if "controller" in fields or "controller_id" in fields:
+            raise TypeError("Handle control must be written through claim_control().")
         if "normalized_value" in fields:
             raise TypeError("Handle.normalized_value is maintained by Handle.save().")
         normalized_value = self.model.normalize_value(platform, value)
@@ -405,7 +406,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 setattr(handle, name, fields[name])
             handle.save(update_fields=[*dirty, "updated_at"])
 
-    def claim_own(
+    def claim_control(
         self,
         user: Any,
         *,
@@ -416,17 +417,17 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         display_name: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> Any:
-        """Record ``value`` as ``user``'s own account handle and normal identity claim.
+        """Record ``value`` as the account handle ``user`` controls and their normal identity claim.
 
         The one verb the connect flows (OIDC login, CardDAV/OAuth connect) call for
         the signed-in user's own address. It writes BOTH facts the model separates:
-        the **control** fact (:attr:`Handle.owner` — this user sends/syncs as the
+        the **control** fact (:attr:`Handle.controller` — this user sends/syncs as the
         address) and the **identity** fact (a normal-rank :class:`PartyStatement` to the
         user's own :class:`~angee.parties.models.Person`, so the address resolves to
         them). Directory *contacts'* handles get neither. Idempotent.
 
         A claim is contested when another user already controls the row. The
-        existing control owner is never reassigned; instead the competing user's
+        existing controller is never replaced; instead the competing user's
         identity link is recorded unconfirmed at ``0.3`` confidence and returned
         for later review. The whole decision is atomic and row-locked.
         """
@@ -434,7 +435,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
         evidence = tuple(evidence)
         person_model = apps.get_model("parties", "Person")
         link_owner = apps.get_model("parties", "Party").objects
-        with system_context(reason="parties.handle.claim_own"), transaction.atomic():
+        with system_context(reason="parties.handle.claim_control"), transaction.atomic():
             handle = self.upsert(
                 platform=platform,
                 value=value,
@@ -448,7 +449,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             )
             handle = handles[handle.pk]
             person = person_model.objects.for_user(user)
-            if handle.owner_id is not None and handle.owner_id != user.pk:
+            if handle.controller_id is not None and handle.controller_id != user.pk:
                 link_owner.assert_handle(
                     person,
                     handle,
@@ -457,9 +458,9 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                     evidence=evidence,
                 )
                 return handle
-            if handle.owner_id is None:
-                handle.owner = user
-                handle.save(update_fields=["owner", "updated_at"])
+            if handle.controller_id is None:
+                handle.controller = user
+                handle.save(update_fields=["controller", "updated_at"])
             link_owner.assert_handle(
                 person,
                 handle,
@@ -1241,12 +1242,13 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         Three branches, none confirming its link and none duplicating an existing
         pair: indexed normalized twins contribute distinct candidate parties (the
-        first at ``1.0``, which decides the owner, competing parties at ``0.3`` for review);
-        otherwise an email whose non-generic domain matches a tracked
+        first at ``1.0``, which decides the handle's party, competing parties at ``0.3`` for
+        review); otherwise an email whose non-generic domain matches a tracked
         :attr:`Organization.domain` contributes a rule suggestion at ``0.4``;
-        otherwise no-op. Both branches stay inside ``handle.created_by``'s audit
-        partition, and public mailbox-provider domains never imply organization
-        membership. Returns the strongest created/existing link, or ``None``.
+        otherwise no-op. Both branches stay inside the partition of the handle's
+        creator: handles that user created and parties that user owns. Public
+        mailbox-provider domains never imply organization membership. Returns the
+        strongest created/existing link, or ``None``.
         """
 
         if handle.party_id is not None:
@@ -1260,7 +1262,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 normalized_value=handle.normalized_value,
                 party__isnull=False,
                 created_by_id=handle.created_by_id,
-                party__created_by_id=handle.created_by_id,
+                party__owner_id=handle.created_by_id,
             )
             .exclude(pk=handle.pk)
             .select_related("party")
@@ -1288,7 +1290,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             organization_model = apps.get_model("parties", "Organization")
             org = (
                 organization_model.objects.filter(
-                    created_by_id=handle.created_by_id,
+                    owner_id=handle.created_by_id,
                     domain__iexact=domain,
                 ).first()
                 if domain and domain not in GENERIC_EMAIL_DOMAINS
@@ -1400,14 +1402,15 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
 
         Each :class:`Signing` is neutral evidence that one sender signed with one
         fragment. This manager owns phone extraction, Handle creation, link
-        provenance, owner partition and the durable-pair check. A number is a
-        person's own only while that one person (or one unresolved address) signs
-        with it in the owner's mail: forwards, company switchboards and conference
-        bridges repeat a number under several people, and none of them owns it.
-        Each such number of a resolved sender is one ``0.3`` suggestion recording
-        its fragment; an undecided suggestion the evidence no longer supports is
-        withdrawn, so ``signings`` must be complete. An existing pair, including a
-        dismissed anti-link, is never changed.
+        provenance, owner partition (a suggestion links only a party the mail's
+        creator owns to a handle that user created) and the durable-pair check. A
+        number is a person's own only while that one person (or one unresolved
+        address) signs with it in the owner's mail: forwards, company switchboards
+        and conference bridges repeat a number under several people, and none of
+        them owns it. Each such number of a resolved sender is one ``0.3``
+        suggestion recording its fragment; an undecided suggestion the evidence no
+        longer supports is withdrawn, so ``signings`` must be complete. An existing
+        pair, including a dismissed anti-link, is never changed.
 
         A signer is the resolved party, or the address while it is unresolved: one
         person writing from a resolved and an unresolved address counts twice until
@@ -1452,7 +1455,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 key not in supported
                 or (party_id, value) in existing
                 or party is None
-                or party.created_by_id != owner_id
+                or party.owner_id != owner_id
             ):
                 continue
             handle = handle_model.objects.upsert(
@@ -1477,7 +1480,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         return created + withdrawn
 
     def _reconcile_display_names(self, shared: frozenset[Any]) -> int:
-        """Reconcile weak identity links with the full display names pooled per audit owner.
+        """Reconcile weak identity links with the full display names pooled per handle creator.
 
         A resolved handle supplies evidence only to a handle on another platform,
         and only for a party that bears the same full name itself. A one-word name
@@ -1485,10 +1488,10 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         as a nameless card holding several people's numbers, is not that person.
         ``shared`` handles are addresses several people speak through: their display
         names name whoever spoke last and are no evidence. Each distinct candidate
-        party of an unresolved handle receives one ``0.4`` rule link. A suggestion is
-        withdrawn only when its names no longer support it, not when its handle
-        later gains an owner; existing pairs, including dismissed links, remain
-        untouched.
+        party the creator owns receives one ``0.4`` rule link per unresolved handle. A
+        suggestion is withdrawn only when its names no longer support it, not when
+        its handle later resolves to a party; existing pairs, including dismissed
+        links, remain untouched.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -1533,7 +1536,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 for candidate in pools.get(normalized_name, ()):
                     if (
                         candidate.party_id is None
-                        or candidate.party.created_by_id != owner_id
+                        or candidate.party.owner_id != owner_id
                         or handle_model.normalize_display_name(candidate.party.display_name) != normalized_name
                         or candidate.platform == handle.platform
                         or candidate.party_id in seen_parties
@@ -1795,7 +1798,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         writer (OIDC first login, the connect flows, messaging reaction attribution)
         routes through here, so a user never grows two person rows. Targets the
         ``Person`` model explicitly, runs within the caller's ``system_context``, and
-        stamps ``created_by``.
+        stamps ``created_by``, so the user also owns their Person.
         """
 
         person_model = apps.get_model("parties", "Person")

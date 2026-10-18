@@ -640,7 +640,7 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     assert reaction.handle is not None
     assert reaction.handle.platform == "email"
     assert reaction.handle.value == "reactor@example.com"
-    assert reaction.handle.owner_id == user.pk
+    assert reaction.handle.controller_id == user.pk
     person = Person._base_manager.get(user=user)
     link = Party.statements.get(handle=reaction.handle, subject=person)
     assert link.confidence == 1.0

@@ -201,11 +201,11 @@ class HandleType(AngeeNode):
     party: PartyType | None = actor_scoped_to_one("party")
     avatar: FileType | None = actor_scoped_to_one("avatar")
 
-    @strawberry_django.field(only=["owner_id"])
-    def owner(self) -> strawberry.ID | None:
+    @strawberry_django.field(only=["controller_id"])
+    def controller(self) -> strawberry.ID | None:
         """Return the controlling user's public id, when a user has claimed this handle."""
 
-        return optional_public_id(user_public_id(cast(Any, self).owner_id))
+        return optional_public_id(user_public_id(cast(Any, self).controller_id))
 
     @strawberry_django.field(
         only=["party_id"],
@@ -625,10 +625,10 @@ class PartiesDirectoryMutation:
                 **directory_values,
             )
             # The connected account's own login address is the admin's own handle:
-            # claim it (control ownership + normal person identity statement). Synced
+            # claim it (control + normal person identity statement). Synced
             # *contacts'* handles get neither fact — only this connected account's.
             if username.strip():
-                Handle.objects.claim_own(
+                Handle.objects.claim_control(
                     user,
                     platform=Handle.Platform.for_value(username),
                     value=username.strip(),

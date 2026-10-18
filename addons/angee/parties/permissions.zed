@@ -1,24 +1,31 @@
 // Authorization schema for the parties addon.
 // @rebac_package: parties
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 14
+// @rebac_schema_revision: 15
 
-// A party and its related rows (handles, links, addresses, relationships) are
-// each owned by the user that created them, with platform admins reaching every
-// row through the const-backed `angee/role:admin` membership (no per-row tuple).
-// Each owns its own created_by rather than reaching through the party, so a
-// handle synced for an unknown sender (party still null) stays readable.
+// Parties, folders and circles are grant roots: each is owned through its
+// transferable `owner` column (OwnerMixin), which an insert defaults to the row's
+// creator; `created_by` stays attribution. The owner, or a platform admin through
+// the const-backed `angee/role:admin` membership (no per-row tuple), transfers it.
+// Person and Organization read their inherited owner column and delegate owner
+// writes to their party's `transfer`.
+//
+// Dependent rows (handles, addresses, relationships, circle memberships) and
+// user-added relationship kinds are never transferred: their access belongs to
+// their `creator` (`created_by`). Each names its own creator rather than reaching
+// through the party, so a handle synced for an unknown sender (party still null)
+// stays readable.
 
-// Record owners may contribute identity read arms. Private fields and private
-// uses of a party require read_private, which retains per-row grants. An
-// explicit `reader` grant on an MTI child also reaches each parent that accepts
-// the relation and subject through the resources grant loader
-// (`addons/angee/resources/grants.py`). Related rows keep their own read rules.
-// Lossless contact data and handle counts are private. created_by, updated_by
-// and their labels remain readable: attribution belongs to identity.
+// Other addons' records (a followed thread, a filed task) may contribute identity
+// read arms. Private fields and private uses of a party require read_private,
+// which retains per-row grants. An explicit `reader` grant on an MTI child also
+// reaches each parent that accepts the relation and subject through the resources
+// grant loader (`addons/angee/resources/grants.py`). Related rows keep their own
+// read rules. Lossless contact data and handle counts are private. created_by,
+// updated_by and their labels remain readable: attribution belongs to identity.
 
 definition parties/party {
-    relation owner: auth/user // rebac:field=created_by
+    relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     // Admission follows retained source links and registered principal roles.
@@ -40,14 +47,18 @@ definition parties/party {
     permission read__handle_count = read_private
     permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 // Person and Organization are multi-table-inheritance children of parties/party.
-// Each owns its own created_by so its child row authorizes independently of the
-// parent row.
+// Each reads the inherited owner column itself, so its child row authorizes
+// independently of the parent row; owner writes delegate through the
+// field-backed `party` relation to the parent's transfer.
 
 definition parties/person {
-    relation owner: auth/user // rebac:field=created_by
+    relation owner: auth/user // rebac:field=owner
+    relation party: parties/party // rebac:field=party_ptr
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
@@ -68,10 +79,12 @@ definition parties/person {
     permission read__nickname = read_private
     permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
+    permission write__owner = party->transfer
 }
 
 definition parties/organization {
-    relation owner: auth/user // rebac:field=created_by
+    relation owner: auth/user // rebac:field=owner
+    relation party: parties/party // rebac:field=party_ptr
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=party_ptr__record_links__stream__integration
@@ -84,10 +97,11 @@ definition parties/organization {
     permission read = read_granted
     permission write = owner + editor + statement_source + admin->member
     permission delete = owner + admin->member
+    permission write__owner = party->transfer
 }
 
 definition parties/handle {
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     // Person assertions retain their typed members' own read admission.
@@ -97,13 +111,13 @@ definition parties/handle {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + statement_source + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
+    permission read   = creator + editor + reader + statement_source + admin->member
+    permission write  = creator + editor + admin->member
+    permission delete = creator + admin->member
 }
 
 definition parties/address {
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
@@ -112,14 +126,14 @@ definition parties/address {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read_granted = creator + editor + reader + statement_source + admin->member
     permission read = read_granted
-    permission write = owner + editor + statement_source + admin->member
-    permission delete = owner + admin->member
+    permission write = creator + editor + statement_source + admin->member
+    permission delete = creator + admin->member
 }
 
 definition parties/folder {
-    relation owner: auth/user // rebac:field=created_by
+    relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
@@ -128,15 +142,17 @@ definition parties/folder {
     permission read   = owner + editor + reader + admin->member
     permission write  = owner + editor + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
-// Circles and relationships are the human-owned organising surfaces. They follow
-// the same per-row ownership shape as the rows they organise; a circle NEVER
-// gates party visibility (organising ≠ authorization — REBAC reader grants stay
-// the one read owner).
+// Circles and relationships are the human-owned organising surfaces. A circle is
+// owned like the parties it organises; a membership or relationship belongs to
+// its creator. A circle NEVER gates party visibility (organising ≠ authorization
+// — REBAC reader grants stay the one read owner).
 
 definition parties/circle {
-    relation owner: auth/user // rebac:field=created_by
+    relation owner: auth/user // rebac:field=owner
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
@@ -145,35 +161,37 @@ definition parties/circle {
     permission read   = owner + editor + reader + admin->member
     permission write  = owner + editor + admin->member
     permission delete = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 definition parties/circle_member {
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
+    permission read   = creator + editor + reader + admin->member
+    permission write  = creator + editor + admin->member
+    permission delete = creator + admin->member
 }
 
 // The relationship vocabulary is catalogue data every signed-in user picks
 // from; user-added kinds stay editable by their creator, seeded rows
 // (created_by null) only by platform admins.
 definition parties/relationship_kind {
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
     permission read   = authenticated
-    permission write  = owner + admin->member
-    permission delete = owner + admin->member
+    permission write  = creator + admin->member
+    permission delete = creator + admin->member
 }
 
 definition parties/relationship {
-    relation owner: auth/user // rebac:field=created_by
+    relation creator: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation directory: integrate/integration // rebac:field=party__record_links__stream__integration
@@ -183,10 +201,10 @@ definition parties/relationship {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read_granted = owner + editor + reader + statement_source + admin->member
+    permission read_granted = creator + editor + reader + statement_source + admin->member
     permission read = read_granted
-    permission write = owner + editor + statement_source + admin->member
-    permission delete = owner + admin->member
+    permission write = creator + editor + statement_source + admin->member
+    permission delete = creator + admin->member
 }
 
 // A Directory is a multi-table-inheritance child of integrate/integration (a
