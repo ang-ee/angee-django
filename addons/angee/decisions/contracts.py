@@ -1,7 +1,7 @@
 """The proposal and the evidence accompanying one question."""
 
 from collections.abc import Mapping, Sequence
-from inspect import Parameter, signature
+from inspect import signature
 from typing import Any
 
 from django.apps import apps
@@ -175,17 +175,9 @@ class RecordActions(BaseModel):
             bound = getattr(record, call, None)
             if not callable(bound):
                 raise ValueError(f"Unknown decision method: {call}.")
-            parameters = tuple(signature(bound).parameters.values())
-            if any(
-                parameter.default is Parameter.empty
-                and parameter.kind
-                not in {
-                    Parameter.VAR_POSITIONAL,
-                    Parameter.VAR_KEYWORD,
-                }
-                for parameter in parameters
-            ):
-                raise ValueError(f"Decision method {call} takes required arguments.")
+            # The declared arguments must satisfy the method's signature: a method with
+            # required parameters (``cancel(reason)``) is a valid decision call when the
+            # proposal names them; binding refuses a missing or unknown argument.
             try:
                 signature(bound).bind(**self.record.arguments)
             except TypeError as error:
