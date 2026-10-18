@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -285,3 +286,43 @@ def test_blank_state_fields_use_null() -> None:
 def test_blank_state_field_syntax(declaration: str, expected: list[int]) -> None:
     tree = ast.parse(f"class Example:\n    state = {declaration}\n")
     assert list(_blank_state_fields_without_null(tree)) == expected
+
+
+INFERENCE_BACKEND_MODULES = (
+    "angee.agents_integrate_anthropic.backend",
+    "angee.agents_integrate_ollama.backend",
+    "angee.agents_integrate_openai.backend",
+)
+INFERENCE_VENDOR_SDKS = ("anthropic", "openai")
+
+
+def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
+    """Listing and labelling provider backends loads no vendor SDK; binding a model does."""
+
+    script = "\n".join(
+        (
+            "import django, importlib, json, sys",
+            "django.setup()",
+            "from angee.agents.backends import InferenceBackend",
+            "from angee.base.impl import check_impl_registry, impl_choices",
+            f"for name in {INFERENCE_BACKEND_MODULES!r}:",
+            "    importlib.import_module(name)",
+            "impl_choices(InferenceBackend)",
+            "check_impl_registry(InferenceBackend)",
+            "print(json.dumps(sorted(sys.modules)))",
+        )
+    )
+    paths = (PROJECT_ROOT, PROJECT_ROOT / "addons", PROJECT_ROOT / "examples" / "addons")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "DJANGO_SETTINGS_MODULE": "tests.settings", "PYTHONPATH": os.pathsep.join(map(str, paths))},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    closure = set(json.loads(result.stdout.splitlines()[-1]))
+
+    assert {
+        sdk for sdk in INFERENCE_VENDOR_SDKS if any(module == sdk or module.startswith(f"{sdk}.") for module in closure)
+    } == set()
