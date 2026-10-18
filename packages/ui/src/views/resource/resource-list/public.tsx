@@ -158,6 +158,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
   list?: ListComponent<TRow>;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
+  /** Override resource metadata for the record header's compact facts line. */
+  contextFields?: FormViewProps["contextFields"];
   /** Host-owned record counters/actions rendered between form actions and views. */
   recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */

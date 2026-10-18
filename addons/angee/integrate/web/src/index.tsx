@@ -34,6 +34,12 @@ import {
   RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
+import {
+  RECORD_LINK_MODEL,
+  RECORD_SOURCE_SEARCH_KEY,
+  RECORD_SOURCES_TAB_ID,
+  RecordSourcesPane,
+} from "./RecordSourcesPane";
 
 const INTEGRATE_ID = "integrate";
 
@@ -118,7 +124,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
 const integrate = defineBaseAddon({
   id: INTEGRATE_ID,
   routes: integrateRoutes,
-  recordSearchKeys: Object.values(INTEGRATION_STREAM_SEARCH_KEYS),
+  recordSearchKeys: [...Object.values(INTEGRATION_STREAM_SEARCH_KEYS), RECORD_SOURCE_SEARCH_KEY],
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
   widgets: {
@@ -134,6 +140,17 @@ const integrate = defineBaseAddon({
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   containers: {
+    "record#aside": {
+      [RECORD_SOURCES_TAB_ID]: {
+        sequence: 70,
+        content: {
+          label: enIntegrateMessages["sources.title"] ?? "Sources",
+          icon: "link",
+          when: ({ route }) => route?.recordEdges?.includes(RECORD_LINK_MODEL) === true,
+          render: (context) => <RecordSourcesPane context={context} />,
+        },
+      },
+    },
     [`${INTEGRATION_MODEL}#sections`]: {
       [INTEGRATION_STREAMS_TAB_ID]: {
         sequence: 30,
@@ -218,5 +235,11 @@ export {
   type IntegrationSyncFieldsOptions,
   type IntegrationSyncFragmentOptions,
 } from "./sync-fragments";
+export {
+  RECORD_LINK_MODEL,
+  RECORD_SOURCE_SEARCH_KEY,
+  RECORD_SOURCES_TAB_ID,
+  RecordSourcesPane,
+} from "./RecordSourcesPane";
 
 export default integrate;

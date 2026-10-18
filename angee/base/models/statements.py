@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import copy
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import Exists, F, OuterRef, Q
+from django.db.models.query import ModelIterable
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
@@ -26,13 +28,13 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.actors import is_sudo
-from rebac.resources import model_resource_type
+from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import instance_actor, source_kind_for
 from angee.base.changesets import current_changeset
-from angee.base.evidence import EvidenceReference, readable_evidence, readable_records
+from angee.base.evidence import EvidenceReference, readable_evidence, readable_evidence_records, readable_records
 from angee.base.fields import StateField
 from angee.base.lineage import most_derived_concrete
 from angee.base.models.history import HistoryMixin, ModelHistory, _ChangesetHistory
@@ -59,6 +61,25 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
         if "changeset" not in kwargs and "changeset_id" not in kwargs:
             kwargs["changeset"] = current_changeset(required=True, record=True)
         return super().update(**kwargs)
+
+    def _clone(self) -> Any:
+        clone = super()._clone()
+        clone._reference_reader = getattr(self, "_reference_reader", None)
+        return clone
+
+    def _fetch_all(self) -> None:
+        fresh = self._result_cache is None
+        super()._fetch_all()
+        reader = getattr(self, "_reference_reader", None)
+        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
+            prime_readable_statement_records(self._result_cache, reader)
+
+    def with_readable_records(self, actor: Any) -> Any:
+        """Batch evidence and asserting-source admission for the evaluated page."""
+
+        rows = self._chain()
+        rows._reference_reader = actor
+        return rows
 
     def current(self) -> Any:
         return self.filter(superseded__isnull=True)
@@ -107,6 +128,53 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
 
     def delete(self) -> Any:
         raise ValidationError("Statements are retained; withdraw them instead.")
+
+
+def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
+    """Resolve a statement page's evidence and asserting principals by model."""
+
+    evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
+    refs: list[EvidenceReference] = []
+    sources_by_model: dict[tuple[type[models.Model], str], set[str]] = defaultdict(set)
+    sources_by_row: list[tuple[Any, tuple[type[models.Model], str, str] | None]] = []
+    for row in rows:
+        evidence = tuple(
+            EvidenceReference.model_validate(value) for value in row.evidence[: Statement.EVIDENCE_LIMIT]
+        )
+        evidence_by_row.append((row, evidence))
+        refs.extend(evidence)
+        source = SubjectRef.parse(row.asserted_by)
+        resolved = model_for_subject_type(source.subject_type)
+        if resolved is None:
+            sources_by_row.append((row, None))
+            continue
+        model, id_attr = resolved
+        sources_by_model[(model, id_attr)].add(source.subject_id)
+        sources_by_row.append((row, (model, id_attr, source.subject_id)))
+
+    evidence_records = readable_evidence_records(refs, actor)
+    readable_evidence = {
+        (ref.model.lower(), ref.id, ref.pointer): record for ref, record in evidence_records
+    }
+    for row, evidence in evidence_by_row:
+        row._readable_evidence = tuple(
+            ref for ref in evidence if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
+        )
+        row._readable_evidence_records = tuple(
+            (ref, readable_evidence[ref.model.lower(), ref.id, ref.pointer])
+            for ref in evidence
+            if (ref.model.lower(), ref.id, ref.pointer) in readable_evidence
+        )
+
+    readable_sources: dict[tuple[type[models.Model], str, str], models.Model] = {}
+    for (model, id_attr), sources in sources_by_model.items():
+        visible = model.objects.with_actor(actor).filter(**{f"{id_attr}__in": sources})
+        readable_sources.update({
+            (model, id_attr, str(getattr(row, id_attr))): row for row in visible
+        })
+    for row, source in sources_by_row:
+        row._asserting_source_readable = source in readable_sources
+        row._readable_asserting_source = readable_sources.get(source) if source is not None else None
 
 
 class StatementManager(models.Manager.from_queryset(StatementQuerySet)):  # type: ignore[misc]

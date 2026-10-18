@@ -30,10 +30,13 @@ describe("decisions fragment", () => {
       filter: { is_open: { exact: true }, can_act: { exact: true } } });
     expect(Object.keys(decisions.i18n ?? {})).toEqual(["decisions"]);
   });
-  test("exports consumer and waiting-owner contracts without registering mandatory content", () => {
+  test("exports consumer contracts and contributes answered decisions to Activity", () => {
     expect(DECISION_MODEL).toBe("decisions.Decision");
     // Independent waiters contribute origin links through the declared container.
-    expect(decisions.containers).toEqual({ "decisions#origin": {} });
+    expect(decisions.containers?.["decisions#origin"]).toEqual({});
+    expect(decisions.containers?.["record#activity"]).toMatchObject({
+      "decisions.answers": { sequence: 40, content: { kinds: ["decision"] } },
+    });
     expect(DecisionCard).toBeTypeOf("function");
   });
 });

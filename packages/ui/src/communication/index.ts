@@ -1,4 +1,16 @@
 export { Chatter, useActiveChatterView, type ChatterProps } from "./Chatter";
+export {
+  ACTIVITY_KINDS,
+  ACTIVITY_PAGE_SIZE,
+  ACTIVITY_TAB_ID,
+  Activity,
+  type ActivityEntry,
+  type ActivityEntrySource,
+  type ActivityKind,
+  type ActivityProps,
+  type ActivityRecord,
+  type ActivityWindow,
+} from "./Activity";
 export { StepList, type StepListItem } from "./StepList";
 export { CHATTER_CONTAINERS } from "./chatter-containers";
 export {

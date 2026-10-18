@@ -264,7 +264,7 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
     f = followers
     query = f"""query Identity($id: String!) {{
       parties(where: {{id: {{_eq: $id}}}}) {{
-        {PARTY_SELECTION} created_by updated_by created_by_label updated_by_label
+        {PARTY_SELECTION} redacted_fields created_by updated_by created_by_label updated_by_label
       }}
       people(where: {{id: {{_eq: $id}}}}) {{ {PERSON_SELECTION} }}
     }}"""
@@ -289,6 +289,10 @@ def test_parties_and_people_roots_redact_private_fields_but_preserve_owner_value
         assert data["parties"][0]["updated_by"] is not None
         assert data["parties"][0]["created_by_label"] == f.owner.username
         assert data["parties"][0]["updated_by_label"] == f.owner.username
+        if actor == f.reader:
+            assert set(PARTY_PRIVATE) <= set(data["parties"][0]["redacted_fields"])
+        else:
+            assert data["parties"][0]["redacted_fields"] == []
 
 
 def test_hidden_introducer_is_null_without_losing_people_or_parties(

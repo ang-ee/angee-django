@@ -8,8 +8,9 @@ that also name rows outside REBAC — a chatter thread on an ungated host, an
 import record link to a plain sink — store :func:`generic_pointer_target`, which falls
 back to Django's own generic-pointer identity for such a row.
 :func:`ancestor_object_refs` owns the read/grant fan-out,
-:meth:`RecordRefMixin.declared_target_models` reads the target types an edge's schema declares,
-and :func:`record_edges_by_target` inverts it into the edges each record type can carry.
+:meth:`RecordRefMixin.accepted_target_models` reads the target types an edge accepts
+from its schema or explicit infrastructure-wide declaration, and
+:func:`record_edges_by_target` inverts them into the edges each record type can carry.
 
 **Placement invariant.** Every polymorphic edge and every reverse
 ``GenericRelation`` onto one (``messaging.ThreadedModelMixin.thread_attachments``,
@@ -176,6 +177,8 @@ class RecordRefMixin(_RecordRefMergeContract):
     """What merging the referenced record does to this edge's rows; an edge that declares none blocks."""
     on_target_delete: ClassVar[Any] = models.PROTECT
     """What deleting the referenced record does to this edge's rows."""
+    accepts_any_record_target: ClassVar[bool] = False
+    """Whether this infrastructure edge may point at every canonical record type."""
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -284,6 +287,19 @@ class RecordRefMixin(_RecordRefMergeContract):
         return cast(type[models.Model], canonical_model(model))
 
     @classmethod
+    def accepted_target_models(cls) -> dict[str, type[models.Model]]:
+        """Return the complete target set from the schema or the explicit open edge."""
+
+        if not cls.accepts_any_record_target:
+            return cls.declared_target_models()
+        targets = {
+            target._meta.label_lower: target
+            for model in cls._meta.apps.get_models()
+            if (target := canonical_model(model)) is not None
+        }
+        return dict(sorted(targets.items()))
+
+    @classmethod
     def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
         """Return the roles of this edge that records of ``target`` carry, beyond the edge itself.
 
@@ -305,7 +321,7 @@ class RecordRefMixin(_RecordRefMergeContract):
         """
 
         target = canonical_model(model)
-        return target is not None and target._meta.label_lower in cls.declared_target_models()
+        return target is not None and target._meta.label_lower in cls.accepted_target_models()
 
     @classmethod
     def validate_target(cls, target: models.Model) -> None:
@@ -364,19 +380,19 @@ class RecordRefMixin(_RecordRefMergeContract):
 
 
 def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
-    """Index the installed edges by the target models their schemas declare, edges in label order.
+    """Index installed edges by every canonical target they accept, in label order.
 
-    The inverse of :meth:`RecordRefMixin.declared_target_models`: the polymorphic
+    The inverse of :meth:`RecordRefMixin.accepted_target_models`: the polymorphic
     edges a record can carry, keyed by the canonical model
     :func:`rebac.generic_target` names it by. An edge without a REBAC definition
-    declares no target types.
+    accepts no target types.
     """
 
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
         if not issubclass(edge, RecordRefMixin) or effective_rebac_definition(edge) is None:
             continue
-        for target in edge.declared_target_models().values():
+        for target in edge.accepted_target_models().values():
             index.setdefault(target, []).append(edge)
     return {target: tuple(edges) for target, edges in index.items()}
 

@@ -898,10 +898,12 @@ class RecordTimelineQuery:
     @strawberry_django.field
     def record_timeline(
         self, info: strawberry.Info, records: list[TimelineRecordInput], include_runs: bool = True,
+        run_limit: int = 20,
     ) -> RecordTimelineSelectionType:
         """One read for a record or selection, through the record and run owners."""
         if len(records) > 100:
             raise ValidationError("A timeline selection accepts at most 100 records.")
+        run_limit = max(1, min(run_limit, 100))
         actor = request_from_info(info).user
         concerned = []
         for reference in records:
@@ -909,7 +911,7 @@ class RecordTimelineQuery:
             record = require_instance_for_id(model, str(reference.id), queryset=model.objects.with_actor(actor))
             concerned.append(record)
         targets = {generic_target(record): record for record in concerned}
-        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=20)
+        run_query = WorkflowRun.objects.with_actor(actor).about(concerned, limit=run_limit)
         runs = list(run_type_get_queryset(
             run_query.order_by("-created_at", "-pk"),
             WorkflowRunType, info,
@@ -938,7 +940,7 @@ class RecordTimelineQuery:
             result.append(RecordTimelineType(
                 record_model=canonical._meta.label,
                 record_id=PublicID(public_id_for(canonical, target.object_id)),
-                runs=list(reversed([run for run in runs if run.pk in selected][:20])),
+                runs=list(reversed([run for run in runs if run.pk in selected][:run_limit])),
                 decisions=[decision for decision in decisions if any(
                     (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
                     for link in decision.records.all())],

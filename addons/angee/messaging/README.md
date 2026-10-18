@@ -3,9 +3,9 @@
 Record chatter and source conversations have different identity. Chatter folds
 through core `MergeableMixin`: the retired thread redirects to its survivor,
 while its messages, follower occurrences and history stay on their physical rows.
-The current record owns read and post admission. Comments includes a single
-bounded timeline of comments and native provenance history; History remains a
-record tab provided by provenance.
+The current record owns read and post admission. Messaging contributes comments,
+its existing composer, and linked source conversations to the framework Activity
+stream; provenance contributes record history independently through the same owner.
 
 Source threads and messages remain channel occurrences. A native `same_as` pair
 statement is the identity fact, and applying it folds the newer copy into the

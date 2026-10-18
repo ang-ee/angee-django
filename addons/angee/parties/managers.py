@@ -27,21 +27,18 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
-from django.db.models.query import ModelIterable
 from django.utils.crypto import salted_hmac
 from phonenumbers import PhoneNumberMatcher
 from rebac import (
     PermissionDenied,
-    SubjectRef,
     actor_context,
     current_actor,
     system_context,
 )
 from rebac.actors import to_subject_ref
-from rebac.resources import model_for_subject_type
 
 from angee.base.actors import actor_user_id
-from angee.base.evidence import EvidenceReference, readable_evidence
+from angee.base.evidence import EvidenceReference
 from angee.base.identity import instances_from_public_ids
 from angee.base.impl import resolve_hooks
 from angee.base.models import (
@@ -562,19 +559,6 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 class PartyStatementQuerySet(StatementQuerySet):
     """Party handle scopes; serving callers explicitly authorize both endpoints."""
 
-    def _clone(self) -> Self:
-        clone = super()._clone()
-        clone._reference_reader = getattr(self, "_reference_reader", None)
-        return clone
-
-    def _fetch_all(self) -> None:
-        fresh = self._result_cache is None
-        super()._fetch_all()
-        reader = getattr(self, "_reference_reader", None)
-        # Aggregation and values() pages carry no rows to prime.
-        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
-            _prime_readable_statement_records(self._result_cache, reader)
-
     def handles(self) -> Any:
         return self.current().filter(aspect="handle")
 
@@ -628,55 +612,6 @@ class PartyStatementQuerySet(StatementQuerySet):
                 | Q(source_kind__in=(SourceKind.DIRECTORY, SourceKind.PERSON)),
             )
         )
-
-    def with_readable_records(self, actor: Any) -> Self:
-        """Batch evidence and asserting-source admission for the evaluated page."""
-
-        rows = self._chain()
-        rows._reference_reader = actor
-        return rows
-
-
-def _prime_readable_statement_records(rows: list[Any], actor: Any) -> None:
-    """Resolve a page's evidence references and asserting principals by model."""
-
-    evidence_by_row: list[tuple[Any, tuple[EvidenceReference, ...]]] = []
-    refs: list[EvidenceReference] = []
-    sources_by_model: dict[tuple[type[models.Model], str], set[str]] = defaultdict(set)
-    sources_by_row: list[tuple[Any, tuple[type[models.Model], str, str] | None]] = []
-    for row in rows:
-        evidence = tuple(
-            EvidenceReference.model_validate(value) for value in row.evidence[: row.EVIDENCE_LIMIT]
-        )
-        evidence_by_row.append((row, evidence))
-        refs.extend(evidence)
-        source = SubjectRef.parse(row.asserted_by)
-        resolved = model_for_subject_type(source.subject_type)
-        if resolved is None:
-            sources_by_row.append((row, None))
-            continue
-        model, id_attr = resolved
-        sources_by_model[(model, id_attr)].add(source.subject_id)
-        sources_by_row.append((row, (model, id_attr, source.subject_id)))
-
-    readable_refs = {
-        (ref.model.lower(), ref.id, getattr(ref, "pointer", ""))
-        for ref in readable_evidence(refs, actor)
-    }
-    for row, evidence in evidence_by_row:
-        row._readable_evidence = tuple(
-            ref
-            for ref in evidence
-            if (ref.model.lower(), ref.id, getattr(ref, "pointer", "")) in readable_refs
-        )
-
-    readable_sources: set[tuple[type[models.Model], str, str]] = set()
-    for (model, id_attr), sources in sources_by_model.items():
-        visible = model.objects.with_actor(actor).filter(**{f"{id_attr}__in": sources}).values_list(id_attr, flat=True)
-        readable_sources.update((model, id_attr, str(value)) for value in visible)
-    for row, source in sources_by_row:
-        row._asserting_source_readable = source in readable_sources
-
 
 @dataclass(frozen=True, slots=True)
 class SameAsPair:

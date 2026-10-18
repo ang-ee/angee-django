@@ -37,3 +37,11 @@ class AngeeNode:
         """
 
         return record_display_label(cast(models.Model, self))
+
+    @strawberry.field(description="Field names hidden from this actor by the record's read policy.")
+    def redacted_fields(self) -> list[str]:
+        """Project the REBAC redaction ledger already attached to this row."""
+
+        record = cast(models.Model, self)
+        redacted = getattr(record, "redacted_fields", None)
+        return sorted(redacted()) if callable(redacted) else []

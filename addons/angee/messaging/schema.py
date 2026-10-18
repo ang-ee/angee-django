@@ -11,14 +11,14 @@ from __future__ import annotations
 from dataclasses import fields
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any, Self, cast
+from typing import Any, Self, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models, transaction
+from django.db import transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
@@ -26,9 +26,7 @@ from rebac import PermissionDenied, current_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 
-from angee.base.changesets import changeset_model_label
 from angee.base.identity import instance_from_public_id
-from angee.base.models import record_history
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -65,12 +63,10 @@ from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options, strip_null_bytes
 from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.parties.schema import HandleType, PartyType
-from angee.provenance.schema import HistorySummaryType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Integration = apps.get_model("integrate", "Integration")
-Changeset = apps.get_model(changeset_model_label())
 Handle = apps.get_model("parties", "Handle")
 File = apps.get_model("storage", "File")
 Channel = apps.get_model("messaging", "Channel")
@@ -906,8 +902,6 @@ class RecordThreadInput(RecordReferenceInput):
     after: strawberry.ID | None = None
     around: strawberry.ID | None = None
     message_types: list[str] = strawberry.field(name="message_types", default_factory=list)
-    include_history: bool = strawberry.field(name="include_history", default=False)
-    timeline_offset: int = strawberry.field(name="timeline_offset", default=0)
 
 
 @strawberry.enum
@@ -1044,11 +1038,6 @@ class RecordPostKind(StrEnum):
     NOTE = "note"
 
 
-RecordTimelineEntry = Annotated[
-    RecordMessageType | HistorySummaryType, strawberry.union("RecordTimelineEntry"),
-]
-
-
 @strawberry.type
 class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     """A record chatter thread, or the error that prevented resolving it."""
@@ -1058,8 +1047,6 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     thread_post_access: str | None = strawberry.field(name="thread_post_access", default=None)
     permissions: list[str] = strawberry.field(default_factory=list)
     messages: list[RecordMessageType] = strawberry.field(default_factory=list)
-    timeline: list[RecordTimelineEntry] = strawberry.field(default_factory=list)
-    timeline_count: int = strawberry.field(name="timeline_count", default=0)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
     _reply_search: strawberry.Private[str] = ""
     _reply_message_types: strawberry.Private[tuple[str, ...]] = ()
@@ -1321,8 +1308,6 @@ class MessagingQuery:
             after=input.after,
             around=input.around,
             message_types=tuple(input.message_types),
-            include_history=input.include_history,
-            timeline_offset=input.timeline_offset,
         )
 
     @strawberry.field(name="record_removed_messages")
@@ -1353,28 +1338,6 @@ class MessagingQuery:
             return []
         edges = ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk")
         return list(with_record_reference_access(edges))
-
-    @strawberry.field(name="record_thread_unread_count")
-    def record_thread_unread_count(
-        self,
-        info: strawberry.Info,
-        model_label: Annotated[str, strawberry.argument(name="model_label")],
-        record_id: Annotated[strawberry.ID, strawberry.argument(name="record_id")],
-    ) -> int:
-        """Return the request actor's unread count for a readable record thread."""
-
-        user = _request_user(info)
-        if user is None:
-            return 0
-        try:
-            record = chatter_record(model_label, record_id)
-        except ValueError:
-            return 0
-        if record is None:
-            return 0
-        return ThreadFollower.objects.unread_count_for_record(record, user=user, role="chatter")
-
-
 
 @strawberry.type
 class MessagingMutation:
@@ -2255,56 +2218,6 @@ def _prime_record_messages(messages: list[Any]) -> None:
         setattr(message, "_sender_name", sender_names.get(message.pk, ""))
 
 
-def _record_timeline(
-    record: Any, *, role: str, search: str, message_types: tuple[str, ...], limit: int, offset: int,
-) -> tuple[list[Any], list[Any], int, int]:
-    """One chronological SQL window over messages and the record's native history.
-
-    Select keys first, then hydrate only the selected rows through their owners.
-    The kind distinguishes equal timestamps and primary keys across the two tables.
-    """
-
-    if offset < 0:
-        raise ValidationError("The timeline offset cannot be negative.")
-    limit = max(1, min(int(limit or 50), 100))
-    messages = Message.objects.record_scope(record, role=role, search=search, message_types=message_types)
-    message_count = messages.count()
-    keys = messages.order_by().values(
-        _timeline_id=models.F("pk"), _timeline_at=models.F("_order_at"),
-        _timeline_kind=models.Value("message", output_field=models.CharField()),
-    )
-    changesets = (
-        Changeset.objects.sudo(reason="messaging.record_timeline").touching(record)
-        if record_history(type(record)) is not None
-        else None
-    )
-    if changesets is not None:
-        for term in strip_null_bytes(search or "").split():
-            changesets = changesets.filter(
-                models.Q(change_reason__icontains=term) | models.Q(actor__icontains=term)
-                | models.Q(action__icontains=term) | models.Q(activity__icontains=term),
-            )
-        keys = keys.union(changesets.order_by().values(
-            _timeline_id=models.F("pk"), _timeline_at=models.F("recorded_at"),
-            _timeline_kind=models.Value("change", output_field=models.CharField()),
-        ), all=True)
-    selected = list(keys.order_by("-_timeline_at", "-_timeline_kind", "-_timeline_id")[offset:offset + limit])
-    message_ids = [row["_timeline_id"] for row in selected if row["_timeline_kind"] == "message"]
-    loaded = {("message", row.pk): row for row in messages.filter(pk__in=message_ids)}
-    if changesets is not None:
-        change_ids = [row["_timeline_id"] for row in selected if row["_timeline_kind"] == "change"]
-        page = list(changesets.filter(pk__in=change_ids))
-        loaded.update(
-            (("change", row.pk), entry)
-            for row, entry in zip(page, HistorySummaryType.from_changesets(page), strict=True)
-        )
-    # A row deleted after key selection is omitted, never replaced outside this window.
-    timeline = [loaded[key] for row in reversed(selected)
-                if (key := (row["_timeline_kind"], row["_timeline_id"])) in loaded]
-    total = message_count + (changesets.count() if changesets is not None else 0)
-    return [entry for entry in timeline if isinstance(entry, Message)], timeline, message_count, total
-
-
 def _record_thread_payload(
     record: Any,
     info: strawberry.Info | None,
@@ -2316,36 +2229,25 @@ def _record_thread_payload(
     after: strawberry.ID | None = None,
     around: strawberry.ID | None = None,
     message_types: tuple[str, ...] = (),
-    include_history: bool = False,
-    timeline_offset: int = 0,
 ) -> RecordThreadPayload:
     """Return a record thread payload with follower state for the request user."""
 
     attachment = ThreadAttachment.objects.for_record(record, role=role)
     thread = attachment.thread if attachment is not None else None
-    if include_history:
-        if any(value not in (None, "") for value in (before, after, around)):
-            raise ValidationError("The combined timeline uses its own offset, not message anchors.")
-        messages, timeline, message_result_count, timeline_count = _record_timeline(
-            record, role=role, search=search, message_types=message_types,
-            limit=message_limit, offset=timeline_offset,
+    messages, message_result_count = (
+        Message.objects.for_record(
+            record,
+            role=role,
+            search=search,
+            limit=message_limit,
+            before=before,
+            after=after,
+            around=around,
+            message_types=message_types,
         )
-    else:
-        messages, message_result_count = (
-            Message.objects.for_record(
-                record,
-                role=role,
-                search=search,
-                limit=message_limit,
-                before=before,
-                after=after,
-                around=around,
-                message_types=message_types,
-            )
-            if thread is not None
-            else ([], 0)
-        )
-        timeline, timeline_count = messages, message_result_count
+        if thread is not None
+        else ([], 0)
+    )
     _prime_record_messages(messages)
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
@@ -2420,8 +2322,6 @@ def _record_thread_payload(
         permissions=[record.thread_post_access] if record_access[0] else [],
         thread=thread,
         messages=messages,
-        timeline=timeline,
-        timeline_count=timeline_count,
         message_result_count=message_result_count,
         _reply_search=search,
         _reply_message_types=message_types,

@@ -20,7 +20,6 @@
     "@angee/integrate": "workspace:*",
     "@angee/iam": "workspace:*",
     "@angee/parties": "workspace:*",
-    "@angee/provenance": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/storage": "workspace:*",
     "@angee/ui": "workspace:*",

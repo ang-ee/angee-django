@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useMemo, useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { RecordFieldMarksProvider, RecordFieldMarkButton, usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, type RecordFieldMark } from "./record-field-marks";
+import { RecordFieldMarksProvider, RecordFieldMarkControl, usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, type RecordFieldMark } from "./record-field-marks";
 
 vi.mock("../resource/record-chrome-context", () => ({ useRecordChromeContextMaybe: () => ({ recordId: "nte_7", canonicalResource: "notes.Note" }) }));
 afterEach(cleanup);
@@ -17,7 +17,7 @@ test("mark and reveal updates do not render a form that only consumes stable dis
     const publications = useMemo(() => [{ model: form.model, id: form.id, marks }], [marks]);
     useRecordFieldMarks(publications);
     const field = useRevealedRecordField();
-    return <><RecordFieldMarkButton field="display_name" label="Name" /><output>{field?.field ?? "none"}</output></>;
+    return <><RecordFieldMarkControl field="display_name" label="Name" /><output>{field?.field ?? "none"}</output></>;
   }
   render(<RecordFieldMarksProvider><Form /><Marks /></RecordFieldMarksProvider>);
   const before = renders.mock.calls.length;

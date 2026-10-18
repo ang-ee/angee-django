@@ -80,3 +80,27 @@ export const IntegrationSyncStream = graphql(`
   }
 `);
 
+/** Remote identities attached to one readable record. */
+export const RecordSourcesDocument = graphql(`
+  query IntegrateRecordSources($modelLabel: String!, $recordId: String!) {
+    record_links(
+      where: { model_label: { _eq: $modelLabel }, record_id: { _eq: $recordId } }
+      order_by: [{ updated_at: desc }]
+      limit: 100
+    ) {
+      id
+      external_key
+      status
+      source_url
+      last_verified_generation
+      last_seen_at
+      applied_at
+      stream {
+        id
+        key
+        partition
+        integration { id display_name }
+      }
+    }
+  }
+`);

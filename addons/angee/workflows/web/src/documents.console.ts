@@ -20,8 +20,8 @@ export const StepDecisionDocument = graphql(`
 `);
 
 export const RecordTimelineDocument = graphql(`
-  query RecordTimeline($records: [TimelineRecordInput!]!) {
-    record_timeline(records: $records) {
+  query RecordTimeline($records: [TimelineRecordInput!]!, $runLimit: Int = 20) {
+    record_timeline(records: $records, run_limit: $runLimit) {
       open_decision_count
       records {
       record_model record_id

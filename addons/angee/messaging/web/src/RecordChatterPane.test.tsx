@@ -94,8 +94,6 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
       error_code: null,
       thread: { id: "thr_1", title: { text: "Rec" }, message_count: messages.length, last_message_at: null },
       message_result_count: messages.length,
-      timeline_count: messages.length,
-      timeline: messages.map((message) => ({ ...message, __typename: "RecordMessageType" as const })),
       audience_label: null,
       post_kinds: ["COMMENT", "NOTE"],
       messages,

@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
-import { decisionRunOrigin, recordRunsTab } from "./contributions";
+import { decisionRunOrigin, workflowActivitySource } from "./contributions";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
@@ -35,7 +35,7 @@ export default defineBaseAddon({
   },
   containers: {
     "form#actions-menu": { "workflows.run-workflow": { sequence: 40, content: createElement(RunWorkflowRecordActions) } },
-    "record#aside": { "workflows.runs": recordRunsTab },
+    "record#activity": { "workflows.activity": workflowActivitySource },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },
   statusTones: WORKFLOW_STATUS_TONES,

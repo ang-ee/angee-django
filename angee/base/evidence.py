@@ -106,6 +106,23 @@ def readable_evidence(
     ]
 
 
+def readable_evidence_records(
+    refs: Sequence[EvidenceReference],
+    actor: Any,
+    *,
+    permission: str = "read",
+) -> list[tuple[EvidenceReference, models.Model]]:
+    """Return readable references with their already batched records, in stored order."""
+
+    readable = _readable(refs, actor, permission=permission, standing=False)
+    result = []
+    for ref in refs:
+        normalized = EvidenceReference(model=ref.model.lower(), id=ref.id, pointer=ref.pointer)
+        if record := readable.get(normalized):
+            result.append((ref, record))
+    return result
+
+
 def readable_records(
     refs: Sequence[EvidenceReference],
     actors: Sequence[Any],

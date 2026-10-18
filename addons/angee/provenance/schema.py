@@ -20,7 +20,7 @@ from typing import Any, cast
 import strawberry
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from rebac import SubjectRef, current_actor
 from rebac.resources import model_for_subject_type
@@ -29,7 +29,16 @@ from strawberry.scalars import JSON
 from angee.base.actors import source_kind_for
 from angee.base.autoconfig import SETTINGS
 from angee.base.identity import public_id_for, public_id_of, public_subject_ref
-from angee.base.models import HistoryMixin, SourceKind, Statement, model_history, record_history
+from angee.base.models import (
+    HistoryMixin,
+    SourceKind,
+    Statement,
+    model_history,
+    prime_readable_statement_records,
+    record_display_label,
+    record_history,
+)
+from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
@@ -82,6 +91,16 @@ class HistoryFieldChangeType:
 
 
 @strawberry.type
+class HistoryReferenceType:
+    """One readable statement source or evidence record, already page-batched."""
+
+    model: str
+    id: PublicID
+    label: str
+    pointer: str
+
+
+@strawberry.type
 class HistoryStatementType:
     """One statement version the changeset wrote for the record, as stored."""
 
@@ -96,6 +115,8 @@ class HistoryStatementType:
     confidence: float
     history_type: HistoryType
     values: JSON
+    source: HistoryReferenceType | None
+    evidence: list[HistoryReferenceType]
 
 
 @strawberry.type
@@ -214,6 +235,31 @@ def _reference_value(model_field: models.Field[Any, Any], value: Any) -> Any:
     return json_safe(value)
 
 
+def _history_reference(record: models.Model, *, pointer: str = "", label: str | None = None) -> HistoryReferenceType:
+    """Project an already authorized record without causing a second read."""
+
+    model = generic_pointer_model(type(record))
+    return HistoryReferenceType(
+        model=model._meta.label,
+        id=PublicID(public_id_of(record)),
+        label=label or record_display_label(record),
+        pointer=pointer,
+    )
+
+
+def _statement_source_reference(version: Any) -> HistoryReferenceType | None:
+    """Prefer a readable retained link; otherwise name the readable principal."""
+
+    link = getattr(version, "_readable_statement_link", None)
+    if link is not None:
+        stream = link.stream
+        stream_name = f"{stream.key} ({stream.partition})" if stream.partition else stream.key
+        label = f"{record_display_label(stream.integration)} · {stream_name} · {link.external_key}"
+        return _history_reference(link, label=label)
+    source = getattr(version, "_readable_asserting_source", None)
+    return _history_reference(source) if source is not None else None
+
+
 class RecordHistory:
     """Assemble a bounded history page from the record and history owners."""
 
@@ -239,6 +285,7 @@ class RecordHistory:
         ids = [changeset.pk for changeset in page]
         versions = self._versions(ids)
         statements = self._statement_versions(ids)
+        self._prime_statement_references(statements)
         redacted = self._redactions(versions, statements)
         merges = self._merges(page)
         actors = _actor_projections(page)
@@ -314,6 +361,41 @@ class RecordHistory:
             for version in versions:
                 grouped[version.changeset_id].append((statement_model, version))
         return dict(grouped)
+
+    def _prime_statement_references(
+        self,
+        statements: dict[Any, list[tuple[type[models.Model], Any]]],
+    ) -> None:
+        """Batch readable principals, evidence and retained record links for this page."""
+
+        versions = [version for rows in statements.values() for _statement_model, version in rows]
+        if not versions:
+            return
+        prime_readable_statement_records(versions, self.actor)
+        links_by_model: defaultdict[type[models.Model], set[Any]] = defaultdict(set)
+        keyed_versions = []
+        for statement_model, version in (
+            row for rows in statements.values() for row in rows
+        ):
+            try:
+                field = statement_model._meta.get_field("link")
+            except FieldDoesNotExist:
+                continue
+            if version.link_id is None or field.remote_field is None:
+                continue
+            link_model = field.remote_field.model
+            if not isinstance(link_model, type):
+                continue
+            links_by_model[link_model].add(version.link_id)
+            keyed_versions.append((version, link_model, version.link_id))
+        readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
+        for link_model, ids in links_by_model.items():
+            rows = link_model.objects.with_actor(self.actor).with_action("read").filter(pk__in=ids)
+            if any(field.name == "stream" for field in link_model._meta.fields):
+                rows = rows.select_related("stream__integration")
+            readable_links.update({(link_model, row.pk): row for row in rows})
+        for version, link_model, pk in keyed_versions:
+            version._readable_statement_link = readable_links.get((link_model, pk))
 
     def _redactions(
         self,
@@ -425,6 +507,11 @@ class RecordHistory:
                     confidence=version.confidence,
                     history_type=cast(Any, HistoryType(version.history_type)),
                     values=cast(JSON, values),
+                    source=_statement_source_reference(version),
+                    evidence=[
+                        _history_reference(record, pointer=ref.pointer)
+                        for ref, record in getattr(version, "_readable_evidence_records", ())
+                    ],
                 )
             )
         return projected
@@ -542,6 +629,7 @@ schemas = {
             RecordHistoryType,
             HistoryEntryType,
             HistoryFieldChangeType,
+            HistoryReferenceType,
             HistoryStatementType,
             HistoryMergeType,
             HistoryRecordType,

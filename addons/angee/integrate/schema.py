@@ -1569,6 +1569,13 @@ class RecordLinkType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["stream_id", "external_key"], select_related=["stream__integration"])
+    def source_url(self) -> str | None:
+        """Return the selected connector's provider URL for this remote identity."""
+
+        integration = cast(Any, self).stream.integration.concrete_capability()
+        return cast(str | None, integration.source_url(self))
+
     @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:
         return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]
@@ -1657,6 +1664,8 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
     update=False,
     delete=False,
     field_id_decode={"stream": public_pk_decoder(SyncStream)},
+    record_ref_filters=("model_label", "record_id"),
+    record_ref_requires_read=True,
 )
 strawberry.enum(cast(Any, ConflictKeep))
 

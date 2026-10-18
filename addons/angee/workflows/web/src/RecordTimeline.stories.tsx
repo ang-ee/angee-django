@@ -38,7 +38,7 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ state = "decision", side = "right", collapsed = false, duplicateRisk = false, data, onRequest }: {
+export function TimelineStory({ state = "decision", side = "left", collapsed = false, duplicateRisk = false, data, onRequest }: {
   state?: TimelineState; side?: "left" | "right"; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
   data?: TimelineSelection;
 }) {
@@ -67,12 +67,13 @@ export function TimelineStory({ state = "decision", side = "right", collapsed = 
 
 function TimelineLayout({ set, side }: { set: boolean; side: "left" | "right" }) {
   const record = useMemo(() => set ? [{ model: "notes.Note", id: "nte_7" }, { model: "notes.Note", id: "nte_8" }] : { model: "notes.Note", id: "nte_7" }, [set]);
-  useRecordTimelinePane({ record, side });
-  useRecordTimelineAttention(record, side);
+  useRecordTimelinePane({ record });
+  useRecordTimelineAttention(record);
   const { node } = usePrimaryPaneContent();
   const chatter = useChatter();
   return <div className="grid min-h-0 w-full bg-sheet" style={{ gridTemplateColumns: side === "left" ? "24rem minmax(0,1fr)" : "minmax(0,1fr) 24rem", height: "100vh" }}>
-    {side === "left" ? <aside data-testid="timeline-left" className="border-r border-border-subtle">{node}</aside> : null}
+    {side === "left" ? <aside data-testid="timeline-left" data-state={`${chatter.collapsed}:${chatter.activeTab}`}
+      className="border-r border-border-subtle">{node}</aside> : null}
     <main className="min-w-0 p-6"><FormView resource="notes.Note" id="nte_7" fields={[{ name: "display_name", label: "Name" }, { name: "body", label: "Body" }]} />
       {side === "right" ? <Button onClick={() => chatter.setCollapsed(!chatter.collapsed)}>Toggle timeline</Button> : null}
     </main>

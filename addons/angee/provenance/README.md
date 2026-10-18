@@ -59,7 +59,7 @@ first (`RecordHistoryType { total, entries: [HistoryEntryType!]! }`), resolved t
 `read` gate: a hidden or unknown record reads as `null`, and a model without
 native history or a REBAC resource type is refused. `HistoryAttribution` is the
 shared interface for detailed entries and the compact `HistorySummaryType` lines
-used by Comments; the web `HistoryEntrySummary` component renders that compact
+used by Activity; the web `HistoryEntrySummary` component renders that compact
 shape. Each `HistoryEntryType` carries the changeset's attribution (`actor` as
 the public SubjectRef, `actor_model`/`actor_id` as the same public reference,
 `source_kind`), `action`, `activity`, `change_reason`,
@@ -72,17 +72,17 @@ fields the actor cannot read on the record (`read__<field>`): statement tables
 mirror history tables, so the subject's redaction is the only rule. MTI parents'
 versions of the same row join the entry. A page holds at most 100 changesets.
 
-`revert_changeset(model, id, changeset)` is the `ActionResult` verb behind the
-History tab's Revert: the record's `history_revert_permission` is the one
+`revert_changeset(model, id, changeset)` is the `ActionResult` verb behind an
+Activity history entry's Revert: the record's `history_revert_permission` is the one
 admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with
-`history: true`, the fact [`web/`](web/) uses to show the tab.
+`history: true`, the fact [`web/`](web/) uses to read entries.
 
-[`web/`](web/) contributes the History tab once, at `form#sections`, visible on
-every saved record whose resource keeps history, and exports
-`RecordHistoryTimeline` (the timeline with its read, paging and Revert; `compact`
-renders one line per changeset linking to the tab) and `useRecordHistory` for
+[`web/`](web/) contributes one `record#activity` history source, visible on every
+saved record whose resource keeps history, and exports `RecordHistoryTimeline`
+(the standalone timeline with its read, paging and Revert; `compact` renders one
+line per changeset linking to Activity) and `useRecordHistory` for
 pages that count or embed the same entries, such as integrate's link history
-drill-down and the notes example's activity chatter.
+drill-down and the notes example's Activity shortcut.
 
 `Changeset.document()` exports deterministic canonical JSON of a closed changeset
 for a trusted archive caller under a system boundary. It includes native history

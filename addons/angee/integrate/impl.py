@@ -78,6 +78,12 @@ class BridgeImpl(IntegrationImpl):
     supports_identity_reads: ClassVar[bool] = False
     """Declare identity reads; otherwise retries request a fresh baseline."""
 
+    def source_url(self, link: Any) -> str | None:
+        """Return the provider URL for ``link``, or none when it has no web view."""
+
+        del link
+        return None
+
     def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once.
 

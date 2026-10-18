@@ -31,7 +31,11 @@ export const RecordHistoryDocument = graphql(`
         ...HistoryEntrySummaryFields
         can_revert
         changes { model id field old new }
-        statements { id aspect asserted_by source_kind snak rank status applied confidence history_type values }
+        statements {
+          id aspect asserted_by source_kind snak rank status applied confidence history_type values
+          source { model id label pointer }
+          evidence { model id label pointer }
+        }
         merge {
           survivor { model id retained }
           absorbed { model id retained }

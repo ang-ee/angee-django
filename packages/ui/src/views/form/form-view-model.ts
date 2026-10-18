@@ -625,18 +625,19 @@ export function recordSubtitleParts(
   id: string | null | undefined,
   fields: DataResourceSubtitleMetadata | null | undefined,
   t: UiTranslate,
+  developerMode = false,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
   const recordId = presentValue(record?.id) ?? presentValue(id);
-  if (recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
+  if (developerMode && recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
   if (record) {
     const created = fieldValue(record, fields?.created);
     const updated = fieldValue(record, fields?.updated);
     const words = fieldValue(record, fields?.wordCount);
-    if (created !== undefined) {
+    if (developerMode && created !== undefined) {
       parts.push(t("form.created", { value: formatRecordDate(created) }));
     }
-    if (updated !== undefined) {
+    if (developerMode && updated !== undefined) {
       parts.push(t("form.updated", { value: formatRecordDate(updated) }));
     }
     if (words !== undefined) parts.push(formatWordCount(words, t));

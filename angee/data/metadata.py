@@ -378,6 +378,8 @@ class DataResourceMetadata:
     row_model: str = "server"
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] = ()
+    context_fields: tuple[str, ...] = ()
+    """Readable fields rendered as the record header's compact facts line."""
     subject_field: str | None = None
     subtitle: DataResourceSubtitleMetadata | None = None
     grantable: tuple[GrantableRelationMetadata, ...] = ()

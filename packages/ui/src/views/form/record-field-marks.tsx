@@ -3,12 +3,15 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
 import { Badge } from "../../ui/badge";
+import { Glyph } from "../../chrome/Glyph";
+import { useUiT } from "../../i18n";
 
 export interface RecordFieldMark {
   field: string;
   label: string;
   tone: Tone;
-  onReveal: () => void;
+  icon?: string;
+  onReveal?: () => void;
 }
 export interface ActiveRecordForm {
   model: string;
@@ -78,28 +81,44 @@ export function usePublishActiveRecordForm(form: ActiveRecordForm | null) {
   }, [setForm, form]);
 }
 
-export function useRecordFieldMark(field: string) {
+export function useRecordFieldMarksForField(field: string) {
   const bridge = useContext(State);
   const setRevealed = useContext(Dispatch)?.setRevealed;
   const record = useRecordChromeContextMaybe();
-  const publication = bridge?.marks.find((item) => item.id === record?.recordId
-    && item.model.toLowerCase() === record.canonicalResource.toLowerCase());
-  const mark = publication?.marks.find((item) => item.field === field);
+  const matches = bridge?.marks.flatMap((publication) => publication.id === record?.recordId
+    && record != null && publication.model.toLowerCase() === record.canonicalResource.toLowerCase()
+    ? publication.marks.filter((mark) => mark.field === field).map((mark) => ({ mark, publication }))
+    : []) ?? [];
   const reveal = useCallback(() => {
-    if (mark && publication) {
-      setRevealed?.({ model: publication.model, id: publication.id, field });
-      mark.onReveal();
+    const target = matches.find(({ mark }) => mark.onReveal);
+    if (target) {
+      setRevealed?.({ model: target.publication.model, id: target.publication.id, field });
+      target.mark.onReveal?.();
     }
-  }, [setRevealed, field, mark, publication]);
-  return mark ? { ...mark, reveal } : null;
+  }, [field, matches, setRevealed]);
+  return matches.map(({ mark }) => ({ ...mark, reveal: mark.onReveal ? reveal : undefined }));
 }
 
-/** Every native form field placement uses the same reveal control. */
-export function RecordFieldMarkButton({ field, label }: { field: string; label?: ReactNode }) {
-  const mark = useRecordFieldMark(field);
-  if (!mark) return null;
-  return <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0" onClick={mark.reveal}
-    aria-label={`${mark.label}: ${typeof label === "string" ? label : field}`}>
-    <Badge tone={mark.tone} density="compact">{mark.label}</Badge>
-  </Button>;
+/** Every native form field placement composes attention and access marks once. */
+export function RecordFieldMarkControl({ field, label, restricted = false }: {
+  field: string;
+  label?: ReactNode;
+  restricted?: boolean;
+}) {
+  const t = useUiT();
+  const published = useRecordFieldMarksForField(field);
+  const marks = restricted
+    ? [...published, { field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }]
+    : published;
+  if (!marks.length) return null;
+  const reveal = marks.flatMap((mark) => "reveal" in mark && mark.reveal ? [mark.reveal] : [])[0];
+  const content = <span className="inline-flex flex-wrap items-center gap-1">
+    {marks.map((mark, index) => <Badge key={`${mark.label}:${index}`} tone={mark.tone} density="compact">
+      {mark.icon ? <Glyph decorative name={mark.icon} /> : null}{mark.label}
+    </Badge>)}
+  </span>;
+  const ariaLabel = `${marks.map((mark) => mark.label).join(", ")}: ${typeof label === "string" ? label : field}`;
+  if (!reveal) return <span aria-label={ariaLabel}>{content}</span>;
+  return <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0" onClick={reveal}
+    aria-label={ariaLabel}>{content}</Button>;
 }

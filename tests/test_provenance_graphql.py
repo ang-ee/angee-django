@@ -20,13 +20,26 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
 from angee.base.changesets import changeset
+from angee.base.evidence import EvidenceReference
 from angee.base.identity import public_id_of, public_subject_ref
 from angee.base.models import SourceKind
+from angee.integrate.states import StreamKind
+from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
+from angee.messaging.testing.models import Channel
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
 from angee.testing.permissions import install_permission_schema
-from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import (
+    Page,
+    addon_schema,
+    create_user,
+    current_stream,
+    execute_schema,
+    make_integration,
+    result_data,
+    vault_for,
+)
 from tests.core_persistence import OwnedRow
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -41,7 +54,11 @@ query History($model: String!, $id: ID!, $limit: Int, $offset: Int) {
     entries {
       id actor actor_model actor_id source_kind action activity change_reason outcome can_revert
       changes { model id field old new }
-      statements { aspect asserted_by source_kind status applied history_type values }
+      statements {
+        aspect asserted_by source_kind status applied history_type values
+        source { model id label pointer }
+        evidence { model id label pointer }
+      }
       merge { survivor { model id retained } absorbed { model id retained } }
     }
   }
@@ -257,7 +274,50 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     assert {row["asserted_by"] for row in identity} == {str(to_subject_ref(person))}
     assert {row["source_kind"] for row in identity} == {"PERSON"}
     assert {row["status"] for row in identity} == {"ASSERTED"}
+    assert {row["source"]["id"] for row in identity} == {public_id_of(person)}
+    assert all(row["evidence"] == [] for row in identity)
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
+
+
+def test_history_projects_a_readable_statement_link_and_evidence_inline() -> None:
+    """Activity gets each statement's retained connector identity and readable evidence in one page."""
+
+    bridge = make_integration("history-statement-source", model=Channel)
+    owner = bridge.owner
+    with actor_context(owner), changeset(fresh=True, change_reason="Create sourced party"):
+        party = Party.objects.create(display_name="Source party")
+    with system_context(reason="tests.history.statement_source"):
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "contact:1", target=party)
+    with system_context(reason="tests.history.statement_source"), changeset(
+        fresh=True,
+        change_reason="Import identity",
+    ):
+        Party.statements.model._base_manager.create(
+            subject=party,
+            aspect="identity",
+            asserted_by=str(to_subject_ref(bridge)),
+            source_kind=SourceKind.SYSTEM_OF_RECORD,
+            link=link,
+            evidence=[EvidenceReference.of(party, pointer="/display_name").model_dump()],
+            display_name="Imported name",
+        )
+
+    history = _history(_schema(), owner, "parties.Party", party)
+    imported = next(entry for entry in history["entries"] if entry["change_reason"] == "Import identity")
+    statement = imported["statements"][0]
+    assert statement["source"] == {
+        "model": "integrate.RecordLink",
+        "id": public_id_of(link),
+        "label": f"{bridge.record_display_label} · contacts · contact:1",
+        "pointer": "",
+    }
+    assert statement["evidence"] == [{
+        "model": "parties.Party",
+        "id": public_id_of(party),
+        "label": "Source party",
+        "pointer": "/display_name",
+    }]
 
 
 @pytest.mark.parametrize("row_count", [1, 25])

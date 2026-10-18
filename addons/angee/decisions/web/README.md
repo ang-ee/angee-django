@@ -12,8 +12,10 @@ record set. Askers contribute origin information through `decisions#origin`.
 
 `decisionFieldMarks` supplies the form bridge's unconfirmed marks from open
 questions' alternative field writes.
-`decisionAttentionColumn()` and `openDecisionFilter` opt a list into the derived
-boolean attention badge and filter without requesting a count query.
+`attentionColumn()` combines the derived open-decision fact with the row's tags
+whose vocabulary records set `attention`; it resolves every badge through the
+composed `statusTones` owner. `openDecisionFilter` filters the decision fact
+without requesting a count query.
 A free correction is a direct record edit followed by choosing an alternative
 without actions. A field action is `{}`, `{"set": value}`, or `{"choose": {}}`.
 Selecting an alternative with `choose` reveals that model field's standard widget

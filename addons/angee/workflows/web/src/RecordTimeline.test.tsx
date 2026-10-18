@@ -44,19 +44,19 @@ test("answers inline with the observed revision and refreshes the stepper", asyn
 
 test("only records with runs select the timeline initially", async () => {
   const view = render(<TimelineStory state="empty" />);
-  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:"));
+  await waitFor(() => expect(screen.getByTestId("timeline-left").getAttribute("data-state")).toBe("false:"));
   view.unmount();
   render(<TimelineStory />);
   await screen.findByText("Started manually by River");
-  expect((await screen.findByTestId("timeline-right")).getAttribute("data-state")).toBe("false:workflows.runs");
+  expect((await screen.findByTestId("timeline-left")).getAttribute("data-state")).toBe("false:activity");
 });
 
 test("a first visit opens a collapsed pane only when a decision is waiting", async () => {
   const view = render(<TimelineStory collapsed />);
-  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.runs"));
+  await waitFor(() => expect(screen.getByTestId("timeline-left").getAttribute("data-state")).toBe("false:activity"));
   view.unmount();
   render(<TimelineStory collapsed state="clean" />);
-  await waitFor(() => expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("true:workflows.runs"));
+  await waitFor(() => expect(screen.getByTestId("timeline-left").getAttribute("data-state")).toBe("true:activity"));
 });
 
 test("answered cards do not nest list items outside a list", async () => {
@@ -116,20 +116,18 @@ test("routine history folds while waiting and record references link to the main
   expect(screen.getByText("Receive record")).toBeTruthy();
   expect(screen.getByRole("link", { name: /Review notes/ }).getAttribute("href")).toBe("/notes/nte_7");
   expect(screen.queryByRole("navigation", { name: "Related records" })).toBeNull();
-  expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.runs");
+  expect(screen.getByTestId("timeline-left").getAttribute("data-state")).toBe("false:activity");
 });
 
-test("form marks reveal and highlight the inline card through the right host", async () => {
+test("form marks reveal Activity and highlight the inline decision card", async () => {
   render(<TimelineStory />);
   await screen.findByRole("button", { name: "Unconfirmed: Name" });
   expect(screen.getByRole("button", { name: "Unconfirmed: Name" }).closest("label")).toBeNull();
   const current = screen.getByText("Review the record").closest("li")!;
   expect(current.getAttribute("aria-current")).toBe("step");
   expect(current.textContent).toContain("Current step");
-  expect(screen.getByTestId("timeline-right").getAttribute("data-state")).toBe("false:workflows.runs");
+  expect(screen.getByTestId("timeline-left").getAttribute("data-state")).toBe("false:activity");
   expect(screen.getByRole("region", { name: "Confirm the name" }).className).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Toggle timeline" }));
-  expect(screen.queryByRole("region", { name: "Confirm the name" })).toBeNull();
   fireEvent.click(await screen.findByRole("button", { name: "Unconfirmed: Name" }));
   await waitFor(() => expect(document.querySelector('[data-decision="dcn_review"]')?.className).toContain("ring-2"));
 });

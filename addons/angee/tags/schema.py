@@ -44,6 +44,7 @@ class TagType(AngeeNode):
 
     name: auto
     color: auto
+    attention: auto
     is_archived: auto
     created_at: auto
     updated_at: auto
@@ -177,16 +178,19 @@ _TAG_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 _TAG_FILTERABLE_FIELDS = (
     "id",
     "name",
+    "attention",
     "is_archived",
     *_TAG_EXTENSION_READ_FIELDS,
 )
 _TAG_GROUPABLE_FIELDS = (
+    "attention",
     "is_archived",
     *_TAG_EXTENSION_READ_FIELDS,
 )
 _TAG_BASE_WRITABLE_FIELDS = (
     "name",
     "color",
+    "attention",
     "is_archived",
 )
 

@@ -394,24 +394,34 @@ def test_declared_target_models_read_the_schema_target_relations(composed_permis
 
 
 def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_permissions: None) -> None:
-    """A type carries the edges whose schema declares its canonical type; its resource lists them."""
+    """A type carries every edge accepting its canonical type; its resource lists them."""
 
     del composed_permissions
     index = record_edges_by_target()
     # A task is itself an edge: its subject may be another task.
     assert [edge._meta.label for edge in index[Task]] == [
-        "knowledge.RecordBinding", "messaging.ThreadAttachment", "projects.Link", "projects.Task",
+        "integrate.RecordLink",
+        "knowledge.RecordBinding",
+        "messaging.ThreadAttachment",
+        "projects.Link",
+        "projects.Task",
         "storage.FileAttachment", "tags.TagAssignment",
     ]
     assert FileAttachment.declares_target(MtiChild) and FileAttachment.declares_target(MtiChildProxy)
     assert not FileAttachment.declares_target(File) and not RecordBinding.declares_target(RecordRefPlainTarget)
     schema = addon_schema(storage_schema.schemas, "public")
     resources = {item.model_label: item for item in schema.angee_resources}
-    assert resources["storage.Drive"].record_edges == ("projects.ProjectBinding", "storage.FileAttachment")
+    assert resources["storage.Drive"].record_edges == (
+        "integrate.RecordLink", "projects.ProjectBinding", "storage.FileAttachment",
+    )
     # A file retains source conversations but keeps no chatter: the edge, not its chatter role.
-    assert resources["storage.File"].record_edges == ("messaging.ThreadAttachment", "tags.TagAssignment")
+    assert resources["storage.File"].record_edges == (
+        "integrate.RecordLink", "messaging.ThreadAttachment", "tags.TagAssignment",
+    )
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
-    assert wire["storage.File"]["recordEdges"] == ["messaging.ThreadAttachment", "tags.TagAssignment"]
+    assert wire["storage.File"]["recordEdges"] == [
+        "integrate.RecordLink", "messaging.ThreadAttachment", "tags.TagAssignment",
+    ]
     # A page keeps chatter: its resource names the edge and the edge's chatter role.
     pages = {item.model_label: item for item in addon_schema(knowledge_schema.schemas, "public").angee_resources}
     edges = pages["knowledge.Page"].record_edges
