@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.apps import apps
 from django.db import connections, models
 from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
-from django.db.models.functions import RowNumber
+from django.db.models.functions import Coalesce, RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rebac import current_actor
@@ -351,14 +351,22 @@ class MessageInbox:
         # A conversation groups under the readable survivor of its thread's
         # redirect. An unreadable thread is not an exposed grouping identity: its
         # readable messages remain independently reachable as standalone sections.
-        visible = Subquery(self.threads.order_by().values("pk"))
-        return rows.annotate(
+        thread_model = self.threads.model
+        survivor_id = Coalesce(F("thread__merged_into_id"), F("thread_id"))
+        survivor = thread_model(
+            pk=Coalesce(OuterRef("thread__merged_into_id"), OuterRef("thread_id")),
+        )
+        visible_group = self.threads.redirect_group(survivor)
+        return rows.alias(
+            _survivor_visible=Exists(visible_group.filter(pk=survivor.pk)),
+            _thread_visible=Exists(visible_group.filter(pk=OuterRef("thread_id"))),
+        ).annotate(
             _conversation=Case(
-                When(thread__merged_into__in=visible, then=F("thread__merged_into_id")),
-                When(thread_id__in=visible, then=F("thread_id")),
+                When(_survivor_visible=True, then=survivor_id),
+                When(_thread_visible=True, then=F("thread_id")),
                 default=-F("pk"),
                 output_field=models.BigIntegerField(),
-            )
+            ),
         )
 
     def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:

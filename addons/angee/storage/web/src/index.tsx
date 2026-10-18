@@ -66,7 +66,6 @@ const storage = defineBaseAddon({
         content: {
           label: "Files",
           icon: "file",
-          aliases: ["files"],
           // Only on types whose schema lets a record carry attachments.
           when: (context) => context.route?.recordEdges?.includes(FILE_ATTACHMENT_MODEL) ?? false,
           useCount: useRecordFilesCount,

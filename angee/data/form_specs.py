@@ -398,4 +398,3 @@ def model_config_form_spec(model: type[BaseModel], *, owner: str, json_fields: b
     """
 
     return _ConfigFormSpecProjector(model, owner=owner, json_fields=json_fields).form_spec()
-

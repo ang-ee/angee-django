@@ -2,6 +2,7 @@
 
 from django.db import models
 
+from angee.portfolio.models import ProjectPortfolio, TaskPortfolio
 from angee.projects.models import ActivityType as AbstractActivityType
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
@@ -41,17 +42,13 @@ class Stage(AbstractWorkStage):
         rebac_resource_type = "work/stage"
 
 
-class Task(TaskWork, TaskProposalAccess, AbstractTask):
+class Task(TaskPortfolio, TaskWork, TaskProposalAccess, AbstractTask):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
     immutable_fields = AbstractTask.immutable_fields
     rebac_grantable = {**AbstractTask.rebac_grantable, **TaskProposalAccess.rebac_grantable}
 
-    # Keep the queue and stage fields used by the native work owner. These
-    # fixtures do not exercise cycle scheduling.
-    cycle = None
-    cycle_id = None
     project = models.ForeignKey(
         "projects.Project",
         null=True,
@@ -64,7 +61,11 @@ class Task(TaskWork, TaskProposalAccess, AbstractTask):
         abstract = False
         base_manager_name = "_angee_base"
         app_label = "projects"
-        constraints = (*AbstractTask.Meta.constraints, *TaskProposalAccess.Meta.constraints)
+        constraints = (
+            *AbstractTask.Meta.constraints,
+            *TaskWork.Meta.constraints,
+            *TaskProposalAccess.Meta.constraints,
+        )
         db_table = "test_projects_task"
         rebac_resource_type = "projects/task"
 
@@ -79,7 +80,7 @@ class Link(AbstractLink):
         rebac_resource_type = "projects/link"
 
 
-class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
+class Project(ProjectPortfolio, ProjectWork, ProjectProposalAccess, AbstractProject):
     """Concrete project carrying the production owners and the work team donor."""
 
     rebac_grantable = {
@@ -91,6 +92,7 @@ class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
         abstract = False
         base_manager_name = "_angee_base"
         app_label = "projects"
+        constraints = (*AbstractProject.Meta.constraints, *ProjectPortfolio.Meta.constraints)
         db_table = "test_projects_project"
         rebac_resource_type = "projects/project"
 

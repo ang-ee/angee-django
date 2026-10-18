@@ -42,7 +42,8 @@ def source_kind_for(subject: Any) -> str | None:
         return None
     try:
         principal = model._base_manager.get(**{id_attr: source.subject_id})
-        return str(principal.source_kind)
+        kind = principal.source_kind
+        return str(kind) if kind is not None else None
     except (model.DoesNotExist, TypeError, ValueError, ImproperlyConfigured, ValidationError):
         return None
 

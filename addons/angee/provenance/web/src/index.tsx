@@ -32,15 +32,9 @@ const provenance = defineBaseAddon({
 
 export {
   HISTORY_TAB_ID,
-  HistoryPane,
   HistoryEntrySummary,
-  HistoryTimeline,
   RecordHistoryTimeline,
   useRecordHistory,
-  type HistoryTimelineProps,
-  type RecordHistoryTimelineProps,
 } from "./RecordHistory";
-export type { HistoryEntry, HistoryFieldChange, HistoryStatement, HistorySummaryEntry, RecordHistory } from "./documents.console";
-export { entryTone, historyValue, statementVerb, type HistoryValue, type StatementVerb } from "./history-entries";
 
 export default provenance;

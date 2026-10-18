@@ -15,6 +15,7 @@ from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
 from angee.base.impl import impl_choices_enum
+from angee.base.models import AngeeQuerySet
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
@@ -32,7 +33,6 @@ from angee.workflows.testing.models import (
     TriggerEvent,
     WorkflowRun,
 )
-from angee.workflows.watches import RecordWatch
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.mtidemo.models import MtiParent
 from tests.test_workflows_watches import Watch, record_deliveries, start_watcher
@@ -106,7 +106,7 @@ def test_record_changed_system_check_requires_grant_targets(monkeypatch):
 
 def test_record_changed_requires_the_mixin_for_watch_eligibility():
     with pytest.raises(ValidationError, match="no registered workflow observation"):
-        RecordWatch.check_model(MtiParent)
+        triggers.TriggerSource.check_model(MtiParent)
 
 
 def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):
@@ -619,7 +619,7 @@ def register_other_changed(settings, monkeypatch):
 def test_refined_source_shares_the_one_capture_of_its_bases_event(
     execution, trigger_setup, register_step, settings, monkeypatch,
 ):
-    """One native save locks the record and captures its watch once while feeding both keys."""
+    """One native save feeds both source keys and captures its watch once."""
     actor, workflow, record, trigger = trigger_setup
     _, sent = execution
     register_other_changed(settings, monkeypatch)
@@ -635,19 +635,20 @@ def test_refined_source_shares_the_one_capture_of_its_bases_event(
     run_until(run)
     assert StepWatch.system_queryset().count() == 1
     locked = []
-    lock = triggers.lock_if_supported
+    lock = AngeeQuerySet.lock_if_supported
 
     def count_lock(rows, **kwargs):
         locked.append(rows.model)
         return lock(rows, **kwargs)
 
-    monkeypatch.setattr(triggers, "lock_if_supported", count_lock)
+    monkeypatch.setattr(AngeeQuerySet, "lock_if_supported", count_lock)
     sent.clear()
     with trigger_source(Vault, connect=True), actor_context(actor):
         record.name = "Ready"
         record.save(update_fields=("name",))
-    monkeypatch.setattr(triggers, "lock_if_supported", lock)
-    assert locked == [Vault]
+    monkeypatch.setattr(AngeeQuerySet, "lock_if_supported", lock)
+    # Admission and watch capture each enforce their own lock contract.
+    assert [model for model in locked if model is Vault] == [Vault, Vault]
     assert len(record_deliveries(sent)) == 1
     assert set(TriggerEvent.system_queryset().values_list("trigger_id", flat=True)) == {trigger.pk, refined.pk}
     assert Trigger.objects.drain() == 2

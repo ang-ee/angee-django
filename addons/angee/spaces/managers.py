@@ -6,11 +6,12 @@ from typing import Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from rebac import PermissionDenied, SubjectRef, current_actor
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_subject_ref
+from rebac.errors import MissingActorError
+from rebac.resources import model_resource_type
 
 from angee.base.fields import enum_member_for
 from angee.base.models import AngeeManager, AngeeQuerySet, HierarchyQuerySet
-from angee.base.scoping import bind_actor
 
 
 class GroupQuerySet(HierarchyQuerySet, AngeeQuerySet):
@@ -36,10 +37,21 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
     def check_role_create(self, *, group: Any, role: Any) -> SubjectRef:
         """Check the selected role through the same REBAC preflight as admission."""
 
-        relationships = {"group": (group,)}
+        actor = current_actor()
+        resource_type = model_resource_type(self.model)
+        if actor is None:
+            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
+        relationships = {"group": (to_subject_ref(group),)}
         if role in (self.model.MembershipRole.MEMBER, self.model.MembershipRole.VIEWER):
-            relationships[f"{role.value}_of"] = (group,)
-        return self.check_create(relationships)
+            relationships[f"{role.value}_of"] = (to_subject_ref(group),)
+        if resource_type is None or not check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+            relationships=relationships,
+        ).allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
+        return actor
 
     def available_roles(self, *, group: Any) -> list[Any]:
         """Return roles the ambient actor may create on this group's roster."""
@@ -95,5 +107,6 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
             membership.full_clean(validate_unique=False, validate_constraints=False)
             membership.sudo(reason="spaces.membership.add_confirmed")
             membership.save()
-            bind_actor(membership, actor)
+            if actor is not None:
+                membership.with_actor(actor)
             return membership

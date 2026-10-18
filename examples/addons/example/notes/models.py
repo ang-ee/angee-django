@@ -11,11 +11,11 @@ from rebac import ObjectRef
 
 from angee.base.fields import StateField
 from angee.base.models import (
+    AngeeDataModel,
     AuditMixin,
     HistoryMixin,
     OwnerMixin,
 )
-from angee.base.models import AngeeDataModel
 from angee.messaging.models import ThreadedModelMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 

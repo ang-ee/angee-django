@@ -574,6 +574,37 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
     ]
 
 
+@pytest.mark.parametrize("row_count", [2, 8])
+def test_statement_reference_reads_have_a_page_query_budget(
+    composed_tables: None,
+    django_assert_num_queries: Any,
+    row_count: int,
+) -> None:
+    """Evidence and asserting principals add a fixed query count, not one per statement."""
+
+    del composed_tables
+    admin = _platform_admin(f"statement-query-budget-{row_count}")
+    with system_context(reason="test.parties.statement_query_budget.seed"):
+        for index in range(row_count):
+            party = messaging_models.Party.objects.create(display_name=f"Party {index}", created_by=admin)
+            handle = Handle.objects.create(
+                platform="email",
+                value=f"statement-query-{row_count}-{index}@example.test",
+                created_by=admin,
+            )
+            messaging_models.Party.objects.assert_handle(
+                party,
+                handle,
+                asserted_by=admin,
+                evidence=[party],
+            )
+    schema = _schema("public")
+    query = "query Statements { party_statements { asserted_by evidence { model id } } }"
+    with django_assert_num_queries(9):
+        rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
+    assert len(rows) == row_count
+
+
 def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:
     """No handle-column axis: its group keys would read handle rows the reader may not read."""
 

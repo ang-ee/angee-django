@@ -8,7 +8,6 @@ from django.utils.text import capfirst
 from rebac import system_context
 
 from angee.base.models import AngeeDataModel, AppendOnlyModel, DerivedFrom, OptimisticLockMixin
-from angee.base.scoping import system_queryset
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.graphql.events import ChangeRelatedRecord
 
@@ -36,7 +35,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Publish the question's retained concern identities with its verdict."""
         with system_context(reason="decisions.change_concerns"):
-            links = system_queryset(self.records.model).filter(decision_id=self.pk).select_related("content_type")
+            links = self.records.model.system_queryset().filter(decision_id=self.pk).select_related("content_type")
             return ChangeRelatedRecord.for_records(*(link.record_ref for link in links))
 
     class Meta:

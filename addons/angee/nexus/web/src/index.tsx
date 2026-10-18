@@ -48,7 +48,6 @@ const nexus = defineBaseAddon({
         content: {
           label: "Timeline",
           icon: "timeline",
-          aliases: ["timeline"],
           when: (context) => context.view.kind === "record",
           render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,
         },
@@ -58,7 +57,6 @@ const nexus = defineBaseAddon({
         content: {
           label: "Network",
           icon: "network",
-          aliases: ["network"],
           when: (context) => context.view.kind === "record",
           render: (context) => <NetworkPane partyId={context.view.sqid ?? ""} />,
         },
@@ -70,7 +68,6 @@ const nexus = defineBaseAddon({
         content: {
           label: "Feed",
           icon: "timeline",
-          aliases: ["feed"],
           when: (context) => context.view.kind === "record",
           render: (context) => <TimelinePane circleId={context.view.sqid ?? ""} />,
         },

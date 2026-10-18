@@ -100,7 +100,7 @@ const projects = defineBaseAddon({
         sequence: 20,
         content: {
           when: (context) => context.route?.recordEdges?.includes(TASK_MODEL) ?? false,
-          label: "Tasks", icon: "project-task", aliases: ["tasks"],
+          label: "Tasks", icon: "project-task",
           render: (context) => <RecordTasksPane context={context} />,
         },
       },

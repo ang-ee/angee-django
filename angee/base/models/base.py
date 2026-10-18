@@ -41,7 +41,7 @@ from angee.base.models.merge import MergeContractMixin, named_in_relationships, 
 from angee.base.models.query import AngeeQuerySet
 from angee.base.models.transitions import StateTransitions
 from angee.base.permissions import effective_rebac_definition
-from angee.base.refs import MergePolicy, RecordRefMixin
+from angee.base.refs import MergePolicy, RecordRefMixin, reference_blocks_target_delete
 from angee.base.tiers import ResourceTier
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -88,6 +88,7 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
         live_references = (
             reference for reference in references(type(self))
             if not issubclass(reference.model, HistoricalChanges)
+            and reference_blocks_target_delete(reference, type(self))
         )
         if named_in_relationships(self) or any(
             reference.rows(self).using(self._state.db).exists() for reference in live_references
@@ -163,6 +164,11 @@ class AngeeModel(MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin)
         del members
         manager = type(self)._base_manager.db_manager(hints={"instance": self})
         return cast(Self, manager.all().select_for_update().get(pk=self.pk))
+
+    def redacted_fields(self) -> frozenset[str]:
+        """Return the fields hidden when this instance was projected by REBAC."""
+
+        return frozenset(getattr(self, "_rebac_redacted_fields", ()))
 
     def apply_input_extensions(self, **values: Any) -> None:
         """Terminal cooperative hook for write-input values no model field owns.

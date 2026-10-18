@@ -31,6 +31,7 @@ export function chatterRouteIndex(
     const recordParam = trailingRouteParamName(path);
     const modelLabel = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
     const facts = modelLabel ? resourceFactsByModel[modelLabel] : undefined;
+    const resourceType = facts?.resourceType;
     const canonicalLabel = facts?.canonicalLabel;
     const recordEdges = facts?.recordEdges;
     return {
@@ -42,6 +43,7 @@ export function chatterRouteIndex(
         childrenByParentName,
         resourceFactsByModel,
       ),
+      ...(resourceType !== undefined ? { resourceType } : {}),
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordEdges ? { recordEdges } : {}),

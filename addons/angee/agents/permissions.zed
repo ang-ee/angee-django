@@ -112,8 +112,6 @@ definition agents/session {
     permission write = owner + agent->actor + admin->member
     permission post = (owner & agent->call) + admin->member
     permission delete = agent->delete + admin->member
-    permission transfer = owner + admin->member
-    permission write__owner = transfer
 }
 
 definition agents/turn {

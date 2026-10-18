@@ -20,7 +20,6 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
-from angee.base.scoping import read_scoped_queryset
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
@@ -310,24 +309,42 @@ _TASK_ACTION_ANNOTATIONS = {
 
 
 
-def _subject_label(info: strawberry.Info, reference: Any) -> str:
-    """Return the subject's display label through the reader's own scope, once per record and request.
+def _subject_label(reference: Any) -> str:
+    """Return one subject's display label through the reader's own scope.
 
     A subject the reader cannot read keeps its public id as its label.
     """
 
-    request = getattr(info.context, "request", None)
-    cache = getattr(request, "_projects_subject_labels", None) if request is not None else None
-    if cache is None:
-        cache = {}
-        if request is not None:
-            request._projects_subject_labels = cache
-    key = (reference.model_label, reference.object_id)
-    if key not in cache:
-        model = apps.get_model(reference.model_label)
-        row = read_scoped_queryset(model, current_actor()).filter(pk=reference.object_id).first()
-        cache[key] = str(row) if row is not None else ""
-    return cache[key]
+    actor = current_actor()
+    if actor is None:
+        return ""
+    model = apps.get_model(reference.model_label)
+    row = model.objects.with_actor(actor).filter(pk=reference.object_id).first()
+    return str(row) if row is not None else ""
+
+
+def _prime_subject_labels(tasks: list[Any]) -> None:
+    """Batch task subject labels once per content type onto their pointer owners."""
+
+    references = [(task, task.record_ref) for task in tasks]
+    by_model: dict[str, set[Any]] = {}
+    for _task, reference in references:
+        if reference.public_id:
+            by_model.setdefault(reference.model_label, set()).add(reference.object_id)
+    labels: dict[tuple[str, Any], str] = {}
+    actor = current_actor()
+    if actor is None:
+        for task, _reference in references:
+            task._projects_subject_label = ""
+        return
+    for model_label, object_ids in by_model.items():
+        model = apps.get_model(model_label)
+        labels.update(
+            ((model_label, row.pk), str(row))
+            for row in model.objects.with_actor(actor).filter(pk__in=object_ids)
+        )
+    for task, reference in references:
+        task._projects_subject_label = labels.get((reference.model_label, reference.object_id), "")
 
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
@@ -355,7 +372,11 @@ class TaskProjectionMixin:
         reference = cast(Any, self).record_ref
         if not reference.public_id:
             return None
-        return RecordPointerType.from_reference(reference, label=_subject_label(info, reference))
+        label = cast(Any, self).__dict__.get("_projects_subject_label")
+        return RecordPointerType.from_reference(
+            reference,
+            label=label if label is not None else _subject_label(reference),
+        )
 
     @strawberry_django.field(only=Task.visibility_audience_fields())
     def audience_label(self) -> str:
@@ -593,8 +614,10 @@ def _record_tasks(info: strawberry.Info, model_label: str, record_id: strawberry
     model = Task.declared_target_model(model_label)
     record = instance_for_id(model, str(record_id), queryset=model._default_manager.all())
     if record is None:
-        return Task.objects.none()
-    return optimize(Task.objects.for_record(record, include_done=include_done), info)
+        return []
+    tasks = list(optimize(Task.objects.for_record(record, include_done=include_done), info))
+    _prime_subject_labels(tasks)
+    return tasks
 
 
 @strawberry.type

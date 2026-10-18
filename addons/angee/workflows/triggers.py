@@ -34,10 +34,9 @@ from rebac.resources import model_for_resource_type
 from angee.base.errors import exception_text
 from angee.base.fields import ModelLabelField
 from angee.base.identity import public_id_of
-from angee.base.impl import ImplBase, resolve_all_impl_classes
+from angee.base.impl import ImplBase, ImplClassField, resolve_all_impl_classes
 from angee.base.models import AngeeManager, AngeeQuerySet, record_display_label
 from angee.base.permissions import rebac_relation_label
-from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.iam.identity import user_label
 from angee.iam.service_users import sync_service_user
 
@@ -84,7 +83,7 @@ class TriggerGrantTarget:
 
         model = model_for_resource_type(self.resource.resource_type)
         if model is not None and model._meta.managed:
-            visible = read_scoped_queryset(model, actor)
+            visible = model.objects.with_actor(actor)
             target = visible.filter(pk=self.resource.resource_id).first()
             if target is not None:
                 return record_display_label(target)
@@ -167,18 +166,46 @@ class TriggerSource(ImplBase):
     registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
     model_label: ClassVar[str] = ""
+    fields: ClassVar[tuple[str, ...]] = ()
+    watch_only: ClassVar[bool] = False
+    """Observe saves for step watches without becoming an admission source."""
     scope_fields: ClassVar[tuple[str, ...]] = ()
     """Trigger fields whose edits invalidate its contributed grants."""
 
     @classmethod
     def registered(cls) -> tuple[type[TriggerSource], ...]:
-        """Return this source and its registered refinements in key order."""
+        """Return admission-capable sources and refinements in key order."""
+        return tuple(source for source in cls.observations() if not source.watch_only)
+
+    @classmethod
+    def observations(cls) -> tuple[type[TriggerSource], ...]:
+        """Return every registered save observation in key order."""
         return tuple(source for source in resolve_all_impl_classes(TriggerSource) if issubclass(source, cls))
 
     @classmethod
     def connect_registered(cls) -> None:
         """Connect each native event once, through the source no other one refines."""
-        sources = cls.registered()
+        sources = cls.observations()
+        watched: dict[Any, type[TriggerSource]] = {}
+        for source in sources:
+            if not source.watch_only:
+                continue
+            model = source.model()
+            if previous := watched.get(model):
+                raise ImproperlyConfigured(
+                    f"Multiple watch registrations for {model._meta.label}: {previous.key} and {source.key}."
+                )
+            watched[model] = source
+            for admission in sources:
+                if admission.watch_only:
+                    continue
+                try:
+                    admission.validate_model(model)
+                except ValidationError:
+                    continue
+                raise ImproperlyConfigured(
+                    f"{model._meta.label} already has native trigger observation {admission.key}."
+                )
         for source in sources:
             if not any(issubclass(source, base) for base in sources if base is not source):
                 source.connect()
@@ -186,7 +213,7 @@ class TriggerSource(ImplBase):
     @classmethod
     def observes(cls, model: Any) -> bool:
         """Whether a registered source captures this model's native changes."""
-        for source in cls.registered():
+        for source in cls.observations():
             try:
                 source.validate_model(model)
             except ValidationError:
@@ -221,6 +248,16 @@ class TriggerSource(ImplBase):
             raise ValidationError("Workflow and decision models cannot be trigger sources.")
         if cls.model_label and model._meta.label != ModelLabelField.normalize(cls.model_label):
             raise ValidationError("This model does not belong to the fixed workflow source.")
+        for name in cls.fields:
+            model._meta.get_field(name)
+
+    @classmethod
+    def check_model(cls, model: Any) -> None:
+        """Require one registered admission or watch-only observation for ``model``."""
+
+        if cls.observes(model):
+            return
+        raise ValidationError("This model has no registered workflow observation.")
 
     @classmethod
     def dispatch(cls, model: Any, record: Any) -> None:
@@ -235,8 +272,8 @@ class TriggerSource(ImplBase):
             with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
                 cls.validate_model(model)
                 target = generic_target(record)
-                records = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
-                if lock_if_supported(records, no_key=True).first() is None:
+                records = target.content_type.model_class().system_queryset().filter(pk=target.object_id)
+                if records.lock_if_supported(no_key=True).first() is None:
                     return
                 events = apps.get_model("workflows", "TriggerEvent").objects
                 for source in cls.registered():
@@ -266,6 +303,38 @@ class TriggerSource(ImplBase):
         ``connect_registered`` calls this for the source that owns the event,
         never for its registered refinements.
         """
+
+        if cls.watch_only:
+            model = cls.model()
+            post_save.connect(
+                cls.changed,
+                sender=model,
+                weak=False,
+                dispatch_uid=f"workflows.watch.{model._meta.label_lower}",
+            )
+
+    @classmethod
+    def changed(
+        cls,
+        sender: Any,
+        *,
+        instance: Any,
+        raw: bool = False,
+        update_fields: frozenset[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Ignore fixture loads and saves that cannot change a watched predicate."""
+
+        del kwargs
+        if not raw and (update_fields is None or not cls.fields or set(cls.fields).intersection(update_fields)):
+            cls.dispatch(sender, instance)
+
+
+class TriggerSourceField(ImplClassField):
+    """Offer only admission-capable entries from the one observation registry."""
+
+    def impl_choices(self) -> list[Any]:
+        return [choice for choice in super().impl_choices() if not self.resolve_class(choice.key).watch_only]
 
 
 class RecordChanged(TriggerSource):
@@ -345,12 +414,12 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
             except ValidationError:
                 return  # This source does not observe the model.
             with transaction.atomic(), system_context(reason="workflows.capture"):
-                queryset = system_queryset(triggers).filter(enabled=True, source=source)
+                queryset = triggers.system_queryset().filter(enabled=True, source=source)
                 if not implementation.model_label:
                     queryset = queryset.filter(model_label=model._meta.label)
                 content_type = ContentType.objects.get_for_model(model)
                 for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
-                    system_queryset(self.model).update_or_create(
+                    self.model.system_queryset().update_or_create(
                         trigger=trigger, record_content_type=content_type, record_object_id=record.pk,
                         defaults={"changed_at": Now()},
                     )
@@ -382,8 +451,8 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
     def lock_grants(self, workflow_id: Any, *, skip_locked: bool = False) -> Any:
         """Serialize grants shared by triggers of one workflow."""
         workflow = apps.get_model("workflows", "Workflow")
-        rows = lock_if_supported(
-            system_queryset(workflow).filter(pk=workflow_id), no_key=True, skip_locked=skip_locked,
+        rows = workflow.system_queryset().filter(pk=workflow_id).lock_if_supported(
+            no_key=True, skip_locked=skip_locked,
         )
         return rows.first() if skip_locked else rows.get()
 
@@ -391,12 +460,12 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         """Reconcile this trigger's contributed tuples without dropping shared grants."""
         old = {TriggerGrantTarget.from_stored(value) for value in trigger.granted_targets}
         new = set(targets)
-        workflow = system_queryset(apps.get_model("workflows", "Workflow")).get(pk=trigger.workflow_id)
+        workflow = apps.get_model("workflows", "Workflow").system_queryset().get(pk=trigger.workflow_id)
         user = sync_service_user(workflow, prefix="workflow")
         subject = to_subject_ref(user)
         retained = {
             TriggerGrantTarget.from_stored(value)
-            for values in system_queryset(self.model).filter(
+            for values in self.model.system_queryset().filter(
                 workflow_id=trigger.workflow_id, enabled=True,
             ).exclude(pk=trigger.pk).values_list("granted_targets", flat=True)
             for value in values
@@ -415,7 +484,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     resource=target.resource, relation=target.relation, subject=subject,
                 ))
             stored = [target.stored() for target in sorted(new, key=order)]
-            system_queryset(self.model).filter(pk=trigger.pk).update(granted_targets=stored)
+            self.model.system_queryset().filter(pk=trigger.pk).update(granted_targets=stored)
             trigger.granted_targets = stored
 
     def _enable_targets(self, trigger: Any, actor: Any) -> tuple[TriggerGrantTarget, ...]:
@@ -466,11 +535,11 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         trigger.workflow.require_access("write", actor)
         with transaction.atomic(), actor_context(actor):
             self.lock_grants(trigger.workflow_id)
-            current = system_queryset(self.model).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
             current.with_actor(actor)
             targets = self._enable_targets(current, actor)
             self.reconcile_grants(current, targets)
-            system_queryset(self.model).filter(pk=current.pk).update(
+            self.model.system_queryset().filter(pk=current.pk).update(
                 enabled=True, disabled_reason="",
             )
             current.refresh_from_db()
@@ -481,7 +550,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         trigger.workflow.require_access("write", actor)
         with transaction.atomic(), system_context(reason="workflows.disable_trigger"):
             self.lock_grants(trigger.workflow_id)
-            current = system_queryset(self.model).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
             current.workflow.require_access("write", actor)
             self._disable(current, "")
             current.refresh_from_db()
@@ -500,7 +569,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         target = TriggerGrantTarget(ObjectRef(resource_type, resource_id), relation)
         with transaction.atomic(), actor_context(actor):
             self.lock_grants(trigger.workflow_id)
-            current = system_queryset(self.model).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
             current.workflow.require_access("write", actor)
             held = {TriggerGrantTarget.from_stored(value) for value in current.granted_targets}
             if target not in held:
@@ -521,7 +590,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             return current
 
     def _disable(self, trigger: Any, reason: str) -> None:
-        system_queryset(self.model).filter(pk=trigger.pk).update(
+        self.model.system_queryset().filter(pk=trigger.pk).update(
             enabled=False, disabled_reason=reason,
         )
         self.reconcile_grants(trigger, ())
@@ -538,21 +607,21 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             return Context().run(self.admit, event)
         events = apps.get_model("workflows", "TriggerEvent")
         with transaction.atomic():
-            event = system_queryset(events).filter(pk=event.pk).select_related(
+            event = events.system_queryset().filter(pk=event.pk).select_related(
                 "record_content_type", "trigger",
             ).first()
             if event is None:
                 return False
             record_model = event.record_content_type.model_class()
             if record_model is not None:
-                records = system_queryset(record_model).filter(pk=event.record_object_id)
-                if lock_if_supported(records, no_key=True, skip_locked=True).first() is None and records.exists():
+                records = record_model.system_queryset().filter(pk=event.record_object_id)
+                if records.lock_if_supported(no_key=True, skip_locked=True).first() is None and records.exists():
                     return False
-            trigger = (system_queryset(self.model).filter(pk=event.trigger_id)
+            trigger = (self.model.system_queryset().filter(pk=event.trigger_id)
                        .lock_if_supported(no_key=True, skip_locked=True).first())
             if trigger is None or not trigger.enabled:
                 return False
-            current = (system_queryset(events).pending().filter(pk=event.pk)
+            current = (events.system_queryset().pending().filter(pk=event.pk)
                        .lock_if_supported(no_key=True, skip_locked=True).first())
             if current is None:
                 return False
@@ -563,7 +632,9 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 if self.lock_grants(trigger.workflow_id, skip_locked=True) is None:
                     return False
                 self._disable(trigger, reason)
-                system_queryset(events).filter(pk=current.pk).update(evaluated_at=F("changed_at"), rejection=reason)
+                events.system_queryset().filter(pk=current.pk).update(
+                    evaluated_at=F("changed_at"), rejection=reason,
+                )
                 return False
             except Exception:
                 logger.exception("Workflow trigger configuration failed for event %s.", current.pk)
@@ -574,7 +645,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     trigger.with_actor(principal)
                     if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
                         raise ValidationError("The source model changed after this event was recorded.")
-                    queryset = read_scoped_queryset(model, principal)
+                    queryset = model.objects.with_actor(principal)
                     record = condition(queryset).filter(pk=current.record_object_id).first()
                     if record is None:
                         raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
@@ -590,12 +661,12 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 if self.lock_grants(trigger.workflow_id, skip_locked=True) is None:
                     return False
                 self._disable(trigger, reason)
-                system_queryset(events).filter(pk=current.pk).update(
+                events.system_queryset().filter(pk=current.pk).update(
                     evaluated_at=F("changed_at"), rejection=reason,
                 )
                 return False
             except (ValidationError, PermissionDenied) as error:
-                system_queryset(events).filter(pk=current.pk).update(
+                events.system_queryset().filter(pk=current.pk).update(
                     evaluated_at=F("changed_at"), rejection=exception_text(error),
                 )
                 return False
@@ -605,7 +676,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             except Exception:
                 logger.exception("Workflow trigger admission failed for event %s.", current.pk)
                 return False
-            system_queryset(events).filter(pk=current.pk).update(
+            events.system_queryset().filter(pk=current.pk).update(
                 evaluated_at=F("changed_at"), admitted_at=Now(), rejection="",
             )
             return True
@@ -613,7 +684,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
     def drain(self) -> int:
         """Examine an ordered, bounded batch; one broken event cannot stop later rows."""
         events = apps.get_model("workflows", "TriggerEvent")
-        candidates = list(system_queryset(events).pending().filter(trigger__enabled=True)
+        candidates = list(events.system_queryset().pending().filter(trigger__enabled=True)
                           .order_by("pk")[:TRIGGER_DRAIN_LIMIT])
         admitted = 0
         for event in candidates:

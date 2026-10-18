@@ -26,4 +26,3 @@ class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):
         """Return the base unscoped Angee queryset for this manager's model."""
 
         return cast(AngeeUnscopedQuerySet[Any], super().get_queryset())
-

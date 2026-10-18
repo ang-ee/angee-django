@@ -16,12 +16,18 @@ from angee.base.models import SourceKind
 from angee.decisions.testing.models import Decision
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.net import AddressResolutionError
-from angee.integrate.states import ConflictKeep, StreamDirection, StreamKind, StreamPhase, SyncFailureKind
+from angee.integrate.states import (
+    ConflictKeep,
+    StreamDefinition,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+    SyncFailureKind,
+)
 from angee.integrate.streams import (
     ApplyResult,
     CursorInvalid,
     RecordChange,
-    StreamDefinition,
     StreamPage,
     advance_stream,
     open_stream,
@@ -48,7 +54,7 @@ def cycle(execution, register_step, monkeypatch):
     administrator, _ = execution
     bridge = make_integration("workflow-stream", model=SyncCycleTestBridge)
     extracted, applied, rescanned, declared = [], [], [], []
-    local_hashes = {}
+    local_keys = set()
     transport = SimpleNamespace(
         identity_reads=True,
         partitions=("",),
@@ -82,9 +88,8 @@ def cycle(execution, register_step, monkeypatch):
                 external_key=key,
                 source_payload={"offset": offset},
                 source_hash=f"source-{offset}",
-                local_hash=local_hashes.get(key, ""),
                 mapped_payload={"offset": offset},
-                projection={"offset": offset} if key in local_hashes else None,
+                projection={"offset": offset} if key in local_keys else None,
             )
 
         def extract(self, stream, page_bound, *, deadline=None):
@@ -111,7 +116,7 @@ def cycle(execution, register_step, monkeypatch):
         def apply_record(self, stream, record):
             assert connection.in_atomic_block
             applied.append(record.external_key)
-            local_hashes[record.external_key] = record.source_hash
+            local_keys.add(record.external_key)
             return ApplyResult(mapped_payload=record.mapped_payload)
 
     monkeypatch.setattr(SyncCycleTestBridge, "backend", property(Adapter), raising=False)
@@ -506,7 +511,6 @@ def test_same_cursor_with_changed_replica_hashes_makes_progress(cycle, step):
                     "record",
                     {},
                     "second",
-                    local_hash="first",
                     mapped_payload={"value": "second"},
                     projection={"value": "first"},
                 ),

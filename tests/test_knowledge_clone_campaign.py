@@ -260,7 +260,7 @@ def test_clone_query_growth_is_bounded_for_five_and_sixty_pages(composed_tables,
     child_insert = f"INSERT INTO {connection.ops.quote_name(MarkdownPage._meta.db_table)}"
     counts = []
     for size in (5, 60):
-        with actor_context(author), system_context(reason="test.clone.budget.template_setup"):
+        with actor_context(author):
             source = Vault.objects.create_for(author, name=f"Template {size}")
             pages = []
             for index in range(size):
@@ -288,7 +288,7 @@ def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_
     actor = create_user("tree-depth-owner")
     counts = []
     for depth in (2, 30):
-        with actor_context(actor), system_context(reason="test.clone.depth.setup"):
+        with actor_context(actor):
             source = Vault.objects.create_for(actor, name=f"Depth {depth}")
             pages = []
             for index in range(30):

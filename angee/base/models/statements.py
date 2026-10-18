@@ -26,6 +26,7 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.actors import is_sudo
+from rebac.resources import model_resource_type
 from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
 
@@ -62,15 +63,30 @@ class StatementQuerySet(AngeeUnscopedQuerySet[Any]):
     def current(self) -> Any:
         return self.filter(superseded__isnull=True)
 
-    def readable(self, actor: Any) -> Any:
-        """Scope shadow rows through their subject's standing read permission.
+    def for_reader(self, actor: Any) -> Any:
+        """Scope shadow rows through every record endpoint the reader may read.
 
-        The subject scope is applied eagerly (``scoped()``): a lazily scoped
-        queryset embedded as a subquery compiles without the actor's scope.
+        The scopes are applied eagerly (``scoped()``): a lazily scoped queryset
+        embedded as a subquery compiles without the actor's scope. Nullable member
+        columns belong to other aspects and do not withhold those rows.
         """
 
+        if actor is None:
+            return self.none()
         subjects = self.model.statement_subject_model.objects.with_actor(actor).with_action("read")
-        return self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
+        rows = self.filter(subject_id__in=models.Subquery(cast(Any, subjects).scoped().values("pk")))
+        member_names = sorted({name for aspect in self.model.statement_aspects.values() for name in aspect.members})
+        for name in member_names:
+            field = self.model._meta.get_field(name)
+            related = field.remote_field.model if isinstance(field, models.ForeignKey) else None
+            if related is None or model_resource_type(related) is None:
+                continue
+            members = related.objects.with_actor(actor).with_action("read").scoped()
+            rows = rows.filter(
+                Q(**{f"{field.attname}__isnull": True})
+                | Q(**{f"{field.attname}__in": models.Subquery(members.values(field.target_field.name))})
+            )
+        return rows
 
     def applied(self) -> Any:
         """Standing value assertions selected by survivorship."""
@@ -1134,6 +1150,13 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
     def delete(self, *args: Any, **kwargs: Any) -> Any:
         raise ValidationError("Statements are retained; withdraw them instead.")
+
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
+        """Lock this retained statement row for history replay."""
+
+        del members
+        manager = type(self)._base_manager.db_manager(hints={"instance": self})
+        return manager.all().select_for_update().get(pk=self.pk)
 
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> None:

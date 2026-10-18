@@ -85,6 +85,3 @@ class SqidMixin(PublicIdentity, models.Model):
         # is always a SqidField on any subclass.
         field = cast(SqidField, cls._meta.get_field("sqid"))
         return field.public_id_from_value(value)
-
-
-

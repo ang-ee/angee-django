@@ -13,12 +13,14 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
 from angee.base.changesets import changeset
-from angee.base.identity import public_id_of
+from angee.base.identity import public_id_of, public_subject_ref
 from angee.base.models import SourceKind
 from angee.knowledge import schema as knowledge_schema
 from angee.parties import schema as parties_schema
@@ -89,7 +91,7 @@ def test_history_lists_a_records_changesets_newest_first_with_their_field_deltas
     assert history["total"] == 2
     rename, draft = history["entries"]
     assert [entry["change_reason"] for entry in (rename, draft)] == ["Rename", "Draft"]
-    assert rename["actor"] == str(to_subject_ref(owner))
+    assert rename["actor"] == str(public_subject_ref(to_subject_ref(owner)))
     assert rename["actor_model"] == get_user_model()._meta.label
     assert rename["actor_id"] == public_id_of(owner)
     assert rename["outcome"] == "SUCCESS"
@@ -248,11 +250,39 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     created = history["entries"][-1]
     identity = [row for row in created["statements"] if row["aspect"] == "identity"]
     # Asserted first, then applied by survivorship: two versions in one changeset.
-    assert [(row["history_type"], row["applied"]) for row in identity] == [("+", False), ("~", True)]
+    assert [(row["history_type"], row["applied"]) for row in identity] == [
+        ("CREATED", False),
+        ("CHANGED", True),
+    ]
     assert {row["asserted_by"] for row in identity} == {str(to_subject_ref(person))}
     assert {row["source_kind"] for row in identity} == {"PERSON"}
-    assert {row["status"] for row in identity} == {"asserted"}
+    assert {row["status"] for row in identity} == {"ASSERTED"}
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
+
+
+@pytest.mark.parametrize("row_count", [1, 25])
+def test_history_page_query_count_does_not_grow_per_entry(
+    row_count: int,
+    django_assert_num_queries: Any,
+) -> None:
+    """Loaded versions, statements, redaction and admission stay page-batched."""
+
+    person = create_user(f"history-budget-{row_count}")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Version 0")
+    for index in range(1, 25):
+        with actor_context(person), changeset(fresh=True, change_reason=f"Version {index}"):
+            party.display_name = f"Version {index}"
+            party.save()
+
+    schema = _schema()
+    _history(schema, person, "parties.Party", party, limit=1)
+    with CaptureQueriesContext(connection) as baseline:
+        _history(schema, person, "parties.Party", party, limit=1)
+    with django_assert_num_queries(len(baseline)):
+        page = _history(schema, person, "parties.Party", party, limit=row_count)
+
+    assert len(page["entries"]) == row_count
 
 
 def test_history_names_a_statements_related_row_by_its_public_id() -> None:

@@ -466,6 +466,10 @@ data through REBAC, never a queryset bypass.
   const-backed relations, `authenticated`, and SQL read scopes are evaluated
   against the Django rows themselves, which no remote tuple store can see. Do not
   mirror column facts into tuples to keep another backend viable.
+- **Permission fragments widen `read_granted`; the owner derives `read`.**
+  Consumer addons union their additional read arms into the resource owner's
+  `read_granted` permission. The owning definition alone derives `read`, so its
+  withholding and other final policy cannot be bypassed or copied by fragments.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
   `kind=service` user for trigger admission and triggered runs; source-declared
@@ -693,7 +697,7 @@ data through REBAC, never a queryset bypass.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
     the system entry [`MergeableMixin.fold`](../../angee/base/models/merge.py),
     which joins the open changeset and runs the same hooks under a system
-    boundary. Before core row locks, both entries call `lock_for_merge(using)`
+    boundary. Before core row locks, both entries call `lock_for_merge()`
     so a domain can acquire its earlier lock class. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
@@ -1459,6 +1463,10 @@ validated at the driver boundary.
 RecordLink is a pointing row with `merge_policy = MOVE`. Merging its target
 moves every link to the survivor; both remote cards receive the survivor's
 projection through their existing write-back policies and remote preconditions.
+`StreamDefinition` declarations own the five generation-seed knobs: `cursor`,
+`reconcile_interval`, `absence_threshold`, `tombstone_retention`, and `config`.
+Persisted stream rows carry runtime state; management pages do not redefine
+those declaration facts.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
@@ -1476,8 +1484,8 @@ projection through their existing write-back policies and remote preconditions.
   adapter locks and revalidates its local projection before applying. Identical
   edits converge under the accepted record-sync design ruling. An origin
   stamp plus the returned version/hash makes a successful write-back recognizable
-  on its next pull. Separate JSON Patch `test` operations check each retained reflection
-  precondition; they do not replace the remote transport version fence.
+  on its next pull. The link checks its complete retained reflection precondition;
+  that does not replace the remote transport version fence.
 - **Applied evidence has one promoter.** Adapters return the actual mapped
   payload, mapping version and dependency digest in `ApplyResult`; the driver
   alone promotes the primary link and pins the history row written for that
@@ -1506,7 +1514,7 @@ projection through their existing write-back policies and remote preconditions.
   evidence but does no transport work and ignores cursor expiry; an explicit
   resync creates a new generation.
   Recurring event feeds without reconciliation remain open. Declare the source
-  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/streams.py),
+  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/states.py),
   mirrored on `SyncStream.snapshot`; backend-private `config` does not own cadence.
   Do not interpret a missing interval alone as read-once.
 - **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
@@ -1795,7 +1803,7 @@ owns locked assertion writes and survivorship; the canonical subject owns source
 eligibility and application. Like history tables, statements have no independent
 REBAC resource or ORM read policy. Read them through their subject: the
 subject-bound `instance.statements` accessor once the subject row is in hand, or
-`StatementQuerySet.readable(actor)` for a cross-record surface such as Review,
+`StatementQuerySet.for_reader(actor)` for a cross-record surface such as Review,
 which scopes rows to the subjects the actor may read. A statement read never
 widens what the subject reader may see: related rows (the member, the asserting
 principal) resolve through their own read gates at the serving seam, no group or
@@ -1933,7 +1941,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   A domain authority that is not `delete` (record-chatter moderation) keeps its own
   verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
   sudo read path it owns, such as the chatter transcript, must exclude trashed rows
-  itself. Work tasks enter the trash by moving into a concealing stage. Managers
+  itself. Managers
   are a positive arm beside the exclusion, never an exclusion inside it: rebac's
   named-grant scan cannot compile an exclusion that holds another
   ([tasks](../../addons/angee/projects/permissions.zed)).
@@ -1981,8 +1989,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 [`RecordRefMixin`](../../angee/base/refs.py) owns the canonical content-type
 and public-ID projection for a generic record pointer.
-Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`;
-the core target-delete receiver is the single teardown owner for instance and
+Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
+model needing row-aware cleanup implements `teardown_for_target(target)`. The
+core target-delete receiver invokes that one declaration for instance and
 queryset deletion paths.
 [`RecordReferenceNode`](../../addons/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current

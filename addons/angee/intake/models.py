@@ -7,7 +7,6 @@ from collections.abc import Callable, Mapping
 from types import NotImplementedType
 from typing import Any, ClassVar, Self, cast
 
-from angee.base.scoping import bind_actor, system_queryset
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -15,22 +14,33 @@ from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.functions import Coalesce, NullIf
-from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
+from rebac import PermissionDenied, actor_context, check_new, current_actor, system_context, to_object_ref
 from rebac.backends import backend
 from rebac.relation_loading import relation_actor
+from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id, instance_actor
 from angee.base.changesets import changeset, changeset_model, creation_fingerprint, current_changeset
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import StateField
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, AuditMixin, HistoryMixin, OptimisticLockMixin
-from angee.base.refs import MergePolicy
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
 from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _require_user_create() -> None:
+    """Require the ambient actor to pass the native account-create gate."""
+
+    actor = current_actor()
+    resource_type = model_resource_type(get_user_model())
+    if actor is None or resource_type is None or not check_new(
+        subject=actor, action="create", resource_type=resource_type,
+    ).allowed:
+        raise PermissionDenied("Account create access is required.")
 
 
 class NeedImportance(models.TextChoices):
@@ -165,10 +175,8 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
                     .first()
                 )
             if existing is not None:
-                bind_actor(existing, actor)
-                return existing
+                return existing.with_actor(actor)
 
-            verified_actor = self.check_create({target_field: (locked_target,)})
             need = self.model(
                 **{target_field: locked_target},
                 party=party,
@@ -178,9 +186,7 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             need.full_clean(validate_unique=False, validate_constraints=False)
             if party is not None:
                 need.validate_party_assignment()
-            need.sudo(reason="intake.need.capture.create").save()
-            bind_actor(need, verified_actor)
-            return need
+            return self.with_actor(actor).insert(need)
 
     def capture_from_message(
         self,
@@ -368,15 +374,6 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         on_delete=models.SET_NULL,
         related_name="captured_need",
     )
-    original_task = models.ForeignKey(
-        "projects.Task",
-        null=True,
-        blank=True,
-        editable=False,
-        on_delete=models.SET_NULL,
-        related_name="former_needs",
-    )
-
     objects = NeedManager()
 
     class Meta:
@@ -407,9 +404,6 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             models.Index(fields=("task", "created_at", "id")),
         )
 
-    # The prior task identity stays on the request as history.
-    merge_policies = {"original_task": MergePolicy.KEEP}
-
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> NotImplementedType | None:
         """Retarget requests through their assignment owner."""
@@ -417,10 +411,9 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         if reference.name != "task":
             return NotImplemented
         for need in rows.order_by("pk").lock_if_supported():
-            need.original_task_id = need.task_id
             need.task = survivor
             try:
-                need.save(update_fields=("task", "original_task", "updated_at"))
+                need.save(update_fields=("task", "updated_at"))
             except RecordAccessSubjectRefused as error:
                 raise ValidationError({"canonical": error.code}) from error
         return None
@@ -616,7 +609,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 # This owner-controlled FK write is part of the same save/revision.
                 self.access_decision = self._new_access_decision()
                 self.admitted_user = None
-                system_queryset(type(self)).filter(pk=self.pk).update(
+                type(self).system_queryset().filter(pk=self.pk).update(
                     access_decision=self.access_decision,
                     admitted_user=None,
                 )
@@ -756,7 +749,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             raise ValidationError({"confirmed": "Confirm resetting requester access."})
         actor = instance_actor(self)
         with actor_context(actor), transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if not locked.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
                 "share",
             ):
@@ -769,7 +762,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 expected_revision=expected_revision,
                 update_fields=("admitted_user", "updated_at"),
             )
-            system_queryset(type(self)).filter(pk=locked.pk).update(access_decision=decision)
+            type(self).system_queryset().filter(pk=locked.pk).update(access_decision=decision)
             apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(locked.target)
         self.refresh_from_db()
         return self
@@ -794,7 +787,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             ):
                 raise PermissionDenied("Deciding request access requires need write and target share.")
             if action == NeedAccessAction.INTAKE_APPROVE and locked._account_for_party(locked.party_id) is None:
-                get_user_model().objects.check_create()
+                _require_user_create()
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if decision is not None:
@@ -856,7 +849,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 locked.task = task
                 locked.project = None
                 locked.save(update_fields=("task", "project", "updated_at"))
-        bind_actor(task, actor)
+        if actor is not None:
+            task.with_actor(actor)
         self.refresh_from_db()
         return task
 
@@ -1061,7 +1055,7 @@ class ChannelIntake(models.Model):
                 if not self.has_access("write"):
                     raise PermissionDenied("Configuring requester domains requires channel write permission.")
                 with actor_context(actor):
-                    get_user_model().objects.check_create()
+                    _require_user_create()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Protect the ingress setting even for writers that do not call full_clean."""

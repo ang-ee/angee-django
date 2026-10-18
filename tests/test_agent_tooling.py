@@ -47,12 +47,12 @@ from rebac.relationships import write_relationships
 from angee.agents import grants as grants_module
 from angee.agents import provisioning
 from angee.agents.grants import (
-    RESOURCE_READER_ROLE,
     TOOL_GRANT_RESOURCE_TYPE,
     sync_builtin_tool_catalogue,
     tool_grant_ref,
 )
 from angee.agents.models import ToolRole
+from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.testing.models import (
     Agent,
     AgentSession,

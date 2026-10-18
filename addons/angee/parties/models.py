@@ -193,8 +193,11 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             ),
         )
 
-    def lock_statement_subject(self, members: Mapping[str, Any], *, using: str) -> Any:
-        owner = apps.get_model("parties", "Party").objects.db_manager(using)
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Any:
+        """Lock identity Handles before the statement owner's core Party lock."""
+
+        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        members = members or {}
         handle = members.get("handle")
         handle_ids = (
             (handle.pk if isinstance(handle, models.Model) else handle,)
@@ -202,7 +205,14 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             else owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
         )
         owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
-        return super().lock_statement_subject(members, using=using)
+        return super().lock_subject(members)
+
+    def lock_for_merge(self) -> None:
+        """Lock this party's Handles before the shared merge owner locks Parties."""
+
+        owner = apps.get_model("parties", "Party").objects.db_manager(hints={"instance": self})
+        handle_ids = owner.handle_statements().filter(subject_id=self.pk).values_list("handle_id", flat=True)
+        owner.lock_identity_rows(party_ids=(self.pk,), handle_ids=handle_ids)
 
     def __str__(self) -> str:
         """Return the party's display name for Django displays."""
@@ -330,7 +340,15 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
             if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
                 return True
         link_id = proposed["handle"]["statement_id"]
-        return bool(link_id and any(row["id"] == link_id and not row["is_confirmed"] for row in current["handles"]))
+        statement_model = self.statements.model
+        confirmed = (statement_model.StatementRank.PREFERRED, statement_model.StatementSnak.VALUE)
+        return bool(
+            link_id
+            and any(
+                row["id"] == link_id and (row["rank"], row["snak"]) != confirmed
+                for row in current["handles"]
+            )
+        )
 
     def identity_values(
         self, addresses: list[Any], links: list[Any], *, include_evidence: bool = False
@@ -361,8 +379,6 @@ class Party(MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedMod
                     "status": link.status,
                     "applied": link.applied,
                     **({"evidence": link.evidence} if include_evidence else {}),
-                    "is_confirmed": link.is_confirmed,
-                    "is_dismissed": link.is_dismissed,
                 }
                 for link in links
             ],
@@ -651,10 +667,6 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
                 if not getattr(self, attname) and getattr(row, attname):
                     setattr(self, attname, getattr(row, attname))
                     filled.append(name)
-            metadata = {**(row.metadata or {}), **(self.metadata or {})}
-            if metadata != self.metadata:
-                self.metadata = metadata
-                filled.append("metadata")
             if filled:
                 self.save(using=self._state.db, update_fields=(*filled, "updated_at"))
             if self.avatar_id is None and row.avatar_id is not None:
@@ -690,9 +702,8 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             return cast(float | None, self.__dict__["_resolved_confidence"])
         row = (
             apps.get_model("parties", "Party")
-            .objects.handle_statements(
-                actor=instance_actor(self),
-            )
+            .objects.handle_statements()
+            .for_reader(instance_actor(self))
             .applied()
             .filter(subject_id=self.party_id, handle_id=self.pk)
             .first()
@@ -805,7 +816,6 @@ class AddressManager(StatementSubjectManager):
                 if conflict == "raise":
                     raise ValidationError({"address": "A different address already exists for this party."})
                 is_primary = False
-            verified_actor = self.check_create()
             row = self.model(
                 party=party,
                 label=" ".join(label.split()).strip()[:64],
@@ -813,9 +823,8 @@ class AddressManager(StatementSubjectManager):
                 created_by_id=getattr(actor, "pk", None),
                 **normalized,
             )
-            row.with_actor(verified_actor)
-            row.save()
-            return "created", row.with_actor(verified_actor)
+            row = self.with_actor(actor).insert(row)
+            return "created", row.with_actor(actor)
 
     def replace_primary_exact(
         self,
@@ -1165,6 +1174,12 @@ class RelationshipKind(AuditMixin, AngeeDataModel):
         """Return the kind's forward label for Django displays."""
 
         return self.name
+
+    @classmethod
+    def employee(cls) -> RelationshipKind | None:
+        """Return the employment vocabulary row when this installation provides it."""
+
+        return cls._base_manager.filter(slug="employee").first()
 
     @property
     def is_symmetric(self) -> bool:
