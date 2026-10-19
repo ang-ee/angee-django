@@ -125,10 +125,13 @@ export function Activity({ context, className }: ActivityProps): React.ReactElem
   const entries = React.useMemo(() => [...batches.entries()].flatMap(([source, batch]) =>
     batch.map((entry, index) => ({ entry, key: `${source}:${entry.kind}:${String(entry.at)}:${index}` })))
     .sort((left, right) => activityTime(right.entry.at) - activityTime(left.entry.at)), [batches]);
-  const page = entries.slice(0, limit);
-  const filtered = kind === "all" ? page : page.filter(({ entry }) => entry.kind === kind);
+  // Filter before paging: the kind filter selects among everything the sources published, so a
+  // kind that only appears further back is still shown and the empty state means "none", not
+  // "none in the newest page".
+  const matching = kind === "all" ? entries : entries.filter(({ entry }) => entry.kind === kind);
+  const filtered = matching.slice(0, limit);
   const ready = sources.every((source) => batches.has(source.id));
-  const canLoadOlder = entries.length > limit || [...batches.values()].some((batch) => batch.length >= limit);
+  const canLoadOlder = matching.length > limit || [...batches.values()].some((batch) => batch.length >= limit);
 
   if (!model || !id) {
     return <EmptyState icon="activity" title={t("activity.empty.title")} description={t("activity.empty.description")} className="min-h-48 p-4" />;
