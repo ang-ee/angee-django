@@ -316,23 +316,36 @@ shared UI copy through an addon bundle.
   navigator publication plus the root loading/empty gate; addons provide row
   projection, route transitions, DnD policy, and domain actions. Context another
   addon owns beside a page's list is that addon's pane component, published with
-  `usePrimaryPane` rather than stacked as a second list:
-  the [workflows record timeline](../../addons/angee/workflows/web/src/timeline-pane.tsx)
-  publishes its left-side timeline this way. Page tests use
+  `usePrimaryPane` rather than stacked as a second list. The left pane never
+  describes the record (see the shell's regions below). Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
-- Chatter publishers compose by owner for their mounted lifetime. Panels mount
-  lazily when first visited and then remain mounted for that record, so a shared
-  `useRecordPeek` Records tab provides an explicit preview opened from main
-  content, not link following from a pane, without discarding draft input in
-  another panel; unmounting the temporary peek must leave other publishers'
-  tabs and composer intact. Chatter stays in the shell's right pane. Consumers
-  do not mount their own chatter. Its tabs are `record#aside` and
-  `<model>#aside` children, narrowed by the layers for the current app and
-  route before tabs mount (see [Chatter](#chatter)); a container nobody narrows
-  keeps all its children, including under a selected app. Public and sign-in
-  routes belong to no app. A tab declared at `record#aside` appears only on
-  record views. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+- **The shell has four regions, each with a test.** The left pane is the
+  explorer: trees, collection lists in split placement, session rails, smart
+  views and the record pager; it changes which record is in the middle and
+  never says anything about the record. The middle is the subject: the form,
+  its body sections, the statusbar and the primary toolbar. The right pane is
+  the context aside: what is around the record (its Timeline, Discussion,
+  Tasks, Related), a page's selection inspector, and drill-ins; it may act on
+  the record's process (answer, stop, revert, comment) or lead to a related
+  record, and it is never a second middle: on a record page it never edits the
+  record's content (a studio page's selection inspector edits the selection,
+  because there the canvas is the subject and the inspector its editor). The
+  drawers are tools: session-scoped and record-independent (agents, logs). A
+  candidate that fails its region's test belongs elsewhere. Related records
+  navigate the middle and the explorer keeps the place; the aside drills in for
+  a bounded question about one object in the record's context (this run, this
+  changeset, this decision, this conversation) and links to the object's page
+  for the open-ended work. Aside publishers compose by owner for their mounted lifetime:
+  panels mount when first visited and stay mounted for that record, so draft
+  input survives switching tabs. Consumers do not mount their own aside. Its
+  tabs are `record#aside` and `<model>#aside` children, narrowed by the layers
+  for the current app and route before tabs mount (see
+  [Context aside](#context-aside)); a container nobody narrows keeps all its
+  children, including under a selected app. Public and sign-in routes belong
+  to no app. A `record#aside` child appears only on model-backed record views;
+  a route whose param names no model has no aside. See the
+  [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
@@ -658,7 +671,8 @@ shared UI copy through an addon bundle.
   which evaluates the loaded record and the form's data resource; fields omitted
   by a child projection are read from the canonical resource. A tab for every
   record kind is a `form#sections` child gated on the resource fact it reads.
-  History and attached work are Activity sources, not saved-record sections.
+  Changes are Timeline lines and the changeset drill-in; attached work is the
+  Related tab; neither is a saved-record section.
   Inside a section panel, use
   `useRecordChromeContext()` and scope a related collection with a base filter
   on a `presentation="embedded"` list, which brings compact chrome and local
@@ -674,7 +688,29 @@ shared UI copy through an addon bundle.
   [FormView](../../packages/ui/src/views/form/form-view-surface.ts) selects
   required fields from the resolved children; authored fields and passive chrome
   remain host-owned.
-- **Record verbs compose the shared action owner.** A verb in the toolbar is a
+- **Record verbs compose the shared action owner.** The primary toolbar is
+  reserved for the subject model's lifecycle transitions, the ones its statusbar
+  explains (post, cancel); secondary lifecycle verbs and model-owned utilities
+  (pay, reverse, send, PDF, merge, download) live in the overflow menu; a
+  capability contributed to another model (run a workflow, rate, generate a
+  delivery, read a file again) uses that model's overflow menu, never its
+  toolbar. Classify an action by the subject it changes and its semantic owner:
+  a bridge addon implementing an inherited lifecycle (connect a channel) is not
+  a foreign capability because it lives in another package. Process drill-ins
+  expose the verbs of the inspected run, decision or changeset (answer, stop,
+  retry, revert); collection controls stay with their collection. Every
+  placement composes the shared action owner, projected permission/admission,
+  the dirty/pending gate and the applicable confirmation. `form#chrome` carries
+  the record-header controls that are about the record rather than verbs on it:
+  marks and status, Share and the effective-access explanation, Follow, Needs
+  you. Those controls mutate only their own metadata (grants, visibility,
+  subscriptions); they never execute a business lifecycle or change content.
+  Grants, effective readers and followers are three facts: a direct tuple is
+  not effective access, a reader is not a subscriber, and following or being
+  made a recipient never grants access. There is no Access aside tab and
+  grants are not a Related group; a model's own audience and role adapters
+  (visibility, responders, rosters) compose the same Share owner. A verb
+  in the toolbar is a
   `#actions` child and one in the overflow menu a `#actions-menu` child; either
   may render [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
@@ -702,20 +738,24 @@ shared UI copy through an addon bundle.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
-- **Records use one timeline pane.** The framework owns the `Activity` tab at
-  `record#aside/activity`; addons contribute model-scoped `record#activity`
-  sources. Activity merges comments, changes, runs, decisions, attached
-  conversations and source events newest-first, with one kind filter, empty
-  state and pager. The same `DecisionCard` serves the inbox, Activity and
-  record-set timeline. `useRecordTimelinePane` remains the left-pane seam for
-  pages; it does not publish a second record-aside tab. Forms consume the shared
-  field-mark bridge, and marks reveal Activity's waiting decision. Lists may opt
-  into `attentionColumn`, which combines open decisions and tags marked for
-  attention in one badge cluster. An attention tag's normalized name is its
-  `statusTones` key, declared once by the addon that owns that vocabulary; there
-  is no attention-column tone map.
-  Run, step and question feeds retain concern identities for scoped
-  invalidation, without polling.
+- **Records have one chronology.** The timeline addon owns the `Timeline`
+  tab and the `timeline` read that unions every eligible source behind one
+  cursor; each addon contributes a Python timeline source (its kind, sequence,
+  eligibility, entries and count) and a `timeline#kinds` presentation (label,
+  glyph, verb, target). A line is a pointer: one sentence, actor, time, one
+  verb, never a body, never an action. A run folds its decisions and changes
+  into its line; the run drill-in shows one run with its own Stop. The same
+  `DecisionCard` serves the inbox and the run drill-in. Forms consume the
+  shared field-mark bridge; a mark's "View change" opens the changeset
+  drill-in with the field highlighted. Needs-you and Follow are record-header
+  controls computed by their owners across the record, independent of what the
+  Timeline has loaded. Lists may opt into `attentionColumn`, which combines
+  open decisions and tags marked for attention in one badge cluster. An
+  attention tag's normalized name is its `statusTones` key, declared once by
+  the addon that owns that vocabulary; there is no attention-column tone map.
+  Sources declare their live-update interests; the timeline fragment keeps no
+  list of foreign models. Run, step and question feeds retain concern
+  identities for scoped invalidation, without polling.
 - **Unreadable projected fields remain legible as restrictions.** A record row's
   existing `redacted_fields` ledger lets `RecordFieldMarkControl` show the field
   label and a lock without its value. Compose that projection; never issue a
@@ -912,12 +952,12 @@ Any other key alters a child an addon this one depends on declared:
 `hide: false` shows again what a dependency hid. The framework's own children
 are every addon's to adjust. Two unrelated layers setting one field fail.
 [Messaging](../../addons/angee/messaging/web/src/index.tsx) contributes the
-comment and related-conversation entry sources it implements:
+presentation of the timeline kinds its Python source implements:
 
 ```tsx
-"record#activity": {
-  "messaging.comments": { content: recordCommentActivitySource(submitKey) },
-  "messaging.related": { content: recordConversationActivitySource },
+"timeline#kinds": {
+  "messaging.comment": { content: { label: "Comments", icon: "comments", verb: "Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
+  "messaging.conversation": { content: { label: "Conversations", icon: "channel", verb: "Open conversation", target: { tab: "messaging.conversation" } } },
 },
 ```
 
@@ -956,7 +996,7 @@ containers: {
   "form#chrome": { only: ["iam.share-record"] },
   "shell#drawers-bottom": { only: [] },
   "record#aside": [
-    { only: ["activity", "storage.files"] },
+    { only: ["timeline.rail", "related"] },
     { only: [], when: { route: "projects.my-work" } },
   ],
 },
@@ -1020,12 +1060,12 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `form#rail` | `FormView.RailGroup` beside a saved record's tabs | `ReactNode` |
 | `form#actions` | record verbs in a saved form's toolbar | `ReactNode` |
 | `form#actions-menu` | record verbs in a saved form's overflow menu | `ReactNode` |
-| `form#chrome` | passive record chrome at the toolbar's right edge | `ReactNode` |
+| `form#chrome` | record-header controls at the toolbar's right edge: marks, status, Share, Follow, Needs you | `ReactNode` |
 | `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
 | `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
-| `record#aside` | chatter tabs | `ChatterTabContent` |
-| `record#activity` | model-scoped entry sources merged by Activity | `ActivityEntrySource` |
+| `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
+| `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
@@ -1039,50 +1079,82 @@ Addons own theirs, such as `messaging.channels#toolbar`,
 `parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
 and `iam#access-visibility`.
 
-### Chatter
+### Context aside
 
-The chatter aside's tabs are children of `record#aside` and `<model>#aside`. A
-`record#aside` tab shows on record views; a model-level tab shows on that
+The context aside is the shell's right region: what is around the record. Its
+children are `record#aside` and `<model>#aside` contributions. A `record#aside`
+child shows on model-backed record views; a model-level child shows on that
 model's pages and may narrow itself further with its content's `when`. A
-`ChatterTabContent` carries `label`, `icon` and `render`, and optionally
-`when`, `count`/`useCount` and `panelClassName`. The framework contributes the
-implemented Activity owner first; addons contribute only implemented capabilities.
-Tab ids are namespaced like every child except the framework-owned `activity` id.
+`ChatterTabContent` carries `label`, `icon`, `render` and `strip`, and
+optionally `when`, `count`/`useCount`, `target` and `panelClassName`. Every
+pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
+actions · overflow; back and title first on a drill-in) instead of its own
+header row; the same band heads explorer panes on the left.
 
-The record's own state belongs in the header and sheet; history and attached
-work belong in Activity and the aside. The default order is Activity 10, Tasks
-20, Files 40, Pages 50, Sources 70. Activity is the single chronological stream;
-comments and linked conversations are entries rather than separate panes. Agents
-use the shell's right drawer so conversation state survives navigation
-independently of the record aside.
+**Four tabs are in the strip, in this order**, each only where its capability
+exists. A tab serves a recurring record-wide job (reading what happened,
+talking, planning, finding what is linked), including its empty state and first
+action; everything that answers a bounded question about one object is a
+drill-in:
 
-A tab that lists one polymorphic edge (files, pages, sources)
-shows only where the record's type can carry it: its `when` checks the edge's
-model label in `context.route.recordEdges`, the resource metadata the backend
-derives from each edge's schema target relations. Entry sources use the same
-fact to decline unsupported records. Workflow run evidence accepts any canonical
-REBAC record, so its Activity source uses that native capability instead of a
-target-restricted edge declaration. Never let a pane report the
-edge "unavailable" or offer writes on a type whose schema declares no arm.
+| id | seq | shows when | holds | owner |
+|---|---|---|---|---|
+| `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
+| `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
+| `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | open tasks about the record, schedule and assign, a folded Completed section | projects |
+| `related` | 40 | at least one section has rows or a create verb | sections Files (upload), Pages (bind), Sources (external links), Conversations (source threads); reverse edges on files and pages | storage, knowledge, integrate, messaging |
 
-Each `record#activity` child has exactly this content shape:
+A tab earns the strip by creating things; everything else is a **drill-in**: a
+`record#aside` child with `strip: false` that renders one object named by its
+`target` (a run, a changeset, a decision, a conversation). The rail opens it
+with `setActiveTab(id, { from, target })`; the shell shows "‹ Timeline" above
+it, keeps a return stack with filters, window, scroll and focus, writes
+`chatterTab`, `chatterTarget`, `chatterFocus` and `chatterFrom` to the URL, and
+shows an unavailable state with Back when the target cannot be read. Hiding a
+destination from the strip never unregisters its drill-in. The record's own
+state belongs in the header and sheet; a drill-in acts on the record's process
+(answer, stop, revert) and never edits its content.
+
+A tab that lists one polymorphic edge (files, pages, sources, the chatter
+thread, tasks) shows only where the record's type can carry it: its `when`
+checks the edge's model label in `context.route.recordEdges`, the resource
+metadata the backend derives from each edge's schema target relations. Timeline
+sources use the same fact to decline unsupported records; workflow run evidence
+accepts any canonical REBAC record. Never let a pane report the edge
+"unavailable" or offer writes on a type whose schema declares no arm. A section
+with neither rows nor a verb is absent, not empty.
+
+Each `timeline#kinds` child presents one kind a Python timeline source
+implements (the source declares `kind`, `sequence`, `eligible`, `entries`,
+`count` and `group_id`; see `angee.timeline.sources`):
 
 ```ts
-interface ActivityEntrySource {
-  kinds: readonly ActivityKind[];
-  useEntries(record: ActivityRecord, window: ActivityWindow): readonly ActivityEntry[];
+interface TimelineKindContent {
+  label: string;
+  icon: string;
+  tone?: StatusIconTone;
+  verb: string;
+  target: { tab: string; focus?: string } | { page: true };
 }
 ```
 
-`ActivityEntry` carries `at`, `kind`, `actor`, `title`, `body` and `reference`.
-The hook reads through its owning addon, observes `window.limit`, and may publish
-that owner's existing composer through `window.publishComposer`; Activity alone
-owns merging, filtering, empty state and paging.
+The rail composes lines from the union read and these presentations. Semantic
+grouping (a run's decisions and changes counted on the run's line) is the
+read's: the source returns `group_id` and the read nests before it pages, so a
+group never splits across pages and a parent outside the window still carries
+its counts. The rail owns the visual part once: day separators, filtering,
+keyset paging, loading, empty, partial-failure and error states. `target.focus`
+names the focus kind (`message`, `decision`, `field`); the focused id travels
+in `chatterFocus`. The back strip is labelled with the origin tab's label. Follow subscribes to timeline kinds; the messaging
+tracking subtypes that mirrored provenance and workflows are retired.
 
 Tabs a page publishes with `useChatterContent` are runtime children of the same
-container. They follow the composed tabs and take the same narrowing. To keep
-the aside off a route, narrow `record#aside` with `only: []` under
-`when: { route }`. See the [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+container (a selection inspector on a studio or graph page is the usual case).
+They follow the composed tabs and take the same narrowing. To keep the aside
+off a route, narrow `record#aside` with `only: []` under `when: { route }`.
+Agents use the shell's right drawer so conversation state survives navigation
+independently of the record aside. See the
+[Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 
 ### Resource views
 
@@ -1598,9 +1670,11 @@ Hard-won traps — the wise learn from others' mistakes
   introduce the legacy `rounded`/`rounded-sm|md|lg|xl` aliases in new or rewritten
   markup.
 - **Pane / Aside / primary-secondary / Panel — one name per concept.** A *Pane* is a
-  `SplitPanes` split region; an *Aside* is page side content (`PageAside`); *primary*/
-  *secondary* are the Workbench sidebars; a *Panel* is a content `Card`. Don't reuse
-  one term for another's concept across components, props, or slots.
+  `SplitPanes` split region; an *Aside* is the Chatter in the shell's secondary pane,
+  whose tabs are `record#aside` children or page tabs published with
+  `useChatterContent`; *primary*/*secondary* are the Workbench sidebars; a *Panel* is
+  a content `Card`. Don't reuse one term for another's concept across components,
+  props, or slots.
 
 - **Message projections have one owner.** A peer addon that lists messages spreads
   the fragments messaging exports (sender, parts + file + mime, reaction groups,
@@ -1626,8 +1700,11 @@ Hard-won traps — the wise learn from others' mistakes
   snapshot lift.
 - **Graph + inspector pages use the shell panes.** Navigator to the primary pane,
   inspector to the secondary pane, as `iam` schema page does; an in-content
-  `SplitPanes` with a hand-rolled `<aside>` is the copy. `PageAside`/`RailPanel`
-  own asides.
+  `SplitPanes` or `Workbench` with its own inspector is the copy. A Chatter tab's
+  children render straight into the panel, which owns scroll and padding while the
+  pane owns width, border and background; `RailPanel` owns the inspector card. Lay
+  out a bounded graph — the selection or a capped neighbourhood — never a whole
+  schema: Dagre holds the main thread for minutes at around two thousand nodes.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
   vendor pairing and source selection.
