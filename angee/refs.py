@@ -42,7 +42,6 @@ from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.schema import FieldBinding
 
 from angee.identity import public_data_id_field, public_id_for
-from angee.models.merge import EdgeReference, MergePolicy, Reference, _RecordRefMergeContract
 from angee.permissions import effective_rebac_definition
 
 
@@ -164,6 +163,17 @@ def canonical_link_path(model: type[models.Model]) -> tuple[str, ...]:
             break
         links.append(step._meta.parents[parent].name)
     return tuple(links)
+
+
+# Deferred on purpose: the merge contract lives in the angee.models package, whose import runs
+# angee.evidence and the statement models, which read this module's pointer helpers above. With
+# the import here, a process that imports angee.refs first still finds those helpers defined.
+from angee.models.merge import (  # noqa: E402
+    EdgeReference,
+    MergePolicy,
+    Reference,
+    _RecordRefMergeContract,
+)
 
 
 class RecordRefMixin(_RecordRefMergeContract):

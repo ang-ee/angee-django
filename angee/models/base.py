@@ -9,8 +9,6 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
@@ -33,14 +31,12 @@ from simple_history.models import HistoricalChanges
 from angee.actors import instance_actor
 from angee.identity import PublicIdentity
 from angee.impl import ImplClassField
-from angee.models.append_only import AppendOnlyModel
 from angee.models.identity import SqidMixin, TimestampMixin
 from angee.models.manager import AngeeManager, AngeeUnscopedManager
 from angee.models.merge import MergeContractMixin, named_in_relationships, references
 from angee.models.query import AngeeQuerySet, SystemQuerysetMixin
 from angee.models.transitions import StateTransitions
 from angee.permissions import effective_rebac_definition
-from angee.refs import MergePolicy, RecordRefMixin, reference_blocks_target_delete
 from angee.tiers import ResourceTier
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -83,6 +79,10 @@ class AngeeModel(SystemQuerysetMixin, MergeContractMixin, PublicIdentity, Timest
         Native historical snapshots may outlive deleted targets. They retain a
         merge identity but do not prevent removal of its reverted creation.
         """
+
+        # angee.refs composes this package (RecordRefMixin is a model mixin), so the
+        # reference guard is bound here, at call time, not at import time.
+        from angee.refs import reference_blocks_target_delete
 
         live_references = (
             reference for reference in references(type(self))
@@ -705,19 +705,6 @@ class AngeeDataModel(SqidMixin, AngeeModel):
     class Meta:
         """Django model options for Angee's public data model base."""
 
-        abstract = True
-
-
-class DerivedFrom(AppendOnlyModel, RecordRefMixin, AngeeDataModel):
-    """One retained edge from an evidence owner to a canonical source record."""
-
-    merge_policy = MergePolicy.KEEP
-
-    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
-    object_id = models.PositiveBigIntegerField()
-    record = GenericForeignKey("content_type", "object_id")
-
-    class Meta:
         abstract = True
 
 

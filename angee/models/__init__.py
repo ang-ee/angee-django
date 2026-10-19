@@ -19,7 +19,6 @@ from angee.models.append_only import (
 from angee.models.base import (
     AngeeDataModel,
     AngeeModel,
-    DerivedFrom,
     DirectRecordAccess,
     record_display_label,
     role_anchor,
@@ -120,3 +119,13 @@ from angee.models.trash import (
     TrashQuerySet,
     clean_trash_reason,
 )
+
+
+def __getattr__(name: str) -> object:
+    """Resolve ``DerivedFrom`` lazily: it composes angee.refs, which composes this package."""
+
+    if name == "DerivedFrom":
+        from angee.models.derived import DerivedFrom
+
+        return DerivedFrom
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
