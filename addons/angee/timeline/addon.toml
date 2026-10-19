@@ -1,0 +1,6 @@
+[addon]
+name = "angee.timeline"
+description = "One chronology per record: addons contribute one-line events, the timeline read unions them behind one cursor"
+keywords = ["timeline", "activity", "history"]
+category = "Foundation"
+depends_on = ["angee.graphql"]

@@ -1,5 +1,6 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { createElement } from "react";
+import { Workflow } from "lucide-react";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
@@ -10,6 +11,7 @@ import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { RunWorkflowRecordActions } from "./run-workflow-actions";
 import { runStatusWidget } from "./run-status";
+import { RecordTimeline } from "./RecordTimeline";
 
 export { RecordTimeline, type RecordTimelineProps, type TimelineRecord } from "./RecordTimeline";
 export { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
@@ -38,9 +40,20 @@ export default defineBaseAddon({
   containers: {
     "form#actions-menu": { "workflows.run-workflow": { sequence: 40, content: createElement(RunWorkflowRecordActions) } },
     "record#activity": { "workflows.activity": workflowActivitySource },
+    // Spike: the run drill-in the timeline rail selects.
+    "record#aside": {
+      "workflows.run": { sequence: 12, content: {
+        label: "Run", icon: "workflow", panelClassName: "p-0",
+        when: ({ view }) => view.kind === "record" && Boolean(view.sqid),
+        render: (context) => createElement(RecordTimeline, {
+          record: { model: context.route?.canonicalLabel ?? context.route?.modelLabel ?? "", id: context.view.sqid ?? "" },
+        }),
+      } },
+    },
     "decisions#origin": { "workflows.run": decisionRunOrigin },
   },
   statusTones: WORKFLOW_STATUS_TONES,
+  icons: { workflow: Workflow },
 
   widgets: {
     "angee.workflows.condition": { read: TriggerCondition, edit: TriggerCondition },

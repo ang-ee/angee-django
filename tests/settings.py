@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "angee",
     "angee.provenance",
     "tests.settings.BareGraphQLConfig",
+    "angee.timeline",
     "django_celery_beat",
     "angee.jobs",
     "angee.resources",

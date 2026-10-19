@@ -40,8 +40,11 @@ export interface ChatterContextValue {
   setCollapsed: (collapsed: boolean) => void;
   toggleCollapsed: () => void;
   activeTab: ChatterTabId;
-  /** Record a user or route-selected tab as the persistent shell intent. */
-  setActiveTab: (tab: ChatterTabId) => void;
+  /** Record a user or route-selected tab as the persistent shell intent; `from`
+   *  names the tab that opened it, so the aside can offer the way back. */
+  setActiveTab: (tab: ChatterTabId, options?: { from?: ChatterTabId }) => void;
+  /** The tab the active one was opened from, until the user picks a tab directly. */
+  tabOrigin: ChatterTabId | null;
   /** Suggest asynchronous content; urgent attention may force it without recording user intent. */
   setInitialActiveTab: (tab: ChatterTabId, force?: boolean) => void;
   content: ChatterContent | null;
@@ -66,6 +69,7 @@ const ChatterContext = createContext<ChatterContextValue>({
   toggleCollapsed: () => undefined,
   activeTab: "",
   setActiveTab: () => undefined,
+  tabOrigin: null,
   setInitialActiveTab: () => undefined,
   content: null,
   setContent: () => undefined,
@@ -93,9 +97,11 @@ export function ChatterProvider({
   // The provider spans record routes, so tab intent does too. A shell remount is
   // the only reset; late route content must not replace a user or URL choice.
   const explicitTabIntentRef = useRef(false);
-  const setActiveTab = useCallback((tab: ChatterTabId) => {
+  const [tabOrigin, setTabOrigin] = useState<ChatterTabId | null>(null);
+  const setActiveTab = useCallback((tab: ChatterTabId, options?: { from?: ChatterTabId }) => {
     explicitTabIntentRef.current = true;
     setActiveTabState(tab);
+    setTabOrigin(options?.from && options.from !== tab ? options.from : null);
   }, []);
   const setInitialActiveTab = useCallback((tab: ChatterTabId, force = false) => {
     if (force || !explicitTabIntentRef.current) setActiveTabState(tab);
@@ -195,6 +201,7 @@ export function ChatterProvider({
       content,
       registerSecondaryController,
       setActiveTab,
+      tabOrigin,
       setInitialActiveTab,
       setCollapsed,
       setContent,
@@ -209,6 +216,7 @@ export function ChatterProvider({
       setCollapsed,
       setContent,
       setInitialActiveTab,
+      tabOrigin,
       toggleCollapsed,
     ],
   );

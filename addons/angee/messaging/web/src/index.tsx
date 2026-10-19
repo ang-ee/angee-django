@@ -9,8 +9,11 @@ import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { recordCommentActivitySource, recordConversationActivitySource } from "./record-activity";
+import { RecordChatterPane } from "./RecordChatterPane";
+import { THREAD_CHATTER_EDGE } from "./documents";
 
 export { CHANNEL_MODEL } from "./documents";
+export { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
 export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
 export {
   defineChannelBridgeAddon,
@@ -106,6 +109,14 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "messaging.channels#toolbar": {},
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
+    },
+    // Spike: the discussion drill-in the timeline rail selects.
+    "record#aside": {
+      "messaging.comments": { sequence: 11, content: {
+        label: "Discussion", icon: "comments", panelClassName: "p-0",
+        when: (context) => context.view.kind === "record" && (context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false),
+        render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+      } },
     },
     // Messaging owns both entry adapters; the framework owns their one stream.
     "record#activity": {

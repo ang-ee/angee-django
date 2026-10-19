@@ -3,4 +3,4 @@ name = "angee.provenance"
 description = "Changesets attributing canonical record history to its actor and origin"
 keywords = ["provenance", "history"]
 category = "Data"
-depends_on = ["angee.graphql"]
+depends_on = ["angee.graphql", "angee.timeline"]

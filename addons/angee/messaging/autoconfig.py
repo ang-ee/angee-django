@@ -16,6 +16,7 @@ SETTINGS = {
     "ANGEE_PARTIES_SHARED_SENDER_PROVIDERS:append": ["angee.messaging.evidence.shared_senders"],
     "ANGEE_PARTIES_SIGNING_PROVIDERS:append": ["angee.messaging.evidence.signings"],
     "ANGEE_IMPL_REGISTRIES:append": ["angee.messaging.backends.ChannelBackend"],
+    "ANGEE_TIMELINE_SOURCES:append": ["angee.messaging.timeline.timeline_sources"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
     # registry). Source addons add their own with a yamlconf dotted key, e.g.

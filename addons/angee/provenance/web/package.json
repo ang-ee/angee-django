@@ -17,7 +17,8 @@
     "@angee/app": "workspace:*",
     "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/ui": "workspace:*"
+    "@angee/ui": "workspace:*",
+    "lucide-react": "^1.21.0"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

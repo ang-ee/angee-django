@@ -35,7 +35,7 @@ export function Chatter({
   className,
 }: ChatterProps): React.ReactElement | null {
   const t = useUiT();
-  const { activeTab, content, setActiveTab, setCollapsed } = useChatter();
+  const { activeTab, content, setActiveTab, setCollapsed, tabOrigin } = useChatter();
   const requestedTab = useRouterState({
     select: (state) => {
       const value = (state.location.search as Record<string, unknown>)[CHATTER_TAB_SEARCH_KEY];
@@ -95,6 +95,9 @@ export function Chatter({
     ? activeId
     : resolvedTabs[0]?.id;
 
+  // A drill-in opened from another tab keeps the way back above its panel.
+  const originTab = tabOrigin && tabOrigin !== active ? resolvedTabs.find((tab) => tab.id === tabOrigin) : undefined;
+
   // Collapse is owned by the enclosing SplitPane (it collapses the pane to zero
   // width); Chatter only bails when it has no tab to show.
   if (!active || !visible) return null;
@@ -148,6 +151,15 @@ export function Chatter({
             </Tabs.Tab>
           ))}
         </Tabs.List>
+        {originTab ? (
+          <button
+            type="button"
+            onClick={() => setActiveTab(originTab.id)}
+            className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-3 py-1.5 text-12 text-link hover:underline"
+          >
+            <Glyph name="chevron-left" /> {originTab.label}
+          </button>
+        ) : null}
         <ChatterPanels key={viewContext.pathname} tabs={resolvedTabs} active={active} />
       </Tabs>
       {resolvedComposer ? (

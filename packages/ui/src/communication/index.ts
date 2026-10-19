@@ -12,6 +12,13 @@ export {
   type ActivityWindow,
 } from "./Activity";
 export { StepList, type StepListItem } from "./StepList";
+export {
+  TIMELINE_SCOPE_ALL,
+  TimelineRail,
+  type TimelineRailEntry,
+  type TimelineRailKind,
+  type TimelineRailProps,
+} from "./TimelineRail";
 export { CHATTER_CONTAINERS } from "./chatter-containers";
 export {
   useRecordPeek,
