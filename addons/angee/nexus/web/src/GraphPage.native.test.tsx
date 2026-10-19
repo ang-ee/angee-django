@@ -1,12 +1,18 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { ShellPageTestProviders } from "@angee/app/testing";
+import { ChatterTabsTestHost, ShellPageTestProviders } from "@angee/app/testing";
 import { NexusGraphParties } from "./documents";
 import { GraphPage } from "./GraphPage";
 import { NetworkPane } from "./NetworkPane";
 
-const state = vi.hoisted(() => ({ navigate: vi.fn() }));
+// The real hooks return stable references; the published inspector depends on them.
+const state = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  search: {},
+  routeHref: Object.assign(() => undefined, { maybe: () => undefined }),
+  recordHref: () => undefined,
+}));
 const graph = { party_graph: { nodes: [
   { id: "root", kind: "root", title: "Alpha", meta: { model: "parties.Party" } },
   { id: "other", kind: "party", title: "Beta", meta: { model: "parties.Party" } },
@@ -22,21 +28,23 @@ vi.mock("@tanstack/react-router", async (original) => ({
 }));
 vi.mock("@angee/ui", async (original) => ({
   ...await original<typeof import("@angee/ui")>(),
-  useRouteSearch: () => ({}), useRouteHref: () => Object.assign(() => undefined, { maybe: () => undefined }),
-  useResourceRecordHrefLookup: () => () => undefined,
+  useRouteSearch: () => state.search, useRouteHref: () => state.routeHref,
+  useResourceRecordHrefLookup: () => state.recordHref,
 }));
 beforeAll(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
 });
 afterEach(cleanup);
 
-test("the relationship explorer keeps its declared horizontal graph and native selection", async () => {
-  render(<ShellPageTestProviders><GraphPage /></ShellPageTestProviders>);
+test("the relationship explorer keeps its declared horizontal graph and inspects the native selection in the chatter", async () => {
+  render(<ShellPageTestProviders><GraphPage /><ChatterTabsTestHost /></ShellPageTestProviders>);
   const alpha = await screen.findByTestId("rf__node-root");
   expect(alpha.querySelector(".react-flow__handle-right")).toBeTruthy();
   expect(screen.getByTestId("rf__node-other").querySelector(".react-flow__handle-left")).toBeTruthy();
+  const inspector = await screen.findByTestId("tab-graph-inspector");
+  expect(within(inspector).queryByText("Alpha")).toBeNull();
   fireEvent.click(alpha);
-  expect(screen.getAllByText("Alpha").length).toBeGreaterThan(1);
+  expect(await within(inspector).findByText("Alpha")).toBeTruthy();
 });
 
 test("the record network pane uses the shared graph with its existing horizontal layout", async () => {

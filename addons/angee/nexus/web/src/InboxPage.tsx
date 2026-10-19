@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Filter,
-  PageAside,
   PrimaryPanePublisher,
   ResourceViewProvider,
   useBreadcrumbLeafLabel,
@@ -83,18 +82,12 @@ function InboxExplorer() {
           icon: "link",
           panelClassName: "p-0",
           children: (
-            <PageAside
-              collapse="never"
-              gutter="none"
-              className="h-full w-full min-w-0 border-0 bg-sheet-2"
+            <ResourceViewProvider
+              namespace="r"
+              initialState={COLLECTION_INITIAL}
             >
-              <ResourceViewProvider
-                namespace="r"
-                initialState={COLLECTION_INITIAL}
-              >
-                <InboxRelatedPane navigation={navigation} />
-              </ResourceViewProvider>
-            </PageAside>
+              <InboxRelatedPane navigation={navigation} />
+            </ResourceViewProvider>
           ),
         },
       ],

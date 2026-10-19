@@ -114,7 +114,10 @@ export interface RecordToolbarContext {
 export interface RecordTabDescriptor {
   id: string;
   label: TabLabel;
-  /** Fill the content area beneath the sheet and the pane strip. */
+  /**
+   * Fill the content area beneath the sheet and the pane strip. The pane is a flex
+   * column, so its content fills it with `flex-1`.
+   */
   presentation?: "full-bleed";
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */

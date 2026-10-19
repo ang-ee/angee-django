@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Badge, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, PageAside, RailPanel,
+  Badge, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel,
   errorMessage, formatDateTime, optionLabel, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent,
   useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode,
 } from "@angee/ui";
@@ -39,12 +39,10 @@ export function RunGraph({ runId, active = true }: { runId: string; active?: boo
   const selected = graph?.nodes.find((node) => node.key === selectedKey);
   const inspector = useMemo(() => active && graph ? { tabs: [{ id: RUN_GRAPH_INSPECTOR_TAB,
     label: t("run.graphInspector"), icon: "info", children:
-      <PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0">
-        <RailPanel title={t("run.graphInspector")} empty={t("run.graphSelectNode")}>
-          {selected ? <RunNodeInspector key={`${runId}:${selected.key}`} runId={runId} node={selected}
-            detail={projected?.nodes.find((node) => node.id === selected.key)?.detail} /> : null}
-        </RailPanel>
-      </PageAside>,
+      <RailPanel title={t("run.graphInspector")} empty={t("run.graphSelectNode")}>
+        {selected ? <RunNodeInspector key={`${runId}:${selected.key}`} runId={runId} node={selected}
+          detail={projected?.nodes.find((node) => node.id === selected.key)?.detail} /> : null}
+      </RailPanel>,
   }] } : null, [active, graph, selected, projected, runId, t]);
   useChatterContent(inspector);
   const graphReady = graph != null;

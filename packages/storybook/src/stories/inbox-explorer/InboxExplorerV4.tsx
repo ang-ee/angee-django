@@ -3,7 +3,7 @@ import { Filter } from "@angee/metadata";
 import {
   Alert, Avatar, Button, Collapsible, ConsoleLayout, ControlBand, EmptyState,
   Glyph, MessageAttachmentChip, MessageDaySeparator, MessageFeed, MessagePartsView,
-  MessageRow, MetaGrid, PageAside, PageHeader, PageToolbar, PopoverContent,
+  MessageRow, MetaGrid, PageHeader, PageToolbar, PopoverContent,
   PopoverPortal, PopoverPositioner, PopoverRoot, PopoverTitle, PopoverTrigger,
   PrimaryPanePublisher, ReactionBar, RemovableChip, ResourceList, ResourceViewProvider,
   SearchInput, SectionEyebrow, Select, StatusSegment, Statusline, StatuslineSpacer,
@@ -99,11 +99,9 @@ function Explorer(initial: InboxExplorerV4Props) {
   const outside = Boolean(selected && !matchIds.has(selected.id));
   const inspector = React.useMemo<ChatterContent>(() => ({ tabs: [{
     id: RELATED, label: "Related", panelClassName: "p-0",
-    children: <PageAside collapse="never" gutter="none" className="w-full min-w-0 border-0 bg-sheet-2 [contain:inline-size]">
-      {related ? <Related key={`${related.target}:${related.origin}`} target={related.target} origin={related.origin}
-        selected={messageId} onSelect={read} onThread={openThread} onClose={closeRelated} />
-        : <EmptyState icon="link" title="Follow a connection" description="Choose a file or shared text to see its other message uses." />}
-    </PageAside>,
+    children: related ? <Related key={`${related.target}:${related.origin}`} target={related.target} origin={related.origin}
+      selected={messageId} onSelect={read} onThread={openThread} onClose={closeRelated} />
+      : <EmptyState icon="link" title="Follow a connection" description="Choose a file or shared text to see its other message uses." />,
   }] }), [related, messageId, read, openThread, closeRelated]);
   useChatterContent(inspector);
 

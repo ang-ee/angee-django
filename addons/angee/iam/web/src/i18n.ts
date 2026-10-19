@@ -170,7 +170,6 @@ export const enIamMessages: Record<string, string> = {
   "schema.permissionGraph": "Permission Graph",
   "schema.nodeCount": "{count} nodes",
   "schema.inspector": "Inspector",
-  "schema.noneSelected": "No resource type selected.",
   "schema.relations": "Relations",
   "schema.permissions": "Permissions",
   "schema.noSubjects": "No subjects",

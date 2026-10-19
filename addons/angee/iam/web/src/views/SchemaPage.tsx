@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Code, GraphView, InlineEmpty, LoadingPanel, PageAside, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Alert, Badge, Code, GraphView, InlineEmpty, LoadingPanel, PrimaryPanePublisher, RailPanel, SearchInput, TreeView, barVariants, cn, routeSearchParam, textRoleVariants, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useState, } from "react";
 
@@ -15,11 +15,7 @@ import { useIamT } from "../i18n";
 type SchemaNodeKind = "resource" | "relation" | "permission";
 type SchemaEdgeKind = "contains" | "computed";
 
-interface SchemaNodeMeta extends Record<string, unknown> {
-  resource_type: string;
-}
-
-type SchemaGraphNode = GraphViewNode<SchemaNodeKind, SchemaNodeMeta>;
+type SchemaGraphNode = GraphViewNode<SchemaNodeKind>;
 type SchemaGraphEdge = GraphViewEdge<SchemaEdgeKind>;
 
 interface SchemaGraph {
@@ -143,11 +139,9 @@ export function SchemaPage(): ReactElement {
         label: t("schema.inspector"),
         icon: "info",
         children: (
-          <PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0 bg-sheet-1">
-            <RailPanel title={t("schema.inspector")} empty={t("schema.noMatches")}>
-              {selectedResource ? <SchemaInspector resource={selectedResource} /> : null}
-            </RailPanel>
-          </PageAside>
+          <RailPanel title={t("schema.inspector")} empty={t("schema.noMatches")}>
+            {selectedResource ? <SchemaInspector resource={selectedResource} /> : null}
+          </RailPanel>
         ),
       },
     ],
@@ -182,11 +176,7 @@ export function SchemaPage(): ReactElement {
   return (
     <>
       <PrimaryPanePublisher node={explorer} />
-      <SchemaGraphCanvas
-        resources={visibleResources}
-        selectedResource={selectedResource}
-        onSelect={selectResource}
-      />
+      <SchemaGraphCanvas resource={selectedResource} />
     </>
   );
 }
@@ -229,12 +219,7 @@ function ResourceTypeList({
         className="min-h-0 flex-1 overflow-auto p-2"
         renderRow={(resource) => (
           <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-            <span className="min-w-0">
-              <span className="block truncate text-13 font-medium">
-                {resourceLabel(resource.resource_type)}
-              </span>
-              <Code truncate tone="muted">{resource.resource_type}</Code>
-            </span>
+            <span className="min-w-0 truncate">{resourceLabel(resource.resource_type)}</span>
             <Badge>{resource.relations.length + resource.permissions.length}</Badge>
           </span>
         )}
@@ -243,22 +228,23 @@ function ResourceTypeList({
   );
 }
 
+/**
+ * The selected resource type's relations and permissions. Every schema edge
+ * stays inside one resource type, so each type is its own graph; the navigator
+ * chooses which one to lay out.
+ */
 function SchemaGraphCanvas({
-  resources,
-  selectedResource,
-  onSelect,
+  resource,
 }: {
-  resources: readonly IAMResourceSchema[];
-  selectedResource: IAMResourceSchema | null;
-  onSelect: (resource_type: string) => void;
+  resource: IAMResourceSchema | null;
 }): ReactElement {
   const t = useIamT();
   const graph = useMemo(
-    () => buildSchemaGraph(resources, selectedResource?.resource_type ?? "", t),
-    [resources, selectedResource?.resource_type, t],
+    () => (resource ? buildSchemaGraph(resource, t) : null),
+    [resource, t],
   );
 
-  if (resources.length === 0) {
+  if (!resource || !graph) {
     return (
       <section className={cn(textRoleVariants({ role: "meta" }), "flex h-full min-h-0 p-6")}>
         {t("schema.noMatches")}
@@ -273,11 +259,9 @@ function SchemaGraphCanvas({
           <h2 className={cn("m-0", textRoleVariants({ role: "title", truncate: true }))}>
             {t("schema.permissionGraph")}
           </h2>
-          {selectedResource ? (
-            <Code className="mt-1" truncate tone="muted">
-              {selectedResource.resource_type}
-            </Code>
-          ) : null}
+          <Code className="mt-1" truncate tone="muted">
+            {resource.resource_type}
+          </Code>
         </div>
         <Badge tone="info">
           {t("schema.nodeCount", { count: graph.nodes.length })}
@@ -289,9 +273,6 @@ function SchemaGraphCanvas({
         nodeStyles={SCHEMA_NODE_STYLES}
         edgeStyles={SCHEMA_EDGE_STYLES}
         className="min-h-0 flex-1"
-        onNodeClick={(node) => {
-          if (node.meta?.resource_type) onSelect(node.meta.resource_type);
-        }}
       />
     </section>
   );
@@ -300,19 +281,10 @@ function SchemaGraphCanvas({
 function SchemaInspector({
   resource,
 }: {
-  resource: IAMResourceSchema | null;
+  resource: IAMResourceSchema;
 }): ReactElement {
-  const t = useIamT();
-  if (!resource) {
-    return (
-      <section className={cn(textRoleVariants({ role: "meta" }), "flex h-full min-h-0 p-6")}>
-        {t("schema.noneSelected")}
-      </section>
-    );
-  }
-
   return (
-    <aside className="flex h-full min-h-0 min-w-0 flex-col">
+    <div className="min-w-0">
       <header className={barVariants({ edge: "bottom", pad: "compactTall", align: "start" })}>
         <div className="min-w-0">
           <h2 className={cn("m-0", textRoleVariants({ role: "title", truncate: true }))}>
@@ -323,11 +295,11 @@ function SchemaInspector({
           </Code>
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto p-4">
+      <div className="grid gap-5 p-4">
         <RelationList relations={resource.relations} />
         <PermissionList permissions={resource.permissions} />
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -451,12 +423,22 @@ function ChipList({
 }
 
 function buildSchemaGraph(
-  resources: readonly IAMResourceSchema[],
-  selectedResourceType: string,
+  resource: IAMResourceSchema,
   t: Translate,
 ): SchemaGraph {
-  const nodes: SchemaGraphNode[] = [];
+  const resource_id = resourceNodeId(resource.resource_type);
+  const nodes: SchemaGraphNode[] = [{
+    id: resource_id,
+    kind: "resource",
+    title: resourceLabel(resource.resource_type),
+    code: resource.resource_type,
+    detail: t("schema.resourceDetail", {
+      relations: resource.relations.length,
+      permissions: resource.permissions.length,
+    }),
+  }];
   const edges: SchemaGraphEdge[] = [];
+  const relationIds = new Map<string, string>();
   const computedEdges = new Map<
     string,
     {
@@ -467,88 +449,59 @@ function buildSchemaGraph(
     }
   >();
 
-  for (const resource of resources) {
-    const resource_id = resourceNodeId(resource.resource_type);
-    const relationIds = new Map<string, string>();
-    const selected = resource.resource_type === selectedResourceType;
-
-    nodes.push(
-      schemaNode({
-        id: resource_id,
-        kind: "resource",
-        resource_type: resource.resource_type,
-        selected,
-        title: resourceLabel(resource.resource_type),
-        code: resource.resource_type,
-        detail: t("schema.resourceDetail", {
-          relations: resource.relations.length,
-          permissions: resource.permissions.length,
-        }),
+  for (const relation of resource.relations) {
+    const relationId = relationNodeId(resource.resource_type, relation.name);
+    relationIds.set(relation.name, relationId);
+    nodes.push({
+      id: relationId,
+      kind: "relation",
+      title: titleCase(relation.name),
+      code: relation.name,
+      detail: t("schema.subjectCount", {
+        count: relation.allowed_subject_types.length,
       }),
+    });
+    edges.push({
+      id: `contains:${resource.resource_type}:${relation.name}`,
+      source: resource_id,
+      target: relationId,
+      kind: "contains",
+      label: t("schema.edge.contains"),
+    });
+  }
+
+  for (const permission of resource.permissions) {
+    const permissionId = permissionNodeId(
+      resource.resource_type,
+      permission.name,
     );
+    nodes.push({
+      id: permissionId,
+      kind: "permission",
+      title: titleCase(permission.name),
+      code: permission.name,
+      detail: t("schema.conditionCount", {
+        count: permission.conditions.length,
+      }),
+    });
 
-    for (const relation of resource.relations) {
-      const relationId = relationNodeId(resource.resource_type, relation.name);
-      relationIds.set(relation.name, relationId);
-      nodes.push(
-        schemaNode({
-          id: relationId,
-          kind: "relation",
-          resource_type: resource.resource_type,
-          selected,
-          title: titleCase(relation.name),
-          code: relation.name,
-          detail: t("schema.subjectCount", {
-            count: relation.allowed_subject_types.length,
-          }),
-        }),
-      );
-      edges.push({
-        id: `contains:${resource.resource_type}:${relation.name}`,
-        source: resource_id,
-        target: relationId,
-        kind: "contains",
-        label: t("schema.edge.contains"),
-      });
-    }
-
-    for (const permission of resource.permissions) {
-      const permissionId = permissionNodeId(
-        resource.resource_type,
-        permission.name,
-      );
-      nodes.push(
-        schemaNode({
-          id: permissionId,
-          kind: "permission",
-          resource_type: resource.resource_type,
-          selected,
-          title: titleCase(permission.name),
-          code: permission.name,
-          detail: t("schema.conditionCount", {
-            count: permission.conditions.length,
-          }),
-        }),
-      );
-
-      for (const condition of permission.conditions) {
-        const relationName = conditionRelationName(condition.name, relationIds);
-        if (!relationName) continue;
-        const relationId = relationIds.get(relationName);
-        if (!relationId) continue;
-        const edgeKey = `${relationId}\u0000${permissionId}`;
-        const existingEdge = computedEdges.get(edgeKey);
-        if (existingEdge) {
-          existingEdge.labels.push(condition.name);
-          continue;
-        }
-        computedEdges.set(edgeKey, {
-          id: `computed:${resource.resource_type}:${relationName}:${permission.name}`,
-          source: relationId,
-          target: permissionId,
-          labels: [condition.name],
-        });
+    for (const condition of permission.conditions) {
+      const relationName = conditionRelationName(condition.name, relationIds);
+      if (!relationName) continue;
+      const relationId = relationIds.get(relationName);
+      if (!relationId) continue;
+      const edgeKey = `${relationId}\u0000${permissionId}`;
+      const existingEdge = computedEdges.get(edgeKey);
+      if (existingEdge) {
+        existingEdge.labels.push(condition.name);
+        continue;
       }
+      computedEdges.set(edgeKey, {
+        id: `computed:${resource.resource_type}:${relationName}:${permission.name}`,
+        source: relationId,
+        target: permissionId,
+        labels: [condition.name],
+      });
     }
   }
 
@@ -563,36 +516,6 @@ function buildSchemaGraph(
   }
 
   return { nodes, edges };
-}
-
-function schemaNode({
-  id,
-  kind,
-  resource_type,
-  selected,
-  title,
-  code,
-  detail,
-}: {
-  id: string;
-  kind: SchemaNodeKind;
-  resource_type: string;
-  selected: boolean;
-  title: string;
-  code: string;
-  detail: ReactNode;
-}): SchemaGraphNode {
-  return {
-    id,
-    kind,
-    title,
-    code,
-    detail,
-    selected,
-    meta: {
-      resource_type,
-    },
-  };
 }
 
 function conditionRelationName(

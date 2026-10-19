@@ -95,6 +95,20 @@ describe("IAM schema page", () => {
     expect(document.querySelector(".react-flow__handle-right")).toBeNull();
   });
 
+  test("lays out only the selected resource type's relations and permissions", () => {
+    sdkMocks.schema.data = SCHEMA;
+    renderPage();
+
+    // Schema edges never cross resource types, so the default selection
+    // (`iam/user`) is the whole graph; `notes/note` stays in the navigator.
+    const graph = document.querySelector<HTMLElement>(".react-flow")!;
+    expect(within(graph).getByText("Self")).toBeTruthy();
+    expect(within(graph).getByText("View")).toBeTruthy();
+    expect(within(graph).queryByText("Owner")).toBeNull();
+    expect(within(graph).queryByText("Edit")).toBeNull();
+    expect(screen.getByText("3 nodes")).toBeTruthy();
+  });
+
   test("publishes an additive inspector chatter tab for the selected resource", () => {
     sdkMocks.schema.data = SCHEMA;
     renderPage();

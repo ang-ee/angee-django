@@ -15,7 +15,7 @@ export type ThemeTokenName =
   | "--on-accent" | "--accent-line" | "--accent-tint" | "--brand-line" | "--brand-tint"
   | "--ring" | "--ring-danger" | "--font-family-sans" | "--font-family-mono" | "--elevation-xs" | "--elevation-sm"
   | "--elevation-md" | "--elevation-lg" | "--elevation-popover" | "--r-2" | "--r-4" | "--r-6" | "--r-8"
-  | "--r-10" | "--r-12" | "--r-full" | "--rail-w" | "--topbar-h" | "--breadcrumbbar-h" | "--controlpanel-h" | "--chatter-w"
+  | "--r-10" | "--r-12" | "--r-full" | "--rail-w" | "--topbar-h" | "--breadcrumbbar-h" | "--controlpanel-h"
   | "--control-h-sm" | "--control-h-md" | "--control-h-lg"
   | "--fw-regular" | "--fw-medium" | "--fw-semibold" | "--fw-bold"
   | "--fs-15" | "--lh-15" | "--fs-18" | "--lh-18" | "--fs-22" | "--lh-22"

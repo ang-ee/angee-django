@@ -4,7 +4,7 @@ import { publicGraphQLErrorsFromUnknown, useAuthoredMutation, useAuthoredQuery, 
 import type { DocumentType } from "@angee/gql/console";
 import {
   ActionFormProvider, Alert, Button, DescriptorFieldList, Dialog, ErrorBanner, GraphEditor,
-  JsonValueSchema, LoadingPanel, PageAside, PrimaryPanePublisher, RailPanel, applyFormErrors, createKeyedEntry,
+  JsonValueSchema, LoadingPanel, PrimaryPanePublisher, RailPanel, applyFormErrors, createKeyedEntry,
   deserializeFormSpec, errorMessage, formSubmitError, savedFormSubmitResult, useActionForm, useAppRuntime, useWatch, useFormState, useChatter, useChatterContent, useFormHistory,
   useRuntimeViewAs, useUnsavedChangesNavigationGuard,
   type FormSpecFieldDescriptor, type GraphEditorLayout, type GraphEditorLink, type GraphEditorSelection, type GraphViewPosition,
@@ -303,7 +303,7 @@ function StudioInspector({ index, contribution, form, configForm, disabled, star
 }): React.ReactElement {
   const state = useFormState({ control: form.control });
   const t = useWorkflowsT();
-  return <ActionFormProvider {...form} formState={state}><PageAside collapse="never" gutter="compact" className="h-full w-full border-l-0">
+  return <ActionFormProvider {...form} formState={state}>
     <RailPanel title={t("studio.inspector")} empty={t("studio.selectNode")}>
       {contribution ? <div className="grid gap-2 p-3">
         <p className="font-semibold">{contribution.value.label || contribution.value.step} ({contribution.key})</p>
@@ -311,7 +311,7 @@ function StudioInspector({ index, contribution, form, configForm, disabled, star
         <p>{t("studio.contributedAt", { point: contribution.point })}</p>
       </div> : index < 0 ? null : <NodeInspector index={index} form={form} configForm={configForm} disabled={disabled} start={start} commit={commit} />}
     </RailPanel>
-  </PageAside></ActionFormProvider>;
+  </ActionFormProvider>;
 }
 
 function NodeInspector({ index, form, configForm, disabled, start, commit }: {

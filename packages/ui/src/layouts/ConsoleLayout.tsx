@@ -113,7 +113,6 @@ function ConsoleLayoutBody({
                   "--rail-current-w": mobileViewport
                     ? "0px"
                     : railWidth ?? "var(--spacing-rail-w)",
-                  "--breadcrumbbar-current-h": showBreadcrumbs ? "var(--spacing-breadcrumbbar-h)" : "0px",
                 } as React.CSSProperties}
                 className={cn(
                   "console-grid h-dvh min-h-0 w-full min-w-0 max-w-full overflow-hidden bg-canvas text-fg",

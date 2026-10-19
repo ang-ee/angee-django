@@ -224,7 +224,6 @@
   --spacing-topbar-h:      var(--topbar-h);
   --spacing-breadcrumbbar-h: var(--breadcrumbbar-h);
   --spacing-control-h:     var(--controlpanel-h);
-  --spacing-chatter-w:     var(--chatter-w);
   --spacing-search-w:      13.5rem;  /* 216px — topbar global-search pill */
 
   /* Per-component sizing referenced from multiple primitives. */
@@ -420,13 +419,6 @@
 @utility area-control { grid-area: control; }
 @utility area-content { grid-area: content; }
 @utility area-status  { grid-area: status; }
-
-.console-route-viewport { min-height: calc(100vh - var(--spacing-topbar-h) - var(--breadcrumbbar-current-h, var(--spacing-breadcrumbbar-h))); }
-
-.console-route-canvas {
-  height: calc(100vh - var(--spacing-topbar-h) - var(--breadcrumbbar-current-h, var(--spacing-breadcrumbbar-h)));
-  min-height: 32rem;
-}
 
 .console-statusline-host {
   position: fixed;

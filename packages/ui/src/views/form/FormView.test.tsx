@@ -649,12 +649,14 @@ describe("FormView", () => {
   test("a full-bleed pane fills the height beneath the sheet, which scrolls in its own region", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
       recordTabs={[{ id: "editor", label: "Editor", keepMounted: true, presentation: "full-bleed",
-        render: () => <div data-testid="lone-canvas" className="h-full">Canvas</div> }]} />);
+        render: () => <div data-testid="lone-canvas" className="min-h-0 flex-1">Canvas</div> }]} />);
     const canvas = await screen.findByTestId("lone-canvas");
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByRole("heading", { name: "Editor" })).toBeTruthy();
     const panel = canvas.parentElement!;
     expect(panel.className).toContain("flex-1");
+    // The pane is a flex column, so a `flex-1` canvas fills it.
+    expect(panel.className).toContain("flex-col");
     expect(panel.className).toContain("overflow-hidden");
     expect(panel.className).not.toContain("max-w-[1100px]");
     expect(panel.parentElement?.className).toContain("h-full");

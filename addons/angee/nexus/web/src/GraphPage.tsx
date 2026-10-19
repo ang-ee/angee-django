@@ -8,7 +8,6 @@ import {
   GraphView,
   LoadingPanel,
   Page,
-  PageAside,
   PageBody,
   PageHeader,
   RailPanel,
@@ -16,13 +15,14 @@ import {
   SegmentedControl,
   Tag,
   NavLink,
-  Workbench,
   useChatter,
+  useChatterContent,
   useResourceRecordHrefLookup,
   useRouteHref,
   useRouteSearch,
   updateRouteSearch,
   useInAppNavigator,
+  type ChatterContent,
   type ResourceRecordHrefLookup,
   type RouteHref,
 } from "@angee/ui";
@@ -43,6 +43,7 @@ import { useNexusT } from "./i18n";
 const ROOT_LIMIT = 200;
 const GRAPH_LIMIT = 60;
 const GRAPH_LAYOUT = { rankdir: "LR" } as const;
+const INSPECTOR_TAB = "graph-inspector";
 
 type GraphLens = "ego" | "circle" | "identity";
 
@@ -111,9 +112,12 @@ export function GraphPage(): React.ReactElement {
     setSelectedEdgeId(null);
   }, [lens, selectedRoot]);
 
-  const selectedNodes = selectedNodeIds
-    .map((id) => nodes.find((node) => node.id === id))
-    .filter((node): node is NexusNode => Boolean(node));
+  const selectedNodes = React.useMemo(
+    () => selectedNodeIds
+      .map((id) => nodes.find((node) => node.id === id))
+      .filter((node): node is NexusNode => Boolean(node)),
+    [nodes, selectedNodeIds],
+  );
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const setSearch = React.useCallback(
     (patch: Record<string, unknown>) => {
@@ -121,6 +125,27 @@ export function GraphPage(): React.ReactElement {
     },
     [navigate],
   );
+  const openTimeline = React.useCallback((node: NexusNode) => {
+    setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.timeline");
+    setCollapsed(false);
+    const path = nodePath(recordHref, node);
+    if (path) {
+      if (navigateInApp) navigateInApp(path);
+      else void navigate({ href: path });
+    }
+  }, [navigate, navigateInApp, recordHref, setActiveTab, setCollapsed]);
+  const showInspector = React.useCallback(() => {
+    setCollapsed(false);
+    setActiveTab(INSPECTOR_TAB);
+  }, [setActiveTab, setCollapsed]);
+  // The inspector is a chatter tab: the shell's secondary pane owns the aside.
+  const ready = options.length > 0;
+  const inspector = React.useMemo<ChatterContent | null>(() => ready ? { tabs: [{
+    id: INSPECTOR_TAB, label: t("graph.inspector"), icon: "info",
+    children: <Inspector nodes={selectedNodes} edge={selectedEdge} routeHref={routeHref}
+      recordHref={recordHref} openTimeline={openTimeline} />,
+  }] } : null, [ready, selectedNodes, selectedEdge, routeHref, recordHref, openTimeline, t]);
+  useChatterContent(inspector);
 
   if (roots.isFetching && options.length === 0) return <LoadingPanel />;
   if (roots.error) return <EmptyState fill icon="triangle-alert" title={roots.error.message} />;
@@ -163,57 +188,37 @@ export function GraphPage(): React.ReactElement {
         ) : graph.error ? (
           <div className="p-5"><ErrorBanner description={graph.error.message} /></div>
         ) : (
-          <Workbench
-            autoSave="nexus.graph"
-            secondarySize={32}
-            contentMinSize={42}
-            secondaryMinSize={22}
-            stackBelow={760}
-            className="h-full min-h-[34rem] bg-canvas"
-            secondary={
-              <Inspector
-                nodes={selectedNodes}
-                edge={selectedEdge}
-                routeHref={routeHref}
-                recordHref={recordHref}
-                openTimeline={(node) => {
-                  setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.timeline");
-                  setCollapsed(false);
-                  const path = nodePath(recordHref, node);
-                  if (path) {
-                    if (navigateInApp) navigateInApp(path);
-                    else void navigate({ href: path });
+          <div className="relative h-full min-h-0">
+            {nodes.length === 0 ? (
+              <EmptyState fill icon="radar" title={t("graph.noResults")} />
+            ) : (
+              <GraphView
+                className="h-full"
+                nodes={nodes}
+                edges={edges}
+                nodeStyles={nodeStyles}
+                edgeStyles={edgeStyles}
+                layout={GRAPH_LAYOUT}
+                onNodesSelect={(selected) => {
+                  setSelectedNodeIds(selected.map((node) => node.id));
+                  if (selected.length > 0) {
+                    setSelectedEdgeId(null);
+                    showInspector();
+                  }
+                }}
+                onEdgeSelect={(edge) => {
+                  setSelectedEdgeId(edge?.id ?? null);
+                  if (edge) {
+                    setSelectedNodeIds([]);
+                    showInspector();
                   }
                 }}
               />
-            }
-          >
-            <div className="relative h-full min-h-0">
-              {nodes.length === 0 ? (
-                <EmptyState fill icon="radar" title={t("graph.noResults")} />
-              ) : (
-                <GraphView
-                  className="h-full"
-                  nodes={nodes}
-                  edges={edges}
-                  nodeStyles={nodeStyles}
-                  edgeStyles={edgeStyles}
-                  layout={GRAPH_LAYOUT}
-                  onNodesSelect={(selected) => {
-                    setSelectedNodeIds(selected.map((node) => node.id));
-                    if (selected.length > 0) setSelectedEdgeId(null);
-                  }}
-                  onEdgeSelect={(edge) => {
-                    setSelectedEdgeId(edge?.id ?? null);
-                    if (edge) setSelectedNodeIds([]);
-                  }}
-                />
-              )}
-              {graph.data?.party_graph?.truncated ? (
-                <Badge className="absolute left-3 top-3" tone="warning">{t("graph.truncated")}</Badge>
-              ) : null}
-            </div>
-          </Workbench>
+            )}
+            {graph.data?.party_graph?.truncated ? (
+              <Badge className="absolute left-3 top-3" tone="warning">{t("graph.truncated")}</Badge>
+            ) : null}
+          </div>
         )}
       </PageBody>
     </Page>
@@ -242,44 +247,42 @@ function Inspector({
       })
     : undefined;
   return (
-    <PageAside collapse="never" gutter="compact" className="h-full w-full bg-sheet-1">
-      <RailPanel title={t("graph.inspector")} count={nodes.length || (edge ? 1 : undefined)} empty={t("graph.inspector.empty")}>
-        {edge ? <EdgeDetails edge={edge} recordHref={recordHref} /> : null}
-        {!edge && nodes.length > 0 ? (
-          <div className="grid gap-3">
-            {nodes.map((node) => {
-              const path = nodePath(recordHref, node);
-              return (
-                <div key={node.id} className="rounded-6 border border-border-subtle bg-sheet p-3">
-                  <div className="font-medium text-fg">{node.title}</div>
-                  <div className="mt-1 flex flex-wrap gap-1.5">
-                    <Tag tone="neutral">{node.kind}</Tag>
-                    {node.meta?.cadence?.cadence_days ? (
-                      <Tag tone="warning">{t("graph.cadenceDays", { count: node.meta.cadence.cadence_days })}</Tag>
-                    ) : null}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
-                    {isPartyNode(node) || isCircleNode(node) ? (
-                      <Button size="sm" variant="ghost" onClick={() => openTimeline(node)}>{t("graph.openTimeline")}</Button>
-                    ) : null}
-                  </div>
+    <RailPanel title={t("graph.inspector")} count={nodes.length || (edge ? 1 : undefined)} empty={t("graph.inspector.empty")}>
+      {edge ? <EdgeDetails edge={edge} recordHref={recordHref} /> : null}
+      {!edge && nodes.length > 0 ? (
+        <div className="grid gap-3">
+          {nodes.map((node) => {
+            const path = nodePath(recordHref, node);
+            return (
+              <div key={node.id} className="rounded-6 border border-border-subtle bg-sheet p-3">
+                <div className="font-medium text-fg">{node.title}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  <Tag tone="neutral">{node.kind}</Tag>
+                  {node.meta?.cadence?.cadence_days ? (
+                    <Tag tone="warning">{t("graph.cadenceDays", { count: node.meta.cadence.cadence_days })}</Tag>
+                  ) : null}
                 </div>
-              );
-            })}
-            {nodes.length === 2 && mergeHref ? (
-              <Button asChild variant="primary">
-                <NavLink href={mergeHref} variant="inline">
-                  {t("graph.merge")}
-                </NavLink>
-              </Button>
-            ) : (
-              <p className="text-2xs text-fg-muted">{t("graph.mergeHint")}</p>
-            )}
-          </div>
-        ) : null}
-      </RailPanel>
-    </PageAside>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {path ? <Button asChild size="sm"><NavLink href={path} variant="inline">{t("graph.openRecord")}</NavLink></Button> : null}
+                  {isPartyNode(node) || isCircleNode(node) ? (
+                    <Button size="sm" variant="ghost" onClick={() => openTimeline(node)}>{t("graph.openTimeline")}</Button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+          {nodes.length === 2 && mergeHref ? (
+            <Button asChild variant="primary">
+              <NavLink href={mergeHref} variant="inline">
+                {t("graph.merge")}
+              </NavLink>
+            </Button>
+          ) : (
+            <p className="text-2xs text-fg-muted">{t("graph.mergeHint")}</p>
+          )}
+        </div>
+      ) : null}
+    </RailPanel>
   );
 }
 

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge, Button, Glyph, Page, PageAside, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, useStatusTone, type SectionNavItem } from "@angee/ui";
+import { Badge, Button, Glyph, Page, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, useStatusTone, type SectionNavItem } from "@angee/ui";
 
 import { ConsoleContentStoryShell, PageStoryShell } from "./chrome-fixtures";
 
@@ -83,49 +83,36 @@ export const Frame: Story = {
             </>
           }
         />
-        <div className="flex min-h-0 flex-1">
-          <PageBody gutter="none">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead sticky>Title</TableHead>
-                  <TableHead sticky>Status</TableHead>
-                  <TableHead sticky>Owner</TableHead>
-                  <TableHead sticky className="text-right">
-                    Words
-                  </TableHead>
-                  <TableHead sticky>Updated</TableHead>
+        <PageBody gutter="none">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead sticky>Title</TableHead>
+                <TableHead sticky>Status</TableHead>
+                <TableHead sticky>Owner</TableHead>
+                <TableHead sticky className="text-right">
+                  Words
+                </TableHead>
+                <TableHead sticky>Updated</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {records.map(([title, status, owner, words, updated]) => (
+                <TableRow key={title} interactive>
+                  <TableCell className="font-medium">{title}</TableCell>
+                  <TableCell>
+                    <Badge tone={statusTone(status)}>{status}</Badge>
+                  </TableCell>
+                  <TableCell>{owner}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {words}
+                  </TableCell>
+                  <TableCell className="text-fg-muted">{updated}</TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {records.map(([title, status, owner, words, updated]) => (
-                  <TableRow key={title} interactive>
-                    <TableCell className="font-medium">{title}</TableCell>
-                    <TableCell>
-                      <Badge tone={statusTone(status)}>{status}</Badge>
-                    </TableCell>
-                    <TableCell>{owner}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {words}
-                    </TableCell>
-                    <TableCell className="text-fg-muted">{updated}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </PageBody>
-          <PageAside collapse="never" width="md">
-            <div className="space-y-5">
-              <section>
-                <h2 className="text-sm font-semibold text-fg">Inspector</h2>
-                <p className="mt-1 text-13 text-fg-muted">
-                  245 records across 8 owners.
-                </p>
-              </section>
-              <SectionNav orientation="vertical" items={navItems} />
-            </div>
-          </PageAside>
-        </div>
+              ))}
+            </TableBody>
+          </Table>
+        </PageBody>
         <PageFooter className="justify-between">
           <span>4 visible records</span>
           <span className="tabular-nums">1-50 / 245</span>

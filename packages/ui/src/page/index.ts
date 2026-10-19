@@ -11,7 +11,6 @@ export {
   type PageToolbarProps,
 } from "./PageToolbar";
 export { PageBody, pageBodyVariants, type PageBodyProps } from "./PageBody";
-export { PageAside, pageAsideVariants, type PageAsideProps } from "./PageAside";
 export {
   PageFooter,
   pageFooterVariants,

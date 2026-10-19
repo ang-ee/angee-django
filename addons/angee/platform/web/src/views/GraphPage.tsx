@@ -31,19 +31,17 @@ export function GraphPage(): ReactElement {
   }
 
   return (
-    <div className="console-route-viewport bg-sheet">
-      <GraphView
-        nodes={nodes}
-        edges={edges}
-        nodeStyles={NODE_STYLES}
-        layout={{ rankdir: "LR" }}
-        className="console-route-canvas"
-        onNodeClick={(node: GraphViewNode<"model">) =>
-          navigate({
-            to: routeHref("platform.models.record", { id: node.id }),
-          })
-        }
-      />
-    </div>
+    <GraphView
+      nodes={nodes}
+      edges={edges}
+      nodeStyles={NODE_STYLES}
+      layout={{ rankdir: "LR" }}
+      className="h-full bg-sheet"
+      onNodeClick={(node: GraphViewNode<"model">) =>
+        navigate({
+          to: routeHref("platform.models.record", { id: node.id }),
+        })
+      }
+    />
   );
 }

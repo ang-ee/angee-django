@@ -293,7 +293,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   };
   // Tabbed, each pane is a tab panel; a lone one is the plain region beneath the sheet.
   const paneRegions = panes.map((pane) => {
-    const paneClass = fullBleed(pane) ? "min-h-0 flex-1 overflow-hidden pt-0" : cn(FORM_VIEW_COLUMN_CLASS, "pt-3 pb-12");
+    const paneClass = fullBleed(pane) ? "flex min-h-0 flex-1 flex-col overflow-hidden pt-0" : cn(FORM_VIEW_COLUMN_CLASS, "pt-3 pb-12");
     const content = <ControlBandProvider host={undefined}>{renderPane(pane)}</ControlBandProvider>;
     // The lines pane stays mounted so its draft rows and their errors survive switching panes.
     const keepMounted = pane.id === EDITABLE_LINES_SECTION || recordTabById.get(pane.id)?.keepMounted;

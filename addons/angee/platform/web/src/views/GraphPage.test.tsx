@@ -64,13 +64,10 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("GraphPage", () => {
-  test("declares a concrete console canvas height for React Flow", () => {
+  test("fills the console's contained content pane for React Flow", () => {
     render(<GraphPage />);
 
-    const graph = screen.getByTestId("graph-view");
-
-    expect(graph.parentElement?.className).toContain("console-route-viewport");
-    expect(graph.className).toContain("console-route-canvas");
+    expect(screen.getByTestId("graph-view").className).toContain("h-full");
   });
 
   test("opens graph nodes through the composed model-detail route", () => {
