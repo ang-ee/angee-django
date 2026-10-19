@@ -1,4 +1,8 @@
-"""Decisions on the record timeline: verdicts answered outside a run, and on a run page every decision the run asked."""
+"""Decisions on the record timeline: one event per decision per record it concerns.
+
+A decision a run step asked folds under that run's line on the same record and is
+also a line of its own on the run's page, where the run is the record.
+"""
 
 from __future__ import annotations
 
@@ -7,94 +11,77 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
+from rebac import to_subject_ref
 
 from angee.identity import public_id_of
-from angee.timeline.sources import Cursor, TimelineEntry, TimelineSource, actor_label
+from angee.timeline.events import target_ref
+from angee.timeline.kinds import EventData, TimelineKind, actor_label
 
 KIND = "decisions.decision"
 DECISION_MODEL = "decisions.Decision"
 
 
-def is_run(record: models.Model) -> bool:
-    return record._meta.label == "workflows.WorkflowRun"
+def _record_shell(content_type_id: int, object_id: Any) -> models.Model | None:
+    model = apps.get_model("contenttypes", "ContentType").objects.get_for_id(content_type_id).model_class()
+    return None if model is None else model(pk=object_id)
 
 
-class AnsweredDecisionSource:
-    """Decisions answered on the record, newest verdict first; a run's decisions fold into its run.
+class DecisionKind:
+    """Every decision a record carries, open ones waiting on their assignees."""
 
-    On a run's own page the run is the record, so its decisions are listed here as asked:
-    open ones wait on their assignees, answered ones carry the verdict.
-    """
-
-    kind = KIND
+    id = KIND
     sequence = 20
-    models = ("decisions.Decision", "decisions.DecisionRecord")
+    models = (DECISION_MODEL,)
 
     def eligible(self, model: type[models.Model]) -> bool:
         return True
 
-    def _answered(self, record: models.Model, actor: Any) -> Any:
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(actor)
-        return decisions.for_records(record).exclude(answered_at=None).filter(requesting_steps__isnull=True)
+    def rows(self) -> Iterable[models.Model]:
+        return apps.get_model("decisions", "Decision").system_queryset().order_by("pk").iterator()
 
-    def _asked_by_run(self, run: models.Model, actor: Any) -> Any:
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(actor)
-        return decisions.filter(requesting_steps__run=run).distinct()
-
-    def entries(
-        self, record: models.Model, actor: Any, *, before: Cursor | None, limit: int, needs_me: bool,
-    ) -> Iterable[TimelineEntry]:
-        if is_run(record):
-            return self._run_entries(record, actor, before=before, limit=limit, needs_me=needs_me)
-        if needs_me:
-            return []
-        decisions = self._answered(record, actor)
-        if before is not None:
-            decisions = decisions.filter(before.predicate(self.kind, "answered_at"))
-        decisions = decisions.order_by("-answered_at", "-pk").select_related("answered_by")[:limit]
-        return [
-            TimelineEntry(
-                key=f"{self.kind}:{public_id_of(decision)}:1", at=decision.answered_at, kind=self.kind, pk=decision.pk,
-                title=decision.kind_label, actor=actor_label(decision.answered_by), detail=decision.verdict_label,
-                target_model=DECISION_MODEL, target_id=public_id_of(decision),
-            )
-            for decision in decisions
-        ]
-
-    def _run_entries(
-        self, run: models.Model, actor: Any, *, before: Cursor | None, limit: int, needs_me: bool,
-    ) -> list[TimelineEntry]:
-        decisions = self._asked_by_run(run, actor)
-        if before is not None:
-            decisions = decisions.filter(before.predicate(self.kind, "created_at"))
-        decisions = decisions.order_by("-created_at", "-pk").select_related("answered_by").prefetch_related("assignees")
-        rows: list[TimelineEntry] = []
-        for decision in decisions[: limit if not needs_me else None]:
-            waiting = decision.is_open
-            needs = waiting and any(user.pk == actor.pk for user in decision.assignees.all())
-            if needs_me and not needs:
+    def events(self, row: models.Model) -> Iterable[EventData]:
+        decisions = apps.get_model("decisions", "Decision").system_queryset().select_related("answered_by")
+        decision = decisions.get(pk=row.pk)
+        assignees = list(decision.assignees.all())
+        waiting = decision.is_open
+        detail = _waiting_on(assignees) if waiting else decision.verdict_label
+        actor = str(to_subject_ref(decision.answered_by)) if decision.answered_by_id else ""
+        needs = tuple(user.pk for user in assignees) if waiting else ()
+        target_model, target_id = target_ref(decision)
+        common = dict(
+            kind=KIND, at=decision.created_at, target_model=target_model, target_id=target_id,
+            title=decision.kind_label, detail=detail, actor=actor, actor_label=actor_label(decision.answered_by),
+            needs=needs,
+        )
+        requesting_runs = [
+            step.run for step in apps.get_model("workflows", "StepRun").system_queryset()
+            .filter(decision_id=decision.pk).select_related("run")
+        ] if apps.is_installed("angee.workflows") else []
+        events: list[EventData] = []
+        links = decision.records.model.system_queryset().filter(decision_id=decision.pk).order_by("pk")
+        for content_type_id, object_id in links.values_list("content_type_id", "object_id"):
+            record = _record_shell(content_type_id, object_id)
+            if record is None:
                 continue
-            rows.append(TimelineEntry(
-                key=f"{self.kind}:{public_id_of(decision)}:1", at=decision.created_at, kind=self.kind, pk=decision.pk,
-                title=decision.kind_label,
-                actor=actor_label(decision.answered_by) if not waiting else "",
-                detail=decision.verdict_label if not waiting else _waiting_on(decision),
-                needs_me=needs, target_model=DECISION_MODEL, target_id=public_id_of(decision),
+            part = f"{record._meta.label}/{object_id}"
+            parent_key = None
+            if requesting_runs:
+                from angee.workflows.timeline import run_event_key
+
+                parent_key = run_event_key(requesting_runs[0], record)
+            events.append(EventData(
+                key=f"{KIND}:{public_id_of(decision)}:{part}", record=record, parent_key=parent_key, **common,
             ))
-            if len(rows) >= limit:
-                break
-        return rows
-
-    def count(self, record: models.Model, actor: Any) -> int:
-        if is_run(record):
-            return int(self._asked_by_run(record, actor).count())
-        return int(self._answered(record, actor).count())
+        for run in requesting_runs:
+            part = f"{run._meta.concrete_model._meta.label}/{run.pk}"
+            events.append(EventData(key=f"{KIND}:{public_id_of(decision)}:{part}", record=run, **common))
+        return events
 
 
-def _waiting_on(decision: Any) -> str:
-    names = [actor_label(user) for user in decision.assignees.all()]
+def _waiting_on(assignees: list[Any]) -> str:
+    names = [actor_label(user) for user in assignees]
     return f"Waiting on {', '.join(names)}" if names else "Waiting"
 
 
-def timeline_sources() -> tuple[TimelineSource, ...]:
-    return (AnsweredDecisionSource(),)
+def timeline_kinds() -> tuple[TimelineKind, ...]:
+    return (DecisionKind(),)

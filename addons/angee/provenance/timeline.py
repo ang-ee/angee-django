@@ -1,4 +1,4 @@
-"""Changesets on the record timeline: one line per changeset a person or sync made."""
+"""Changesets on the record timeline: one event per record a closed changeset touched."""
 
 from __future__ import annotations
 
@@ -12,10 +12,13 @@ from rebac.resources import model_for_subject_type
 
 from angee.identity import public_id_of
 from angee.models import record_history
-from angee.timeline.sources import Cursor, TimelineEntry, TimelineSource
+from angee.refs import generic_pointer_target
+from angee.timeline.events import target_ref
+from angee.timeline.kinds import EventData, TimelineKind
 
 KIND = "provenance.change"
-CHANGESET_MODEL = "provenance.Changeset"
+RUN_KIND = "workflows.run"
+RUN_MODEL = "workflows.WorkflowRun"
 
 
 def _actor_label(stored: str) -> str:
@@ -31,50 +34,65 @@ def _actor_label(stored: str) -> str:
     return str(instance) if instance is not None else str(subject)
 
 
-class ChangeSource:
-    """Every changeset touching the record, newest first; a run's changesets fold into its run."""
+class ChangeKind:
+    """Every closed changeset, on each record it touched; a run's changesets fold under the run."""
 
-    kind = KIND
+    id = KIND
     sequence = 30
     models = ("provenance.Changeset",)
 
     def eligible(self, model: type[models.Model]) -> bool:
         return record_history(model) is not None
 
-    def _changesets(self, record: models.Model) -> Any:
-        changesets = apps.get_model("provenance", "Changeset").objects.sudo(reason="timeline.changes").touching(record)
-        if not apps.is_installed("angee.workflows"):
-            return changesets
-        run_type = apps.get_model("contenttypes", "ContentType").objects.get_for_model(
-            apps.get_model("workflows", "WorkflowRun"), for_concrete_model=False,
-        )
-        return changesets.exclude(origin_content_type=run_type)
+    def rows(self) -> Iterable[models.Model]:
+        changeset_model = apps.get_model("provenance", "Changeset")
+        return changeset_model._base_manager.filter(state=changeset_model.State.CLOSED).order_by("pk").iterator()
 
-    def entries(
-        self, record: models.Model, actor: Any, *, before: Cursor | None, limit: int, needs_me: bool,
-    ) -> Iterable[TimelineEntry]:
-        if needs_me:
+    def events(self, changeset: models.Model) -> Iterable[EventData]:
+        if changeset.state != changeset.State.CLOSED:
             return []
-        changesets = self._changesets(record)
-        if before is not None:
-            changesets = changesets.filter(before.predicate(self.kind, "occurred_at"))
-        actors: dict[str, str] = {}
-        rows: list[TimelineEntry] = []
-        for changeset in changesets.order_by("-occurred_at", "-pk")[:limit]:
-            if changeset.actor not in actors:
-                actors[changeset.actor] = _actor_label(changeset.actor)
-            rows.append(TimelineEntry(
-                key=f"{self.kind}:{public_id_of(changeset)}:1", at=changeset.occurred_at, kind=self.kind,
-                pk=changeset.pk,
-                title=f"{changeset.get_action_display()} · {changeset.get_activity_display()}",
-                actor=actors[changeset.actor], detail=changeset.change_reason,
-                target_model=CHANGESET_MODEL, target_id=public_id_of(changeset),
-            ))
-        return rows
+        target_model, target_id = target_ref(changeset)
+        title = f"{changeset.get_action_display()} · {changeset.get_activity_display()}"
+        actor_label = _actor_label(changeset.actor)
+        run_key = _origin_run_key(changeset)
+        events: dict[str, EventData] = {}
+        for model, history in changeset.history_rows():
+            pk_name = model._meta.pk.attname
+            ids = set(history.values_list(pk_name if _history_has(history.model, pk_name) else "id", flat=True))
+            for row in model._base_manager.filter(pk__in=ids):
+                content_type, pk = generic_pointer_target(row)
+                occurrence = f"{content_type.model_class()._meta.label}/{pk}"
+                key = f"{KIND}:{target_id}:{occurrence}"
+                if key in events:
+                    continue
+                events[key] = EventData(
+                    key=key, kind=KIND, at=changeset.occurred_at, record=row,
+                    target_model=target_model, target_id=target_id, title=title, detail=changeset.change_reason,
+                    actor=changeset.actor, actor_label=actor_label,
+                    parent_key=f"{run_key}:{occurrence}" if run_key else None,
+                )
+        return list(events.values())
 
-    def count(self, record: models.Model, actor: Any) -> int:
-        return int(self._changesets(record).count())
+
+def _history_has(history_model: type[models.Model], name: str) -> bool:
+    try:
+        history_model._meta.get_field(name)
+    except Exception:  # noqa: BLE001 - the history copy names the pk differently
+        return False
+    return True
 
 
-def timeline_sources() -> tuple[TimelineSource, ...]:
-    return (ChangeSource(),)
+def _origin_run_key(changeset: Any) -> str | None:
+    """The run kind's key prefix when the changeset was made by a workflow run."""
+
+    if changeset.origin_content_type_id is None or not apps.is_installed("angee.workflows"):
+        return None
+    origin_model = changeset.origin_content_type.model_class()
+    if origin_model is None or origin_model._meta.label != RUN_MODEL:
+        return None
+    run = origin_model._base_manager.filter(pk=changeset.origin_object_id).first()
+    return f"{RUN_KIND}:{public_id_of(run)}" if run is not None else None
+
+
+def timeline_kinds() -> tuple[TimelineKind, ...]:
+    return (ChangeKind(),)

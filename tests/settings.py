@@ -94,6 +94,7 @@ INSTALLED_APPS = [
     "angee.platform_integrate_operator",
     "angee.resources.testing",
     "angee.provenance.testing",
+    "angee.timeline.testing",
     "angee.integrate.testing",
     "angee.workflows.testing",
     "tests.linesdemo",

@@ -739,9 +739,10 @@ shared UI copy through an addon bundle.
   chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
   and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
 - **Records have one chronology.** The timeline addon owns the `Timeline`
-  tab and the `timeline` read that unions every eligible source behind one
-  cursor; each addon contributes a Python timeline source (its kind, sequence,
-  eligibility, entries and count) and a `timeline#kinds` presentation (label,
+  tab, the `timeline.Event` ledger and the `timeline` read that pages it
+  behind one cursor; each addon contributes a Python timeline kind (its id,
+  sequence, source models, eligibility, rows and the projection of a row's
+  events, synced on every save) and a `timeline#kinds` presentation (label,
   glyph, verb, target). A line is a pointer: one sentence, actor, time, one
   verb, never a body, never an action. A run folds its decisions and changes
   into its line; the run drill-in shows one run with its own Stop. The same
@@ -1149,9 +1150,10 @@ target has a page and a button when it opens something beside it. Day and
 section labels sit above rows, folded sections open from their label. A pane
 never picks its own font size, card or header row.
 
-Each `timeline#kinds` child presents one kind a Python timeline source
-implements (the source declares `kind`, `sequence`, `eligible`, `entries`,
-`count` and `group_id`; see `angee.timeline.sources`):
+Each `timeline#kinds` child presents one kind a Python timeline kind
+implements (the kind declares `id`, `sequence`, `models`, `eligible`, `rows`
+and `events`; see `angee.timeline.kinds`). The owner projects its rows into
+the `timeline.Event` ledger on every save; the read pages that one table:
 
 ```ts
 interface TimelineKindContent {

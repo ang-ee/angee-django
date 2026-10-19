@@ -49,6 +49,7 @@ from angee.models import (
 )
 from angee.refs import MergePolicy, RecordRefMixin
 from angee.serialization import canonical_json, canonical_json_sha256, json_safe
+from angee.timeline.events import sync_events
 
 ProvenanceRole = role_anchor("provenance/role")
 
@@ -297,6 +298,9 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
             touched=self.touched,
             counts=self.counts,
         )
+        # A queryset write fires no save signal: project the closed changeset onto
+        # the timeline of every record it touched here.
+        sync_events(self)
 
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""

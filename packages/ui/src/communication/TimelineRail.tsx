@@ -52,8 +52,6 @@ export interface TimelineRailProps {
   onScope: (scope: string) => void;
   pending?: boolean;
   error?: string | null;
-  /** Kinds whose source failed; their counts are unknown and their lines missing. */
-  failed?: readonly string[];
   onRetry?: () => void;
   hasMore?: boolean;
   onLoadOlder?: () => void;
@@ -64,7 +62,7 @@ export interface TimelineRailProps {
 const MAX_SCOPE_CHIPS = 2;
 
 export function TimelineRail({
-  entries, kinds, needsMe, scope, onScope, pending = false, error = null, failed = [], onRetry, hasMore = false, onLoadOlder, onOpen, className,
+  entries, kinds, needsMe, scope, onScope, pending = false, error = null, onRetry, hasMore = false, onLoadOlder, onOpen, className,
 }: TimelineRailProps): React.ReactElement {
   const t = useUiT();
   const presentation = React.useMemo(() => new Map(kinds.map((kind) => [kind.id, kind])), [kinds]);
@@ -98,11 +96,6 @@ export function TimelineRail({
             <p>{error}</p>
             {onRetry ? <Button size="sm" variant="secondary" className="mt-2" onClick={onRetry}>{t("timeline.retry")}</Button> : null}
           </div>
-        ) : null}
-        {failed.length ? (
-          <p className="m-1 rounded-8 border border-warning-border bg-warning-bg p-2 text-12 text-warning-text">
-            {t("timeline.partial", { kinds: failed.map((id) => presentation.get(id)?.label ?? id).join(", ") })}
-          </p>
         ) : null}
         {pending && sorted.length === 0 && !error ? <LoadingPanel message={t("timeline.loading")} density="inline" /> : null}
         {!pending && !error && sorted.length === 0 ? (

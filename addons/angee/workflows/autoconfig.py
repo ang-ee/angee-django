@@ -5,7 +5,7 @@ SETTINGS = {
         "angee.workflows.steps.Step", "angee.workflows.triggers.TriggerSource",
     ],
     "ANGEE_MERGE_GUARDS:append": ["angee.workflows.managers.unfinished_run_merge_guard"],
-    "ANGEE_TIMELINE_SOURCES:append": ["angee.workflows.timeline.timeline_sources"],
+    "ANGEE_TIMELINE_KINDS:append": ["angee.workflows.timeline.timeline_kinds"],
     "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": {
         "workflows.workflowextension": "angee.workflows.resources.WorkflowExtensionResourceKind",
     },

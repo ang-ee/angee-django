@@ -1,28 +1,32 @@
-"""The ``timeline`` read: one ordered page of a record's events across every source."""
+"""The ``timeline`` read: one ordered page of a record's events from the ledger."""
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any
 
 import strawberry
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from django.db.models import Count
 
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.iam.permissions import request_from_info
-from angee.timeline.sources import Cursor, TimelineEntry, TimelineSource, timeline_sources
+from angee.timeline.kinds import Cursor, timeline_kinds
 
 PAGE_LIMIT_DEFAULT = 25
 PAGE_LIMIT_MAX = 100
 
-log = logging.getLogger(__name__)
+
+@strawberry.type
+class TimelineKindCount:
+    kind: str
+    count: int
 
 
 @strawberry.type
 class TimelineEntryType:
-    """One line: what happened, who, when, and where its body lives."""
+    """One line: what happened, who, when, where its body lives, and what folds under it."""
 
     key: str
     at: datetime
@@ -31,9 +35,9 @@ class TimelineEntryType:
     actor: str
     detail: str
     needs_me: bool
-    target_model: str | None
-    target_id: PublicID | None
-    folded: str
+    target_model: str
+    target_id: PublicID
+    children: list[TimelineKindCount]
 
 
 @strawberry.type
@@ -41,8 +45,7 @@ class TimelineKindType:
     """A kind this record can carry, in sequence order; its presentation is the kind's ``timeline#kinds`` child."""
 
     id: str
-    count: int | None
-    """None when the kind's source failed on this read."""
+    count: int
     models: list[str]
 
 
@@ -51,18 +54,20 @@ class TimelinePageType:
     entries: list[TimelineEntryType]
     """Newest first."""
     kinds: list[TimelineKindType]
-    failed: list[str]
-    """Kinds whose source raised; their lines are missing from this page."""
+    needs_me: int
+    """How many lines on the record wait on the viewer."""
     has_more: bool
     next_before: str | None
 
 
-def _entry_type(entry: TimelineEntry) -> TimelineEntryType:
-    return TimelineEntryType(
-        key=entry.key, at=entry.at, kind=entry.kind, title=entry.title, actor=entry.actor, detail=entry.detail,
-        needs_me=entry.needs_me, target_model=entry.target_model,
-        target_id=PublicID(entry.target_id) if entry.target_id else None, folded=entry.folded,
-    )
+def _record(info: strawberry.Info, model: str, id: PublicID) -> tuple[Any, Any, Any]:
+    actor = request_from_info(info).user
+    try:
+        record_model = apps.get_model(model)
+    except (LookupError, ValueError) as error:
+        raise ValidationError(f"Unknown model {model!r}.", code="invalid") from error
+    record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
+    return actor, record_model, record
 
 
 @strawberry.type
@@ -80,53 +85,64 @@ class TimelineQuery:
     ) -> TimelinePageType:
         """One page of the record's events, newest first, across the selected kinds."""
 
-        actor = request_from_info(info).user
-        try:
-            record_model = apps.get_model(model)
-        except (LookupError, ValueError) as error:
-            raise ValidationError(f"Unknown model {model!r}.", code="invalid") from error
-        record = require_instance_for_id(record_model, str(id), queryset=record_model.objects.with_actor(actor))
+        actor, record_model, record = _record(info, model, id)
         limit = max(1, min(int(limit), PAGE_LIMIT_MAX))
         try:
             cursor = Cursor.decode(before) if before else None
         except ValueError as error:
             raise ValidationError(str(error), code="invalid") from error
-
-        eligible = [source for source in timeline_sources() if source.eligible(record_model)]
-        selected = [source for source in eligible if not kinds or source.kind in kinds]
-        failed: list[str] = []
-        rows: list[TimelineEntry] = []
-        for source in selected:
-            try:
-                rows.extend(source.entries(record, actor, before=cursor, limit=limit + 1, needs_me=needs_me))
-            except Exception:  # noqa: BLE001 - one failing source must not take the page down
-                log.exception("timeline source %s failed on %s", source.kind, record)
-                failed.append(source.kind)
+        event_model = apps.get_model("timeline", "Event")
+        # The record was read under the actor; the ledger is its index.
+        lines = event_model.objects.for_record(record).top_level()
+        eligible = [kind for kind in timeline_kinds() if kind.eligible(record_model)]
+        counts = dict(lines.values_list("kind").annotate(n=Count("pk")).values_list("kind", "n"))
+        waiting = lines.needing(actor).count() if actor is not None and actor.pk else 0
+        if kinds:
+            lines = lines.filter(kind__in=kinds)
+        if needs_me:
+            lines = lines.needing(actor)
         if cursor is not None:
-            rows = [row for row in rows if cursor.admits(row)]
-        rows.sort(key=lambda row: row.order_key)
-        page = rows[:limit]
+            lines = lines.filter(cursor.predicate())
+        page = list(lines.order_by("-at", "kind", "-pk")[: limit + 1])
+        more = len(page) > limit
+        page = page[:limit]
+        children: dict[int, list[TimelineKindCount]] = {}
+        for parent_id, kind, n in (
+            event_model.objects.filter(parent__in=[event.pk for event in page])
+            .values_list("parent_id", "kind").annotate(n=Count("pk")).values_list("parent_id", "kind", "n")
+            .order_by("parent_id", "kind")
+        ):
+            children.setdefault(parent_id, []).append(TimelineKindCount(kind=kind, count=n))
+        mine = set(
+            event_model.needs.through.objects.filter(event_id__in=[event.pk for event in page], user_id=actor.pk)
+            .values_list("event_id", flat=True)
+        ) if actor is not None and actor.pk else set()
         return TimelinePageType(
-            entries=[_entry_type(row) for row in page],
-            kinds=[_kind_type(source, record, actor, failed) for source in eligible],
-            failed=failed,
-            has_more=len(rows) > limit,
-            next_before=Cursor.after(page[-1]).encode() if page and len(rows) > limit else None,
+            entries=[
+                TimelineEntryType(
+                    key=event.key, at=event.at, kind=event.kind, title=event.title, actor=event.actor_label,
+                    detail=event.detail, needs_me=event.pk in mine, target_model=event.target_model,
+                    target_id=PublicID(event.target_id), children=children.get(event.pk, []),
+                )
+                for event in page
+            ],
+            kinds=[
+                TimelineKindType(id=kind.id, count=counts.get(kind.id, 0), models=list(kind.models))
+                for kind in eligible
+            ],
+            needs_me=waiting,
+            has_more=more,
+            next_before=Cursor(at=page[-1].at, kind=page[-1].kind, pk=page[-1].pk).encode() if page and more else None,
         )
 
+    @strawberry.field
+    def timeline_attention(self, info: strawberry.Info, model: str, id: PublicID) -> int:
+        """How many lines on the record wait on the viewer."""
 
-def _kind_type(source: TimelineSource, record: Any, actor: Any, failed: list[str]) -> TimelineKindType:
-    count: int | None
-    if source.kind in failed:
-        count = None
-    else:
-        try:
-            count = int(source.count(record, actor))
-        except Exception:  # noqa: BLE001
-            log.exception("timeline source %s count failed on %s", source.kind, record)
-            failed.append(source.kind)
-            count = None
-    return TimelineKindType(id=source.kind, count=count, models=list(source.models))
+        actor, _record_model, record = _record(info, model, id)
+        if actor is None or not actor.pk:
+            return 0
+        return int(apps.get_model("timeline", "Event").objects.for_record(record).top_level().needing(actor).count())
 
 
 schemas: dict[str, dict[str, list[Any]]] = {"console": {"query": [TimelineQuery]}}

@@ -11,7 +11,6 @@ export const enUiMessages: Record<string, string> = {
   "timeline.empty.description": "Nothing has happened on this record in this scope.",
   "timeline.older": "Load older",
   "timeline.retry": "Retry",
-  "timeline.partial": "Some kinds could not be loaded: {kinds}.",
   "stepList.trigger": "Started",
   "stepList.done": "Complete",
   "stepList.current": "Current step",
