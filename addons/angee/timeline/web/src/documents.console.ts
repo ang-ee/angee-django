@@ -1,13 +1,13 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const TimelineDocument = graphql(`
-  query RecordTimelineRail($model: String!, $id: ID!, $kinds: [String!], $before: String, $limit: Int = 25) {
-    timeline(model: $model, id: $id, kinds: $kinds, before: $before, limit: $limit) {
-      kinds
+  query RecordTimelineRail($model: String!, $id: ID!, $kinds: [String!], $needsMe: Boolean = false, $before: String, $limit: Int = 25) {
+    timeline(model: $model, id: $id, kinds: $kinds, needs_me: $needsMe, before: $before, limit: $limit) {
+      kinds { id count models }
+      failed
       has_more
       next_before
-      counts { kind count }
-      entries { id at kind title actor detail needs_me target_model target_id group_id }
+      entries { key at kind title actor detail needs_me target_model target_id folded }
     }
   }
 `);

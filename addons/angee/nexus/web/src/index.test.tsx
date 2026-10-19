@@ -55,7 +55,7 @@ describe("nexus addon manifest", () => {
     const chatter = ["parties.Party#aside", "parties.Circle#aside"].flatMap((address) =>
       Object.entries(containers[address] ?? {}).map(([id, child]) => ({ id, address, ...child })));
     expect(chatter.map(({ id, sequence, address }) => ({ id, sequence, address }))).toEqual([
-      { id: "nexus.timeline", sequence: 30, address: "parties.Party#aside" },
+      { id: "nexus.correspondence", sequence: 30, address: "parties.Party#aside" },
       { id: "nexus.network", sequence: 31, address: "parties.Party#aside" },
       { id: "nexus.feed", sequence: 32, address: "parties.Circle#aside" },
     ]);

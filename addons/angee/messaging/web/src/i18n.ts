@@ -32,10 +32,6 @@ export const enMessagingMessages: Record<string, string> = {
   "messages.selectionLoading": "Loading the action selection limit.",
   "messages.selectionError": "Could not load the action selection limit. Refresh to try again.",
   "messages.selectionUnavailable": "Select readable held drafts with permission to send or discard them.",
-  "sources.conversation": "Conversation",
-  "activity.comment": "Comment",
-  "activity.conversationMessages_one": "{count} message",
-  "activity.conversationMessages_other": "{count} messages",
   // RecordChatterPane — Activity's shared record composer and conversation chrome.
   "chatter.noRecord": "No record selected",
   "chatter.noRecordHint": "Open a record to discuss it.",

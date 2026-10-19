@@ -9,9 +9,18 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useRouter } from "@tanstack/react-router";
 
 import type { CollapsiblePane } from "../page";
 import { developmentMode } from "../lib/development-mode";
+import type { ChatterSelection } from "../runtime/contracts";
+import {
+  CHATTER_FOCUS_SEARCH_KEY,
+  CHATTER_FROM_SEARCH_KEY,
+  CHATTER_SEARCH_KEYS,
+  CHATTER_TAB_SEARCH_KEY,
+  CHATTER_TARGET_SEARCH_KEY,
+} from "../runtime/route-href";
 
 export type ChatterPaneController = Pick<CollapsiblePane, "collapsed" | "collapse" | "expand" | "toggle"> & {
   /** Native split panes publish their handle after the panel mounts. */
@@ -19,7 +28,7 @@ export type ChatterPaneController = Pick<CollapsiblePane, "collapsed" | "collaps
 };
 
 export type ChatterTabId = string;
-export const CHATTER_TAB_SEARCH_KEY = "chatterTab";
+export { CHATTER_TAB_SEARCH_KEY, CHATTER_TARGET_SEARCH_KEY, CHATTER_FOCUS_SEARCH_KEY, CHATTER_FROM_SEARCH_KEY };
 
 export interface ChatterTab {
   id: ChatterTabId;
@@ -27,12 +36,20 @@ export interface ChatterTab {
   icon?: string;
   count?: number;
   panelClassName?: string;
+  /** In the tab strip (the default); a drill-in is reached from a line, with a target. */
+  strip?: boolean;
   children: ReactNode;
 }
 
 export interface ChatterContent {
   tabs?: readonly ChatterTab[];
-  composer?: ReactNode;
+}
+
+export type { ChatterSelection };
+
+export interface ChatterOpenOptions extends ChatterSelection {
+  /** The tab that opened this one, so the aside offers the way back. */
+  from?: ChatterTabId;
 }
 
 export interface ChatterContextValue {
@@ -40,11 +57,13 @@ export interface ChatterContextValue {
   setCollapsed: (collapsed: boolean) => void;
   toggleCollapsed: () => void;
   activeTab: ChatterTabId;
-  /** Record a user or route-selected tab as the persistent shell intent; `from`
-   *  names the tab that opened it, so the aside can offer the way back. */
-  setActiveTab: (tab: ChatterTabId, options?: { from?: ChatterTabId }) => void;
-  /** The tab the active one was opened from, until the user picks a tab directly. */
-  tabOrigin: ChatterTabId | null;
+  /**
+   * Record a user or route-selected tab as the persistent shell intent. With
+   * `from`, `target` or `focus` the choice is navigation state: it is written to
+   * the URL (`chatterTab`, `chatterTarget`, `chatterFocus`, `chatterFrom`), so
+   * links, reload and the browser's Back restore it.
+   */
+  setActiveTab: (tab: ChatterTabId, options?: ChatterOpenOptions) => void;
   /** Suggest asynchronous content; urgent attention may force it without recording user intent. */
   setInitialActiveTab: (tab: ChatterTabId, force?: boolean) => void;
   content: ChatterContent | null;
@@ -69,7 +88,6 @@ const ChatterContext = createContext<ChatterContextValue>({
   toggleCollapsed: () => undefined,
   activeTab: "",
   setActiveTab: () => undefined,
-  tabOrigin: null,
   setInitialActiveTab: () => undefined,
   content: null,
   setContent: () => undefined,
@@ -97,12 +115,31 @@ export function ChatterProvider({
   // The provider spans record routes, so tab intent does too. A shell remount is
   // the only reset; late route content must not replace a user or URL choice.
   const explicitTabIntentRef = useRef(false);
-  const [tabOrigin, setTabOrigin] = useState<ChatterTabId | null>(null);
-  const setActiveTab = useCallback((tab: ChatterTabId, options?: { from?: ChatterTabId }) => {
+  // Standalone hosts (stories, bare tests) have no router: the choice stays local.
+  const router = useRouter({ warn: false });
+  const setActiveTab = useCallback((tab: ChatterTabId, options?: ChatterOpenOptions) => {
     explicitTabIntentRef.current = true;
     setActiveTabState(tab);
-    setTabOrigin(options?.from && options.from !== tab ? options.from : null);
-  }, []);
+    if (!router) return;
+    const search = router.state.location.search as Record<string, unknown>;
+    const drill = options?.from !== undefined || options?.target !== undefined || options?.focus !== undefined;
+    // A plain pick with nothing in the URL stays local; otherwise the URL is the
+    // navigation state and must agree (a drill-in pushes, a plain pick replaces).
+    if (!drill && !CHATTER_SEARCH_KEYS.some((key) => search[key] != null)) return;
+    const next: Record<string, string | undefined> = {
+      [CHATTER_TAB_SEARCH_KEY]: tab,
+      [CHATTER_TARGET_SEARCH_KEY]: options?.target,
+      [CHATTER_FOCUS_SEARCH_KEY]: options?.focus,
+      [CHATTER_FROM_SEARCH_KEY]: options?.from,
+    };
+    // Adopting what the URL already says is not a navigation.
+    if (CHATTER_SEARCH_KEYS.every((key) => (search[key] ?? undefined) === next[key])) return;
+    void router.navigate({
+      to: ".",
+      replace: !drill,
+      search: (previous: Record<string, unknown>) => ({ ...previous, ...next }),
+    } as never);
+  }, [router]);
   const setInitialActiveTab = useCallback((tab: ChatterTabId, force = false) => {
     if (force || !explicitTabIntentRef.current) setActiveTabState(tab);
   }, []);
@@ -167,7 +204,7 @@ export function ChatterProvider({
         }
         const previous = current.find((entry) => entry.owner === owner);
         if (next) {
-          if (previous && sameChatterContent(previous, next)) {
+          if (previous && previous.tabs === next.tabs) {
             return current;
           }
           const entry = { ...next, owner };
@@ -184,13 +221,7 @@ export function ChatterProvider({
   );
   const content = useMemo<ChatterContent | null>(() => {
     if (!contentState.length) return null;
-    const composer = contentState.findLast((entry) => entry.composer !== undefined)?.composer;
-    return {
-      tabs: contentState.flatMap((entry) => entry.tabs ?? []),
-      ...(composer !== undefined
-        ? { composer }
-        : {}),
-    };
+    return { tabs: contentState.flatMap((entry) => entry.tabs ?? []) };
   }, [contentState]);
 
   const collapsed = controllerCollapsed ?? localCollapsed;
@@ -201,7 +232,6 @@ export function ChatterProvider({
       content,
       registerSecondaryController,
       setActiveTab,
-      tabOrigin,
       setInitialActiveTab,
       setCollapsed,
       setContent,
@@ -216,7 +246,6 @@ export function ChatterProvider({
       setCollapsed,
       setContent,
       setInitialActiveTab,
-      tabOrigin,
       toggleCollapsed,
     ],
   );
@@ -249,13 +278,6 @@ export function useChatterContent(content: ChatterContent | null): void {
 
 function normalizeChatterContent(content: ChatterContent | null): ChatterContent | null {
   if (content === null) return null;
-  if (content.tabs?.length === 0 && content.composer === undefined) return null;
+  if (content.tabs?.length === 0) return null;
   return content;
-}
-
-function sameChatterContent(
-  current: (ChatterContent & { owner: symbol }) | null,
-  next: ChatterContent,
-): boolean {
-  return current?.tabs === next.tabs && current?.composer === next.composer;
 }

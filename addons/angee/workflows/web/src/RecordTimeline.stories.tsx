@@ -4,13 +4,12 @@ import { operationDocuments } from "@angee/gql/console/actions";
 import { decisionLinkFixture, decisionRecordFixture, decisionResourceFixture, decisionUserFixture } from "@angee/decisions/testing";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
 import {
-  Button, ChatterProvider, FormView, PrimaryPaneProvider, RecordFieldMarksProvider, ScrollArea,
-  createRouteHref, useChatter, usePrimaryPaneContent, JsonValueSchema,
+  Button, ChatterProvider, FormView, RecordFieldMarksProvider, ScrollArea, createRouteHref, useChatter, JsonValueSchema,
 } from "@angee/ui";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
-import { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
+import { RecordTimeline, type TimelineSelection } from "./RecordTimeline";
+import { useRecordTimelineAttention } from "./timeline-pane";
 import { timelineFixture, type TimelineState } from "./timeline-testing";
-import type { TimelineSelection } from "./RecordTimeline";
 import { WORKFLOW_STATUS_TONES } from "./status-tones";
 import { attemptResourceFixture, recordResourceFixture, runResourceFixture, stepRunResourceFixture, watchResourceFixture } from "./testing";
 
@@ -22,7 +21,6 @@ export const RetryWithAcknowledgement = { render: () => <TimelineStory state="er
 export const HeldByRun = { render: () => <TimelineStory state="run" /> };
 export const Stopped = { render: () => <TimelineStory state="stopped" /> };
 export const RecordSet = { render: () => <TimelineStory state="set" /> };
-export const LeftPane = { render: () => <TimelineStory side="left" /> };
 
 const Request = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 export type TimelineRequest = v.InferOutput<typeof Request>;
@@ -38,8 +36,8 @@ const runtime = {
 };
 
 /** The real read and inline mutation owners over a neutral, disposable transport. */
-export function TimelineStory({ state = "decision", side = "left", collapsed = false, duplicateRisk = false, data, onRequest }: {
-  state?: TimelineState; side?: "left" | "right"; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
+export function TimelineStory({ state = "decision", collapsed = false, duplicateRisk = false, data, onRequest }: {
+  state?: TimelineState; collapsed?: boolean; duplicateRisk?: boolean; onRequest?: (request: TimelineRequest) => void;
   data?: TimelineSelection;
 }) {
   const schemas = useMemo(() => {
@@ -61,24 +59,21 @@ export function TimelineStory({ state = "decision", side = "left", collapsed = f
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
   }, [state, duplicateRisk, data, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
-    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><PrimaryPaneProvider><TimelineLayout set={state === "set"} side={side} /></PrimaryPaneProvider></ChatterProvider></RecordFieldMarksProvider>
+    <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><TimelineLayout set={state === "set"} /></ChatterProvider></RecordFieldMarksProvider>
   </RoutedRuntimeFixture>;
 }
 
-function TimelineLayout({ set, side }: { set: boolean; side: "left" | "right" }) {
+/** The run body as the aside's drill-in renders it, beside the form it belongs to. */
+function TimelineLayout({ set }: { set: boolean }) {
   const record = useMemo(() => set ? [{ model: "notes.Note", id: "nte_7" }, { model: "notes.Note", id: "nte_8" }] : { model: "notes.Note", id: "nte_7" }, [set]);
-  useRecordTimelinePane({ record });
   useRecordTimelineAttention(record);
-  const { node } = usePrimaryPaneContent();
   const chatter = useChatter();
-  return <div className="grid min-h-0 w-full bg-sheet" style={{ gridTemplateColumns: side === "left" ? "24rem minmax(0,1fr)" : "minmax(0,1fr) 24rem", height: "100vh" }}>
-    {side === "left" ? <aside data-testid="timeline-left" data-state={`${chatter.collapsed}:${chatter.activeTab}`}
-      className="border-r border-border-subtle">{node}</aside> : null}
+  return <div className="grid min-h-0 w-full bg-sheet" style={{ gridTemplateColumns: "minmax(0,1fr) 24rem", height: "100vh" }}>
     <main className="min-w-0 p-6"><FormView resource="notes.Note" id="nte_7" fields={[{ name: "display_name", label: "Name" }, { name: "body", label: "Body" }]} />
-      {side === "right" ? <Button onClick={() => chatter.setCollapsed(!chatter.collapsed)}>Toggle timeline</Button> : null}
+      <Button onClick={() => chatter.setCollapsed(!chatter.collapsed)}>Toggle timeline</Button>
     </main>
-    {side === "right" ? <aside data-testid="timeline-right" data-state={`${chatter.collapsed}:${chatter.activeTab}`} className="min-h-0 border-l border-border-subtle">
-      <ScrollArea className="h-full" viewportClassName="p-4">{!chatter.collapsed && chatter.content?.tabs?.map((tab) => <section key={tab.id} data-tab={tab.id}>{tab.children}</section>)}</ScrollArea>
-    </aside> : null}
+    <aside data-testid="timeline-aside" data-state={`${chatter.collapsed}:${chatter.activeTab}`} className="min-h-0 border-l border-border-subtle">
+      <ScrollArea className="h-full" viewportClassName="p-4"><RecordTimeline record={record} /></ScrollArea>
+    </aside>
   </div>;
 }

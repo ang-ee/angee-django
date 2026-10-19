@@ -1,17 +1,7 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { useAuthoredQuery } from "@angee/refine";
-import type { ActivityEntry, ActivityEntrySource, ActivityRecord, ActivityWindow } from "@angee/ui";
-import * as React from "react";
-
 import { enDecisionsMessages } from "./i18n";
-import { DECISION_MODEL, RecordDecisionAnswersDocument } from "./documents.console";
-import { DecisionCard } from "./DecisionCard";
-
-const decisionAnswerActivitySource = {
-  kinds: ["decision"],
-  useEntries: useDecisionAnswerEntries,
-} satisfies ActivityEntrySource;
+import { DECISION_MODEL } from "./documents.console";
 
 export { DECISION_MODEL } from "./documents.console";
 export { DecisionCard, type DecisionCardProps } from "./DecisionCard";
@@ -40,14 +30,12 @@ export default defineBaseAddon({
     "decisions.waiting": { parent: "decisions.queue", label: "Waiting on me", icon: "check", route: "decisions.inbox", defaultResourceView: "decisions.waiting" },
     "decisions.all": { parent: "decisions.queue", label: "All decisions", icon: "check", route: "decisions.inbox", defaultResourceView: "decisions.all" },
   },
-  // Independent waiting owners link back from the generic card.
+  // Independent waiting owners link back from the generic card; answered
+  // decisions outside a run are Timeline lines opening the decision's page.
   containers: {
     "decisions#origin": {},
-    "record#activity": {
-      "decisions.answers": {
-        sequence: 40,
-        content: decisionAnswerActivitySource,
-      },
+    "timeline#kinds": {
+      "decisions.decision": { content: { label: "Decisions", icon: "check", tone: "success", verb: "Open decision", target: { page: true } } },
     },
   },
   i18n: { decisions: enDecisionsMessages },
@@ -55,21 +43,3 @@ export default defineBaseAddon({
 });
 
 export { attentionColumn, openDecisionFilter, useDecisionFieldMarks } from "./attention";
-
-function useDecisionAnswerEntries(record: ActivityRecord, window: ActivityWindow): readonly ActivityEntry[] {
-  const variables = React.useMemo(() => ({ model: record.model, id: record.id, limit: window.limit }),
-    [record.id, record.model, window.limit]);
-  const query = useAuthoredQuery(RecordDecisionAnswersDocument, variables, {
-    enabled: Boolean(record.model && record.id),
-    models: [DECISION_MODEL, "decisions.DecisionRecord"],
-    records: [{ model: record.model, id: record.id }],
-  });
-  return React.useMemo(() => (query.data?.record_decision_answers ?? []).map((decision) => ({
-    at: decision.answered_at ?? decision.created_at,
-    kind: "decision" as const,
-    actor: decision.answered_by?.display_name,
-    title: decision.verdict_label || decision.kind_label,
-    body: React.createElement(DecisionCard, { decision, selfId: record.id, compact: true }),
-    reference: null,
-  })), [query.data?.record_decision_answers, record.id]);
-}

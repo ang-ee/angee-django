@@ -1,5 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { EmptyState, ErrorBanner, PreviewPane, Skeleton, SkeletonStatus, routeSearchParam, type RecordPeekReference } from "@angee/ui";
+import { EmptyState, ErrorBanner, PreviewPane, Skeleton, SkeletonStatus, routeSearchParam } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import { StorageFileById, type StorageFile } from "../data/documents";
@@ -7,19 +7,6 @@ import { useStorageT } from "../i18n";
 
 /** Portable detail key; its value binds the requested page to one exact File. */
 export const FILE_PREVIEW_PAGE_PARAM = "previewPage";
-
-export function filePreviewReference(id: string, oneBasedPage?: number | null): RecordPeekReference {
-  const page = validPreviewPage(oneBasedPage);
-  return {
-    model: "storage.File",
-    id,
-    tab: "preview",
-    ...(page === null ? {} : {
-      page,
-      search: { [FILE_PREVIEW_PAGE_PARAM]: `${id}:${page}` },
-    }),
-  };
-}
 
 export function filePreviewPageFromSearch(
   search: Readonly<Record<string, unknown>>,

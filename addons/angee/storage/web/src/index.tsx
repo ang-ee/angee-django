@@ -3,7 +3,7 @@
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
-import { Tab, useRecordChromeContext, useRecordPeekContext, useRouteSearch } from "@angee/ui";
+import { Tab, useRecordChromeContext, useRouteSearch } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
@@ -88,7 +88,7 @@ const storage = defineBaseAddon({
 
 export { useStorageUpload } from "./data/use-upload";
 export { RecordFilesPane, recordFilesTarget, type RecordFilesTarget } from "./RecordFilesPane";
-export { FileRecordPreview, filePreviewReference } from "./views/FilePreview";
+export { FileRecordPreview } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
 export { StorageUploadTasks } from "./views/StorageUploadTasks";
 export { useStorageT } from "./i18n";
@@ -98,8 +98,7 @@ export default storage;
 
 function FilePreviewSection() {
   const record = useRecordChromeContext();
-  const peek = useRecordPeekContext();
   const search = useRouteSearch();
-  const page = peek ? peek.reference.page : filePreviewPageFromSearch(search, record.recordId);
+  const page = filePreviewPageFromSearch(search, record.recordId);
   return <div className="h-[65vh] min-h-80"><FileRecordPreview id={record.recordId} page={page} /></div>;
 }

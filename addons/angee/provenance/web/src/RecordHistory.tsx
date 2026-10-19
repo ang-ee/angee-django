@@ -17,18 +17,14 @@ import {
   RecordActionBar,
   RecordReference,
   StepList,
-  ACTIVITY_TAB_ID,
   optionToken,
   titleCase,
   useActionResultMutation,
-  type ActivityEntry,
-  type ActivityRecord,
-  type ActivityWindow,
   type ActionDescriptor,
   type ComparisonRow,
   type StepListItem,
 } from "@angee/ui";
-import { useCallback, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import {
   RecordHistoryDocument,
@@ -162,9 +158,7 @@ export function HistoryTimeline({
     title: <EntryTitle entry={entry} t={t} />,
     ...(optionToken(entry.outcome) === "failure" ? { outcome: t("history.outcome.failure") } : {}),
     timestamp: entry.recorded_at,
-    detail: compact
-      ? <RecordReference model={history.model} id={history.id} search={{ chatterTab: ACTIVITY_TAB_ID }} label={t("history.openTab")} />
-      : <EntrySummary entry={entry} t={t} />,
+    detail: <EntrySummary entry={entry} t={t} />,
     ...(compact ? {} : {
       children: <EntryDetails entry={entry} record={history} onRevert={onRevert} reverting={reverting} t={t} />,
     }),
@@ -189,42 +183,6 @@ export function HistoryTimeline({
   );
 }
 
-/** Compact facts for a changeset already loaded by Activity; no second read or pager. */
-export function HistoryEntrySummary({ entry, model, id }: {
-  entry: HistorySummaryEntry;
-  model: string;
-  id: string;
-}): ReactElement {
-  const t = useProvenanceT();
-  return <div className="grid gap-1">{entry.change_reason ? <p className="text-fg">{entry.change_reason}</p> : null}
-    <span className="text-xs text-fg-muted"><RecordReference model={model} id={id}
-      search={{ chatterTab: ACTIVITY_TAB_ID }} label={t("history.openTab")} /></span></div>;
-}
-
-/** Provenance's `record#activity` hook: detailed changes, statements and Revert stay together. */
-export function useRecordHistoryEntries(record: ActivityRecord, window: ActivityWindow): readonly ActivityEntry[] {
-  const query = useRecordHistory(record.model, record.id, { enabled: record.history, limit: window.limit });
-  const [revert, revertState] = useActionResultMutation<ActionFieldName>("revert_changeset", {
-    invalidateModels: [record.model],
-  });
-  const history = query.data?.history ?? null;
-  const onRevert = useCallback((entry: HistoryEntry) =>
-    revert(record.id, { model: record.model, changeset: entry.id }), [record.id, record.model, revert]);
-  return useMemo(() => history?.entries.map((entry): ActivityEntry => ({
-    at: entry.recorded_at,
-    kind: entry.source_kind && optionToken(entry.source_kind) !== "person" ? "source-event" : "change",
-    actor: <EntryActor entry={entry} />,
-    title: <ActivityEntryTitle entry={entry} />,
-    body: <div className="grid gap-2"><HistoryEntrySummary entry={entry} model={history.model} id={history.id} />
-      <ActivityHistoryDetails entry={entry} record={history} onRevert={onRevert} reverting={revertState.fetching} /></div>,
-    reference: null,
-  })) ?? [], [history, onRevert, revertState.fetching]);
-}
-
-function ActivityHistoryDetails(props: Omit<Parameters<typeof EntryDetails>[0], "t">): ReactElement | null {
-  return <EntryDetails {...props} t={useProvenanceT()} />;
-}
-
 function EntryActor({ entry }: { entry: HistorySummaryEntry }): ReactElement {
   const t = useProvenanceT();
   return entry.actor_model && entry.actor_id
@@ -232,16 +190,6 @@ function EntryActor({ entry }: { entry: HistorySummaryEntry }): ReactElement {
     : <span>{entry.actor ?? t("history.system")}</span>;
 }
 
-function ActivityEntryTitle({ entry }: { entry: HistorySummaryEntry }): ReactElement {
-  const t = useProvenanceT();
-  return <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-    <span>{activityLabel(t, entry.activity)}</span>
-    <Badge tone="neutral">{actionLabel(t, entry.action)}</Badge>
-    {entry.source_kind ? <Chip size="sm" tone="info">{titleCase(optionToken(entry.source_kind))}</Chip> : null}
-  </span>;
-}
-
-/** "<actor> <activity> · <action>": who wrote, how the write came about, what it did. */
 function EntryTitle({ entry, t }: { entry: HistorySummaryEntry; t: ProvenanceT }): ReactElement {
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">

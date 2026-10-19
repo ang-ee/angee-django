@@ -4,7 +4,7 @@ import { Workflow } from "lucide-react";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { RUN_MODEL } from "./documents.console";
 import { WORKFLOW_MODEL } from "./catalogue/resources";
-import { decisionRunOrigin, workflowActivitySource } from "./contributions";
+import { decisionRunOrigin } from "./contributions";
 import { enWorkflowsMessages } from "./i18n";
 import { TriggerCondition } from "./TriggerCondition";
 import { TRIGGER_MODEL, TRIGGER_EVENT_MODEL } from "./triggers";
@@ -14,7 +14,7 @@ import { runStatusWidget } from "./run-status";
 import { RecordTimeline } from "./RecordTimeline";
 
 export { RecordTimeline, type RecordTimelineProps, type TimelineRecord } from "./RecordTimeline";
-export { useRecordTimelineAttention, useRecordTimelinePane } from "./timeline-pane";
+export { useRecordTimelineAttention } from "./timeline-pane";
 export { useRecordTimelineQuery } from "./RecordTimeline";
 export { WORKFLOW_STUDIO_TAB_ID } from "./catalogue/resources";
 export { runStatusColumn } from "./run-status";
@@ -39,14 +39,16 @@ export default defineBaseAddon({
   },
   containers: {
     "form#actions-menu": { "workflows.run-workflow": { sequence: 40, content: createElement(RunWorkflowRecordActions) } },
-    "record#activity": { "workflows.activity": workflowActivitySource },
-    // Spike: the run drill-in the timeline rail selects.
+    // Runs on the Timeline: one line per run, opening the run drill-in.
+    "timeline#kinds": {
+      "workflows.run": { content: { label: "Runs", icon: "workflow", tone: "info", verb: "Open run", target: { tab: "workflows.run", focus: "decision" } } },
+    },
     "record#aside": {
       "workflows.run": { sequence: 12, content: {
-        label: "Run", icon: "workflow", panelClassName: "p-0",
-        when: ({ view }) => view.kind === "record" && Boolean(view.sqid),
-        render: (context) => createElement(RecordTimeline, {
-          record: { model: context.route?.canonicalLabel ?? context.route?.modelLabel ?? "", id: context.view.sqid ?? "" },
+        label: "Run", icon: "workflow", panelClassName: "p-0", strip: false, target: { model: RUN_MODEL },
+        render: (context, selection) => createElement(RecordTimeline, {
+          record: { model: context.route?.canonicalLabel ?? context.route?.modelLabel ?? "", id: context.view.kind === "record" ? context.view.sqid ?? "" : "" },
+          runId: selection?.target,
         }),
       } },
     },

@@ -8,7 +8,6 @@ import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
-import { recordCommentActivitySource, recordConversationActivitySource } from "./record-activity";
 import { RecordChatterPane } from "./RecordChatterPane";
 import { THREAD_CHATTER_EDGE } from "./documents";
 
@@ -110,18 +109,17 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "parties.overview#items": {
       "messaging.channel-health": { sequence: 30, content: <MessagingOverviewContribution /> },
     },
-    // Spike: the discussion drill-in the timeline rail selects.
+    // Comments and source conversations on the Timeline; Discussion is the record's thread.
+    "timeline#kinds": {
+      "messaging.comment": { content: { label: "Comments", icon: "comments", tone: "info", verb: "Open in Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
+      "messaging.conversation": { content: { label: "Conversations", icon: "channel", tone: "muted", verb: "Open conversation", target: { page: true } } },
+    },
     "record#aside": {
-      "messaging.comments": { sequence: 11, content: {
+      "messaging.discussion": { sequence: 20, content: {
         label: "Discussion", icon: "comments", panelClassName: "p-0",
-        when: (context) => context.view.kind === "record" && (context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false),
+        when: (context) => context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false,
         render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
       } },
-    },
-    // Messaging owns both entry adapters; the framework owns their one stream.
-    "record#activity": {
-      "messaging.comments": { sequence: 10, content: recordCommentActivitySource(submitKey) },
-      "messaging.related": { sequence: 20, content: recordConversationActivitySource },
     },
   },
 

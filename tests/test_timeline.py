@@ -1,4 +1,4 @@
-"""The record timeline unions every eligible source's one-liners behind one cursor."""
+"""The record timeline unions every eligible source's one-liners behind one keyset cursor."""
 
 from __future__ import annotations
 
@@ -20,31 +20,38 @@ SOURCES = [
 ]
 
 QUERY = """
-query($model: String!, $id: ID!, $kinds: [String!], $before: String, $limit: Int) {
-  timeline(model: $model, id: $id, kinds: $kinds, before: $before, limit: $limit) {
-    kinds has_more next_before
-    counts { kind count }
-    entries { id at kind title actor detail needs_me target_model target_id }
+query($model: String!, $id: ID!, $kinds: [String!], $needsMe: Boolean, $before: String, $limit: Int) {
+  timeline(model: $model, id: $id, kinds: $kinds, needs_me: $needsMe, before: $before, limit: $limit) {
+    kinds { id count models } failed has_more next_before
+    entries { key at kind title actor detail needs_me target_model target_id folded }
   }
 }
 """
 
 
-def test_cursor_round_trip_and_tie_break() -> None:
+def test_cursor_orders_the_page_totally() -> None:
     at = datetime(2026, 10, 19, 9, 41, tzinfo=UTC)
-    cursor = Cursor.decode(Cursor(at=at, id="run_b").encode())
-    assert cursor == Cursor(at=at, id="run_b")
-    same_instant_lower = TimelineEntry(id="run_a", at=at, kind="run", title="x")
-    same_instant_higher = TimelineEntry(id="run_c", at=at, kind="run", title="x")
-    assert cursor.admits(same_instant_lower)
-    assert not cursor.admits(same_instant_higher)
-    assert not cursor.admits(TimelineEntry(id="run_z", at=at.replace(minute=42), kind="run", title="x"))
+    cursor = Cursor.decode(Cursor(at=at, kind="provenance.change", pk=7).encode())
+    assert cursor == Cursor(at=at, kind="provenance.change", pk=7)
+    same_kind_older_row = TimelineEntry(key="k1", at=at, kind="provenance.change", title="x", pk=6)
+    same_kind_newer_row = TimelineEntry(key="k2", at=at, kind="provenance.change", title="x", pk=8)
+    later_kind_same_instant = TimelineEntry(key="k3", at=at, kind="workflows.run", title="x", pk=99)
+    earlier_kind_same_instant = TimelineEntry(key="k4", at=at, kind="decisions.decision", title="x", pk=1)
+    assert cursor.admits(same_kind_older_row)
+    assert not cursor.admits(same_kind_newer_row)
+    assert cursor.admits(later_kind_same_instant)
+    assert not cursor.admits(earlier_kind_same_instant)
+    assert not cursor.admits(TimelineEntry(key="k5", at=at.replace(minute=42), kind="workflows.run", title="x", pk=1))
+    assert str(cursor.predicate("workflows.run", "created_at")).count("created_at") == 2
+    assert str(cursor.predicate("provenance.change", "occurred_at")).count("pk__lt") == 1
+    assert str(cursor.predicate("decisions.decision", "answered_at")).count("answered_at") == 1
 
 
 @override_settings(ANGEE_TIMELINE_SOURCES=SOURCES)
-def test_sources_resolve_once_per_kind() -> None:
-    kinds = [source.kind for source in timeline_sources()]
-    assert kinds == ["change", "decision", "run", "comment", "conversation"]
+def test_sources_resolve_once_per_kind_in_sequence_order() -> None:
+    assert [source.kind for source in timeline_sources()] == [
+        "workflows.run", "decisions.decision", "provenance.change", "messaging.comment", "messaging.conversation",
+    ]
 
 
 @pytest.mark.django_db
@@ -55,15 +62,22 @@ def test_timeline_lists_eligible_kinds_newest_first(composed_permissions: None) 
     schema = addon_schema(timeline_schema.schemas, "console")
     variables = {"model": "knowledge.Vault", "id": public_id_of(vault)}
     page = result_data(execute_schema(schema, QUERY, variables, user=owner))["timeline"]
-    # A vault keeps history but is not threaded: `comment` is absent, not empty.
-    assert page["kinds"] == ["change", "decision", "run", "conversation"]
-    counts = {row["kind"]: row["count"] for row in page["counts"]}
-    assert counts["change"] >= 1
-    assert page["entries"][0]["kind"] == "change"
+    # A vault keeps history but is not threaded: `messaging.comment` is absent, not empty.
+    assert [kind["id"] for kind in page["kinds"]] == [
+        "workflows.run", "decisions.decision", "provenance.change", "messaging.conversation",
+    ]
+    counts = {kind["id"]: kind["count"] for kind in page["kinds"]}
+    assert counts["provenance.change"] >= 1
+    assert page["failed"] == []
+    assert page["entries"][0]["kind"] == "provenance.change"
+    assert page["entries"][0]["key"].startswith("provenance.change:")
     assert page["entries"][0]["target_model"] == "provenance.Changeset"
     ats = [entry["at"] for entry in page["entries"]]
     assert ats == sorted(ats, reverse=True)
     assert page["has_more"] is False
-    scoped = result_data(execute_schema(schema, QUERY, {**variables, "kinds": ["run"]}, user=owner))["timeline"]
+    runs_only = {**variables, "kinds": ["workflows.run"]}
+    scoped = result_data(execute_schema(schema, QUERY, runs_only, user=owner))["timeline"]
     assert scoped["entries"] == []
-    assert scoped["kinds"] == page["kinds"]
+    assert [kind["id"] for kind in scoped["kinds"]] == [kind["id"] for kind in page["kinds"]]
+    waiting = result_data(execute_schema(schema, QUERY, {**variables, "needsMe": True}, user=owner))["timeline"]
+    assert waiting["entries"] == []

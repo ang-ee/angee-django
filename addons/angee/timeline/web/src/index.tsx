@@ -3,28 +3,28 @@ import { ListOrdered } from "lucide-react";
 
 import { RecordTimelinePane, TIMELINE_TAB_ID } from "./RecordTimelinePane";
 
-export { TIMELINE_TAB_ID } from "./RecordTimelinePane";
+export { TIMELINE_KINDS_CONTAINER, TIMELINE_TAB_ID, RecordTimelinePane } from "./RecordTimelinePane";
 
 /**
- * The record timeline rail as a `record#aside` tab. Spike: it sits beside the
- * Activity tab so the two can be compared on the same record; the refactor
- * replaces Activity with it.
+ * The record's one chronology: the Timeline tab, first in the context aside, on
+ * every model-backed record. Kinds present themselves through `timeline#kinds`,
+ * the container this addon owns; their Python sources feed the union read.
  */
 export default defineBaseAddon({
   id: "timeline",
   icons: { timeline: ListOrdered },
   containers: {
+    "timeline#kinds": {},
     "record#aside": {
       [TIMELINE_TAB_ID]: {
-        sequence: 5,
+        sequence: 10,
         content: {
           label: "Timeline",
           icon: "timeline",
           panelClassName: "p-0",
-          when: ({ view }) => view.kind === "record" && Boolean(view.sqid),
           render: (context) => (
             <RecordTimelinePane
-              key={`${context.route?.canonicalLabel ?? context.route?.modelLabel}:${context.view.sqid}`}
+              key={`${context.route?.canonicalLabel ?? context.route?.modelLabel}:${context.view.kind === "record" ? context.view.sqid : ""}`}
               context={context}
             />
           ),
@@ -33,5 +33,3 @@ export default defineBaseAddon({
     },
   },
 });
-
-export { RecordTimelinePane } from "./RecordTimelinePane";

@@ -14,14 +14,11 @@ import {
 export interface RecordChatterPaneProps {
   context: ChatterViewContext;
   submitKey?: RecordThreadConversationProps["submitKey"];
-  composerOnly?: boolean;
   messageLimit?: RecordThreadConversationProps["messageLimit"];
 }
 
-/** The record-thread conversation owner used by Activity and full conversation views.
- *  Activity can request only the shared composer and record chrome; full views also
- *  render the transcript. Discuss rooms compose the same conversation owner. */
-export function RecordChatterPane({ context, submitKey, composerOnly = false, messageLimit }: RecordChatterPaneProps): React.ReactElement {
+/** The record's Discussion: its thread, chrome and composer. Discuss rooms compose the same conversation owner. */
+export function RecordChatterPane({ context, submitKey, messageLimit }: RecordChatterPaneProps): React.ReactElement {
   const t = useMessagingT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
@@ -40,7 +37,6 @@ export function RecordChatterPane({ context, submitKey, composerOnly = false, me
       modelLabel={modelLabel}
       recordId={recordId}
       submitKey={submitKey}
-      composerOnly={composerOnly}
       messageLimit={messageLimit}
       header={(chrome) => (
         <ChatterConversationHeader

@@ -7,7 +7,7 @@ import { createRouteHref } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
 
-import { DecisionRunOrigin, decisionRunOrigin, workflowActivitySource } from "./contributions";
+import { DecisionRunOrigin, decisionRunOrigin } from "./contributions";
 import { DecisionWaitingRunsDocument } from "./documents.console";
 
 vi.mock("@angee/decisions", async (importOriginal) => ({
@@ -72,12 +72,6 @@ test.each([{ steprun: [] }, { steprun: [{ id: "wsr_hidden", node_label: "Hidden"
 test("failed origin reads show the shared error surface", async () => {
   origin(undefined, true);
   expect(await screen.findByText("Waiting runs are unavailable.")).toBeTruthy();
-});
-
-test("workflow lifecycle and waiting decisions contribute one Activity source", () => {
-  expect(workflowActivitySource.sequence).toBe(30);
-  expect(workflowActivitySource.content.kinds).toEqual(["run", "decision"]);
-  expect(workflowActivitySource.content.useEntries).toBeTypeOf("function");
 });
 
 test("the decision origin child renders the waiting-run origin", () => {

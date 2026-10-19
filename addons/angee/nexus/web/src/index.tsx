@@ -1,6 +1,6 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { CalendarClock, History, Inbox, Radar, Share2 } from "lucide-react";
+import { CalendarClock, Inbox, Radar, Share2 } from "lucide-react";
 
 import { enNexusMessages } from "./i18n";
 import { NetworkPane } from "./NetworkPane";
@@ -34,19 +34,20 @@ const nexus = defineBaseAddon({
     "nexus.ties": { parent: "nexus", label: "Ties", route: "nexus.ties", icon: "radar", sequence: 30, hide: true },
     "nexus.cadences": { parent: "nexus", label: "Cadences", route: "nexus.cadences", icon: "cadence", sequence: 40 },
   },
-  icons: { cadence: CalendarClock, network: Share2, radar: Radar, timeline: History, "nexus-inbox": Inbox },
+  icons: { cadence: CalendarClock, network: Share2, radar: Radar, "nexus-inbox": Inbox },
   i18n: { nexus: enNexusMessages },
-  // The cross-channel timeline rides the record chatter seam; the shell applies
-  // each canonical model and record predicate before rendering the contribution.
+  // The cross-channel correspondence rides the record chatter seam until it
+  // becomes a `nexus.correspondence` Timeline kind; the shell applies each
+  // canonical model and record predicate before rendering the contribution.
   containers: {
     "parties.overview#items": {
       "nexus.relationship-health": { sequence: 20, content: <NexusOverviewContribution /> },
     },
     "parties.Party#aside": {
-      "nexus.timeline": {
+      "nexus.correspondence": {
         sequence: 30,
         content: {
-          label: "Timeline",
+          label: "Correspondence",
           icon: "timeline",
           when: (context) => context.view.kind === "record",
           render: (context) => <TimelinePane partyId={context.view.sqid ?? ""} />,

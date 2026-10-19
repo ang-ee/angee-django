@@ -100,7 +100,7 @@ Not built in the first version: timers on decisions, automatic answers, any cons
 
 `RecordTimeline` receives only `record`, a `{model, id}` or array of those.
 `useRecordTimelinePane({record})` publishes it through the existing left
-primary-pane host. The model-scoped `record#activity/workflows.activity` source
+primary-pane host. The `timeline#kinds/workflows.run` presentation and its Python source
 contributes run lifecycle, step-note and waiting-decision entries to Activity.
 
 Each step body opens a fresh run changeset whose origin is the WorkflowRun. Actor

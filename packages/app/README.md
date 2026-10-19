@@ -175,7 +175,7 @@ containers: {
     "desk.review": { sequence: 40, content: reviewSection },
   },
   "form#chrome": { only: ["iam.share-record"] },
-  "record#activity": {
+  "timeline#kinds": {
     "messaging.comments": { sequence: 10 },
   },
   "record#aside": [

@@ -5,7 +5,7 @@ import { developmentMode } from "../lib/development-mode";
 import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
-import type { ChatterTabContent, DrawerContribution, DrawerEdge } from "./contracts";
+import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent } from "./contracts";
 import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
 /**
@@ -37,8 +37,10 @@ export interface ContainerKinds {
   /** Non-modal drawers docked on the console's right or bottom edge. */
   "drawers-right": DockedDrawerContent;
   "drawers-bottom": DockedDrawerContent;
-  /** Chatter aside tabs. */
+  /** Context-aside tabs and drill-ins. */
   aside: ChatterTabContent;
+  /** How a timeline kind presents (`timeline#kinds`), declared by the kind's owner. */
+  kinds: TimelineKindContent;
   /**
    * Renderable children of addon pages' own containers, declared on the
    * owner's node: toolbar verbs (`messaging.channels#toolbar`), dashboard

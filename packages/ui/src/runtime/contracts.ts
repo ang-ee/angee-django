@@ -206,7 +206,35 @@ export interface ChatterTabContent {
   count?: number;
   useCount?: (context: ChatterViewContext) => number | undefined;
   panelClassName?: string;
-  render?: (context: ChatterViewContext) => ReactNode;
+  /**
+   * In the tab strip (the default), or a drill-in: reached from a line with a
+   * `target` (the object's public id), shown in the strip's place with a way
+   * back, addressable through the URL. Layers admit drill-ins like any child.
+   */
+  strip?: boolean;
+  /** What a drill-in's target names: the model the id belongs to. */
+  target?: { model: string };
+  render?: (context: ChatterViewContext, selection?: ChatterSelection) => ReactNode;
+}
+
+/** What a tab was opened with: a drill-in's object and an optional focus inside it. */
+export interface ChatterSelection {
+  target?: string;
+  focus?: string;
+}
+
+/**
+ * How a timeline kind presents: a `timeline#kinds` child declared by the addon
+ * whose Python source implements the kind, under the kind's id.
+ */
+export interface TimelineKindContent {
+  label: ReactNode;
+  icon: string;
+  tone?: "info" | "success" | "warning" | "danger" | "muted";
+  /** The one verb a line of this kind carries. */
+  verb: ReactNode;
+  /** Where the verb leads: a drill-in tab (with the line's target and an optional focus kind), or the target's page. */
+  target: { tab: string; focus?: string } | { page: true };
 }
 
 /**

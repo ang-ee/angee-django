@@ -1,7 +1,13 @@
 /** Query keys owned by shared record routing; addon detail state declares its own keys. */
 export const RECORD_NAVIGATION_SEARCH_KEY = "recordNav";
 export const RECORD_TAB_SEARCH_KEY = "recordTab";
-export const RECORD_SEARCH_KEYS: readonly string[] = [RECORD_NAVIGATION_SEARCH_KEY, RECORD_TAB_SEARCH_KEY];
+/** The context aside's navigation state: the tab, a drill-in's target, a focus inside it, the tab it was opened from. */
+export const CHATTER_TAB_SEARCH_KEY = "chatterTab";
+export const CHATTER_TARGET_SEARCH_KEY = "chatterTarget";
+export const CHATTER_FOCUS_SEARCH_KEY = "chatterFocus";
+export const CHATTER_FROM_SEARCH_KEY = "chatterFrom";
+export const CHATTER_SEARCH_KEYS: readonly string[] = [CHATTER_TAB_SEARCH_KEY, CHATTER_TARGET_SEARCH_KEY, CHATTER_FOCUS_SEARCH_KEY, CHATTER_FROM_SEARCH_KEY];
+export const RECORD_SEARCH_KEYS: readonly string[] = [RECORD_NAVIGATION_SEARCH_KEY, RECORD_TAB_SEARCH_KEY, ...CHATTER_SEARCH_KEYS];
 
 /** The route facts a rendered consumer may ask the composed app for. */
 export interface RuntimeRouteDescriptor {

@@ -77,7 +77,7 @@ Activity history entry's Revert: the record's `history_revert_permission` is the
 admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with
 `history: true`, the fact [`web/`](web/) uses to read entries.
 
-[`web/`](web/) contributes one `record#activity` history source, visible on every
+[`web/`](web/) contributes the `provenance.change` Timeline kind and the history drill-in, visible on every
 saved record whose resource keeps history, and exports `RecordHistoryTimeline`
 (the standalone timeline with its read, paging and Revert; `compact` renders one
 line per changeset linking to Activity) and `useRecordHistory` for

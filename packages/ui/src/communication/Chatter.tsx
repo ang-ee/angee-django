@@ -6,41 +6,63 @@ import {
 } from "@tanstack/react-router";
 
 import { Glyph } from "../chrome/Glyph";
+import { EmptyState } from "../fragments/EmptyState";
 import { useUiT } from "../i18n";
+import { PaneToolbarHost } from "../layouts/PaneToolbar";
 import { cn } from "../lib/cn";
 import {
   useAppRuntime,
   useActiveRoute,
   useContainer,
+  type ChatterSelection,
   type ChatterTabContent,
   type ChatterView,
   type ChatterViewContext,
   type ComposedContainerChild,
   modelChain,
 } from "../runtime";
+import {
+  CHATTER_FOCUS_SEARCH_KEY,
+  CHATTER_FROM_SEARCH_KEY,
+  CHATTER_TAB_SEARCH_KEY,
+  CHATTER_TARGET_SEARCH_KEY,
+} from "../runtime/route-href";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
-import { CHATTER_TAB_SEARCH_KEY, useChatter, type ChatterTab } from "./chatter-context";
-import { ACTIVITY_TAB_ID } from "./Activity";
+import { useChatter, type ChatterTab } from "./chatter-context";
 
 export interface ChatterProps {
   tabs?: readonly ChatterTab[];
-  composer?: React.ReactNode;
   className?: string;
 }
 
+/**
+ * The context aside: what is around the record. Strip tabs are its persistent
+ * surfaces; a drill-in (`strip: false`) shows one object in the strip's place,
+ * reached from a line with a target and addressable through the URL, with the way
+ * back above it. Every pane renders into its own toolbar host.
+ */
 export function Chatter({
   tabs,
-  composer,
   className,
 }: ChatterProps): React.ReactElement | null {
   const t = useUiT();
-  const { activeTab, content, setActiveTab, setCollapsed, tabOrigin } = useChatter();
-  const requestedTab = useRouterState({
+  const { activeTab, setActiveTab, setCollapsed } = useChatter();
+  const requested = useRouterState({
     select: (state) => {
-      const value = (state.location.search as Record<string, unknown>)[CHATTER_TAB_SEARCH_KEY];
-      return typeof value === "string" && value ? value : null;
+      const search = state.location.search as Record<string, unknown>;
+      const text = (key: string): string | undefined => {
+        const value = search[key];
+        return typeof value === "string" && value ? value : undefined;
+      };
+      return {
+        tab: text(CHATTER_TAB_SEARCH_KEY),
+        target: text(CHATTER_TARGET_SEARCH_KEY),
+        focus: text(CHATTER_FOCUS_SEARCH_KEY),
+        from: text(CHATTER_FROM_SEARCH_KEY),
+      };
     },
+    structuralSharing: true,
   });
   const requestIdentity = useRouterState({
     select: (state) => state.location.href,
@@ -62,6 +84,10 @@ export function Chatter({
     },
     [],
   );
+  const selection = React.useMemo<ChatterSelection | undefined>(
+    () => requested.target || requested.focus ? { target: requested.target, focus: requested.focus } : undefined,
+    [requested.target, requested.focus],
+  );
   // The aside's tabs are `record#aside` / `<model>#aside` children for this view,
   // narrowed by the layers, in their composed order; a page's published tabs
   // follow, a same-id tab replacing its predecessor in place.
@@ -71,32 +97,38 @@ export function Chatter({
     [candidates],
   );
   const contributedTabs = React.useMemo(
-    () => tabsFromContributions(activeContributions, viewContext, counts),
-    [activeContributions, viewContext, counts],
+    () => tabsFromContributions(activeContributions, viewContext, counts, selection),
+    [activeContributions, viewContext, counts, selection],
   );
   const publishedTabs = React.useMemo(
     () => candidates.flatMap((child) => child.owner === PAGE_OWNER ? [child.content as ChatterTab] : []),
     [candidates],
   );
   const resolvedTabs = mergeChatterTabs(contributedTabs, publishedTabs);
-  const requestedId = requestedTab;
-  const resolvedComposer = composer ?? content?.composer;
+  const stripTabs = resolvedTabs.filter((tab) => tab.strip !== false);
+  const requestedId = requested.tab;
   const requestedTabAvailable = Boolean(
     requestedId && resolvedTabs.some((tab) => tab.id === requestedId),
   );
+  // The URL is the navigation state: adopt its tab and selection as they stand.
   React.useEffect(() => {
     if (!requestedId) return;
     if (!requestedTabAvailable) return;
-    setActiveTab(requestedId);
+    setActiveTab(requestedId, { from: requested.from, target: requested.target, focus: requested.focus });
     setCollapsed(false);
-  }, [requestIdentity, requestedId, requestedTabAvailable, setActiveTab, setCollapsed]);
+  }, [requestIdentity, requestedId, requestedTabAvailable, requested.from, requested.target, requested.focus, setActiveTab, setCollapsed]);
   const activeId = activeTab;
   const active = resolvedTabs.some((tab) => tab.id === activeId)
     ? activeId
-    : resolvedTabs[0]?.id;
-
-  // A drill-in opened from another tab keeps the way back above its panel.
-  const originTab = tabOrigin && tabOrigin !== active ? resolvedTabs.find((tab) => tab.id === tabOrigin) : undefined;
+    : stripTabs[0]?.id;
+  const activeDrillIn = resolvedTabs.find((tab) => tab.id === active && tab.strip === false);
+  // The way back from a drill-in: the tab that opened it, else the first strip tab.
+  const originTab = activeDrillIn
+    ? resolvedTabs.find((tab) => tab.id === requested.from && tab.strip !== false) ?? stripTabs[0]
+    : undefined;
+  const back = React.useCallback(() => {
+    if (originTab) setActiveTab(originTab.id, {});
+  }, [originTab, setActiveTab]);
 
   // Collapse is owned by the enclosing SplitPane (it collapses the pane to zero
   // width); Chatter only bails when it has no tab to show.
@@ -107,7 +139,7 @@ export function Chatter({
       aria-label={t("chatter.label")}
       className={cn(
         // A pane filler — the SplitPane supplies width, separator, border, and
-        // background; Chatter just lays its tabs + composer out to fill it.
+        // background; Chatter just lays its tabs out to fill it.
         "chatter-pane flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden",
         className,
       )}
@@ -124,13 +156,13 @@ export function Chatter({
         ) : null,
       )}
       <Tabs
-        value={active}
+        value={activeDrillIn ? (originTab?.id ?? active) : active}
         onValueChange={(value) => setActiveTab(value)}
         variant="card"
         className="flex min-h-0 flex-1 flex-col"
       >
         <Tabs.List className="flex shrink-0 min-w-0 overflow-x-auto px-2 pt-2">
-          {resolvedTabs.map((tab) => (
+          {stripTabs.map((tab) => (
             <Tabs.Tab
               key={tab.id}
               value={tab.id}
@@ -151,22 +183,18 @@ export function Chatter({
             </Tabs.Tab>
           ))}
         </Tabs.List>
-        {originTab ? (
-          <button
-            type="button"
-            onClick={() => setActiveTab(originTab.id)}
-            className="flex shrink-0 items-center gap-1 border-b border-border-subtle px-3 py-1.5 text-12 text-link hover:underline"
-          >
-            <Glyph name="chevron-left" /> {originTab.label}
-          </button>
-        ) : null}
-        <ChatterPanels key={viewContext.pathname} tabs={resolvedTabs} active={active} />
+        {activeDrillIn ? (
+          <PaneToolbarHost back={originTab ? { label: originTab.label, onClick: back } : undefined} title={activeDrillIn.label}>
+            {selection?.target ? (
+              <ChatterPanel tab={activeDrillIn} />
+            ) : (
+              <EmptyState icon="activity" title={t("chatter.unavailable.title")} description={t("chatter.unavailable.description")} className="min-h-40 p-4" />
+            )}
+          </PaneToolbarHost>
+        ) : (
+          <ChatterPanels key={viewContext.pathname} tabs={stripTabs} active={active} />
+        )}
       </Tabs>
-      {resolvedComposer ? (
-        <div className="min-w-0 shrink-0 overflow-hidden border-t border-border-subtle p-3">
-          {resolvedComposer}
-        </div>
-      ) : null}
     </aside>
   );
 }
@@ -202,32 +230,42 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
     if (child.address === "record#aside" && context.view.kind !== "record") return false;
     return tab.when?.(context) ?? true;
   }), [children, context]);
-  return { context, visible: tabs.length > 0, tabs };
+  // The aside shows when a strip tab exists; drill-ins alone never open it.
+  const visible = tabs.some((child) => child.owner === PAGE_OWNER || (child.content as ChatterTabContent).strip !== false);
+  return { context, visible, tabs };
 }
 
-/** Activity stays eager for attention; other tabs mount on first visit and retain drafts. */
+/** Strip tabs mount on first visit and then stay mounted for that record, so drafts survive switching. */
 function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: string }): React.ReactElement {
   const [visited, setVisited] = React.useState<readonly string[]>([active]);
   React.useEffect(() => {
     setVisited((current) => current.includes(active) ? current : [...current, active]);
   }, [active]);
   return <>{tabs.map((tab) => (
-    <Tabs.Panel key={tab.id} value={tab.id}
-      keepMounted={tab.id === ACTIVITY_TAB_ID || visited.includes(tab.id)} className="min-h-0 flex-1">
+    <Tabs.Panel key={tab.id} value={tab.id} keepMounted={visited.includes(tab.id)} className="flex min-h-0 flex-1 flex-col">
+      <ChatterPanel tab={tab} />
+    </Tabs.Panel>
+  ))}</>;
+}
+
+/** One pane: its own toolbar host above its scroll area. */
+function ChatterPanel({ tab }: { tab: ChatterTab }): React.ReactElement {
+  return (
+    <PaneToolbarHost>
       {/* base-ui's ScrollArea.Content sets inline `min-width: fit-content`; only an
           inline `contentStyle` override lets long content shrink and wrap instead of
           overflowing horizontally, since a `min-w-0` class can never beat that inline
           style. */}
       <ScrollArea
-        className="h-full"
+        className="min-h-0 flex-1"
         viewportClassName={cn("overflow-x-hidden p-4", tab.panelClassName)}
         contentClassName="w-full max-w-full"
         contentStyle={{ minWidth: 0 }}
       >
         {tab.children}
       </ScrollArea>
-    </Tabs.Panel>
-  ))}</>;
+    </PaneToolbarHost>
+  );
 }
 
 /** The current route and record context, shared by the aside and shell drawers. */
@@ -244,10 +282,13 @@ export function useActiveChatterView(): ChatterViewContext {
       route?.recordParam && params[route.recordParam]
         ? params[route.recordParam]
         : undefined;
+    // A record view names a model's row; a route whose param names no model
+    // (a dashboard key, a board, a merge pair) has no record and no aside.
+    const record = selectedId !== undefined && Boolean(route?.modelLabel);
     const view: ChatterView = {
-      kind: selectedId ? "record" : "dashboard",
+      kind: record ? "record" : "dashboard",
       type: route?.viewType ?? viewTypeFromPath(pathname),
-      ...(selectedId ? { sqid: selectedId } : {}),
+      ...(record ? { sqid: selectedId } : {}),
       ...(Object.keys(params).length > 0 ? { params } : {}),
     };
     return {
@@ -290,10 +331,11 @@ function tabsFromContributions(
   contributions: readonly ComposedContainerChild<ChatterTabContent>[],
   context: ChatterViewContext,
   counts: Readonly<Record<string, number>>,
+  selection: ChatterSelection | undefined,
 ): readonly ChatterTab[] {
   return contributions.flatMap(({ id, content: tab }) => {
     if (!tab.render) return [];
-    const children = tab.render(context);
+    const children = tab.render(context, selection);
     if (children == null || children === false) return [];
     const count = counts[id] ?? tab.count;
     return [{
@@ -302,6 +344,7 @@ function tabsFromContributions(
       ...(tab.icon ? { icon: tab.icon } : {}),
       ...(typeof count === "number" ? { count } : {}),
       ...(tab.panelClassName ? { panelClassName: tab.panelClassName } : {}),
+      ...(tab.strip === false ? { strip: false } : {}),
       children,
     }];
   });

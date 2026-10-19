@@ -1,22 +1,17 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
-import type { ActivityEntrySource, ContainerChild } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
-import messaging, { defineMessagingAddon } from "./index";
+import messaging from "./index";
 
 describe("messaging addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
   });
 
-  test("contributes comments and related conversations to the one Activity stream", () => {
-    expect(messaging.containers?.["record#aside"]).toBeUndefined();
-    const activity = messaging.containers?.["record#activity"] as Record<string, ContainerChild<ActivityEntrySource>>;
-    expect(activity).toMatchObject({
-      "messaging.comments": { sequence: 10, content: { kinds: ["comment"] } },
-      "messaging.related": { sequence: 20, content: { kinds: ["conversation"] } },
-    });
+  test("contributes the comment and conversation kinds to the Timeline and the Discussion tab", () => {
+    expect(Object.keys(messaging.containers?.["timeline#kinds"] ?? {})).toEqual(["messaging.comment", "messaging.conversation"]);
+    expect(messaging.containers?.["record#aside"]).toMatchObject({ "messaging.discussion": { sequence: 20 } });
   });
 
   test("registers the message resources", () => {
@@ -40,14 +35,5 @@ describe("messaging addon manifest", () => {
     expect(routeHref("messaging.messages")).toBe("/messaging/messages");
     expect(routeHref("messaging.messages.record", { id: "message 1" })).toBe("/messaging/messages/message%201");
     expect(messaging.routes?.find((route) => route.resource === "messaging.Message")?.name).toBe("messaging.messages");
-  });
-
-  test("configures the app's Activity comment source through the manifest", () => {
-    const comments = (addon: typeof messaging) =>
-      (addon.containers?.["record#activity"] as Record<string, ContainerChild<ActivityEntrySource>>)["messaging.comments"]!;
-    const configured = defineMessagingAddon({ submitKey: "mod-enter" });
-    expect(() => expectValidBaseAddon(configured)).not.toThrow();
-    expect(comments(configured).content.kinds).toEqual(["comment"]);
-    expect(comments(configured).content.useEntries).not.toBe(comments(messaging).content.useEntries);
   });
 });

@@ -174,7 +174,6 @@ describe("composeAddons", () => {
     });
     const composed = composeAddons([a, b], IDENTITY_CANONICALIZER);
     expect(ids(resolveContainer(composed.containers, "record#aside")).filter((id) => !id.startsWith("chatter."))).toEqual([
-      "activity",
       "b.early",
       "a.late",
     ]);

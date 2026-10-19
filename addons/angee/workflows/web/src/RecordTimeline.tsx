@@ -14,7 +14,7 @@ import { useStepRetryActions } from "./step-retry";
 import { useRunCancelActions } from "./run-cancel";
 
 export interface TimelineRecord { model: string; id: string }
-export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[] }
+export interface RecordTimelineProps { record: TimelineRecord | readonly TimelineRecord[]; /** Show this run alone (the drill-in's target). */ runId?: string }
 export type TimelineSelection = DocumentType<typeof RecordTimelineDocument>["record_timeline"];
 export type TimelineData = TimelineSelection["records"];
 export type TimelineDecision = TimelineData[number]["decisions"][number];
@@ -26,12 +26,17 @@ const EMPTY_TIMELINE: TimelineData = [];
 const runSteps = (run: TimelineRun) => run.graph.nodes.flatMap(({ step_run }) => step_run ? [step_run, ...step_run.map_steps] : []);
 
 /** One input: a record or a selection. The contributing surface chooses placement. */
-export function RecordTimeline({ record }: RecordTimelineProps): ReactElement {
+export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactElement {
   const t = useWorkflowsT();
   const query = useRecordTimelineQuery(record);
+  const records = query.data?.record_timeline?.records ?? EMPTY_TIMELINE;
+  const data = useMemo(
+    () => runId ? records.map((entry) => ({ ...entry, runs: entry.runs.filter((run) => run.id === runId), decisions: [] })) : records,
+    [records, runId],
+  );
   if (query.isLoading) return <LoadingPanel />;
   if (query.error) return <ErrorBanner description={t("timeline.unavailable")} />;
-  return <RecordTimelineView data={query.data?.record_timeline?.records ?? EMPTY_TIMELINE} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} />;
+  return <RecordTimelineView data={data} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} />;
 }
 
 export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20) {

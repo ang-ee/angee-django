@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useRecordHistory } from "@angee/provenance";
-import { ACTIVITY_TAB_ID, CHATTER_TAB_SEARCH_KEY, ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, updateRouteSearch, useRouteHref, type RecordSmartButtonDescriptor, type ResourceViewDefaultGroups } from "@angee/ui";
+import { CHATTER_TAB_SEARCH_KEY, ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, Statusline, StatusSegment, StatuslineSpacer, updateRouteSearch, useRouteHref, type RecordSmartButtonDescriptor, type ResourceViewDefaultGroups } from "@angee/ui";
 import { useNavigate, useParams } from "@tanstack/react-router";
 
 import { useNotesT, type NotesT } from "./i18n";
@@ -93,7 +93,7 @@ export function NotePage(): React.ReactElement {
           count: versionCount,
           label: t("record.versions"),
           onClick: () => {
-            void navigate({ to: ".", search: updateRouteSearch({ [CHATTER_TAB_SEARCH_KEY]: ACTIVITY_TAB_ID }) });
+            void navigate({ to: ".", search: updateRouteSearch({ [CHATTER_TAB_SEARCH_KEY]: "timeline.rail" }) });
           },
         },
       ] satisfies readonly RecordSmartButtonDescriptor[],

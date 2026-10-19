@@ -126,7 +126,7 @@ export function GraphPage(): React.ReactElement {
     [navigate],
   );
   const openTimeline = React.useCallback((node: NexusNode) => {
-    setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.timeline");
+    setActiveTab(isCircleNode(node) ? "nexus.feed" : "nexus.correspondence");
     setCollapsed(false);
     const path = nodePath(recordHref, node);
     if (path) {

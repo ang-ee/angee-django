@@ -1,19 +1,8 @@
 export { Chatter, useActiveChatterView, type ChatterProps } from "./Chatter";
-export {
-  ACTIVITY_KINDS,
-  ACTIVITY_PAGE_SIZE,
-  ACTIVITY_TAB_ID,
-  Activity,
-  type ActivityEntry,
-  type ActivityEntrySource,
-  type ActivityKind,
-  type ActivityProps,
-  type ActivityRecord,
-  type ActivityWindow,
-} from "./Activity";
 export { StepList, type StepListItem } from "./StepList";
 export {
   TIMELINE_SCOPE_ALL,
+  TIMELINE_SCOPE_NEEDS_ME,
   TimelineRail,
   type TimelineRailEntry,
   type TimelineRailKind,
@@ -21,20 +10,18 @@ export {
 } from "./TimelineRail";
 export { CHATTER_CONTAINERS } from "./chatter-containers";
 export {
-  useRecordPeek,
-  useRecordPeekContext,
-  type RecordPeekOpen,
-  type RecordPeekOpenOptions,
-  type RecordPeekReference,
-} from "./record-peek";
-export {
   ChatterProvider,
   CHATTER_TAB_SEARCH_KEY,
+  CHATTER_TARGET_SEARCH_KEY,
+  CHATTER_FOCUS_SEARCH_KEY,
+  CHATTER_FROM_SEARCH_KEY,
   useChatter,
   useChatterContent,
   type ChatterContent,
   type ChatterContextValue,
+  type ChatterOpenOptions,
   type ChatterProviderProps,
+  type ChatterSelection,
   type ChatterTab,
   type ChatterTabId,
 } from "./chatter-context";

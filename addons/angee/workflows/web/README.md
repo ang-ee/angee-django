@@ -33,7 +33,7 @@ published, startable definitions and sends `start_workflow_run`. Required inputs
 compose the shared schema action dialog; success refreshes the record's timeline.
 
 Workflows contributes the waiting run as a `decisions#origin` child and run,
-step-note, and waiting-decision entries through `record#activity/workflows.activity`.
+run lines through `timeline#kinds/workflows.run` and the one-run drill-in at `record#aside/workflows.run`.
 `RecordTimeline`
 accepts `record: {model, id} | readonly {model, id}[]`. It shows the trigger, done
 steps, inline decisions, error/run holds and the certain future steps, with other

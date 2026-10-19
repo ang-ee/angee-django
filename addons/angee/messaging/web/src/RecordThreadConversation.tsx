@@ -83,9 +83,6 @@ export interface RecordThreadConversationProps {
   composerCopy?: { audience?: string; help?: string };
   /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
   submitKey?: "enter" | "mod-enter";
-  /** Render only the shared record chrome and composer for an Activity footer. */
-  composerOnly?: boolean;
-  /** Let Activity share this query exactly with its bounded entry source. */
   messageLimit?: number;
   /** The stream is the same thread owner with quieter, declaration-driven chrome. */
   stream?: {
@@ -123,7 +120,6 @@ export function RecordThreadConversation({
   header,
   composerCopy,
   submitKey = "enter",
-  composerOnly = false,
   messageLimit = MESSAGE_PAGE_SIZE,
   stream,
 }: RecordThreadConversationProps): React.ReactElement {
@@ -448,8 +444,6 @@ export function RecordThreadConversation({
   ) : null;
   const errorBanner = <ErrorBanner description={error} dismissLabel={t("error.dismiss")}
     onDismiss={() => setError(null)} />;
-
-  if (composerOnly) return <div className="grid min-w-0 gap-3">{header?.(chrome)}{composer}{errorBanner}</div>;
 
   return (
     <div className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
