@@ -16,7 +16,7 @@ class StatementSubject(StatementsMixin, HistoryMixin, AngeeDataModel):
             "identity": Aspect(fields=("label",)),
             "membership": Aspect(
                 fields=("detail",),
-                member={"member": models.ForeignKey("angee.StatementSubject", on_delete=models.PROTECT)},
+                member={"member": models.ForeignKey("base.StatementSubject", on_delete=models.PROTECT)},
             ),
         },
         link=None,
