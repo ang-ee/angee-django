@@ -946,7 +946,11 @@ and current contracts before applying a historical example to a new deployment.
   them without touching non-composed apps. A data transition that `makemigrations`
   cannot express uses an addon `[[migrations]]` declaration as a write → apply on
   every stack → delete in the next change vehicle; no declaration is released
-  history and no migration import earns a compatibility alias.
+  history. A stack collapses its history **before** taking a release that moves a
+  module its generated migrations import; where a release renames such a module
+  anyway (`angee.base` → `angee`), the old paths stay as thin re-export aliases
+  (`angee/base/`) until every stack has collapsed, because the applied graph must
+  load for `makemigrations`, `migrate` and `reset_migration_history` alike.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** `makemigrations` refuses the autodetected drop through the
   [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An

@@ -35,8 +35,10 @@ among the concerns. Field names must be editable scalar fields on their canonica
 models or updatable many-to-many fields; to-one sets use readable public identities or null, and many-to-many `set`/`choose` values are lists of readable public ids (empty clears); one-to-many stays refused. Values and field
 editability are validated when asking. Multiple alternatives cannot write the
 same field of the same record. A record action may call only a method named by
-the model's class-level `decision_methods` tuple, taking no required arguments;
-optional keyword `arguments` are checked against its signature. `delete` is
+the model's class-level `decision_methods` tuple; the proposal's keyword
+`arguments` are bound to the method's signature when the request is validated, so
+a method with required parameters (a strict `cancel(reason)`) is a valid call
+when the proposal names them and refused when it does not. `delete` is
 never permitted. JSON null values are retained.
 
 `Decision.objects.decide(decision, actor=actor, chosen=keys, revision=revision)`

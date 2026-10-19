@@ -9,14 +9,42 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
+
+- `angee.base` is `angee`: `angee.models` (base model, ownership, statements,
+  merge, locks), `angee.fields`, `angee.impl`, `angee.identity`, `angee.indexes`,
+  `angee.lineage`, `angee.refs`. Generated migrations of a stack that keeps its
+  database import the old paths; `angee/base/{fields,mixins,impl,identity,indexes}`
+  and `angee.parties.runtime_migrations` stay as thin re-export aliases until every
+  stack has collapsed its history (`reset_migration_history`), then leave.
+- One spelling of ownership: `OwnerMixin.owner` is the column and a relation named
+  `owner` is that column (`angee.E045`). `AgentSession.owner` is `user`,
+  `parties.Handle.owner` is `controller` (GraphQL `AgentSessionType.user`,
+  `HandleType.controller`); `Integration.owner` and `WebhookSubscription.owner` are
+  nullable `retained_set_null`; `owner` lands on `Party`, `Folder`, `Circle`,
+  `Workflow` and `ExternalAccount` (the external-account `#owner` tuples fold into the
+  column). Each addon declares the cutover as a `[[migrations]]` runtime migration.
+- `client_creation_key` is `idempotency_key` on every create argument and on the
+  GraphQL wire; the conflict error keeps its code.
+- Workflows: extension points (`workflows.workflowextension` resources add steps to
+  a published workflow at `after_<node>` / `before_<node>`), `blocks` tokens with
+  `WorkflowRun.objects.blocking(record, action)` evaluated as policy, blocking runs,
+  `reap_interrupted()`, page references on decisions.
+- Decisions on records; a record call may name required arguments (binding is the
+  check).
+- One provenance surface: the `record#activity` container and the facts line
+  (`context_fields`), `attentionColumn`, lock marks for redacted fields, the Sources
+  aside with the provider `source_url` hook; see the `@angee/ui` changeset.
+- `FileType.permissions` (verbs contributed to `storage.File#actions` gate on it).
+
 ## Unreleased — sync provenance and native history (breaking; ships in 0.3.0)
 
-Upgrade steps and the retired names with their owners now:
-`docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: sync provenance and
-native history".
+The retired names and their owners are listed below; the upgrade path for a
+stack that keeps its database is the incremental one in "Unreleased — AP
+consolidation" (a stack with re-importable data starts a fresh database).
 
 - A record's facts are statements: who asserted a value, from what evidence,
-  through which link. `StatementsMixin` and `Aspect` (`angee.mixins`)
+  through which link. `StatementsMixin` and `Aspect` (`angee.models.statements`)
   declare them, `StatementManager` resolves the winner, and every write runs
   under a provenance changeset. Parties, circles and spaces memberships,
   addresses and relationships carry statements instead of `source` columns.
@@ -29,14 +57,14 @@ native history".
   CardDAV columns on `Party` are folded into statements and record links, then
   retired by a declared chain that preflights every refusal before it drops.
   `Party.merge_into` and `PartyManager.merge` give way to the shared record
-  merge (`angee.merge`).
+  merge (`angee.models.merge`).
 - Integrate: `RecordRevision` and `SyncDiscrepancy` are retired. A link's
   observations are its native history and a sync failure is a state of its link
   (`SyncFailure`, `LinkStatus.FAILED`); `SyncStream.authoritative` marks a
   system of record.
-- Kept as imports until 0.4.0: `angee.evidence.DerivedFromRelation` (now
-  `angee.refs.RetainedGenericRelation`) and `@angee/ui`'s `RevisionsTab`,
-  which renders a retired notice.
+- Removed ahead of the 0.4.0 window they were promised (ruling 2026-10-18, with the
+  `angee.base` → `angee` rename): the `DerivedFromRelation` alias of
+  `angee.refs.RetainedGenericRelation` and `@angee/ui`'s `RevisionsTab`.
 - GraphQL removals: `confirm_party_handle`, `dismiss_party_handle`, `veto_merge`,
   `duplicate_party_candidates`, `Party.party_handles`, `Person.folder`, the
   `source` field on circle members, relationships and space memberships,
@@ -75,7 +103,7 @@ native history".
 
 ## Unreleased — record tasks (breaking; ships in 0.3.0)
 
-Upgrade steps: `docs/howto/getstarted.md`, "Upgrading to angee 0.3.0: record tasks".
+Upgrade steps: see "Unreleased — AP consolidation" below.
 
 - Record activities are record tasks: a `projects.Task` whose `subject` is a
   record's chatter attachment, typed by `projects.ActivityType` (moved from
