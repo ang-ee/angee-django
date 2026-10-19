@@ -66,7 +66,7 @@ EXPECTED_VERBS = {
     "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
     "decisions.Decision.manager": "ask decide withdraw",
     "decisions.Decision.queryset": (
-        "attention_expression open open_expression open_for"
+        "attention_expression for_records open open_expression open_for"
     ),
 }
 
