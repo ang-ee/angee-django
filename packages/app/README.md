@@ -179,7 +179,7 @@ containers: {
     "messaging.comments": { sequence: 10 },
   },
   "record#aside": [
-    { only: ["activity", "storage.files"] },
+    { only: ["timeline.rail", "related"] },
     { only: [], when: { route: "notes.detail" } }, // may be owned by another addon
   ],
 },

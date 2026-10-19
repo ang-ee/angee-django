@@ -75,7 +75,7 @@ export function TimelinePane(props: TimelinePaneProps): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-1">
-      <p className="pb-2 text-2xs text-fg-subtle">
+      <p className="pb-2 text-12 text-fg-muted">
         {t("timeline.count", { count: total })}
       </p>
       <MessageFeed label={t("timeline.feedLabel")} className="gap-1">

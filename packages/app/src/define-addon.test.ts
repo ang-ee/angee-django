@@ -173,9 +173,11 @@ describe("composeAddons", () => {
       containers: { "record#aside": { "b.early": { sequence: 10, content: { label: "Early" } } } },
     });
     const composed = composeAddons([a, b], IDENTITY_CANONICALIZER);
+    // The framework's Related tab (sequence 40) sorts among them.
     expect(ids(resolveContainer(composed.containers, "record#aside")).filter((id) => !id.startsWith("chatter."))).toEqual([
       "b.early",
       "a.late",
+      "related",
     ]);
   });
 

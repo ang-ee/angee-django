@@ -14,6 +14,8 @@ export {
   type PaneToolbarAction,
   type PaneToolbarHostProps,
   type PaneToolbarIconButtonProps,
+  PaneToolbarMenu,
+  type PaneToolbarMenuItem,
   type PaneToolbarProps,
 } from "./PaneToolbar";
 export {

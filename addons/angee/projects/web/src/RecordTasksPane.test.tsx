@@ -96,7 +96,7 @@ afterEach(() => {
 });
 
 describe("RecordTasksPane", () => {
-  test("lists planned and done tasks apart with their type, assignee and day", () => {
+  test("lists planned and done tasks behind the scope chips with their type, assignee and day", () => {
     mocks.data = payload([
       task({ id: "tsk_done", title: "Sent the reminder", status: "DONE", activity_type: "todo" }),
       task(),
@@ -104,7 +104,10 @@ describe("RecordTasksPane", () => {
     renderPane();
     const planned = screen.getByRole("region", { name: "Planned" });
     expect(planned.textContent).toContain("Chase the credit note");
-    expect(planned.textContent).toContain("Call · Ada");
+    expect(planned.textContent).toContain("Call");
+    expect(planned.textContent).toContain("Ada");
+    expect(planned.textContent).not.toContain("Sent the reminder");
+    fireEvent.click(screen.getByRole("button", { name: /^Done/ }));
     expect(screen.getByRole("region", { name: "Done" }).textContent).toContain("Sent the reminder");
   });
 
@@ -126,6 +129,7 @@ describe("RecordTasksPane", () => {
   test("completes a planned task through the generic verb with its completion note", async () => {
     mocks.data = payload([task()]);
     renderPane();
+    fireEvent.click(screen.getByRole("button", { name: /Chase the credit note/ }));
     fireEvent.change(screen.getByLabelText("Completion note"), { target: { value: "Supplier confirmed." } });
     fireEvent.click(screen.getByRole("button", { name: "Mark done" }));
     await waitFor(() => expect(mocks.calls).toEqual([

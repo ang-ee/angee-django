@@ -144,7 +144,7 @@ export const StorageRecordFiles = graphql(`
       attachments {
         id
         label
-        file { id filename title }
+        file { id filename title size_bytes created_by_label }
       }
     }
   }

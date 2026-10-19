@@ -9,7 +9,9 @@ import { messageForm } from "./MessageForm";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordChatterPane } from "./RecordChatterPane";
-import { THREAD_CHATTER_EDGE } from "./documents";
+import { FollowRecordChrome } from "./FollowRecordChrome";
+import { RecordConversationsGroup, useRecordConversationsCount } from "./RecordConversationsGroup";
+import { THREAD_ATTACHMENT_MODEL, THREAD_CHATTER_EDGE } from "./documents";
 
 export { CHANNEL_MODEL } from "./documents";
 export { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
@@ -119,6 +121,19 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
         label: "Discussion", icon: "comments", panelClassName: "p-0",
         when: (context) => context.route?.recordEdges?.includes(THREAD_CHATTER_EDGE) ?? false,
         render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+      } },
+    },
+    // Follow is a record-header control; what to be told about sits behind the Discussion's overflow.
+    "form#chrome": {
+      "messaging.follow": { sequence: 30, content: <FollowRecordChrome /> },
+    },
+    // The conversations a record came from, in the Related tab.
+    "related#groups": {
+      "messaging.conversations": { sequence: 40, content: {
+        label: "Conversations",
+        when: (context) => context.route?.recordEdges?.some((edge) => edge.startsWith(THREAD_ATTACHMENT_MODEL)) ?? false,
+        useCount: useRecordConversationsCount,
+        render: (context) => <RecordConversationsGroup context={context} />,
       } },
     },
   },

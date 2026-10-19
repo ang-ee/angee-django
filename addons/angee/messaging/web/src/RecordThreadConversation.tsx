@@ -70,6 +70,9 @@ export interface RecordThreadConversationChrome {
   markRead: () => Promise<void>;
   markReadPending: boolean;
   reportError: (message: string | null) => void;
+  /** The transcript's search, for a header that renders the control itself. */
+  search: string;
+  setSearch: (value: string) => void;
 }
 
 export interface RecordThreadConversationProps {
@@ -79,6 +82,10 @@ export interface RecordThreadConversationProps {
    *  followers/subtypes/mark-read strip here; a room supplies its own or omits it.
    *  The transcript + composer + mark-read + live-refetch are the same either way. */
   header?: (chrome: RecordThreadConversationChrome) => React.ReactNode;
+  /** Where the search control renders: inline above the feed (default), or by the header through `chrome.setSearch`. */
+  searchPlacement?: "inline" | "header";
+  /** Message types the chatter transcript narrows to (server values: `comment`, `notification`); empty lists all. */
+  messageTypes?: readonly string[];
   /** Already translated consumer copy; omitted entries use messaging defaults. */
   composerCopy?: { audience?: string; help?: string };
   /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
@@ -118,6 +125,8 @@ export function RecordThreadConversation({
   modelLabel,
   recordId,
   header,
+  searchPlacement = "inline",
+  messageTypes,
   composerCopy,
   submitKey = "enter",
   messageLimit = MESSAGE_PAGE_SIZE,
@@ -137,9 +146,9 @@ export function RecordThreadConversation({
       recordId,
       search: activeSearch,
       messageLimit,
-      messageTypes: stream ? [...(stream.messageTypes ?? [])] : [],
+      messageTypes: stream ? [...(stream.messageTypes ?? [])] : [...(messageTypes ?? [])],
     }),
-    [modelLabel, recordId, activeSearch, messageLimit, stream?.messageTypes, Boolean(stream)],
+    [modelLabel, recordId, activeSearch, messageLimit, stream?.messageTypes, messageTypes, Boolean(stream)],
   );
   const threadQuery = useAuthoredQuery(RecordThreadDocument, variables, {
     enabled,
@@ -422,6 +431,8 @@ export function RecordThreadConversation({
     markRead: handleMarkRead,
     markReadPending: markReadState.fetching,
     reportError: setError,
+    search,
+    setSearch,
   };
   const composer = canPost ? (
     <ChatterComposer
@@ -448,7 +459,7 @@ export function RecordThreadConversation({
   return (
     <div className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
       {header?.(chrome)}
-      {(stream?.search ?? !stream) ? <SearchInput
+      {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
         value={search}
         onChange={(event) => setSearch(event.currentTarget.value)}
         onClear={() => setSearch("")}

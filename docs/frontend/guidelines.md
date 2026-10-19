@@ -1066,6 +1066,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
 | `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
 | `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
+| `related#groups`, `<model>#groups` | one group of the Related tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
 | `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
@@ -1102,7 +1103,7 @@ drill-in:
 | `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
 | `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
 | `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | open tasks about the record, schedule and assign, a folded Completed section | projects |
-| `related` | 40 | at least one section has rows or a create verb | sections Files (upload), Pages (bind), Sources (external links), Conversations (source threads); reverse edges on files and pages | storage, knowledge, integrate, messaging |
+| `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); reverse edges (Backlinks, Bound to) on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
 
 A tab earns the strip by creating things; everything else is a **drill-in**: a
 `record#aside` child with `strip: false` that renders one object named by its
@@ -1123,6 +1124,30 @@ sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
 "unavailable" or offer writes on a type whose schema declares no arm. A section
 with neither rows nor a verb is absent, not empty.
+
+Each `related#groups` child (or `<model>#groups` for one model's pages) is one
+group of the framework's Related tab, declared by the addon that owns the edge.
+The tab draws the group's label with its count; the group renders its rows and
+its one verb through the shared pane row anatomy:
+
+```ts
+interface RelatedGroupContent {
+  when?: (context: ChatterViewContext) => boolean;
+  label: ReactNode;
+  useCount?: (context: ChatterViewContext) => number | undefined;
+  useVerb?: (context: ChatterViewContext) => boolean; // offers its one verb here
+  render: (context: ChatterViewContext) => ReactNode;
+}
+```
+
+A group with neither rows nor a verb is absent, not empty.
+
+**Every pane list composes one row anatomy** (`PaneRow`, `PaneRows`,
+`PaneLabel` in `@angee/ui`): glyph, `title · detail`, a right meta, a muted
+second line and one hover verb, on the 13/12 scale; a row is a link when its
+target has a page and a button when it opens something beside it. Day and
+section labels sit above rows, folded sections open from their label. A pane
+never picks its own font size, card or header row.
 
 Each `timeline#kinds` child presents one kind a Python timeline source
 implements (the source declares `kind`, `sequence`, `eligible`, `entries`,

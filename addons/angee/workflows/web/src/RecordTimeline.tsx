@@ -4,7 +4,7 @@ import * as v from "valibot";
 import { DecisionCard } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, RecordActionBar, RecordIssues, RecordReference,
+  Alert, Badge, Button, Chip, CountBadge, ErrorBanner, InlineEmpty, LoadingPanel, PaneToolbar, RecordActionBar, RecordIssues, RecordReference,
   SegmentedControl, StepList, optionToken, titleCase, useActiveRecordForm, useStatusTone,
   formatDateTime, textRoleVariants, type StepListItem,
 } from "@angee/ui";
@@ -36,7 +36,7 @@ export function RecordTimeline({ record, runId }: RecordTimelineProps): ReactEle
   );
   if (query.isLoading) return <LoadingPanel />;
   if (query.error) return <ErrorBanner description={t("timeline.unavailable")} />;
-  return <RecordTimelineView data={data} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} />;
+  return <RecordTimelineView data={data} openCount={query.data?.record_timeline?.open_decision_count ?? 0} set={Array.isArray(record)} drillIn={Boolean(runId)} />;
 }
 
 export function useRecordTimelineQuery(record: RecordTimelineProps["record"], enabled = true, runLimit = 20) {
@@ -62,9 +62,11 @@ export function RecordTimelineDecisionCard({ decision, recordId, compact = false
     actions={actions} />;
 }
 
-/** Presentation over the same generated read, used by stories and interaction tests. */
-export function RecordTimelineView({ data, openCount, set = false }: {
-  data: TimelineData; openCount: number; set?: boolean;
+/** Presentation over the same generated read, used by stories and interaction tests.
+ *  As the aside's run drill-in (`drillIn`) the host names the pane, so the run's
+ *  status and verbs ride the pane toolbar instead of a header of their own. */
+export function RecordTimelineView({ data, openCount, set = false, drillIn = false }: {
+  data: TimelineData; openCount: number; set?: boolean; drillIn?: boolean;
 }): ReactElement {
   const t = useWorkflowsT();
   const [grouping, setGrouping] = useState<"record" | "question">("record");
@@ -125,6 +127,23 @@ export function RecordTimelineView({ data, openCount, set = false }: {
   const entry = data[0];
   const single = runs.length === 1 ? runs[0] : undefined;
   const inRuns = new Set(runs.flatMap((run) => runSteps(run).flatMap((step) => step.decision ? [step.decision.id] : [])));
+  if (drillIn) {
+    return <div className="flex min-h-0 flex-1 flex-col">
+      {single ? <PaneToolbar
+        scope={<RunStatus run={single} compact />}
+        actions={<>{link("workflows.WorkflowRun", single.id, t("timeline.openRun"))}{single.can_cancel ? cancelRun(single) : null}</>}
+      /> : <PaneToolbar />}
+      <div className="grid min-w-0 gap-4 p-3">
+        {single?.status && optionToken(single.status) === "failed" && single.failure_reason ? <p className="text-13 text-danger-text">{single.failure_reason}</p> : null}
+        {runs.map((run) => <section key={run.id} className="grid min-w-0 gap-3" aria-label={run.display_name}>
+          <RunSteps run={run} recordId={entry?.record_id ?? ""}
+            card={(decision, id, compact, records) => card(decision, id, compact, records, run.can_cancel ? run.id : undefined)}
+            link={link} retry={retryStep} />
+        </section>)}
+        {!runs.length ? <InlineEmpty label={t("timeline.empty")} /> : null}
+      </div>
+    </div>;
+  }
   return <div className="grid min-w-0 gap-4">
     <header className="grid min-w-0 gap-1.5"><div className="flex min-w-0 items-center gap-2">
       <h2 className={textRoleVariants({ role: "title", truncate: true, className: "min-w-0" })}>{single?.version?.workflow?.display_name ?? t("timeline.workflows", { count: runs.length })}</h2>
@@ -147,7 +166,7 @@ export function RecordTimelineView({ data, openCount, set = false }: {
   </div>;
 }
 
-function RunStatus({ run }: { run: TimelineRun }) {
+function RunStatus({ run, compact = false }: { run: TimelineRun; compact?: boolean }) {
   const t = useWorkflowsT();
   const resolveTone = useStatusTone();
   const holds = runSteps(run).flatMap((step) => step.hold ? [step.hold] : []);
@@ -156,7 +175,9 @@ function RunStatus({ run }: { run: TimelineRun }) {
     : status === "succeeded" ? "plan_complete" : status === "running" ? "plan_running"
     : status === "waiting" ? holds.includes("error") ? "error" : holds.includes("run") ? "run"
       : holds.includes("decision") ? "decision" : "waiting" : "unknown";
-  return <div className="grid gap-1"><Badge tone={state === "unknown" ? "neutral" : resolveTone(state)}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</Badge>
+  const badge = <Badge tone={state === "unknown" ? "neutral" : resolveTone(state)}>{state === "plan_complete" && run.outcome_label || t(`timeline.status.${state}`)}</Badge>;
+  if (compact) return badge;
+  return <div className="grid gap-1">{badge}
     {status === "failed" && run.failure_reason ? <p className="text-13 text-danger-text">{run.failure_reason}</p> : null}</div>;
 }
 

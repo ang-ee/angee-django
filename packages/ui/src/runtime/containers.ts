@@ -5,7 +5,7 @@ import { developmentMode } from "../lib/development-mode";
 import { orderById, positionSiblings } from "../lib/position";
 import type { BuiltInResourceViewKind } from "../views/resource/model/capabilities";
 import type { ResourceViewKindCapabilities } from "../views/resource/model/capabilities";
-import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent } from "./contracts";
+import type { ChatterTabContent, DrawerContribution, DrawerEdge, TimelineKindContent, RelatedGroupContent } from "./contracts";
 import { isPresent, sessionPermitted, useAppRuntime } from "./runtime";
 
 /**
@@ -41,6 +41,8 @@ export interface ContainerKinds {
   aside: ChatterTabContent;
   /** How a timeline kind presents (`timeline#kinds`), declared by the kind's owner. */
   kinds: TimelineKindContent;
+  /** The Related tab's groups (`related#groups`, `<model>#groups`), declared by each edge's owner. */
+  groups: RelatedGroupContent;
   /**
    * Renderable children of addon pages' own containers, declared on the
    * owner's node: toolbar verbs (`messaging.channels#toolbar`), dashboard

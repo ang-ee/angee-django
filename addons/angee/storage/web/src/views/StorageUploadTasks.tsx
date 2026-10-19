@@ -24,7 +24,7 @@ function StorageUploadTaskRow({ task, t, onRetry }: { task: UploadTask; t: Trans
     <div className="flex items-center gap-2 text-13">
       <span className="min-w-0 flex-1 truncate text-fg">{task.name}</span>
       <span
-        className={cn("shrink-0 text-2xs", task.status === "failed" ? "text-danger-text" : "text-fg-muted")}
+        className={cn("shrink-0 text-12", task.status === "failed" ? "text-danger-text" : "text-fg-muted")}
         title={task.error}
       >
         {t(`upload.status.${task.status}`)}

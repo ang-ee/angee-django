@@ -99,7 +99,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
   if (!open) {
     const withdrawn = verdict.success && verdict.output.length === 0;
     const supplied = v.safeParse(VerdictValuesSchema, decision.verdict_values);
-    return <p ref={closedRef} tabIndex={-1} className="text-xs text-fg-muted">{decision.kind_label}{" · "}
+    return <p ref={closedRef} tabIndex={-1} className="text-12 text-fg-muted">{decision.kind_label}{" · "}
       {!withdrawn && decision.answered_by ? <><span>{decision.answered_by.display_name}</span>{" · "}</> : null}<span>{withdrawn
       ? t("decision.withdrawn", { name: decision.answered_by?.display_name ?? t("decision.operator") })
       : supplied.success && verdict.success && proposal.success ? <>{t("decision.chose", { labels: "" })}{alternatives.filter((alternative) => verdict.output.includes(alternative.key)).map((alternative, index) =>
@@ -131,7 +131,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
     <section ref={ref} aria-label={decision.kind_label} data-decision={decision.id}>
       <div className="flex min-w-0 items-start gap-2"><StatusIcon tone="warning" size="sm" icon="help" className="mt-0.5" />
         <div className="min-w-0 flex-1"><h2 className="text-13 font-semibold leading-5 text-fg [overflow-wrap:anywhere]">{decision.kind_label}</h2>
-          {!inStep ? <div className="mt-0.5 text-xs text-fg-muted"><DecisionOriginOutlet />
+          {!inStep ? <div className="mt-0.5 text-12 text-fg-muted"><DecisionOriginOutlet />
             {decision.requester ? t("decision.requestedBy", { name: decision.requester.display_name }) : null}{" · "}<RelativeTime value={decision.created_at} /></div> : null}
         </div>
       </div>
@@ -159,7 +159,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, inStep, o
         {onEditField && editField ? <Button size="sm" variant="ghost" onClick={() => onEditField(editField)}>{t("decision.editOnForm")}</Button> : null}
         {actions}
       </div>
-      {decision.assignees.length ? <p className="mt-2 text-xs text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
+      {decision.assignees.length ? <p className="mt-2 text-12 text-fg-muted">{t("decision.mayAnswer", { names: decision.assignees.map(({ display_name }) => display_name).join(", ") })}</p> : null}
       {!compact ? <div className="mt-3 border-t border-border-subtle pt-2">
         <div className="flex min-w-0 flex-wrap gap-1">{decision.records.map((record) => record.record_id && record.record_id !== selfId && !inStep?.records.includes(record.record_id)
           ? <span key={record.id}>{recordLink(record.record_id)}</span> : null)}</div>

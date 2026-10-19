@@ -49,7 +49,7 @@ function deferred<T>() {
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://files" });
 afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); });
 
-test("cold Files navigation preserves the real shell, tree, pager and active Details tab while native reads run in parallel", async () => {
+test("cold Files navigation preserves the real shell, tree, pager and the details form while native reads run in parallel", async () => {
   installTestLocalStorage();
   Element.prototype.getAnimations ??= () => [];
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
@@ -90,15 +90,13 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     <Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
       <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.File": "mutation DeleteFiles($id: ID!) { delete_files_preview(id: $id) { deleted } }", "storage.Folder": "mutation DeleteFolders($id: ID!) { delete_folders_preview(id: $id) { deleted } }" } } }}>
       <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []),
-        // The composed containers: the chatter aside the page publishes its Details tab into.
+        // The composed containers: the record aside and its Related groups.
         containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers }}>
         <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
       </AppRuntimeProvider>
       </OperationDocumentsProvider>
     </Provider>,
   );
-  const details = await screen.findByRole("tab", { name: "Details" });
-  fireEvent.click(details);
   await waitFor(() => expect(forms.has("file-a") && previews.has("file-a")).toBe(true));
   await act(async () => {
     previews.get("file-a")!.resolve({ data: { files_by_pk: records[0] } });
@@ -109,16 +107,15 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
   const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
   const tree = screen.getByRole("tree");
   const pager = screen.getByRole("navigation", { name: "Record navigation" });
-  const trash = screen.getByRole("button", { name: "Trash" }) as HTMLButtonElement;
+  // The lifecycle verbs reach the control band once the desktop shell has mounted its host.
+  await waitFor(() => expect(view.container.querySelector(".area-control")?.contains(screen.getByRole("button", { name: "Trash" }))).toBe(true));
   const control = view.container.querySelector(".area-control");
-  expect(control?.contains(trash)).toBe(true);
+  const trash = screen.getByRole("button", { name: "Trash" }) as HTMLButtonElement;
   await waitFor(() => expect((screen.getByRole("button", { name: "Next record" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   await waitFor(() => expect(forms.has("file-b") && previews.has("file-b")).toBe(true));
   expect(router.state.location.pathname).toBe("/storage/file-b");
   expect(screen.queryByDisplayValue("Alpha")).toBeNull();
-  expect(screen.getByRole("tab", { name: "Details" })).toBe(details);
-  expect(details.getAttribute("aria-selected")).toBe("true");
   expect(screen.getByRole("tree")).toBe(tree);
   expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
   expect(screen.getByRole("heading", { level: 2, name: "Loading file" })).toBe(header);
@@ -137,9 +134,8 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
   expect(trash.disabled).toBe(false);
   expect(control?.contains(trash)).toBe(true);
   expect(update).not.toHaveBeenCalled();
-  // The initial compact server snapshot remounts once at the desktop breakpoint;
-  // subsequent record navigation owns one form read per id.
-  expect(getOne.mock.calls.map(([request]) => String(request.id))).toEqual(["file-a", "file-a", "file-b"]);
+  // The metadata form lives in the page body, so each record owns one form read.
+  expect(getOne.mock.calls.map(([request]) => String(request.id))).toEqual(["file-a", "file-b"]);
 
   for (const missing of [false, true]) {
     const id = missing ? "file-missing" : "file-denied";
@@ -158,8 +154,6 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     });
     await waitFor(() => expect(header.textContent).toBe(missing ? "File not found" : "Could not load this preview."));
     if (!missing) expect(await screen.findByText("Preview access denied")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Details" })).toBe(details);
-    expect(details.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tree")).toBe(tree);
     expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
     expect(trash.disabled).toBe(true);

@@ -7,8 +7,7 @@ import { PaneToolbar } from "../layouts/PaneToolbar";
 import { cn } from "../lib/cn";
 import type { TimelineKindContent } from "../runtime";
 import { Button } from "../ui/button";
-import { Chip } from "../ui/chip";
-import { StatusIcon } from "../ui/status-icon";
+import { PaneLabel, PaneRow, PaneRows, ScopeChip } from "./pane-list";
 import { formatDate, formatDateTime } from "../widgets/date-format";
 
 /**
@@ -109,40 +108,28 @@ export function TimelineRail({
         {!pending && !error && sorted.length === 0 ? (
           <EmptyState icon="activity" title={t("timeline.empty.title")} description={t("timeline.empty.description")} className="min-h-40 p-4" />
         ) : null}
-        <ul>
+        <PaneRows>
           {sorted.map((entry, index) => {
             const day = formatDate(entry.at);
             const previous = index ? formatDate(sorted[index - 1]!.at) : undefined;
             const kind = presentation.get(entry.kind);
             return (
               <React.Fragment key={entry.key}>
-                {day !== previous ? <li className="px-1 pb-1 pt-4 text-12 font-medium text-fg-muted first:pt-1">{day}</li> : null}
+                {day !== previous ? <PaneLabel>{day}</PaneLabel> : null}
                 <li>
-                  <Line
+                  <PaneRow
+                    icon={kind?.icon ?? "activity"}
+                    tone={kind?.tone ?? "muted"}
+                    title={entry.title}
+                    detail={entry.detail}
+                    meta={<time dateTime={entry.at} title={formatDateTime(entry.at)}>{new Date(entry.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</time>}
+                    sub={`${entry.actor}${entry.folded ? ` · ${entry.folded}` : ""}`}
+                    verb={kind?.verb}
+                    needsMe={entry.needsMe}
                     href={entry.href}
                     onOpen={() => onOpen(entry)}
-                    title={typeof kind?.verb === "string" ? kind.verb : undefined}
-                  >
-                    <span className="relative mt-0.5 shrink-0">
-                      <StatusIcon tone={kind?.tone ?? "muted"} icon={kind?.icon ?? "activity"} size="sm" />
-                      {entry.needsMe ? <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-warning-text ring-2 ring-sheet" /> : null}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline gap-2">
-                        <span className="min-w-0 flex-1 truncate text-13">
-                          <span className={entry.needsMe ? "font-semibold" : "font-medium"}>{entry.title}</span>
-                          {entry.detail ? <span className="text-fg-muted"> · {entry.detail}</span> : null}
-                        </span>
-                        <time dateTime={entry.at} title={formatDateTime(entry.at)} className="shrink-0 text-12 tabular-nums text-fg-muted">
-                          {new Date(entry.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-                        </time>
-                      </span>
-                      <span className="flex items-center gap-1 text-12 text-fg-muted">
-                        <span className="truncate">{entry.actor}{entry.folded ? ` · ${entry.folded}` : ""}</span>
-                        <span className="ml-auto flex shrink-0 items-center text-link opacity-0 group-hover/line:opacity-100">{kind?.verb}</span>
-                      </span>
-                    </span>
-                  </Line>
+                    label={typeof kind?.verb === "string" ? kind.verb : undefined}
+                  />
                 </li>
               </React.Fragment>
             );
@@ -150,28 +137,8 @@ export function TimelineRail({
           {hasMore && onLoadOlder ? (
             <li className="py-2 text-center"><Button size="sm" variant="ghost" disabled={pending} onClick={onLoadOlder}>{t("timeline.older")}</Button></li>
           ) : null}
-        </ul>
+        </PaneRows>
       </div>
     </div>
-  );
-}
-
-const LINE_CLASS = "group/line flex w-full gap-2 rounded-6 px-1 py-1.5 text-left hover:bg-canvas/70";
-
-/** A line is a link when its target has a page of its own, a button when it opens a drill-in beside it. */
-function Line({ href, onOpen, title, children }: { href?: string; onOpen: () => void; title?: string; children: React.ReactNode }): React.ReactElement {
-  if (href) {
-    return <a href={href} title={title} className={LINE_CLASS} onClick={(event) => { event.preventDefault(); onOpen(); }}>{children}</a>;
-  }
-  return <button type="button" title={title} className={LINE_CLASS} onClick={onOpen}>{children}</button>;
-}
-
-function ScopeChip({ label, count, active, tone, onClick }: { label: React.ReactNode; count: number; active: boolean; tone?: "warning"; onClick: () => void }): React.ReactElement {
-  return (
-    <button type="button" aria-pressed={active} onClick={onClick} className="rounded-full">
-      <Chip size="sm" tone={active ? "brand" : tone ?? "muted"} variant={active ? "solid" : "soft"} className="cursor-pointer whitespace-nowrap">
-        {label}<span className={active ? "ml-1 opacity-80" : "ml-1 text-fg-muted"}>{count}</span>
-      </Chip>
-    </button>
   );
 }

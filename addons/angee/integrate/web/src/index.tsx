@@ -34,12 +34,7 @@ import {
   RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
-import {
-  RECORD_LINK_MODEL,
-  RECORD_SOURCE_SEARCH_KEY,
-  RECORD_SOURCES_TAB_ID,
-  RecordSourcesPane,
-} from "./RecordSourcesPane";
+import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup } from "./RecordSourcesPane";
 
 const INTEGRATE_ID = "integrate";
 
@@ -124,7 +119,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
 const integrate = defineBaseAddon({
   id: INTEGRATE_ID,
   routes: integrateRoutes,
-  recordSearchKeys: [...Object.values(INTEGRATION_STREAM_SEARCH_KEYS), RECORD_SOURCE_SEARCH_KEY],
+  recordSearchKeys: [...Object.values(INTEGRATION_STREAM_SEARCH_KEYS)],
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
   widgets: {
@@ -140,17 +135,8 @@ const integrate = defineBaseAddon({
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   containers: {
-    "record#aside": {
-      [RECORD_SOURCES_TAB_ID]: {
-        sequence: 70,
-        content: {
-          label: enIntegrateMessages["sources.title"] ?? "Sources",
-          icon: "link",
-          when: ({ route }) => route?.recordEdges?.includes(RECORD_LINK_MODEL) === true,
-          render: (context) => <RecordSourcesPane context={context} />,
-        },
-      },
-    },
+    // The Related tab's Sources group, on records that admit RecordLink edges.
+    "related#groups": { [RECORD_SOURCES_GROUP_ID]: recordSourcesGroup },
     [`${INTEGRATION_MODEL}#sections`]: {
       [INTEGRATION_STREAMS_TAB_ID]: {
         sequence: 30,
@@ -237,9 +223,9 @@ export {
 } from "./sync-fragments";
 export {
   RECORD_LINK_MODEL,
-  RECORD_SOURCE_SEARCH_KEY,
-  RECORD_SOURCES_TAB_ID,
+  RECORD_SOURCES_GROUP_ID,
   RecordSourcesPane,
+  recordSourcesGroup,
 } from "./RecordSourcesPane";
 
 export default integrate;

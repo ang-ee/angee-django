@@ -8,7 +8,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
-import { FILE_ATTACHMENT_MODEL, RecordFilesPane, recordFilesTarget, useRecordFilesCount } from "./RecordFilesPane";
+import { recordFilesGroup } from "./RecordFilesPane";
 import { FileRecordPreview, filePreviewPageFromSearch } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
 import { fileForm } from "./views/file-form";
@@ -60,19 +60,8 @@ const storage = defineBaseAddon({
         content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
       },
     },
-    "record#aside": {
-      "storage.files": {
-        sequence: 40,
-        content: {
-          label: "Files",
-          icon: "file",
-          // Only on types whose schema lets a record carry attachments.
-          when: (context) => context.route?.recordEdges?.includes(FILE_ATTACHMENT_MODEL) ?? false,
-          useCount: useRecordFilesCount,
-          render: (context) => <RecordFilesPane target={recordFilesTarget(context)} />,
-        },
-      },
-    },
+    // The Related tab's Files group, on types whose schema lets a record carry attachments.
+    "related#groups": { "storage.files": recordFilesGroup },
   },
   i18n: { storage: enStorageMessages },
   icons: {
@@ -87,7 +76,7 @@ const storage = defineBaseAddon({
 });
 
 export { useStorageUpload } from "./data/use-upload";
-export { RecordFilesPane, recordFilesTarget, type RecordFilesTarget } from "./RecordFilesPane";
+export { RecordFilesPane, recordFilesGroup, recordFilesTarget, type RecordFilesTarget } from "./RecordFilesPane";
 export { FileRecordPreview } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
 export { StorageUploadTasks } from "./views/StorageUploadTasks";

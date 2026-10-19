@@ -10,7 +10,7 @@ MCP exposes vault-scoped `create_page` through the same GraphQL tool compiler as
 Retrieval backends implement `search_many` over each bounded readable vault group;
 the lexical owner performs one text scan for the group.
 
-Knowledge contributes a **Pages** chatter tab for record routes. It lists
+Knowledge contributes a **Pages** group to the Related tab of record routes. It lists
 actor-readable page bindings and embeds `KnowledgePageView`. Binding and
 unbinding use the existing role-keyed mutations, which require write access to
 both the page and target record. A record owner declares its type bindable from
@@ -31,15 +31,15 @@ record views of declared types (their resource metadata lists
 `knowledge.RecordBinding` in `recordEdges`), and `record_knowledge_can_bind`
 offers binding only on a declared type the actor can write.
 
-The tab is the `record#aside/knowledge.pages` child. The rendered addon exports
-`recordPagesTab({ label, role, sequence, when })`, which returns a
-chatter tab child. A product addon can add a second tab with a specific binding
+The group is the `related#groups/knowledge.pages` child of the framework's
+Related tab. The rendered addon exports `recordPagesGroup({ label, role, sequence, when })`,
+which returns a Related group child. A product addon can add a second tab with a specific binding
 role on its own model's aside, for example:
 
 ```tsx
 containers: {
   "notes.Note#aside": {
-    "notes.reference-pages": recordPagesTab({ label: "Reference pages", role: "reference" }),
+    "notes.reference-pages": recordPagesGroup({ label: "Reference pages", role: "reference" }),
   },
 },
 ```

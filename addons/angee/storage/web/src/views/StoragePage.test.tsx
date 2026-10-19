@@ -283,18 +283,10 @@ vi.mock("./FileBrowserContent", async () => {
 });
 
 vi.mock("./FileDetail", () => ({
-  // The detail is now the file's metadata form only — published into the
-  // chatter's `details` tab. The pager + lifecycle verbs moved to the control band.
+  // The detail is the file's metadata form, rendered under the preview; the
+  // pager and lifecycle verbs ride the control band.
   FileDetail: ({ id }: { id: string }) => (
     <section data-testid="file-detail" data-file-id={id} />
-  ), }));
-
-vi.mock("./NewFolderControl", () => ({
-  NewFolderControl: () => <button type="button">New folder</button>, }));
-
-vi.mock("./SelectedFolderControl", () => ({
-  SelectedFolderControl: ({ name }: { name: string }) => (
-    <section data-testid="selected-folder">{name}</section>
   ), }));
 
 import {

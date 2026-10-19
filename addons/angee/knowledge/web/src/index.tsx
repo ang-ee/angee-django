@@ -5,11 +5,11 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 
 import { enKnowledgeMessages } from "./i18n";
-import { recordPagesTab } from "./RecordPagesPane";
+import { pageBacklinksGroup, pageBoundToGroup, recordPagesGroup } from "./RecordPagesPane";
 import { vaultCreateForm } from "./views/vault-form";
 
 export { KnowledgePageView, type KnowledgePageViewProps } from "./KnowledgePageView";
-export { RecordPagesPane, recordPagesTab, recordPagesTarget, type RecordPagesTabOptions, type RecordPagesTarget } from "./RecordPagesPane";
+export { RecordPagesPane, recordPagesGroup, recordPagesTarget, type RecordPagesGroupOptions, type RecordPagesTarget } from "./RecordPagesPane";
 export { RecordNotesStream, recordNotesTab, type RecordNotesStreamProps, type RecordNotesTabOptions } from "./RecordNotesStream";
 
 const KNOWLEDGE_ID = "knowledge";
@@ -45,7 +45,10 @@ const knowledge = defineBaseAddon({
   menus: knowledgeMenu,
   i18n: { knowledge: enKnowledgeMessages },
   containers: {
-    "record#aside": { "knowledge.pages": recordPagesTab() },
+    // The Related tab: bound pages on every record type that carries bindings; on a
+    // page, the pages that link to it and the records it is bound to.
+    "related#groups": { "knowledge.pages": recordPagesGroup() },
+    "knowledge.Page#groups": { "knowledge.backlinks": pageBacklinksGroup, "knowledge.bound-to": pageBoundToGroup },
   },
   // The Vault create form, used wherever a vault is created (the wiki's
   // relation-picker inline create resolves it via the model name).

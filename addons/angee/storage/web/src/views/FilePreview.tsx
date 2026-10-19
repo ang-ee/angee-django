@@ -39,7 +39,7 @@ export function FileRecordPreview({ id, page }: { id: string; page?: number | nu
     <Skeleton className="h-6 w-2/3" /><Skeleton className="h-40" />
   </SkeletonStatus> : <EmptyState icon="file" title={t("file.notFoundTitle")} />;
   return <div className="flex h-full min-h-0 flex-col">
-    <div className="shrink-0 border-b border-border-subtle px-3 py-2 text-xs text-fg-muted">
+    <div className="shrink-0 border-b border-border-subtle px-3 py-2 text-12 text-fg-muted">
       <p className="truncate" title={file.filename}>{file.title || file.filename}</p>
     </div>
     <div className="min-h-0 flex-1"><FilePreview file={file} page={page} /></div>

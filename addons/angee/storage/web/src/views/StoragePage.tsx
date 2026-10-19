@@ -12,30 +12,31 @@ import {
   Button,
   buttonVariants,
   ControlBand,
+  ControlBandProvider,
   EmptyState,
   ErrorBanner,
   formatSize,
   Glyph,
+  InlineTextAction,
   LoadingPanel,
   parseRecordNavigationScope,
   recordNavigationHref,
   recordNavigationSearch,
   RecordPager,
   ResourceViewProvider,
+  PaneToolbarMenu,
   ScopedExplorerPane,
   SelectionBarAction,
   SurfaceHeader,
   TreeView,
   useBreadcrumbLeafLabel,
   useBreadcrumbCollectionLink,
-  useChatterContent,
   useConfirm,
   useLatestRef,
   useListRecordNavigation,
   useRouteHref,
   useRouteRecordId,
   useRouteSearch,
-  type ChatterTab,
   type FieldDescriptor,
   type ListViewNavigationScope,
   type ScopedExplorerController,
@@ -69,8 +70,6 @@ import { useStorageUpload } from "../data/use-upload";
 import { FileBrowserContent } from "./FileBrowserContent";
 import { FileDetail } from "./FileDetail";
 import { FilePreview, filePreviewPageFromSearch } from "./FilePreview";
-import { NewFolderControl } from "./NewFolderControl";
-import { SelectedFolderControl } from "./SelectedFolderControl";
 import { useStorageT } from "../i18n";
 
 // Drives and backends are small catalogues. Files page through their resource
@@ -111,11 +110,12 @@ function expandedFolderKey(drive: string, parent: string): string {
 
 /**
  * The file browser: it publishes a folder navigator into the console shell's
- * primary pane and an open file's metadata into the chatter's details tab, and
- * renders the scoped file list or the open-file preview as its content (the
- * file's download/trash/restore verbs and the record pager ride the shell's
- * control band). The drive switcher scopes the folder tree and server-backed
- * file list, and a row click opens an independently fetched file preview route.
+ * primary pane (the drive picker and folder verbs in the pane toolbar) and
+ * renders the scoped file list or the open file (its preview above its
+ * metadata) as its content; the file's download/trash/restore verbs and the
+ * record pager ride the shell's control band. The drive switcher scopes the
+ * folder tree and server-backed file list, and a row click opens an
+ * independently fetched file preview route.
  */
 export function StoragePage(): ReactElement {
   const t = useStorageT();
@@ -391,28 +391,54 @@ export function StoragePage(): ReactElement {
     ),
     [handleExpandFolder, handleFileDrop, openFileId, openFileRoute],
   );
+  // The toolbar's folder verbs: New folder opens the inline name field below the
+  // tree, Rename opens it prefilled, Delete confirms first. The field closes on submit.
+  const [folderEdit, setFolderEdit] = useState<"create" | "rename" | null>(null);
   const renderNavigatorFooter = useCallback(
+    (controller: StorageExplorerController) => {
+      if (!folderEdit) return null;
+      const effectiveScope = controller.selectedId ?? ALL_SCOPE;
+      const selectedFolder =
+        effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
+          ? controller.selectedRow
+          : undefined;
+      const submit = (name: string): void => {
+        if (folderEdit === "rename") {
+          void folderActionsRef.current.rename(effectiveScope, name);
+        } else if (controller.rootId) {
+          void folderActionsRef.current.create({
+            drive: controller.rootId,
+            name,
+            parent: selectedFolder ? effectiveScope : null,
+          });
+        }
+        setFolderEdit(null);
+      };
+      return (
+        <InlineTextAction
+          key={`${folderEdit}:${selectedFolder?.id ?? ""}`}
+          open
+          onOpenChange={(next) => { if (!next) setFolderEdit(null); }}
+          value={folderEdit === "rename" ? selectedFolder?.name : undefined}
+          busy={folderActions.busy}
+          onSubmit={submit}
+          inputLabel={folderEdit === "rename" ? t("folder.nameLabel") : t("newFolder.nameLabel")}
+          placeholder={t("newFolder.placeholder")}
+          submitLabel={folderEdit === "rename" ? t("folder.save") : t("newFolder.create")}
+          formClassName="w-full items-center gap-1"
+          inputClassName="min-w-0 flex-1"
+        />
+      );
+    },
+    [folderActions.busy, folderActionsRef, folderEdit, t],
+  );
+  const explorerToolbar = useCallback(
     (controller: StorageExplorerController) => {
       const effectiveScope = controller.selectedId ?? ALL_SCOPE;
       const selectedFolder =
         effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
           ? controller.selectedRow
           : undefined;
-      const createFolder = (name: string): void => {
-        if (!controller.rootId) return;
-        const parent =
-          effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
-            ? null
-            : effectiveScope;
-        void folderActionsRef.current.create({
-          drive: controller.rootId,
-          name,
-          parent,
-        });
-      };
-      const renameFolder = (name: string): void => {
-        void folderActionsRef.current.rename(effectiveScope, name);
-      };
       const deleteFolder = async (): Promise<void> => {
         if (!selectedFolder) return;
         const ok = await confirm({
@@ -426,49 +452,18 @@ export function StoragePage(): ReactElement {
           .remove(effectiveScope)
           .then(() => controller.setSelectedId(ALL_SCOPE));
       };
-      return (
-        <>
-          {selectedFolder ? (
-            <SelectedFolderControl
-              key={selectedFolder.id}
-              name={selectedFolder.name}
-              busy={folderActions.busy}
-              onRename={renameFolder}
-              onDelete={deleteFolder}
-            />
-          ) : null}
-          <NewFolderControl busy={folderActions.busy} onCreate={createFolder} />
-        </>
-      );
+      return {
+        actions: [{ icon: "folder", label: t("newFolder.button"), disabled: folderActions.busy || !controller.rootId, onClick: () => setFolderEdit("create") }],
+        overflow: selectedFolder ? (
+          <PaneToolbarMenu items={[
+            { icon: "pencil", label: t("folder.rename"), disabled: folderActions.busy, onClick: () => setFolderEdit("rename") },
+            { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => void deleteFolder() },
+          ]} />
+        ) : undefined,
+      };
     },
     [confirm, folderActions.busy, folderActionsRef, t],
   );
-
-  // The open file's metadata, published as an additive `details` tab into the
-  // chatter; nothing published renders the default chatter tabs.
-  const detailsTab = useMemo<readonly ChatterTab[]>(
-    () =>
-      openFileId
-        ? [
-            {
-              id: "details",
-              label: t("file.detailsTab"),
-              icon: "info",
-              children: (
-                <FileDetail
-                  id={openFileId}
-                  filename={openFile?.filename}
-                  onChanged={openFileQuery.refetch}
-                  compact
-                />
-              ),
-            },
-          ]
-        : [],
-    [openFileId, openFile?.filename, openFileQuery.refetch, t],
-  );
-  const chatter = useMemo(() => ({ tabs: detailsTab }), [detailsTab]);
-  useChatterContent(chatter);
   const handleRootChange = useCallback(
     (rootId: string) => {
       setActiveDriveId(rootId);
@@ -496,6 +491,7 @@ export function StoragePage(): ReactElement {
       rootPicker={driveRootPicker}
       onRootChange={handleRootChange}
       renderTree={renderTree}
+      toolbar={explorerToolbar}
       renderNavigatorFooter={renderNavigatorFooter}
       renderContentWithoutRoots={openFileId !== null}
       loading={drivesQuery.isFetching && drives.length === 0}
@@ -526,6 +522,7 @@ export function StoragePage(): ReactElement {
             openFileFetching={openFileQuery.isFetching}
             openFileError={openFileQuery.error}
             openFilePreviewPage={openFilePreviewPage}
+            onOpenFileChanged={openFileQuery.refetch}
             fileResource={fileResource}
             navigationScope={navigationScope}
             uploads={uploads}
@@ -546,6 +543,7 @@ function StorageExplorerContent({
   openFileFetching,
   openFileError,
   openFilePreviewPage,
+  onOpenFileChanged,
   fileResource,
   navigationScope,
   uploads,
@@ -559,6 +557,7 @@ function StorageExplorerContent({
   openFileFetching: boolean;
   openFileError: Error | null;
   openFilePreviewPage: number | null;
+  onOpenFileChanged: () => void;
   fileResource: DataResourceMetadata | undefined;
   navigationScope: ListViewNavigationScope | null;
   uploads: ReturnType<typeof useStorageUpload>;
@@ -699,10 +698,12 @@ function StorageExplorerContent({
       ) : null}
       {openFileId ? (
         <FilePreviewFrame
+          id={openFileId}
           file={openFile}
           fetching={openFileFetching}
           error={openFileError}
           page={openFilePreviewPage}
+          onChanged={onOpenFileChanged}
         />
       ) : (
         <FileBrowserContent
@@ -720,19 +721,25 @@ function StorageExplorerContent({
 }
 
 function FilePreviewFrame({
+  id,
   file,
   fetching,
   error,
   page,
+  onChanged,
 }: {
+  id: string;
   file: StorageFile | null;
   fetching: boolean;
   error: Error | null;
   page?: number | null;
+  onChanged: () => void;
 }): ReactElement {
   const t = useStorageT();
   // The file's verbs (download, trash/restore) live in the shell control band,
-  // beside the preview; this frame just titles and renders the content.
+  // beside the preview; this frame titles the file, renders its content and,
+  // under it, its metadata form: the subject owns its details, the aside what
+  // relates to it.
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas">
       <SurfaceHeader
@@ -754,7 +761,8 @@ function FilePreviewFrame({
             })
           : undefined}
       />
-      <div className="min-h-0 flex-1 overflow-hidden p-3">
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div className="h-[65vh] min-h-80">
         {file ? (
           <FilePreview file={file} page={page} />
         ) : fetching ? (
@@ -769,6 +777,14 @@ function FilePreviewFrame({
             description={t("file.notFoundDescription")}
           />
         )}
+        </div>
+        {/* The metadata form's own save row stays inline in its section; the page's
+            control band keeps the file's lifecycle verbs and the pager. */}
+        <section aria-label={t("file.details")} className="mt-4 rounded-8 border border-border-subtle bg-sheet p-4">
+          <ControlBandProvider host={undefined}>
+            <FileDetail id={id} filename={file?.filename} onChanged={onChanged} />
+          </ControlBandProvider>
+        </section>
       </div>
     </div>
   );

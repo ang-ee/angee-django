@@ -9,6 +9,8 @@ import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT } from "../i18n";
 import { PaneToolbarHost } from "../layouts/PaneToolbar";
+import { RELATED_TAB_ID } from "./chatter-containers";
+import { useRelatedGroups } from "./RelatedPane";
 import { cn } from "../lib/cn";
 import {
   useAppRuntime,
@@ -147,7 +149,7 @@ export function Chatter({
       {activeContributions.map((contribution) =>
         contribution.content.useCount ? (
           <ChatterCountProbe
-            key={contribution.id}
+            key={`${viewContext.pathname}:${contribution.id}`}
             id={contribution.id}
             useCount={contribution.content.useCount}
             context={viewContext}
@@ -223,13 +225,16 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
     [published],
   );
   const children = useContainer<ChatterTabContent | ChatterTab>("record#aside", { models, extra });
+  // The framework's Related tab shows only where an edge owner declared a group.
+  const relatedGroups = useRelatedGroups(context);
   const tabs = React.useMemo(() => children.filter((child) => {
     if (child.owner === PAGE_OWNER) return true;
     const tab = child.content as ChatterTabContent;
     if (!tab.render) return false;
     if (child.address === "record#aside" && context.view.kind !== "record") return false;
+    if (child.id === RELATED_TAB_ID && relatedGroups.length === 0) return false;
     return tab.when?.(context) ?? true;
-  }), [children, context]);
+  }), [children, context, relatedGroups]);
   // The aside shows when a strip tab exists; drill-ins alone never open it.
   const visible = tabs.some((child) => child.owner === PAGE_OWNER || (child.content as ChatterTabContent).strip !== false);
   return { context, visible, tabs };

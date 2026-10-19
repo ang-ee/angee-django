@@ -112,6 +112,18 @@ export const KnowledgeRecordPages = graphql(`
   }
 `);
 
+/** The records one page is bound to; `RecordReference` resolves their labels and routes. */
+export const KnowledgePageRecordBindings = graphql(`
+  query KnowledgePageRecordBindings($page: ID!) {
+    page_record_bindings(page: $page) {
+      id
+      role
+      model_label
+      record_id
+    }
+  }
+`);
+
 export const KnowledgeRecordNotes = graphql(`
   query KnowledgeRecordNotes($modelLabel: String!, $recordId: ID!, $role: String!) {
     record_knowledge_bindings(model_label: $modelLabel, record_id: $recordId, role: $role) {

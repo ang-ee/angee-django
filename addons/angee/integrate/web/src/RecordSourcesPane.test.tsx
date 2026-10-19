@@ -11,20 +11,9 @@ vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()),
   useAuthoredQuery: mocks.query,
 }));
-vi.mock("@angee/ui", async (original) => ({
-  ...(await original<typeof import("@angee/ui")>()),
-  useRouteSearch: () => ({ source: "rlk_1" }),
-  useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-    (key: string, vars?: Record<string, unknown>) => (messages[key] ?? key).replace(
-      /\{(\w+)\}/g,
-      (_match, name: string) => String(vars?.[name] ?? `{${name}}`),
-    ),
-  NavLink: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) =>
-    <a href={href} {...props}>{children}</a>,
-}));
 
 import { RecordSourcesDocument } from "./documents";
-import { RecordSourcesPane } from "./RecordSourcesPane";
+import { RecordSourcesPane, recordSourcesGroup } from "./RecordSourcesPane";
 
 const context: ChatterViewContext = {
   pathname: "/bills/bil_1",
@@ -62,8 +51,10 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-test("renders every generic source fact and delegates the outbound URL", () => {
-  render(<RecordSourcesPane context={context} />);
+test("the Sources group counts and lists each source as a row linking to its outbound URL", () => {
+  expect(recordSourcesGroup.content.when?.(context)).toBe(true);
+  function Count() { return <span>Count {recordSourcesGroup.content.useCount?.(context)}</span>; }
+  render(<><Count /><RecordSourcesPane context={context} /></>);
 
   expect(mocks.query).toHaveBeenCalledWith(RecordSourcesDocument, {
     modelLabel: "accounting.Bill",
@@ -73,13 +64,10 @@ test("renders every generic source fact and delegates the outbound URL", () => {
     models: ["integrate.RecordLink"],
     records: [{ model: "accounting.Bill", id: "bil_1" }],
   });
-  expect(screen.getByText("Accounting source")).toBeTruthy();
-  expect(screen.getByText("bills · company-1")).toBeTruthy();
-  expect(screen.getByText("CURRENT")).toBeTruthy();
-  expect(screen.getByText("Generation 7")).toBeTruthy();
-  expect(screen.getByText("Last observed")).toBeTruthy();
-  expect(screen.getByText("Applied base")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "account.move:42" }).getAttribute("href"))
-    .toBe("https://source.test/42");
-  expect(document.getElementById("source-rlk_1")?.className).toContain("border-border-strong");
+  expect(screen.getByText("Count 1")).toBeTruthy();
+  const row = screen.getByRole("link", { name: /Accounting source/ });
+  expect(row.getAttribute("href")).toBe("https://source.test/42");
+  expect(row.textContent).toContain("bills · company-1");
+  expect(row.textContent).toContain("CURRENT");
+  expect(row.textContent).toContain("account.move:42");
 });

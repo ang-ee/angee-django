@@ -19,7 +19,11 @@ RUN_MODEL = "workflows.WorkflowRun"
 
 
 class RunSource:
-    """Every run that worked on the record, newest first; the run drill-in holds its events."""
+    """Every run that worked on the record, newest first; the run drill-in holds its events.
+
+    On a run's own page the record is the run, whose events are its body: here the
+    Timeline lists the runs it started instead, so the run never lists itself.
+    """
 
     kind = KIND
     sequence = 10
@@ -29,7 +33,10 @@ class RunSource:
         return True
 
     def _runs(self, record: models.Model, actor: Any) -> Any:
-        return apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor).about(record)
+        runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(actor)
+        if record._meta.label == RUN_MODEL:
+            return runs.filter(parent_step__run=record)
+        return runs.about(record)
 
     def entries(
         self, record: models.Model, actor: Any, *, before: Cursor | None, limit: int, needs_me: bool,

@@ -113,6 +113,7 @@ export type {
   ChatterViewContext,
   ChatterSelection,
   TimelineKindContent,
+  RelatedGroupContent,
   ComposedMenuItem,
   DrawerContribution,
   DrawerEdge,

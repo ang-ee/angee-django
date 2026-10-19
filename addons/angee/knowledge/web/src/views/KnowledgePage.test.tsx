@@ -106,12 +106,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("../data/use-page-actions", () => ({
   usePageActions: () => pageActionMocks, }));
 
-vi.mock("./BacklinksPanel", () => ({
-  BacklinksPanel: () => <section data-testid="backlinks" />, }));
-
-vi.mock("./NewPageControl", () => ({
-  NewPageControl: () => <button type="button">New page</button>, }));
-
 vi.mock("./PageEditor", () => ({
   PageEditor: ({ detail }: { detail: { id: string } }) => (
     <section data-testid="page-editor" data-page-id={detail.id} />
@@ -224,9 +218,8 @@ describe("KnowledgePage explorer wiring", () => {
     expect(screen.getByTestId("page-editor").getAttribute("data-page-id")).toBe(
       "page-b",
     );
-    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe(
-      "backlinks",
-    );
+    // Backlinks and bindings are Related groups on the page's record, not page-published tabs.
+    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
   });
 
   test("shows the not-found state when the detail read returns null", () => {
@@ -245,11 +238,10 @@ describe("KnowledgePage explorer wiring", () => {
     const primary = within(screen.getByTestId("shell-primary"));
     expect(primary.getByTestId("tree")).toBeTruthy();
     expect(primary.getByLabelText("Vault")).toBeTruthy();
-    // Backlinks belong to an open page; the dashboard has no page-specific
-    // secondary tab to publish.
-    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe(
-      "",
-    );
+    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe("");
+    // The create verbs sit in the pane toolbar and open the inline title field.
+    fireEvent.click(primary.getByRole("button", { name: "New note" }));
+    expect(primary.getByRole("textbox", { name: "New page title" })).toBeTruthy();
   });
 
   test("trashed pages leave the tree and wait in the vault's Removed list", () => {

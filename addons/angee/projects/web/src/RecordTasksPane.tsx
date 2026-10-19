@@ -2,22 +2,24 @@ import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery } from "@an
 import * as React from "react";
 import {
   Button,
+  Chip,
   DatePopover,
   EmptyState,
   ErrorBanner,
   FieldRoot,
   Glyph,
   LoadingPanel,
-  SectionHeading,
+  PaneRow,
+  PaneRows,
+  PaneToolbar,
   SegmentedControl,
   Select,
+  StatusIcon,
   Textarea,
   actionOutcomeSubmitResult,
-  cn,
   dateFromValue,
   formatDate,
   formatDateStorage,
-  textRoleVariants,
   useActionForm,
   useActionOutcomeMutation,
   useActionResultRun,
@@ -33,7 +35,6 @@ import {
   RECORD_TASK_MODELS,
   RecordTasksDocument,
   ScheduleRecordTaskDocument,
-  type ActivityTypeRow,
   type RecordTaskRow,
 } from "./documents";
 import { useProjectsT } from "./i18n";
@@ -56,9 +57,11 @@ interface TaskFormValues {
 
 const EMPTY_FORM: TaskFormValues = { text: "", note: "", day: "", activityType: "" };
 
-/** The Tasks chatter tab: the record's tasks, a scheduler, and a log for exchanges
- * that already happened. The task schema derives access from the record; the
- * generic task verbs complete and drop, and a completion posts on the record. */
+/** The Tasks tab: the record's open or done tasks as pane rows under a scope
+ * toolbar, a row's note and completion note when opened, then the scheduler and
+ * the log for exchanges that already happened. The task schema derives access
+ * from the record; the generic task verbs complete and drop, and a completion
+ * posts on the record. */
 export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactElement {
   const t = useProjectsT();
   const uiT = useUiT();
@@ -83,6 +86,9 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   const [mode, setMode] = React.useState<Mode>("schedule");
   const [dateOpen, setDateOpen] = React.useState(false);
   const [feedbackById, setFeedbackById] = React.useState<Record<string, string>>({});
+  const [scope, setScope] = React.useState<"open" | "done">("open");
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
+  const textRef = React.useRef<HTMLInputElement | null>(null);
   const form = useActionForm<TaskFormValues>({
     defaultValues: EMPTY_FORM,
     resolver: (values): ResolverResult<TaskFormValues> => {
@@ -115,6 +121,7 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
     toastSuccess: false,
     genericErrorMessage: mode === "log" ? t("recordTasks.errorLog") : t("recordTasks.errorSchedule"),
   });
+  const textField = form.form.register("text");
   const day = useWatch({ control: form.form.control, name: "day" });
   const activityType = useWatch({ control: form.form.control, name: "activityType" });
   const textError = form.form.formState.errors.text;
@@ -127,6 +134,9 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   const open = tasks.filter(isOpenTask);
   const closed = tasks.filter((task) => !isOpenTask(task));
   const busy = form.submitting || completeState.fetching || dropState.fetching;
+  React.useEffect(() => {
+    if (expandedId && !tasks.some((task) => task.id === expandedId)) setExpandedId(null);
+  }, [expandedId, tasks]);
 
   if (!enabled) {
     return (
@@ -168,41 +178,84 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
 
   const kindOptions = kinds.map((kind) => ({ value: kind.key, label: kind.name }));
   const dayLabel = day ? formatDate(day) : t("recordTasks.noDate");
+  const shown = scope === "done" ? closed : open;
+  const row = (task: RecordTaskRow) => {
+    const kind = kindByKey.get(task.activity_type ?? "");
+    const taskOpen = isOpenTask(task);
+    const offers = (action: string) => taskOpen && offersTaskAction(task, action);
+    const assignee = task.assignee ? task.assignee.display_name || task.assignee.username : "";
+    const expanded = expandedId === task.id;
+    return (
+      <li key={task.id}>
+        <PaneRow
+          leading={offers("complete") ? (
+            <button
+              type="button"
+              aria-label={t("recordTasks.markDone")}
+              disabled={busy}
+              onClick={(event) => { event.stopPropagation(); void handleComplete(task.id); }}
+              className="grid size-4 place-items-center rounded-4 border border-border-strong text-fg-muted hover:bg-canvas hover:text-fg disabled:opacity-50"
+            >
+              <Glyph name="check" className="opacity-0 hover:opacity-100" />
+            </button>
+          ) : (
+            <StatusIcon tone={taskOpen ? "muted" : "success"} icon={taskOpen ? kind?.glyph || "project-task" : "circle-check"} size="sm" />
+          )}
+          title={task.title}
+          detail={kind?.name}
+          meta={task.due_date ? formatDate(task.due_date) : undefined}
+          sub={[assignee, dueLabel(task, t)].filter(Boolean).join(" · ")}
+          verb={offers("drop") ? (
+            <span role="button" aria-label={t("recordTasks.cancel")} onClick={(event) => { event.stopPropagation(); void handleCancel(task.id); }}>
+              {t("recordTasks.cancel")}
+            </span>
+          ) : undefined}
+          selected={expanded}
+          onOpen={() => setExpandedId(expanded ? null : task.id)}
+        />
+        {expanded ? (
+          <div className="ml-6 space-y-2 pb-2 pr-1">
+            {task.note ? <p className="whitespace-pre-wrap text-13 text-fg-muted">{task.note}</p> : null}
+            {offers("complete") ? (
+              <Textarea
+                value={feedbackById[task.id] ?? ""}
+                onChange={(event) => setFeedbackById((current) => ({ ...current, [task.id]: event.currentTarget.value }))}
+                rows={2}
+                resize="none"
+                aria-label={t("recordTasks.feedback")}
+                placeholder={t("recordTasks.feedback")}
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </li>
+    );
+  };
 
   return (
-    <div className="flex min-h-72 flex-col gap-4">
-      {open.length > 0 ? (
-        <TaskSection label={t("recordTasks.open")}>
-          {open.map((task) => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              kind={kindByKey.get(task.activity_type ?? "")}
-              busy={busy}
-              feedback={feedbackById[task.id] ?? ""}
-              onFeedback={(value) => setFeedbackById((current) => ({ ...current, [task.id]: value }))}
-              onComplete={() => void handleComplete(task.id)}
-              onCancel={() => void handleCancel(task.id)}
-            />
-          ))}
-        </TaskSection>
-      ) : null}
-      {closed.length > 0 ? (
-        <TaskSection label={t("recordTasks.closed")}>
-          {closed.map((task) => (
-            <TaskItem key={task.id} task={task} kind={kindByKey.get(task.activity_type ?? "")} busy={busy} />
-          ))}
-        </TaskSection>
-      ) : null}
-      {tasks.length === 0 ? (
-        <EmptyState
-          icon="project-task"
-          title={t("recordTasks.emptyTitle")}
-          description={t("recordTasks.emptyHint")}
-          className="min-h-40 p-4"
-        />
-      ) : null}
-      <form onSubmit={handleSubmit} className="mt-auto space-y-2 border-t border-border-subtle pt-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PaneToolbar
+        scope={<>
+          <ScopeChip label={t("recordTasks.open")} count={open.length} active={scope === "open"} onClick={() => setScope("open")} />
+          <ScopeChip label={t("recordTasks.closed")} count={closed.length} active={scope === "done"} onClick={() => setScope("done")} />
+        </>}
+        actions={[{ icon: "calendar", label: t("recordTasks.schedule"), onClick: () => { setMode("schedule"); textRef.current?.focus(); } }]}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        {shown.length > 0 ? (
+          <section aria-label={scope === "done" ? t("recordTasks.closed") : t("recordTasks.open")}>
+            <PaneRows>{shown.map(row)}</PaneRows>
+          </section>
+        ) : (
+          <EmptyState
+            icon="project-task"
+            title={t("recordTasks.emptyTitle")}
+            description={t("recordTasks.emptyHint")}
+            className="min-h-40 p-4"
+          />
+        )}
+      </div>
+      <form onSubmit={handleSubmit} className="space-y-2 border-t border-border-subtle p-3">
         <SegmentedControl<Mode>
           aria-label={t("recordTasks.tab")}
           value={mode}
@@ -217,7 +270,8 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
             {mode === "log" ? t("recordTasks.logNote") : t("recordTasks.title")}
           </FieldRoot.Label>
           <FieldRoot.Control
-            {...form.form.register("text")}
+            {...textField}
+            ref={(element: HTMLInputElement | null) => { textField.ref(element); textRef.current = element; }}
             placeholder={mode === "log" ? t("recordTasks.logNote") : t("recordTasks.title")}
           />
           {textError ? <FieldRoot.Error match>{textError.message}</FieldRoot.Error> : null}
@@ -272,7 +326,7 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
           </Button>
         </div>
         {(dayError ?? typeError) ? (
-          <p role="alert" className={cn(textRoleVariants({ role: "caption" }), "text-danger-text")}>
+          <p role="alert" className="text-12 text-danger-text">
             {(dayError ?? typeError)?.message}
           </p>
         ) : null}
@@ -282,87 +336,13 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   );
 }
 
-function TaskSection({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
+function ScopeChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }): React.ReactElement {
   return (
-    <section className="space-y-3" aria-label={label}>
-      <SectionHeading label={label} count={React.Children.count(children)} />
-      {children}
-    </section>
-  );
-}
-
-function TaskItem({
-  task,
-  kind,
-  busy,
-  feedback,
-  onFeedback,
-  onComplete,
-  onCancel,
-}: {
-  task: RecordTaskRow;
-  kind: ActivityTypeRow | undefined;
-  busy: boolean;
-  feedback?: string;
-  onFeedback?: (value: string) => void;
-  onComplete?: () => void;
-  onCancel?: () => void;
-}): React.ReactElement {
-  const t = useProjectsT();
-  const isOpen = isOpenTask(task);
-  // The task's own verbs admit each control: only the record's writers close its tasks.
-  const offers = (action: string) => isOpen && offersTaskAction(task, action);
-  const assignee = task.assignee ? task.assignee.display_name || task.assignee.username : "";
-  return (
-    <article className="rounded-6 border border-border-subtle bg-surface p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
-            <Glyph
-              decorative
-              name={isOpen ? kind?.glyph || "project-task" : "circle-check"}
-              fallbackName="project-task"
-              className="shrink-0 text-fg-muted"
-            />
-            <h3 className="truncate text-13 font-medium text-fg">{task.title}</h3>
-          </div>
-          <p className={cn(textRoleVariants({ role: "caption" }), "pl-6")}>
-            {[kind?.name ?? "", assignee, task.due_date ? formatDate(task.due_date) : "", dueLabel(task, t)]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-        </div>
-        {offers("drop") && onCancel ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            disabled={busy}
-            onClick={onCancel}
-            aria-label={t("recordTasks.cancel")}
-          >
-            <Glyph name="trash" />
-          </Button>
-        ) : null}
-      </div>
-      {task.note ? <p className="mt-2 whitespace-pre-wrap text-13 text-fg-muted">{task.note}</p> : null}
-      {offers("complete") && onFeedback && onComplete ? (
-        <div className="mt-3 space-y-2">
-          <Textarea
-            value={feedback ?? ""}
-            onChange={(event) => onFeedback(event.currentTarget.value)}
-            rows={2}
-            resize="none"
-            aria-label={t("recordTasks.feedback")}
-            placeholder={t("recordTasks.feedback")}
-          />
-          <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={onComplete}>
-            <Glyph name="check" />
-            {t("recordTasks.markDone")}
-          </Button>
-        </div>
-      ) : null}
-    </article>
+    <button type="button" aria-pressed={active} onClick={onClick} className="rounded-full">
+      <Chip size="sm" tone={active ? "brand" : "muted"} variant={active ? "solid" : "soft"} className="cursor-pointer whitespace-nowrap">
+        {label}<span className={active ? "ml-1 opacity-80" : "ml-1 text-fg-muted"}>{count}</span>
+      </Chip>
+    </button>
   );
 }
 

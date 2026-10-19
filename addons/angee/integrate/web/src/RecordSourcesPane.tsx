@@ -3,21 +3,20 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingPanel,
-  NavLink,
-  cn,
+  PaneRow,
+  PaneRows,
   formatDateTime,
-  routeSearchParam,
-  useRouteSearch,
   type ChatterViewContext,
+  type ContainerChild,
+  type RelatedGroupContent,
 } from "@angee/ui";
 import * as React from "react";
 
 import { RecordSourcesDocument } from "./documents";
-import { useIntegrateT } from "./i18n";
+import { enIntegrateMessages, useIntegrateT } from "./i18n";
 
 export const RECORD_LINK_MODEL = "integrate.RecordLink";
-export const RECORD_SOURCES_TAB_ID = "integrate.sources";
-export const RECORD_SOURCE_SEARCH_KEY = "source";
+export const RECORD_SOURCES_GROUP_ID = "integrate.sources";
 
 interface RecordSourceRow {
   id: string;
@@ -35,52 +34,56 @@ interface RecordSourceRow {
   };
 }
 
-/** The record's retained provider identities; connectors own their outbound URLs. */
-export function RecordSourcesPane({ context }: { context: ChatterViewContext }): React.ReactElement {
-  const t = useIntegrateT();
-  const search = useRouteSearch();
+function useRecordSources(context: ChatterViewContext) {
   const modelLabel = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const recordId = context.view.kind === "record" ? context.view.sqid ?? "" : "";
   const variables = React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
-  const query = useAuthoredQuery(RecordSourcesDocument, variables, {
+  return useAuthoredQuery(RecordSourcesDocument, variables, {
     enabled: Boolean(modelLabel && recordId),
     models: [RECORD_LINK_MODEL],
     records: [{ model: modelLabel, id: recordId }],
   });
-  const rows = ((query.data as { record_links?: readonly RecordSourceRow[] } | undefined)?.record_links ?? []);
-  const selected = routeSearchParam(search, RECORD_SOURCE_SEARCH_KEY);
+}
+
+function sourceRows(data: unknown): readonly RecordSourceRow[] {
+  return (data as { record_links?: readonly RecordSourceRow[] } | undefined)?.record_links ?? [];
+}
+
+/** The Sources group of the Related tab: the record's retained provider identities. */
+export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
+  sequence: 70,
+  content: {
+    label: enIntegrateMessages["sources.title"] ?? "Sources",
+    when: ({ route }) => route?.recordEdges?.includes(RECORD_LINK_MODEL) === true,
+    useCount: (context) => {
+      const query = useRecordSources(context);
+      return query.data ? sourceRows(query.data).length : undefined;
+    },
+    render: (context) => <RecordSourcesPane context={context} />,
+  },
+};
+
+/** One row per source: the integration, its stream, the status and the external key; connectors own their outbound URLs. */
+export function RecordSourcesPane({ context }: { context: ChatterViewContext }): React.ReactElement {
+  const t = useIntegrateT();
+  const query = useRecordSources(context);
+  const rows = sourceRows(query.data);
 
   if (query.error) return <ErrorBanner description={query.error.message} />;
   if (query.isLoading) return <LoadingPanel message={t("sources.loading")} density="inline" />;
-  if (rows.length === 0) return <EmptyState icon="link" title={t("sources.empty")} className="min-h-48 p-4" />;
+  if (rows.length === 0) return <EmptyState icon="link" title={t("sources.empty")} className="min-h-24 p-3" />;
 
-  return <ul className="min-h-0 overflow-y-auto p-3">
-    {rows.map((source) => <li key={source.id} id={`source-${source.id}`} className={cn(
-      "rounded-8 border border-border-subtle p-3 [&+&]:mt-2",
-      source.id === selected && "border-border-strong bg-inset",
-    )}>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{source.stream.integration.display_name}</div>
-          <div className="truncate text-xs text-fg-muted">{source.stream.key}{source.stream.partition ? ` · ${source.stream.partition}` : ""}</div>
-        </div>
-        <span className="shrink-0 text-xs text-fg-muted">{source.status}</span>
-      </div>
-      <div className="mt-2 min-w-0 text-sm">
-        {source.source_url
-          ? <NavLink href={source.source_url} target="_blank" variant="inline">{source.external_key}</NavLink>
-          : <span className="break-all">{source.external_key}</span>}
-      </div>
-      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-        <div><dt className="text-fg-subtle">{t("sources.coverage")}</dt>
-          <dd>{source.last_verified_generation > 0
-            ? t("sources.generation", { count: source.last_verified_generation })
-            : t("sources.notVerified")}</dd></div>
-        <div><dt className="text-fg-subtle">{t("sources.lastObserved")}</dt>
-          <dd>{source.last_seen_at ? formatDateTime(source.last_seen_at) : t("sources.never")}</dd></div>
-        <div><dt className="text-fg-subtle">{t("sources.appliedBase")}</dt>
-          <dd>{source.applied_at ? formatDateTime(source.applied_at) : t("sources.notApplied")}</dd></div>
-      </dl>
+  return <PaneRows>
+    {rows.map((source) => <li key={source.id}>
+      <PaneRow
+        icon="link"
+        title={source.stream.integration.display_name}
+        detail={`${source.stream.key}${source.stream.partition ? ` · ${source.stream.partition}` : ""}`}
+        meta={source.status}
+        sub={`${source.external_key} · ${source.last_seen_at ? formatDateTime(source.last_seen_at) : t("sources.never")}`}
+        href={source.source_url ?? undefined}
+        onOpen={source.source_url ? () => window.open(source.source_url ?? "", "_blank", "noopener") : undefined}
+      />
     </li>)}
-  </ul>;
+  </PaneRows>;
 }

@@ -238,6 +238,23 @@ export interface TimelineKindContent {
 }
 
 /**
+ * One group of the Related tab: a `related#groups` child (every record view) or
+ * `<model>#groups` child (that model's pages), declared by the addon that owns
+ * the edge. The group lists rows that link to their records and offers at most
+ * one verb (upload, bind); the Related tab shows when any group is eligible.
+ */
+export interface RelatedGroupContent {
+  when?: (context: ChatterViewContext) => boolean;
+  label: ReactNode;
+  /** Rows the group has on this record, for the tab's count and the group's label. */
+  useCount?: (context: ChatterViewContext) => number | undefined;
+  /** Whether the group offers its one verb (upload, bind) on this record; a group with neither rows nor a verb is absent. */
+  useVerb?: (context: ChatterViewContext) => boolean;
+  /** The group's rows and its verb, rendered under its label. */
+  render: (context: ChatterViewContext) => ReactNode;
+}
+
+/**
  * A file-preview renderer contributed at build time; merges by `id` (fail-fast
  * on collision, like widgets). The headless SDK only needs the `id` to detect
  * collisions — the rendered binding owns the mime matcher, component, and

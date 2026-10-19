@@ -148,9 +148,33 @@ describe("RecordChatterPane", () => {
 
     expect(screen.getByText("Hello there")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Following" }).getAttribute("aria-pressed")).toBe("false");
-    // The composer send affordance.
+    // The composer send affordance; the head carries no Following button (that is the record header's).
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Following" })).toBeNull();
+  });
+
+  test("the head's scope narrows the thread read to the picked message types", () => {
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordChatterPane context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Notes" }));
+    const last = mocks.useAuthoredQuery.mock.calls
+      .filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(last?.[1]).toMatchObject({ messageTypes: ["notification"] });
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    const after = mocks.useAuthoredQuery.mock.calls
+      .filter(([document]) => operationName(document) === "MessagingRecordThread").at(-1);
+    expect(after?.[1]).toMatchObject({ messageTypes: [] });
+  });
+
+  test("the head reveals search on demand and marks the thread read from its badge", () => {
+    mocks.threadData = threadPayload([message()]);
+    (mocks.threadData as { record_thread: { unread_count: number } }).record_thread.unread_count = 2;
+    render(<RecordChatterPane context={context} />);
+    expect(screen.queryByLabelText("Search comments", { selector: "input" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    expect(screen.getByLabelText("Search comments", { selector: "input" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+    expect(mocks.mutateCalls.some((call) => call.op === "MessagingMarkRecordThreadRead")).toBe(true);
   });
 
   test("passes the host's submit key to its record conversation", () => {

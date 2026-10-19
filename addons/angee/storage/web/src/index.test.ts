@@ -1,5 +1,5 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
-import type { BaseMenuItem, ChatterTabContent, ChatterViewContext, ContainerChild } from "@angee/ui";
+import type { BaseMenuItem, ChatterViewContext, ContainerChild, RelatedGroupContent } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import { enStorageMessages } from "./i18n";
@@ -62,8 +62,9 @@ describe("storage addon manifest", () => {
     );
   });
 
-  test("offers the Files tab only where the record's type carries file attachments", () => {
-    const tab = (storage.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["storage.files"]!;
+  test("offers the Files group of Related only where the record's type carries file attachments", () => {
+    const tab = (storage.containers?.["related#groups"] as Record<string, ContainerChild<RelatedGroupContent>>)["storage.files"]!;
+    expect(storage.containers?.["record#aside"]).toBeUndefined();
     const record = (recordEdges?: readonly string[]): ChatterViewContext => ({
       pathname: "/records/rec_1", params: { id: "rec_1" },
       route: { name: "record", path: "/records/$id", viewType: "example/record", modelLabel: "example.Record", ...(recordEdges ? { recordEdges } : {}) },

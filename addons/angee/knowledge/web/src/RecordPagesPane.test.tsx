@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const sdk = vi.hoisted(() => ({ query: vi.fn(), bind: vi.fn(), unbind: vi.fn() }));
+const sdk = vi.hoisted(() => ({ query: vi.fn(), bind: vi.fn(), unbind: vi.fn(), navigate: vi.fn() }));
 
 vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()),
@@ -13,6 +13,7 @@ vi.mock("@angee/refine", async (original) => ({
 vi.mock("@angee/ui", async (original) => ({
   ...(await original<typeof import("@angee/ui")>()),
   useRuntimeViewAs: () => ({ viewAs: null, pending: false }),
+  useRouteHref: () => (name: string, params?: { id?: string }) => `/${name.replace(".", "/")}/${params?.id ?? ""}`,
   Select: ({ options, value, onValueChange, ...props }: {
     options: readonly { value: string; label: string }[];
     value: string;
@@ -23,10 +24,12 @@ vi.mock("@angee/ui", async (original) => ({
     {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
   </select>,
 }));
-vi.mock("./KnowledgePageView", () => ({ KnowledgePageView: ({ pageId }: { pageId: string }) => <p>Page {pageId}</p> }));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()), useNavigate: () => sdk.navigate,
+}));
 
-import { RecordPagesPane, recordPagesTab, recordPagesTarget } from "./RecordPagesPane";
-import { KnowledgeBindRecord, KnowledgePages, KnowledgeRecordPages } from "./data/documents";
+import { RecordPagesPane, pageBacklinksGroup, recordPagesGroup, recordPagesTarget } from "./RecordPagesPane";
+import { KnowledgeBindRecord, KnowledgePage, KnowledgePages, KnowledgeRecordPages } from "./data/documents";
 import type { ChatterViewContext } from "@angee/ui";
 
 const context: ChatterViewContext = {
@@ -41,23 +44,25 @@ const context: ChatterViewContext = {
 beforeEach(() => {
   sdk.query.mockReset().mockImplementation((document) => document === KnowledgePages
     ? { data: { pages: [{ id: "pg_2", title: "Another", permissions: ["write"] }] }, isPending: false }
-    : { data: { record_knowledge_can_bind: true, record_knowledge_bindings: [
-      { id: "krb_1", page: "pg_1", page_title: "Guide", page_can_write: true, role: "reference" },
-    ] }, isPending: false });
+    : document === KnowledgePage
+      ? { data: { pages_by_pk: { backlinks: [{ page: "pg_9", title: "Linking page", display_text: "see also" }] } }, isPending: false }
+      : { data: { record_knowledge_can_bind: true, record_knowledge_bindings: [
+        { id: "krb_1", page: "pg_1", page_title: "Guide", page_can_write: true, role: "reference" },
+      ] }, isPending: false });
   sdk.bind.mockReset().mockResolvedValue({});
   sdk.unbind.mockReset().mockResolvedValue({});
+  sdk.navigate.mockReset();
 });
 afterEach(cleanup);
 
-test("role configuration filters one shared query and opens the bound page inline", () => {
-  const tab = recordPagesTab({ label: "References", role: "reference", sequence: 45, when: () => true });
-  expect(tab).toMatchObject({ sequence: 45, content: { label: "References", icon: "knowledge" } });
-  const contribution = tab.content;
+test("role configuration filters one shared query and each row links to the page reader", () => {
+  const group = recordPagesGroup({ label: "References", role: "reference", sequence: 45, when: () => true });
+  expect(group).toMatchObject({ sequence: 45, content: { label: "References" } });
+  const contribution = group.content;
   expect(contribution.when?.(context)).toBe(true);
-  // A type whose schema declares no binding arm, and a list view, offer no Pages tab.
+  // A type whose schema declares no binding arm offers no Pages group.
   expect(contribution.when?.({ ...context, route: { ...context.route!, recordEdges: ["storage.FileAttachment"] } })).toBe(false);
-  expect(contribution.when?.({ ...context, view: { kind: "list", type: "example/record" } })).toBe(false);
-  expect(recordPagesTab({ when: () => false }).content.when?.(context)).toBe(false);
+  expect(recordPagesGroup({ when: () => false }).content.when?.(context)).toBe(false);
   function Count() { return <span>Count {contribution.useCount?.(context)}</span>; }
   render(<Count />);
   expect(screen.getByText("Count 1")).toBeTruthy();
@@ -65,8 +70,10 @@ test("role configuration filters one shared query and opens the bound page inlin
   expect(sdk.query).toHaveBeenCalledWith(KnowledgeRecordPages, {
     modelLabel: "example.Record", recordId: "rec_1", role: "reference",
   }, { enabled: true, models: ["knowledge.RecordBinding"] });
-  fireEvent.click(screen.getByRole("button", { name: "Guide" }));
-  expect(screen.getByText("Page pg_1")).toBeTruthy();
+  const row = screen.getByRole("link", { name: "Guide" });
+  expect(row.getAttribute("href")).toBe("/knowledge/page/pg_1");
+  fireEvent.click(row);
+  expect(sdk.navigate).toHaveBeenCalledWith({ href: "/knowledge/page/pg_1" });
 });
 
 test("writer controls use the role-keyed bind and unbind mutations", async () => {
@@ -82,7 +89,7 @@ test("writer controls use the role-keyed bind and unbind mutations", async () =>
   } }));
 });
 
-test("the unfiltered tab removes each binding under its stored role", async () => {
+test("the unfiltered group removes each binding under its stored role", async () => {
   render(<RecordPagesPane target={recordPagesTarget(context)} />);
   fireEvent.click(screen.getByRole("button", { name: "Unbind Guide (reference)" }));
   await waitFor(() => expect(sdk.unbind).toHaveBeenCalledWith({ input: {
@@ -95,4 +102,14 @@ test("pending bindings render a skeleton without write controls", () => {
   render(<RecordPagesPane target={recordPagesTarget(context)} />);
   expect(screen.getByRole("status").textContent).toContain("Loading bound pages");
   expect(screen.queryByRole("button", { name: "Bind" })).toBeNull();
+});
+
+test("a page's backlinks are a Related group linking to the linking pages", () => {
+  const pageContext: ChatterViewContext = {
+    ...context, route: { ...context.route!, modelLabel: "knowledge.Page" }, view: { kind: "record", type: "knowledge/page", sqid: "pg_1" },
+  };
+  function Group() { return <>{pageBacklinksGroup.content.useCount?.(pageContext)}{pageBacklinksGroup.content.render(pageContext)}</>; }
+  render(<Group />);
+  expect(screen.getByText("1")).toBeTruthy();
+  expect(screen.getByRole("link", { name: /Linking page/ }).getAttribute("href")).toBe("/knowledge/page/pg_9");
 });

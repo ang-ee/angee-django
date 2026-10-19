@@ -1,10 +1,10 @@
 import { holdsPermission } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  EmptyState, LoadingPanel, RemovedDisclosure, RemovedItem, ScopedExplorerPane, TRASH_PERMISSION, TreeView, WikilinkProvider, useChatterContent, useRouteHref, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
+  EmptyState, InlineTextAction, LoadingPanel, RemovedDisclosure, RemovedItem, ScopedExplorerPane, TRASH_PERMISSION, TreeView, WikilinkProvider, useRouteHref, useRouteRecordId, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -13,7 +13,6 @@ import {
   KNOWLEDGE_LIST_LIMIT,
   PAGE_MODEL,
   PAGE_READ_MODELS,
-  type Backlink,
   type KnowledgePageRow,
 } from "../data/documents";
 import {
@@ -29,13 +28,11 @@ import {
 } from "../data/page-rows";
 import { usePageActions } from "../data/use-page-actions";
 import { KnowledgePageView } from "../KnowledgePageView";
-import { BacklinksPanel } from "./BacklinksPanel";
-import { NewPageControl, type NewPageKind } from "./NewPageControl";
 import { useKnowledgeT } from "../i18n";
 
 // One safety-capped read each of vaults/pages; the browser scopes the set
 // client-side so the navigator and reader share one fetch.
-const EMPTY_BACKLINKS: readonly Backlink[] = [];
+type NewPageKind = "note" | "folder";
 
 type KnowledgeExplorerController = ScopedExplorerController<
   { id: string; name: string },
@@ -44,10 +41,10 @@ type KnowledgeExplorerController = ScopedExplorerController<
 
 /**
  * The knowledge wiki reader. The vault switcher + page-tree navigator publishes
- * into the shell's primary pane (`usePrimaryPane`) and a backlinks tab into the
- * shell's secondary chatter (`useChatterContent`); the page itself renders only
- * the open page's reader. Vaults/pages load once; the switcher and tree drive
- * client-side scoping, and selecting a page reads it.
+ * into the shell's primary pane, with the create verbs in its pane toolbar; the
+ * page itself renders only the open page's reader, and the page's backlinks and
+ * bindings are Related groups on its record. Vaults/pages load once; the
+ * switcher and tree drive client-side scoping, and selecting a page reads it.
  */
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();
@@ -85,18 +82,7 @@ export function KnowledgePage(): ReactElement {
     enabled: openPageId !== null,
     models: PAGE_READ_MODELS,
   });
-  const detail = detailQuery.data?.pages_by_pk ?? null;
   const pageNotFound = !detailQuery.isPending && detailQuery.data?.pages_by_pk === null;
-  const detailBacklinks = detail?.backlinks ?? EMPTY_BACKLINKS;
-  const backlinkSignature = useMemo(
-    () => backlinksSignature(detailBacklinks),
-    [detailBacklinks],
-  );
-  const stableBacklinks = useMemo(
-    () => detailBacklinks,
-    [backlinkSignature],
-  );
-
   const { busy: actionsBusy, createPage, trashPage, restorePage, movePage } =
     usePageActions();
   const activePage = pageById(pages, openPageId);
@@ -160,20 +146,16 @@ export function KnowledgePage(): ReactElement {
     ),
     [handlePageDrop, openPage],
   );
+  // The toolbar's create verbs open the inline title field below the tree; the
+  // field closes on submit and the new page opens.
+  const [creating, setCreating] = useState<NewPageKind | null>(null);
   const renderNavigatorFooter = useCallback(
     (controller: KnowledgeExplorerController) => {
-      const createInScope = async (
-        kind: NewPageKind,
-        title: string,
-      ): Promise<void> => {
-        if (!controller.rootId) return;
+      const createInScope = async (title: string): Promise<void> => {
+        if (!controller.rootId || !creating) return;
         const parent = activePage?.kind === "folder" ? openPageId : null;
-        const id = await createPage({
-          vault: controller.rootId,
-          title,
-          kind,
-          parent,
-        });
+        const id = await createPage({ vault: controller.rootId, title, kind: creating, parent });
+        setCreating(null);
         if (id) openPage(id);
       };
       return (
@@ -183,38 +165,34 @@ export function KnowledgePage(): ReactElement {
             busy={actionsBusy}
             onRestore={restorePage}
           />
-          <NewPageControl busy={actionsBusy} onCreate={createInScope} />
+          {creating ? (
+            <InlineTextAction
+              key={creating}
+              open
+              onOpenChange={(next) => { if (!next) setCreating(null); }}
+              busy={actionsBusy}
+              onSubmit={(title) => void createInScope(title)}
+              inputLabel={t("newPage.titleLabel")}
+              placeholder={creating === "folder" ? t("newPage.folderPlaceholder") : t("newPage.notePlaceholder")}
+              submitLabel={t("newPage.create")}
+              formClassName="w-full items-center gap-1"
+              inputClassName="min-w-0 flex-1"
+            />
+          ) : null}
         </>
       );
     },
-    [actionsBusy, activePage, createPage, openPage, openPageId, pages, restorePage],
+    [actionsBusy, activePage, creating, createPage, openPage, openPageId, pages, restorePage, t],
   );
-
-  // The backlinks rail rides along as an additive secondary (chatter) tab.
-  const backlinksTabs = useMemo<readonly ChatterTab[]>(
-    () =>
-      detail
-        ? [
-            {
-              id: "backlinks",
-              label: t("backlinks.heading"),
-              icon: "link",
-              children: (
-                <BacklinksPanel
-                  backlinks={stableBacklinks}
-                  onOpen={openPage}
-                />
-              ),
-            },
-          ]
-        : [],
-    [detail?.id, openPage, stableBacklinks, t],
+  const explorerToolbar = useCallback(
+    (controller: KnowledgeExplorerController) => ({
+      actions: [
+        { icon: "notes", label: t("newPage.newNote"), disabled: actionsBusy || !controller.rootId, onClick: () => setCreating("note") },
+        { icon: "folder", label: t("newPage.newFolder"), disabled: actionsBusy || !controller.rootId, onClick: () => setCreating("folder") },
+      ],
+    }),
+    [actionsBusy, t],
   );
-  const chatter = useMemo(
-    () => (backlinksTabs.length > 0 ? { tabs: backlinksTabs } : null),
-    [backlinksTabs],
-  );
-  useChatterContent(chatter);
 
   return (
     <ScopedExplorerPane<{ id: string; name: string }, KnowledgeTreeRow>
@@ -228,6 +206,7 @@ export function KnowledgePage(): ReactElement {
       rootPicker={vaultRootPicker}
       onRootChange={closePage}
       renderTree={renderTree}
+      toolbar={explorerToolbar}
       renderNavigatorFooter={renderNavigatorFooter}
       loading={vaultsQuery.isFetching && vaults.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
@@ -335,12 +314,4 @@ function KnowledgeExplorerContent({
       )}
     </WikilinkProvider>
   );
-}
-
-function backlinksSignature(backlinks: readonly Backlink[]): string {
-  return backlinks
-    .map((backlink) =>
-      [backlink.page, backlink.title, backlink.display_text ?? ""].join("\u0000"),
-    )
-    .join("\u0001");
 }

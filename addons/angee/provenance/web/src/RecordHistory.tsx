@@ -6,31 +6,28 @@ import {
   Chip,
   Code,
   CodeBlock,
-  CollapsibleIcon,
-  CollapsiblePanel,
-  CollapsibleRoot,
-  CollapsibleTrigger,
   ComparisonRows,
   EmptyState,
   ErrorBanner,
   LoadingPanel,
+  PaneRow,
+  PaneRows,
+  PaneToolbar,
   RecordActionBar,
   RecordReference,
-  StepList,
+  formatDateTime,
   optionToken,
   titleCase,
   useActionResultMutation,
   type ActionDescriptor,
   type ComparisonRow,
-  type StepListItem,
 } from "@angee/ui";
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import {
   RecordHistoryDocument,
   type HistoryEntry,
   type HistoryStatement,
-  type HistorySummaryEntry,
   type RecordHistory,
 } from "./documents.console";
 import { entryTone, historyValue, statementVerb } from "./history-entries";
@@ -67,8 +64,10 @@ export interface RecordHistoryTimelineProps {
   model: string;
   id: string | null | undefined;
   dataProviderName?: string;
-  /** One line per changeset linking to the record's Activity tab. */
+  /** One line per changeset, no details. */
   compact?: boolean;
+  /** The changeset a Timeline line opened: shown with its details and scrolled into view. */
+  selected?: string;
 }
 
 /** The timeline with its read, paging and the Revert verb bound to one record. */
@@ -77,6 +76,7 @@ export function RecordHistoryTimeline({
   id,
   dataProviderName,
   compact = false,
+  selected,
 }: RecordHistoryTimelineProps): ReactElement {
   const t = useProvenanceT();
   const [offset, setOffset] = useState(0);
@@ -121,6 +121,7 @@ export function RecordHistoryTimeline({
     <HistoryTimeline
       history={history}
       compact={compact}
+      selected={selected}
       fetching={query.isFetching}
       offset={offset}
       onPage={compact ? undefined : setOffset}
@@ -133,6 +134,7 @@ export function RecordHistoryTimeline({
 export interface HistoryTimelineProps {
   history: RecordHistory;
   compact?: boolean;
+  selected?: string;
   fetching?: boolean;
   offset?: number;
   onPage?: (offset: number) => void;
@@ -140,10 +142,11 @@ export interface HistoryTimelineProps {
   reverting?: boolean;
 }
 
-/** Presentation over one loaded page: the workflows step list renders changesets as it renders runs. */
+/** Presentation over one loaded page: one pane row per changeset, the opened one with its details below. */
 export function HistoryTimeline({
   history,
   compact = false,
+  selected,
   fetching = false,
   offset = 0,
   onPage,
@@ -151,20 +154,12 @@ export function HistoryTimeline({
   reverting = false,
 }: HistoryTimelineProps): ReactElement {
   const t = useProvenanceT();
-  const items = history.entries.map((entry): StepListItem => ({
-    id: entry.id,
-    state: "done",
-    tone: entryTone(entry),
-    title: <EntryTitle entry={entry} t={t} />,
-    ...(optionToken(entry.outcome) === "failure" ? { outcome: t("history.outcome.failure") } : {}),
-    timestamp: entry.recorded_at,
-    detail: <EntrySummary entry={entry} t={t} />,
-    ...(compact ? {} : {
-      children: <EntryDetails entry={entry} record={history} onRevert={onRevert} reverting={reverting} t={t} />,
-    }),
-  }));
+  const [openId, setOpenId] = useState<string | null>(selected ?? null);
+  useEffect(() => {
+    if (selected) setOpenId(selected);
+  }, [selected]);
   const pager = onPage && history.total > HISTORY_PAGE_SIZE ? (
-    <div className="flex items-center gap-2">
+    <li className="flex items-center justify-center gap-2 py-2">
       <Button size="sm" variant="ghost" disabled={offset === 0 || fetching}
         onClick={() => onPage(Math.max(0, offset - HISTORY_PAGE_SIZE))}>
         {t("history.newer")}
@@ -173,44 +168,72 @@ export function HistoryTimeline({
         onClick={() => onPage(offset + HISTORY_PAGE_SIZE)}>
         {t("history.older")}
       </Button>
-    </div>
+    </li>
   ) : null;
   return (
-    <div className="grid min-w-0 gap-3">
-      <StepList items={items} />
-      {pager}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PaneToolbar />
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+        <PaneRows>
+          {history.entries.map((entry) => (
+            <HistoryRow
+              key={entry.id}
+              entry={entry}
+              record={history}
+              open={!compact && openId === entry.id}
+              focused={selected === entry.id}
+              onToggle={compact ? undefined : () => setOpenId((current) => current === entry.id ? null : entry.id)}
+              onRevert={onRevert}
+              reverting={reverting}
+              t={t}
+            />
+          ))}
+          {pager}
+        </PaneRows>
+      </div>
     </div>
   );
 }
 
-function EntryActor({ entry }: { entry: HistorySummaryEntry }): ReactElement {
-  const t = useProvenanceT();
-  return entry.actor_model && entry.actor_id
-    ? <RecordReference model={entry.actor_model} id={entry.actor_id} />
-    : <span>{entry.actor ?? t("history.system")}</span>;
-}
-
-function EntryTitle({ entry, t }: { entry: HistorySummaryEntry; t: ProvenanceT }): ReactElement {
-  return (
-    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-      <EntryActor entry={entry} />
-      <span className="font-normal text-fg-muted">{activityLabel(t, entry.activity)}</span>
-      <Badge tone="neutral">{actionLabel(t, entry.action)}</Badge>
-      {entry.source_kind ? <Chip size="sm" tone="info">{titleCase(optionToken(entry.source_kind))}</Chip> : null}
-    </span>
-  );
-}
-
-function EntrySummary({ entry, t }: { entry: HistoryEntry; t: ProvenanceT }): ReactElement {
+function HistoryRow({ entry, record, open, focused, onToggle, onRevert, reverting, t }: {
+  entry: HistoryEntry;
+  record: RecordHistory;
+  open: boolean;
+  focused: boolean;
+  onToggle?: () => void;
+  onRevert: HistoryTimelineProps["onRevert"];
+  reverting: boolean;
+  t: ProvenanceT;
+}): ReactElement {
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: "center" });
+  }, [focused]);
   const counts = [
     entry.changes.length ? t("history.changes", { count: entry.changes.length }) : null,
     entry.statements.length ? t("history.statements", { count: entry.statements.length }) : null,
   ].filter((part): part is string => part !== null);
+  const failed = optionToken(entry.outcome) === "failure";
   return (
-    <div className="grid gap-0.5">
-      {entry.change_reason ? <p className="text-fg">{entry.change_reason}</p> : null}
-      {counts.length ? <p className="text-fg-muted">{counts.join(" · ")}</p> : null}
-    </div>
+    <li ref={ref}>
+      <PaneRow
+        icon={failed ? "triangle-alert" : "pencil"}
+        tone={failed ? "danger" : entryTone(entry)}
+        title={actionLabel(t, entry.action)}
+        detail={[counts.join(" · "), failed ? t("history.outcome.failure") : null].filter(Boolean).join(" · ") || undefined}
+        meta={<time dateTime={entry.recorded_at}>{formatDateTime(entry.recorded_at)}</time>}
+        sub={[entry.actor ?? t("history.system"), activityLabel(t, entry.activity), entry.source_kind ? titleCase(optionToken(entry.source_kind)) : null, entry.change_reason]
+          .filter(Boolean).join(" · ")}
+        verb={onToggle ? t("history.details") : undefined}
+        selected={open}
+        onOpen={onToggle}
+      />
+      {open ? (
+        <div className="ml-6 pb-2 pr-1">
+          <EntryDetails entry={entry} record={record} onRevert={onRevert} reverting={reverting} t={t} />
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -221,7 +244,7 @@ function HistoryValueCell({ value, t }: { value: unknown; t: ProvenanceT }): Rea
   return <span className="[overflow-wrap:anywhere]">{rendered.text}</span>;
 }
 
-/** Field deltas, statement versions, merge facts and the Revert verb, folded under one trigger. */
+/** Field deltas, statement versions, merge facts and the Revert verb, under the opened row. */
 function EntryDetails({ entry, record, onRevert, reverting, t }: {
   entry: HistoryEntry;
   record: RecordHistory;
@@ -255,27 +278,19 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
     },
   };
   return (
-    <CollapsibleRoot variant="flush">
-      <CollapsibleTrigger>
-        <CollapsibleIcon />
-        {t("history.details")}
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="grid min-w-0 gap-3 pt-1">
-          {rows.length ? (
-            <ComparisonRows
-              rows={rows}
-              fieldLabel={t("history.field")}
-              beforeLabel={t("history.before")}
-              afterLabel={t("history.after")}
-            />
-          ) : null}
-          {entry.statements.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}
-          {entry.merge ? <MergeFacts merge={entry.merge} t={t} /> : null}
-          {revertable ? <RecordActionBar record={{ id: record.id }} actions={[revertAction]} blocked={reverting} /> : null}
-        </div>
-      </CollapsiblePanel>
-    </CollapsibleRoot>
+    <div className="grid min-w-0 gap-3 pt-1">
+      {rows.length ? (
+        <ComparisonRows
+          rows={rows}
+          fieldLabel={t("history.field")}
+          beforeLabel={t("history.before")}
+          afterLabel={t("history.after")}
+        />
+      ) : null}
+      {entry.statements.length ? <StatementVersions statements={entry.statements} record={record} t={t} /> : null}
+      {entry.merge ? <MergeFacts merge={entry.merge} t={t} /> : null}
+      {revertable ? <RecordActionBar record={{ id: record.id }} actions={[revertAction]} blocked={reverting} /> : null}
+    </div>
   );
 }
 

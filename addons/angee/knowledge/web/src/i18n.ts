@@ -40,7 +40,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "backlinks.emptyTitle": "No backlinks",
   "backlinks.emptyDescription":
     "Pages that link to this one show up here.",
-  "backlinks.heading": "Backlinks",
+  "boundTo.empty": "Not bound to any record",
   "newPage.newNote": "New note",
   "newPage.newFolder": "New folder",
   "newPage.folderPlaceholder": "Folder name",

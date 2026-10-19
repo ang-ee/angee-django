@@ -9,9 +9,11 @@ describe("messaging addon manifest", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
   });
 
-  test("contributes the comment and conversation kinds to the Timeline and the Discussion tab", () => {
+  test("contributes the comment and conversation kinds to the Timeline, the Discussion tab, the Follow control and the Conversations group", () => {
     expect(Object.keys(messaging.containers?.["timeline#kinds"] ?? {})).toEqual(["messaging.comment", "messaging.conversation"]);
     expect(messaging.containers?.["record#aside"]).toMatchObject({ "messaging.discussion": { sequence: 20 } });
+    expect(Object.keys(messaging.containers?.["form#chrome"] ?? {})).toEqual(["messaging.follow"]);
+    expect(messaging.containers?.["related#groups"]).toMatchObject({ "messaging.conversations": { sequence: 40, content: { label: "Conversations" } } });
   });
 
   test("registers the message resources", () => {

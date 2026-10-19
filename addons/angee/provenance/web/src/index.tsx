@@ -30,8 +30,12 @@ const provenance = defineBaseAddon({
         content: {
           label: "History", icon: "history", panelClassName: "p-0", strip: false, target: { model: "provenance.Changeset" },
           when: (context) => Boolean(context.route?.history),
-          render: (context) => (
-            <RecordHistoryTimeline model={context.route?.canonicalLabel ?? context.route?.modelLabel ?? ""} id={context.view.kind === "record" ? context.view.sqid ?? "" : ""} />
+          render: (context, selection) => (
+            <RecordHistoryTimeline
+              model={context.route?.canonicalLabel ?? context.route?.modelLabel ?? ""}
+              id={context.view.kind === "record" ? context.view.sqid ?? "" : ""}
+              selected={selection?.target}
+            />
           ),
         },
       },

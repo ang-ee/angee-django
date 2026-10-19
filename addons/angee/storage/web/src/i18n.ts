@@ -80,7 +80,6 @@ export const enStorageMessages: Record<string, string> = {
   "file.download": "Download",
   "file.restore": "Restore",
   "file.trash": "Trash",
-  "file.detailsTab": "Details",
   "file.unknownType": "Unknown type",
   // File preview pane header subtitle: mime label · formatted size (formatSize
   // already carries the unit, e.g. "1.4 MB").

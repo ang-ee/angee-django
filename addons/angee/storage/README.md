@@ -35,9 +35,9 @@ definition storage/file {
 The model owner decides record read/write permissions. Storage checks the
 effective arm before accepting a record upload, `record_files` offers uploads
 (`can_upload`) only where it exists and the actor can write the record, and the
-tab uses the existing `file_upload_begin` record target with `visibility: RECORD`. The tab is the
-`record#aside/storage.files` child (`?chatterTab=files` still selects it); a product
-narrowing `record#aside` with `only` keeps it by listing `storage.files`.
+tab uses the existing `file_upload_begin` record target with `visibility: RECORD`. The group is the
+`related#groups/storage.files` child of the framework's Related tab; a product
+narrowing `record#aside` with `only` keeps it by listing `related`.
 
 Folders compose the native hierarchy and transferable ownership, scoped to their
 drive. Files, folders and FileAttachment edges retain changeset history; a merge
