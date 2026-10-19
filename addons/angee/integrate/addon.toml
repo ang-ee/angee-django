@@ -19,6 +19,11 @@ dependencies = [
   "qrcode[pil]>=8.2",
 ]
 
+[[migrations]]
+name = "external_account_owner"
+app_label = "integrate"
+module = "runtime_migrations.external_account_owner"
+
 [resources]
 master = [
   { path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" },

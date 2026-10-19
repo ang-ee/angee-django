@@ -6,3 +6,8 @@ description = "Immutable workflow graphs and actor-scoped execution"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
 depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions", "angee.provenance"]
+
+[[migrations]]
+name = "owner_column"
+app_label = "workflows"
+module = "runtime_migrations.owner_column"
