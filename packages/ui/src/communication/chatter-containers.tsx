@@ -1,5 +1,5 @@
 import type { ChatterTabContent, ChatterViewContext, CoreContainer } from "../runtime";
-import { RelatedPane, useRelatedCount } from "./RelatedPane";
+import { RelatedPane } from "./RelatedPane";
 
 /** The Related tab's id in `record#aside`. */
 export const RELATED_TAB_ID = "related";
@@ -27,7 +27,6 @@ export const CHATTER_CONTAINERS: readonly CoreContainer[] = [
           icon: "link",
           panelClassName: "p-0",
           when: (context: ChatterViewContext) => context.view.kind === "record",
-          useCount: useRelatedCount,
           render: (context: ChatterViewContext) => <RelatedPane context={context} />,
         } satisfies ChatterTabContent,
       },

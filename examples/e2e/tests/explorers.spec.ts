@@ -40,7 +40,8 @@ test("explorer pane toolbars create a file folder and open a new knowledge note 
       await expect(pages.node(noteTitle)).toBeVisible();
       const reader = page.getByRole("article").filter({ has: page.getByRole("heading", { name: noteTitle, exact: true }) });
       await expect(reader).toBeVisible();
-      await expect(reader.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+      // Page verbs publish into the shell's control band above the reader.
+      await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
     });
   } finally {
     if (pageId) requireGraphQLData(await consoleApi.query(`mutation RemoveExplorerPage($id: ID!) {

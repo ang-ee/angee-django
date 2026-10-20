@@ -131,7 +131,7 @@ beforeEach(() => {
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
-      return { data: mocks.threadData, fetching: false, error: null, refetch: vi.fn() };
+      return { data: mocks.threadData, isFetching: mocks.threadData === undefined, error: null, refetch: vi.fn() };
     }
     if (op === "MessagingRecipientUsers") {
       return { data: mocks.recipientData, fetching: false, error: null, refetch: vi.fn() };
@@ -239,6 +239,22 @@ describe("RecordChatterPane", () => {
     expect(screen.getByLabelText("Search comments", { selector: "input" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
     expect(mocks.mutateCalls.some((call) => call.op === "MessagingMarkRecordThreadRead")).toBe(true);
+  });
+
+  test("search stays open through a query change and closes with its filter cleared", () => {
+    mocks.threadData = threadPayload([message()]);
+    const view = render(<RecordChatterPane context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search comments" }), { target: { value: "Hello" } });
+    mocks.threadData = undefined;
+    view.rerender(<RecordChatterPane context={context} />);
+    expect(screen.getByRole("searchbox", { name: "Search comments" })).toBeTruthy();
+    mocks.threadData = threadPayload([message()]);
+    view.rerender(<RecordChatterPane context={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    expect(screen.queryByRole("searchbox", { name: "Search comments" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Search comments" }));
+    expect((screen.getByRole("searchbox", { name: "Search comments" }) as HTMLInputElement).value).toBe("");
   });
 
   test("passes the host's submit key to its record conversation", () => {

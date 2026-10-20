@@ -21,6 +21,10 @@ import { ResourceListBody } from "./body";
 import { parseResourceListDeclarations, validateResourceListDeclarations } from "./declarations";
 import { declaredGroupDefaults } from "../search/group-defaults";
 import { useAppRuntime } from "../../../runtime";
+import { REFINE_CREATE_ID } from "../../../runtime/route-href";
+
+export { REFINE_CREATE_ID } from "../../../runtime/route-href";
+
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer" | "split";
 
@@ -57,9 +61,6 @@ export interface ResourceListCalendarSpec {
   /** Map a selected range to the create form's seed values (quick-create). */
   createDefaults?: (start: Date, end: Date) => Record<string, unknown>;
 }
-
-/** Record id sentinel that tells `ResourceList` to render a blank create form. */
-export const REFINE_CREATE_ID = "new";
 
 export interface RecordSmartButtonDescriptor {
   id: string;

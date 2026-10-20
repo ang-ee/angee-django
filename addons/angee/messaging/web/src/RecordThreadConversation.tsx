@@ -24,7 +24,6 @@ import {
   PostRecordMessageDocument,
   READ_MODELS,
   RecordRemovedMessagesDocument,
-  RecordThreadDocument,
   RestoreRecordMessageDocument,
   SetRecordMessageReactionDocument,
   SetRecordMessageStarredDocument,
@@ -35,6 +34,7 @@ import {
   type RecipientUserRow,
   type SuggestedRecipientRow,
 } from "./documents";
+import { useRecordThreadQuery } from "./useRecordThreadQuery";
 
 const RECIPIENT_MODELS = ["iam.User"] as const;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -114,7 +114,7 @@ export interface RecordThreadConversationProps {
 
 /** The reusable record-thread conversation: the message transcript + composer over
  *  a record's chatter thread (`record_thread`/`post_record_message`), live-refetched
- *  through the `READ_MODELS` invalidation set. Owns reading, posting, editing,
+ *  through `useRecordThreadQuery`. Owns reading, posting, editing,
  *  reactions, stars, mark-done, and mark-read for a `{modelLabel, recordId}`.
  *  The composer requires the record's projected post permission and stays
  *  read-only during view-as preview. The
@@ -154,10 +154,7 @@ export function RecordThreadConversation({
     }),
     [modelLabel, recordId, activeSearch, messageLimit, around, stream?.messageTypes, messageTypes, Boolean(stream)],
   );
-  const threadQuery = useAuthoredQuery(RecordThreadDocument, variables, {
-    enabled,
-    models: READ_MODELS,
-  });
+  const threadQuery = useRecordThreadQuery(variables);
   const threadPayload = threadQuery.data?.record_thread;
   const offeredKinds: readonly RecordMessagePostKind[] = threadPayload ? threadPayload.post_kinds ?? ["COMMENT", "NOTE"] : [];
   const canPost = Boolean(
@@ -418,23 +415,10 @@ export function RecordThreadConversation({
     }
   }, [modelLabel, recordId, markReadMutation, t]);
 
-  if (threadQuery.isFetching && threadQuery.data === undefined) {
-    return <SkeletonStatus label={t("chatter.loading")}
-      className={cn("flex flex-col gap-4 p-3", stream ? "min-h-40" : "min-h-72")}>
-      {!stream ? <Skeleton className="h-9 w-full" /> : null}
-      {[0, 1, 2].map((index) => <div key={index} className="flex gap-3">
-        <Skeleton className="h-8 w-8 rounded-full" />
-        <div className="flex flex-1 flex-col gap-2"><Skeleton className="h-4 w-1/3" /><Skeleton className="h-10 w-3/4" /></div>
-      </div>)}
-    </SkeletonStatus>;
-  }
   // Any failure returns a state surface and NO composer — a `record_thread`
   // `NOT_FOUND` (unreadable/nonexistent record) or `BAD_RECORD` (undecodable
   // model/record) must never render a phantom room a non-member could post into.
   const errorCode = threadPayload?.error_code ?? null;
-  if (threadQuery.error || errorCode) {
-    return renderThreadError(errorCode, t);
-  }
 
   const chrome: RecordThreadConversationChrome = {
     payload: threadPayload,
@@ -468,70 +452,82 @@ export function RecordThreadConversation({
 
   return (
     <div ref={conversationRef} className={cn("flex flex-col gap-4", stream ? "min-h-0" : "min-h-72")}>
+      {/* Search and notification controls survive a new query's loading state. */}
       {header?.(chrome)}
-      {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
-        value={search}
-        onChange={(event) => setSearch(event.currentTarget.value)}
-        onClear={() => setSearch("")}
-        placeholder={t("chatter.search")}
-        aria-label={t("chatter.search")}
-      /> : null}
-      {messages.length > 0 ? (
-        <div className="space-y-3">
-          {activeSearch ? (
-            <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
-              {t("chatter.results", { count: messageResultCount })}
-            </div>
-          ) : null}
-          <MessageFeed label={t("chatter.feedLabel")}>
-            {messages.map((message) => <MessageFeedRow
-                key={`message:${message.id}`}
-                message={message}
-                focused={message.id === around}
-                editing={editingMessageId === message.id}
-                canReply={canPost}
-                readOnly={readOnly}
-                streamMode={streamMode}
-                streamVerb={stream?.verbs?.[message.is_reply ? "reply" : "root"]}
-                streamKind={stream?.kindLabels?.[message.subtype?.key ?? ""]}
-                audience={stream ? stream.audience ?? threadPayload?.audience_label ?? t("composer.audience") : undefined}
-                t={t}
-                onStartEdit={handleStartEdit}
-                onCancelEdit={handleCancelEdit}
-                onSaveEdit={handleSaveEdit}
-                onStartReply={handleStartReply}
-                onDelete={handleDeleteMessage}
-                onTrash={handleTrashMessage}
-                onToggleReaction={handleToggleReaction}
-                onToggleStarred={handleToggleStarred}
-                onMarkDone={handleMarkMessageDone}
-              />)}
-          </MessageFeed>
-        </div>
-      ) : (
-        <EmptyState
-          icon="comments"
-          title={activeSearch ? t("chatter.noMatchTitle") : t(stream ? "stream.empty" : "chatter.emptyTitle")}
-          description={
-            activeSearch ? t("chatter.noMatchHint") : t(stream ? "stream.emptyHint" : "chatter.emptyHint")
-          }
-          className="min-h-40 p-4"
-        />
-      )}
-      {threadPayload?.removed_message_count ? (
-        <RemovedMessages
-          modelLabel={modelLabel}
-          recordId={recordId}
-          count={threadPayload.removed_message_count}
-          readOnly={readOnly}
-          t={t}
-          onRestore={handleRestoreMessage}
-        />
-      ) : null}
-      {composer}
-      {/* The shared danger banner announces via role="alert" and is dismissable —
-          `description={null}` renders nothing, so this is the "no error" state too. */}
-      {errorBanner}
+      {threadQuery.isFetching && threadQuery.data === undefined ? (
+        <SkeletonStatus label={t("chatter.loading")}
+          className={cn("flex flex-col gap-4 p-3", stream ? "min-h-40" : "min-h-72")}>
+          {!stream ? <Skeleton className="h-9 w-full" /> : null}
+          {[0, 1, 2].map((index) => <div key={index} className="flex gap-3">
+            <Skeleton className="h-8 w-8 rounded-full" />
+            <div className="flex flex-1 flex-col gap-2"><Skeleton className="h-4 w-1/3" /><Skeleton className="h-10 w-3/4" /></div>
+          </div>)}
+        </SkeletonStatus>
+      ) : threadQuery.error || errorCode ? renderThreadError(errorCode, t) : <>
+        {(stream ? Boolean(stream.search) : searchPlacement === "inline") ? <SearchInput
+          value={search}
+          onChange={(event) => setSearch(event.currentTarget.value)}
+          onClear={() => setSearch("")}
+          placeholder={t("chatter.search")}
+          aria-label={t("chatter.search")}
+        /> : null}
+        {messages.length > 0 ? (
+          <div className="space-y-3">
+            {activeSearch ? (
+              <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
+                {t("chatter.results", { count: messageResultCount })}
+              </div>
+            ) : null}
+            <MessageFeed label={t("chatter.feedLabel")}>
+              {messages.map((message) => <MessageFeedRow
+                  key={`message:${message.id}`}
+                  message={message}
+                  focused={message.id === around}
+                  editing={editingMessageId === message.id}
+                  canReply={canPost}
+                  readOnly={readOnly}
+                  streamMode={streamMode}
+                  streamVerb={stream?.verbs?.[message.is_reply ? "reply" : "root"]}
+                  streamKind={stream?.kindLabels?.[message.subtype?.key ?? ""]}
+                  audience={stream ? stream.audience ?? threadPayload?.audience_label ?? t("composer.audience") : undefined}
+                  t={t}
+                  onStartEdit={handleStartEdit}
+                  onCancelEdit={handleCancelEdit}
+                  onSaveEdit={handleSaveEdit}
+                  onStartReply={handleStartReply}
+                  onDelete={handleDeleteMessage}
+                  onTrash={handleTrashMessage}
+                  onToggleReaction={handleToggleReaction}
+                  onToggleStarred={handleToggleStarred}
+                  onMarkDone={handleMarkMessageDone}
+                />)}
+            </MessageFeed>
+          </div>
+        ) : (
+          <EmptyState
+            icon="comments"
+            title={activeSearch ? t("chatter.noMatchTitle") : t(stream ? "stream.empty" : "chatter.emptyTitle")}
+            description={
+              activeSearch ? t("chatter.noMatchHint") : t(stream ? "stream.emptyHint" : "chatter.emptyHint")
+            }
+            className="min-h-40 p-4"
+          />
+        )}
+        {threadPayload?.removed_message_count ? (
+          <RemovedMessages
+            modelLabel={modelLabel}
+            recordId={recordId}
+            count={threadPayload.removed_message_count}
+            readOnly={readOnly}
+            t={t}
+            onRestore={handleRestoreMessage}
+          />
+        ) : null}
+        {composer}
+        {/* The shared danger banner announces via role="alert" and is dismissable —
+            `description={null}` renders nothing, so this is the "no error" state too. */}
+        {errorBanner}
+      </>}
     </div>
   );
 }
