@@ -164,7 +164,7 @@ export function Chatter({
               value={tab.id}
               onClick={() => setActiveTab(tab.id)}
               icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
-              className="h-8 min-w-fit flex-1 px-2 text-13 font-medium"
+              className="h-8 min-w-fit px-2 text-13 font-medium"
             >
               <span
                 className={cn(tab.icon && "chatter-tab-label")}
