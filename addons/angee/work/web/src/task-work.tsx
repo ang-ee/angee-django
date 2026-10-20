@@ -1,7 +1,6 @@
 import { Group, Field, RelativeTime, type StringIdRow } from "@angee/ui";
 import * as React from "react";
 
-import { estimateLabel } from "./estimates";
 import { useWorkT } from "./i18n";
 
 export interface WorkTaskRow extends StringIdRow {
@@ -34,30 +33,6 @@ export const taskWorkFormSection = (
     <Field name="triaged_at" readOnly />
   </Group>
 );
-
-export function WorkTaskCard({
-  task,
-  estimateScale,
-}: {
-  task: WorkTaskRow;
-  estimateScale: unknown;
-}): React.ReactElement {
-  const t = useWorkT();
-  const estimate = estimateLabel(task.estimate, estimateScale, t);
-  const workKey = String(task.work_key ?? "").trim();
-  const title = String(task.title ?? "").trim();
-  return (
-    <div className="grid gap-2">
-      <div className="flex items-center justify-between gap-3 text-12 text-fg-muted">
-        <span className="font-semibold tabular-nums">
-          {workKey || t("task.card.unnumbered")}
-        </span>
-        {estimate ? <span className="tabular-nums">{estimate}</span> : null}
-      </div>
-      <span className="text-sm font-medium text-fg">{title}</span>
-    </div>
-  );
-}
 
 export function TriageDwell({ value }: { value: unknown }): React.ReactElement {
   const t = useWorkT();

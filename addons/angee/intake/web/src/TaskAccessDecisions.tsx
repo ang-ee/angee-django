@@ -1,5 +1,5 @@
 import type { DocumentType } from "@angee/gql/console";
-import { Avatar, Chip, Card, CardContent, CardFooter, CardHeader, InlineEmpty, NavLink, Skeleton, SkeletonText, avatarInitials, useRouteHref, useStatusTone } from "@angee/ui";
+import { Avatar, Card, CardContent, CardFooter, CardHeader, InlineEmpty, NavLink, StatusBadge, avatarInitials, textRoleVariants, useRouteHref } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import type { TaskAccessNeedsDocument } from "./documents";
@@ -8,18 +8,6 @@ import { TaskAccessActions } from "./TaskAccessActions";
 
 /** One Need as the Task's access query selects it. */
 export type CurrentAccessRow = DocumentType<typeof TaskAccessNeedsDocument>["intake_needs"][number];
-
-export function TaskAccessCardSkeleton(): ReactElement {
-  return <Card>
-    <CardHeader className="flex-row items-center gap-2">
-      <Skeleton shape="avatar" className="size-avatar-sm" />
-      <Skeleton shape="text" className="w-32" />
-      <Skeleton shape="text" className="w-28" />
-    </CardHeader>
-    <CardContent className="pt-0"><SkeletonText lines={2} /></CardContent>
-    <CardFooter><Skeleton className="h-8 w-28" /></CardFooter>
-  </Card>;
-}
 
 /** The pill and the sentence for each access state. */
 const STATE_COPY = {
@@ -38,7 +26,6 @@ export function TaskAccessDecisions({
 }): ReactElement {
   const t = useIntakeT();
   const routeHref = useRouteHref();
-  const statusTone = useStatusTone();
   if (needs.length === 0) return <InlineEmpty label={t("access.empty")} />;
 
   return <div className="grid gap-3">{needs.map((need) => {
@@ -54,11 +41,11 @@ export function TaskAccessDecisions({
         <Avatar size="sm" src={need.party?.display_avatar?.url || undefined} initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
-        <Chip tone={statusTone(stateKey, { approved: "success", denied: "danger", pending: "warning" })}>
-          {t(state.pill)}
-        </Chip>
+        {/* approved, denied and pending read their tones from the framework vocabulary; the
+            manifest adds `unavailable`. */}
+        <StatusBadge value={stateKey}>{t(state.pill)}</StatusBadge>
       </CardHeader>
-      <CardContent className="pt-0 text-sm text-fg-muted">
+      <CardContent className={textRoleVariants({ role: "meta", className: "pt-0" })}>
         {t(state.sentence, { email: email || t("access.emailUnknown") })}
       </CardContent>
       <CardFooter className="flex-wrap">

@@ -4,14 +4,15 @@ import { useResourceInvalidates, type Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   Skeleton,
-  defaultWidgets,
+  StatusBadge,
+  useEnumOptions,
   useResourceViewMaybe,
   type ListColumn,
   type WidgetDefinition,
   type WidgetRenderProps,
 } from "@angee/ui";
 
-import { RecordRunStatusDocument, RUN_MODELS } from "./documents.console";
+import { RecordRunStatusDocument, RUN_MODEL, RUN_MODELS } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
 /** A render-only column showing the latest workflow run about each resource row. */
@@ -31,6 +32,8 @@ function RunStatusLabel() {
 }
 
 function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
+  const t = useWorkflowsT();
+  const statusOptions = useEnumOptions(RUN_MODEL, "status");
   const resource = useResourceViewMaybe()?.resource ?? "";
   const id = typeof row?.id === "string" ? row.id : "";
   const records = React.useMemo(() => (resource && id ? [{ model: resource, id }] : []), [resource, id]);
@@ -62,9 +65,8 @@ function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
   }, [invalidate, invalidations, transition]);
   if (!records.length) return null;
   if (query.isLoading) return <Skeleton shape="text" size="sm" className="w-16" />;
-  if (!run) return <span aria-label={query.error ? "Run status unavailable" : undefined}>—</span>;
-  const Status = defaultWidgets.statusBadge.read;
-  return <Status value={run.status} />;
+  if (!run) return <span aria-label={query.error ? t("run.statusUnavailable") : undefined}>—</span>;
+  return <StatusBadge value={run.status} options={statusOptions} />;
 }
 
 export const runStatusWidget = {

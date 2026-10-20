@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { TASK_MODEL } from "./resources";
-import { useTaskFormDeclaration, type TaskActionRow } from "./task-actions";
+import { useTaskFormDeclaration, useTaskRowHref, type TaskActionRow } from "./task-actions";
 
 export interface TaskBoardSurfaceProps<TRow extends TaskActionRow> {
   children: React.ReactNode;
@@ -22,6 +22,7 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
   const taskHref = useResourceRecordHref(TASK_MODEL);
   const [creating, setCreating] = React.useState(false);
   const form = useTaskFormDeclaration();
+  const rowHref = useTaskRowHref();
   const select = React.useCallback(
     (id: string | null) => {
       if (id === null) {
@@ -43,7 +44,7 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
       onSelect={select}
       onClose={() => setCreating(false)}
       createDefaults={createDefaults}
-      rowHref={taskHref ? (row) => taskHref(row.id, row) ?? "" : undefined}
+      rowHref={rowHref}
     >
       {children}
       {form}

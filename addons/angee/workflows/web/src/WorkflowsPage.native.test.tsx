@@ -19,7 +19,7 @@ test("opens a workflow from the catalogue with its retained versions and recent 
   fireEvent.click(workflow);
   expect(await screen.findByRole("heading", { level: 1, name: "Record review" })).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Versions" }));
-  expect(await screen.findByText("retained_hash")).toBeTruthy();
+  expect(await screen.findByText("usr_operator")).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
   expect(await screen.findByText("Failed")).toBeTruthy();
   // The workflow's own fields stay on the sheet above every pane.
@@ -30,7 +30,7 @@ test("versions and recent runs are filtered by the open workflow using native li
   const onRequest = vi.fn();
   render(<CatalogueStory onRequest={onRequest} />);
   fireEvent.click(await screen.findByRole("tab", { name: "Versions" }));
-  await screen.findByText("retained_hash");
+  await screen.findByText("usr_operator");
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
   await screen.findByText("Failed");
   for (const name of ["workflowversion", "workflowrun"]) {

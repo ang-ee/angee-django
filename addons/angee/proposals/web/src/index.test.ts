@@ -61,6 +61,8 @@ describe("proposals addon manifest", () => {
       "proposals.project-round-open",
       "proposals.round-verbs",
       "proposals.project-round-verbs",
+      "proposals.round-topics",
+      "proposals.round-proposals",
       "proposals.round-people",
       "proposals.project-people",
       "proposals.project-approach",

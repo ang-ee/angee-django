@@ -29,7 +29,8 @@ vi.mock("@angee/ui", () => ({
   },
   Page: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   PageBody: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  PageHeader: ({ actions }: { actions?: React.ReactNode }) => <>{actions}</>,
+  CommandBand: ({ verbs }: { verbs?: React.ReactNode }) => <>{verbs}</>,
+  RecordHeader: () => null,
   NavLink: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href}>{children}</a>,
   useBreadcrumbLeafLabel: (label?: string) => {
     mocks.leafLabel = label;
@@ -69,10 +70,6 @@ vi.mock("../cycle-actions", () => ({
 
 vi.mock("../i18n", () => ({
   useWorkT: () => (key: string) => key,
-}));
-
-vi.mock("../task-work", () => ({
-  WorkTaskCard: () => null,
 }));
 
 vi.mock("../removed-tasks", () => ({

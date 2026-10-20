@@ -21,6 +21,8 @@ export default defineBaseAddon({
             <Field name="permissions" hidden readOnly />
             <Field
               name="clarification_queue"
+              // A string label: the relation picker's accessible name reads string labels only
+              // (`widgetLabel`); a translated-label descriptor on Field is an owner gap.
               label={enProposalsWorkMessages["round.queue"]}
               resolve={(values) => ({
                 name: "clarification_queue",

@@ -37,6 +37,7 @@ export const enIntakeMessages: Record<string, string> = {
   "capture.submit": "Capture",
   "capture.submitting": "Capturing…",
   "capture.error": "Could not capture the need.",
+  "capture.importanceRequired": "Choose the need's importance.",
 };
 
 export const useIntakeT = createNamespaceT("intake", enIntakeMessages);

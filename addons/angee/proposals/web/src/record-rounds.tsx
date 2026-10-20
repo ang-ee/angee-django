@@ -18,6 +18,7 @@ import { ROUND_MODEL } from "./resources";
 import { TaskResponderShareAction } from "./task-responder-share";
 import { RoundResponderAccessRole } from "./access-role";
 import { RoundOpeningAccessVisibility } from "./access-visibility";
+import { RoundProposalsPanel, RoundTopicsPanel } from "./round-sections";
 
 const ROUND_RECORD_FIELDS = ["id", "name", "status", "opening_policy", "permissions", "revision", "can_open", "can_admit",
   "roster.user", "roster.name", "roster.track_status"] as const;
@@ -82,10 +83,10 @@ function RecordRoundsPane({
   );
 }
 
-function RoundTabLabel({ name }: { name: "roster" | "comparison" }): React.ReactElement {
-  const t = useProposalsT();
-  return <>{t(name === "roster" ? "round.tabs.roster" : "round.tabs.comparison")}</>;
-}
+
+
+/** A tab label resolved through the host's i18n, with the bundled English as the fallback. */
+const tabLabel = (key: keyof typeof enProposalsMessages) => ({ namespace: "proposals", key, fallback: enProposalsMessages[key] });
 
 /** The round's and its project's children: access owners, the rail, record verbs and tabs. */
 export const roundRecordContainers = {
@@ -131,28 +132,32 @@ export const roundRecordContainers = {
     },
   },
   [`${ROUND_MODEL}#sections`]: {
+    "proposals.round-topics": {
+      sequence: 10,
+      content: <Tab id="topics" label={tabLabel("round.tabs.topics")} icon={<Glyph decorative name="proposals-response" />}><RoundTopicsPanel /></Tab>,
+    },
+    "proposals.round-proposals": {
+      sequence: 20,
+      content: <Tab id="proposals" label={tabLabel("round.tabs.proposals")} icon={<Glyph decorative name="proposals-round" />}><RoundProposalsPanel /></Tab>,
+    },
     "proposals.round-people": {
       sequence: 40,
-      content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={ROUND_RECORD_FIELDS}><RoundRecordSection surface="people" /></Tab>,
+      content: <Tab id="round-roster" label={tabLabel("round.tabs.roster")} requiredFields={ROUND_RECORD_FIELDS}><RoundRecordSection surface="people" /></Tab>,
     },
   },
   [`${PROJECT_MODEL}#sections`]: {
     "proposals.project-people": {
       sequence: 40,
-      content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="people" /></Tab>,
+      content: <Tab id="round-roster" label={tabLabel("round.tabs.roster")} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="people" /></Tab>,
     },
     "proposals.project-approach": {
       sequence: 35,
-      content: <Tab id="comparison" label={<RoundTabLabel name="comparison" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="approach" /></Tab>,
+      content: <Tab id="comparison" label={tabLabel("round.tabs.comparison")} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="approach" /></Tab>,
     },
     "proposals.project-rounds": {
       sequence: 35,
       content: (
-        <Tab
-          id="proposal-rounds"
-          label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
-          icon={<Glyph decorative name="proposals-round" />}
-        >
+        <Tab id="proposal-rounds" label={tabLabel("round.pane.label")} icon={<Glyph decorative name="proposals-round" />}>
           <RecordRoundsSection targetField="project" />
         </Tab>
       ),
@@ -169,11 +174,7 @@ export const roundRecordContainers = {
     "proposals.task-rounds": {
       sequence: 35,
       content: (
-        <Tab
-          id="proposal-rounds"
-          label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
-          icon={<Glyph decorative name="proposals-round" />}
-        >
+        <Tab id="proposal-rounds" label={tabLabel("round.pane.label")} icon={<Glyph decorative name="proposals-round" />}>
           <RecordRoundsSection targetField="task" />
         </Tab>
       ),

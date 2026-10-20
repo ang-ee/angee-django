@@ -56,7 +56,7 @@ export function RunsList({ baseFilter, embedded = false }: {
       <Column field="finished_at" header={t("run.finished")} />
       <Column field="outcome_label" header={t("run.outcome")} />
     </List>
-    <Form readOnly returning={["can_cancel", "can_reprocess", "subject_model", "subject_id"]}
+    <Form readOnly eyebrow={t("run.eyebrow")} returning={["can_cancel", "can_reprocess", "subject_model", "subject_id"]}
       headerExtras={({ record }) => typeof record?.subject_id === "string" && typeof record.subject_model === "string"
         ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
       <Field name="display_name" title readOnly />

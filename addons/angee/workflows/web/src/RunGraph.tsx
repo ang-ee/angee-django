@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuthoredQuery } from "@angee/refine";
-import { Chip, Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel, errorMessage, formatDateTime, optionLabel, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent, useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode } from "@angee/ui";
+import { Button, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, MetaGrid, MetaSection, RailPanel, StatusBadge, errorMessage, formatDateTime, routeSearchParam, updateRouteSearch, useAppRuntime, useChatter, useChatterContent, useEnumOptions, useRouteSearch, useStatusTone, type GraphViewNode } from "@angee/ui";
 import { RUN_MODEL, STEP_RUN_MODEL, WorkflowRunGraphDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 import { projectRunGraph, RUN_GRAPH_EDGE_STYLES, type RunGraphNode } from "./run-graph";
 import { StepRuns } from "./StepRuns";
 import { formatStepPage } from "./step-page";
-import { WORKFLOW_STEP_STATUS_TONES } from "./status-tones";
 
 export const RUN_GRAPH_INSPECTOR_TAB = "run-graph-inspector";
 
@@ -70,15 +69,13 @@ function RunNodeInspector({ runId, node, detail }: {
   runId: string; node: RunGraphNode; detail: GraphViewNode["detail"];
 }) {
   const t = useWorkflowsT();
-  const resolveTone = useStatusTone();
   const statuses = useEnumOptions(STEP_RUN_MODEL, "status");
   const row = node.step_run;
   return <>
     <MetaSection title={node.label}>
       <MetaGrid rows={[
-        [t("run.graphKey"), node.key], [t("run.graphStep"), node.step_label],
-        [t("run.status"), <Chip tone={resolveTone(row?.status ?? "unreached", WORKFLOW_STEP_STATUS_TONES)}>
-          {row ? optionLabel(statuses, row.status) : t("run.graphPending")}</Chip>],
+        [t("run.graphStep"), node.step_label],
+        [t("run.status"), <StatusBadge value={row?.status ?? "unreached"} options={statuses}>{row ? undefined : t("run.graphPending")}</StatusBadge>],
         ...(detail ? [[t("run.graphProgress"), detail] as const] : []),
         ...(row ? [[t("step.attempts"), row.attempt], [t("step.page"), formatStepPage(row.page_index, t)],
           [t("step.created"), formatDateTime(row.created_at)], [t("step.updated"), formatDateTime(row.updated_at)],

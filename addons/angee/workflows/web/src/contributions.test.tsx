@@ -38,7 +38,7 @@ function origin(data: WaitingRuns = visible, error = false, pending = false) {
 
 test("decision origin asks for the current decision and links its waiting run and step", async () => {
   const { custom } = origin();
-  expect((await screen.findByRole("link", { name: "Record review" })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
+  expect((await screen.findByRole("link", { name: /Record review/ })).getAttribute("href")).toBe("/workflows/runs/wfr_review");
   expect(screen.getByText(/· Review document$/)).toBeTruthy();
   expect(screen.queryByText(/\[0\]/)).toBeNull();
   expect(custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ decision: "dcn_review" });
@@ -52,7 +52,7 @@ test("decision origin asks for the current decision and links its waiting run an
 
 test("mapped waiting rows show item zero without inferring mapping from the node key", async () => {
   origin({ steprun: visible.steprun.map((step) => ({ ...step, is_mapped: true })) });
-  expect(await screen.findByText(/· Review document \[0\]/)).toBeTruthy();
+  expect(await screen.findByText(/· Review document · 1$/)).toBeTruthy();
 });
 
 test("the optional decision origin occupies no space while loading", () => {

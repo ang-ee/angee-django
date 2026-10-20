@@ -105,7 +105,7 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
     minWidth: 160,
     align: "left",
     render: (row) => (
-      <div className="flex h-8 flex-wrap items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {row.rule_owned ? <Chip tone="info">{t("stage.ruleOwned")}</Chip> : null}
       </div>
     ),

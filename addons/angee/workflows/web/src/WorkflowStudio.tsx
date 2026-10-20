@@ -3,9 +3,9 @@ import * as v from "valibot";
 import { publicGraphQLErrorsFromUnknown, useAuthoredMutation, useAuthoredQuery, stableSerialize } from "@angee/refine";
 import type { DocumentType } from "@angee/gql/console";
 import {
-  ActionFormProvider, Alert, Button, DescriptorFieldList, Dialog, ErrorBanner, GraphEditor,
-  JsonValueSchema, LoadingPanel, PrimaryPanePublisher, RailPanel, applyFormErrors, createKeyedEntry,
-  deserializeFormSpec, errorMessage, formSubmitError, savedFormSubmitResult, useActionForm, useAppRuntime, useWatch, useFormState, useChatter, useChatterContent, useFormHistory,
+  ActionFormProvider, Alert, Button, Chip, DescriptorFieldList, Dialog, ErrorBanner, GraphEditor,
+  JsonValueSchema, LoadingPanel, MetaGrid, PaneToolbar, PrimaryPanePublisher, RailPanel, applyFormErrors, createKeyedEntry,
+  deserializeFormSpec, errorMessage, formSubmitError, savedFormSubmitResult, useActionForm, useAppRuntime, useConfirm, useWatch, useFormState, useChatter, useChatterContent, useFormHistory,
   useRuntimeViewAs, useUnsavedChangesNavigationGuard,
   type FormSpecFieldDescriptor, type GraphEditorLayout, type GraphEditorLink, type GraphEditorSelection, type GraphViewPosition,
   type UseActionFormResult, type ValidationErrors,
@@ -64,6 +64,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
 }): React.ReactElement {
   const t = useWorkflowsT();
   const preview = useRuntimeViewAs();
+  const confirm = useConfirm();
   const chatter = useChatter();
   const { widgets } = useAppRuntime();
   const configForm = React.useMemo(() => {
@@ -229,6 +230,8 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
   useChatterContent(active ? inspector : null);
 
   async function discard(): Promise<void> {
+    // Discarding is destructive: the shared confirm ceremony names what is lost.
+    if (!await confirm({ title: t("studio.discard"), body: t("studio.discardBody"), confirm: t("studio.discard"), danger: true })) return;
     setLoadingLatest(true);
     try {
       const latest = await loadLatest();
@@ -263,25 +266,30 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
   return <ActionFormProvider {...form}>
     <PrimaryPanePublisher node={active ? palette : null} />
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2 p-3">
-        <Button type="button" disabled={disabled || !history.canUndo} onClick={() => { history.undo(); applyIssues(); commitConfigurations(); }}>{t("studio.undo")}</Button>
-        <Button type="button" disabled={disabled || !history.canRedo} onClick={() => { history.redo(); applyIssues(); commitConfigurations(); }}>{t("studio.redo")}</Button>
-        <Button type="button" disabled={disabled} onClick={() => setIntent({})}>{t("studio.addStep")}</Button>
-        <Button type="button" disabled={disabled || !form.formState.isDirty} onClick={() => void action.run()}>{t("studio.save")}</Button>
-        <Button type="button" disabled={disabled || form.formState.isDirty || conflict !== null} onClick={() => void publishSaved()}>{t("studio.publish")}</Button>
-        <span className="text-sm text-fg-muted">{version == null ? t("studio.unpublished") : t("studio.version", { number: version })}</span>
-        {pointNames.length ? <span className="text-sm text-fg-muted">{t("studio.extensionPoints", { names: pointNames.join(", ") })}</span> : null}
-      </div>
+      {/* The studio's own band: the draft's state as scope, the editing verbs as the pane's actions. */}
+      <PaneToolbar
+        scope={<>
+          <Chip tone={version == null ? "muted" : "neutral"}>{version == null ? t("studio.unpublished") : t("studio.version", { number: version })}</Chip>
+          {pointNames.length ? <Chip tone="muted">{t("studio.extensionPoints", { names: pointNames.join(", ") })}</Chip> : null}
+        </>}
+        actions={[
+          { icon: "undo-2", label: t("studio.undo"), disabled: disabled || !history.canUndo, onClick: () => { history.undo(); applyIssues(); commitConfigurations(); } },
+          { icon: "redo-2", label: t("studio.redo"), disabled: disabled || !history.canRedo, onClick: () => { history.redo(); applyIssues(); commitConfigurations(); } },
+          { icon: "plus", label: t("studio.addStep"), text: true, disabled, onClick: () => setIntent({}) },
+          { icon: "check", label: t("studio.save"), text: true, disabled: disabled || !form.formState.isDirty, onClick: () => void action.run() },
+          { icon: "arrow-up-right", label: t("studio.publish"), text: true, disabled: disabled || form.formState.isDirty || conflict !== null, onClick: () => void publishSaved() },
+        ]}
+      />
       {action.formError && (!conflict || !action.saveConflict) ? <ErrorBanner description={action.formError} /> : null}
       {hasIssues ? <ErrorBanner description={[issueMessage, ...projected.formErrors].join("\n")} /> : null}
-      {conflict ? <Alert tone="warning"><span>{conflict.message}</span><div className="flex flex-wrap gap-2">
-        <Button type="button" disabled={disabled || conflict.revision == null} onClick={() => {
+      {conflict ? <Alert tone="warning" title={conflict.message} actions={<>
+        <Button type="button" size="sm" disabled={disabled || conflict.revision == null} onClick={() => {
           if (conflict.revision == null) return;
           revision.current = conflict.revision;
           void action.run();
         }}>{t("studio.overwrite")}</Button>
-        <Button type="button" disabled={disabled} onClick={() => void discard()}>{t("studio.discard")}</Button>
-      </div></Alert> : null}
+        <Button type="button" size="sm" variant="danger" disabled={disabled} onClick={() => void discard()}>{t("studio.discard")}</Button>
+      </>} /> : null}
       {dependents.length ? <Alert tone="info">{t("studio.dependents", { names: dependents.join(", ") })}</Alert> : null}
       <StudioGraph form={form} recordId={recordId} topology={topology} publication={published} selection={selection} configurations={configurations}
         select={select} active={active} disabled={disabled} update={update} add={setIntent} issueIds={issueIds} layoutResolved={layoutResolved} />
@@ -305,11 +313,12 @@ function StudioInspector({ index, contribution, form, configForm, disabled, star
   const t = useWorkflowsT();
   return <ActionFormProvider {...form} formState={state}>
     <RailPanel title={t("studio.inspector")} empty={t("studio.selectNode")}>
-      {contribution ? <div className="grid gap-2 p-3">
-        <p className="font-semibold">{contribution.value.label || contribution.value.step} ({contribution.key})</p>
-        <p>{t("studio.contributedBy", { addon: contribution.sourceAddon })}</p>
-        <p>{t("studio.contributedAt", { point: contribution.point })}</p>
-      </div> : index < 0 ? null : <NodeInspector index={index} form={form} configForm={configForm} disabled={disabled} start={start} commit={commit} />}
+      {contribution ? <div className="p-3"><MetaGrid rows={[
+        [t("studio.label"), contribution.value.label || contribution.value.step],
+        [t("studio.key"), contribution.key],
+        [t("studio.addon"), contribution.sourceAddon],
+        [t("studio.point"), contribution.point],
+      ]} /></div> : index < 0 ? null : <NodeInspector index={index} form={form} configForm={configForm} disabled={disabled} start={start} commit={commit} />}
     </RailPanel>
   </ActionFormProvider>;
 }
@@ -407,7 +416,10 @@ function StudioGraph({ form, recordId, topology, publication, selection, select,
   }
   return <div className="flex min-h-0 flex-1 flex-col" data-testid="workflow-studio-canvas">
     {outcomes.error ? <ErrorBanner description={errorMessage(outcomes.error, t("studio.outcomesFailed"))} /> : null}
-    {outcomeIssues.length ? <ErrorBanner description={outcomeIssues.map((issue) => `${form.getValues().entries.find((entry) => entry.clientId === issue.node)?.key ?? issue.node}: ${issue.message}`).join("\n")} /> : null}
+    {outcomeIssues.length ? <ErrorBanner description={outcomeIssues.map((issue) => {
+      const entry = form.getValues().entries.find((entry) => entry.clientId === issue.node);
+      return `${entry?.key ?? issue.node}: ${issue.message}`;
+    }).join("\n")} /> : null}
     <GraphEditor {...graph} layoutOptions={{ rankdir: "LR" }} initialView={{ minZoom: 0.65, ready: Boolean(outcomes.data) }} miniMap layout={layout} selected={selection} onSelectionChange={select} readOnly={disabled || !outcomes.data}
       className="min-h-0 flex-1" status={status} canLink={canLink} onLink={(value) => link(value)} onUnlink={(value) => link(value, true)}
       onLayoutResolved={(value) => layoutResolved(Object.fromEntries(Object.entries(value).filter(([id]) => !contributionIds(publication).has(id))))}

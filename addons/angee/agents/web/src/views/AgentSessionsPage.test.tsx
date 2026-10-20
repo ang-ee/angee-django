@@ -144,7 +144,7 @@ describe("AgentSessionsPage", () => {
     renderPage();
 
     expect(screen.getByRole("navigation", { name: "Running agents" })).toBeTruthy();
-    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
     expect(screen.queryByTestId("agent-chat")).toBeNull();
   });
 
