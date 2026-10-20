@@ -5,7 +5,7 @@ export { cn } from "./cn";
 export { formatNumber, numberFormatter, type NumberInput } from "./format-number";
 export { titleCase } from "./titleCase";
 export { rowValueAtPath } from "@angee/metadata";
-export { statusLabel } from "./labels";
+export { isLabelKey, resolveLabelKey, statusLabel, type LabelKey, type LabelKeyResolver } from "./labels";
 export { tv, recipeAxes, type VariantProps } from "./variants";
 export { ANGEE_TW_MERGE_CONFIG } from "./tailwind-merge-config";
 export {

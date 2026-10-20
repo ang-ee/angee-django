@@ -66,7 +66,6 @@ export {
   MESSAGE_SUMMARY_FIELDS,
   MessageSummary,
   MessagePaneRow,
-  MessageTime,
   useMessageChannelLabel,
   type MessageSummaryData,
 } from "./MessageSummary";

@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { senderDisplayName } from "@angee/parties";
-import { MessagePaneRow, MessageTime, useMessageChannelLabel } from "@angee/messaging";
+import { MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
 import {
-  ListView, PaneLabelAction, PaneRow, PaneToolbarHost, ScopeChip, Select, optionLabel, useEnumOptions, useResourceView,
+  AbsoluteTime, ListView, PaneLabelAction, PaneRow, PaneToolbarHost, ScopeChip, Select, optionLabel, useEnumOptions, useResourceView,
 } from "@angee/ui";
 import { RESULT_LENSES, resultLensForGroup } from "./contract";
 import { useResultControls } from "./Controls";
@@ -63,7 +63,7 @@ function ResultRow({ row, navigation }: { row: InboxResultRow; navigation: Inbox
   return <PaneRow icon={row.fragment ? "file" : "files"}
       title={row.file ? row.part.name || row.file.filename : row.fragment ? t("inbox.sharedText") : row.part.name || t("inbox.file")}
       detail={available ? optionLabel(roles, row.part.role) : t("inbox.fileUnavailable")} tone={available ? "muted" : "warning"}
-      meta={<MessageTime value={row.latest} />} sub={row.fragment?.text || [sender, channelLabel(message)].filter(Boolean).join(" · ")}
+      meta={<AbsoluteTime value={row.latest} display="date" />} sub={row.fragment?.text || [sender, channelLabel(message)].filter(Boolean).join(" · ")}
       verb={available ? t("inbox.matchingUses", { count: row.count }) : t("inbox.read")}
       onOpen={() => available ? navigation.connect(row.id, message.id) : navigation.read(message.id, row.part?.id)} />;
 }

@@ -4,7 +4,9 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button, type ButtonSize, type ButtonVariant } from "./button";
 import { FormRoot } from "./form";
+import { ErrorBanner } from "../fragments/ErrorBanner";
 import { Input, type InputSize } from "./input";
+import { Textarea } from "./textarea";
 
 export interface InlineTextActionControls {
   busy: boolean;
@@ -21,9 +23,26 @@ export interface InlineTextActionProps
   /** Initial uncontrolled edit state. */
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /** Receives the already-trimmed, non-empty value. */
-  onSubmit: (value: string) => void;
+  /**
+   * Receives the already-trimmed, non-empty value. A returned promise keeps the
+   * editor open and busy until it settles; `false` or a rejection keeps it open
+   * (the caller shows the failure through `error`).
+   */
+  onSubmit: (value: string) => void | boolean | Promise<void | boolean>;
   onCancel?: () => void;
+  /**
+   * A multi-line body: a textarea where Enter breaks the line and ⌘/Ctrl+Enter
+   * submits; a visible Cancel replaces blur-cancel so a long draft never vanishes
+   * on a stray click.
+   */
+  multiline?: boolean;
+  /** The textarea's visible rows. */
+  rows?: number;
+  /** Controls rendered before the verbs (a visibility picker). */
+  extra?: React.ReactNode;
+  /** The failure under the editor after a rejected submit. */
+  error?: React.ReactNode;
+  cancelLabel?: React.ReactNode;
   /** Accessible name for the text input. */
   inputLabel: string;
   placeholder?: string;
@@ -60,10 +79,15 @@ export function InlineTextAction({
   placeholder,
   submitLabel,
   requiredMessage,
-  busy = false,
+  busy: externalBusy = false,
   disabled = false,
   submitUnchanged = false,
   selectOnFocus = true,
+  multiline = false,
+  rows = 3,
+  extra,
+  error,
+  cancelLabel,
   renderTrigger,
   className,
   formClassName,
@@ -74,11 +98,13 @@ export function InlineTextAction({
   ...props
 }: InlineTextActionProps): React.ReactElement {
   const t = useUiT();
-  const inputRef = React.useRef<HTMLInputElement>(null);
+  const inputRef = React.useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
   const editing = open ?? uncontrolledOpen;
   const [draft, setDraft] = React.useState(value);
   const [showRequired, setShowRequired] = React.useState(false);
+  const [settling, setSettling] = React.useState(false);
+  const busy = externalBusy || settling;
   const messageId = React.useId();
 
   const trimmed = draft.trim();
@@ -90,6 +116,7 @@ export function InlineTextAction({
     trimmed.length > 0 &&
     (submitUnchanged || !unchanged);
   const invalid = showRequired && trimmed.length === 0;
+  const errorId = `${messageId}-error`;
 
   const setEditing = React.useCallback(
     (next: boolean) => {
@@ -144,8 +171,9 @@ export function InlineTextAction({
         density="compact"
         aria-busy={busy || undefined}
         aria-label={inputLabel}
-        className={cn("items-center gap-1", formClassName)}
+        className={cn(multiline ? "flex-wrap items-center gap-2" : "items-center gap-1", formClassName)}
         onBlur={(event) => {
+          if (multiline) return;
           const nextTarget = event.relatedTarget;
           if (nextTarget && event.currentTarget.contains(nextTarget)) return;
           if (!busy) cancel();
@@ -161,33 +189,71 @@ export function InlineTextAction({
             cancel();
             return;
           }
-          onSubmit(trimmed);
-          setDraft("");
-          setShowRequired(false);
-          setEditing(false);
+          const settled = (accepted: boolean | void) => {
+            if (accepted === false) return;
+            setDraft("");
+            setShowRequired(false);
+            setEditing(false);
+          };
+          const result = onSubmit(trimmed);
+          if (result instanceof Promise) {
+            setSettling(true);
+            void result.then(settled, () => undefined).finally(() => setSettling(false));
+            return;
+          }
+          settled(result);
         }}
       >
-        <Input
-          ref={inputRef}
-          size={inputSize}
-          value={draft}
-          placeholder={placeholder}
-          disabled={disabled || busy}
-          invalid={invalid}
-          aria-label={inputLabel}
-          aria-describedby={invalid ? messageId : undefined}
-          className={inputClassName}
-          onChange={(event) => {
-            setDraft(event.currentTarget.value);
-            if (showRequired) setShowRequired(false);
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.preventDefault();
-            event.stopPropagation();
-            cancel();
-          }}
-        />
+        {multiline ? (
+          <Textarea
+            ref={inputRef}
+            rows={rows}
+            value={draft}
+            placeholder={placeholder}
+            disabled={disabled || busy}
+            invalid={invalid}
+            aria-label={inputLabel}
+            aria-describedby={invalid ? messageId : error ? errorId : undefined}
+            className={cn("w-full", inputClassName)}
+            onChange={(event) => {
+              setDraft(event.currentTarget.value);
+              if (showRequired) setShowRequired(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                cancel();
+              } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+        ) : (
+          <Input
+            ref={inputRef}
+            size={inputSize}
+            value={draft}
+            placeholder={placeholder}
+            disabled={disabled || busy}
+            invalid={invalid}
+            aria-label={inputLabel}
+            aria-describedby={invalid ? messageId : undefined}
+            className={inputClassName}
+            onChange={(event) => {
+              setDraft(event.currentTarget.value);
+              if (showRequired) setShowRequired(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              cancel();
+            }}
+          />
+        )}
+        {extra}
         <Button
           type="submit"
           size={submitSize}
@@ -197,11 +263,17 @@ export function InlineTextAction({
         >
           {submitLabel ?? t("inlineText.submit")}
         </Button>
+        {multiline ? (
+          <Button type="button" size={submitSize} variant="ghost" disabled={busy} onClick={cancel}>
+            {cancelLabel ?? t("inlineText.cancel")}
+          </Button>
+        ) : null}
         {invalid ? (
           <span id={messageId} className="sr-only">
             {requiredMessage ?? t("inlineText.required")}
           </span>
         ) : null}
+        {error ? <ErrorBanner id={errorId} description={error} className="basis-full" /> : null}
       </FormRoot>
     </div>
   );

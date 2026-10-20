@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { cn } from "../lib/cn";
 import { StatusIcon } from "../ui/status-icon";
-import { RelativeTime } from "../fragments/RelativeTime";
+import { AbsoluteTime } from "../fragments/AbsoluteTime";
 import { toneText, type Tone } from "../lib/tones";
 import { useUiT } from "../i18n";
 import { statusTone } from "../widgets/status-tones";
@@ -45,7 +45,7 @@ export function StepList({ items }: { items: readonly StepListItem[] }): ReactEl
       <div className={cn("min-w-0", index === items.length - 1 ? "pb-1" : "pb-5")}>
         <div className="flex min-w-0 items-start justify-between gap-2">
           <p className={cn("min-w-0 text-13 leading-5 [overflow-wrap:anywhere]", planned ? "font-medium text-fg-muted" : "font-semibold text-fg")}>{item.title}<span className="sr-only"> · {t(`stepList.${item.state}`)}</span></p>
-          {item.timestamp ? <RelativeTime value={item.timestamp} className="shrink-0 pt-0.5 text-12 text-fg-muted" /> : null}
+          {item.timestamp ? <AbsoluteTime value={item.timestamp} className="shrink-0 pt-0.5 text-12 text-fg-muted" /> : null}
         </div>
         {item.outcome ? <p className={cn("text-13 font-medium leading-5", toneText(item.tone ?? "success"))}>{item.outcome}</p> : null}
         {item.detail ? <div className="mt-0.5 text-13 text-fg-2">{item.detail}</div> : null}

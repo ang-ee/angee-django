@@ -52,7 +52,7 @@ export function SecretsPage(): ReactNode {
       {
         field: "required", header: t("secrets.column.required"),
         render: (secret) => secret.required || secret.generated
-          ? <StatusBadge value="protected">{secret.required ? t("secrets.required") : t("secrets.generated")}</StatusBadge>
+          ? <StatusBadge value="protected" title={t("secrets.protectedHint")}>{secret.required ? t("secrets.required") : t("secrets.generated")}</StatusBadge>
           : null,
       },
       { field: "envVar", header: t("secrets.column.envVar"), render: (secret) => secret.envVar ? <Code truncate>{secret.envVar}</Code> : null },

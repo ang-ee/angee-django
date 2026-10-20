@@ -30,8 +30,6 @@ export const enPostsMessages: Record<string, string> = {
   "post.author": "Unknown author",
   "post.emptyBody": "No post body.",
   "post.reactions": "Post reactions",
-  "post.reactionCount": "{reaction} reaction, {count}",
-  "post.reactionTitle": "{reaction} by {names}",
 };
 
 export const usePostsT = createNamespaceT("posts", enPostsMessages);

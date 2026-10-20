@@ -303,10 +303,72 @@ export function RemovedItem({
   );
 }
 
-export interface RemovedRecordsProps<TRow extends Row = Row> {
-  resource: DataResourceMetadata | null | undefined;
+export interface RemovedListProps<TRow extends Row = Row> {
+  /** The removed rows, from the shared trash read or a domain read (a queue's removed tasks). */
+  rows: readonly TRow[];
+  /** The removed count when the read pages; defaults to the rows given. */
+  total?: number;
+  /** The read's failure. */
+  error?: unknown;
   /** The record's display name. */
   label: (row: TRow) => string;
+  /** Where a row keeps who removed it and why; default: the shared trash stamps. */
+  stamps?: (row: TRow) => { trashedByLabel?: string | null; trashReason?: string | null };
+  /** Whether a row offers Restore; default: the reader holds the trash permission on it. */
+  canRestore?: (row: TRow) => boolean;
+  /** The restore verb: the shared `restore_record`, or a domain's own. */
+  restore?: (row: TRow) => void | Promise<unknown>;
+  /** Marks every Restore busy while a restore runs. */
+  busy?: boolean;
+  className?: string;
+}
+
+/**
+ * "Removed (n)" over rows already read: the disclosure, each row's name, who removed
+ * it and why, and Restore when the reader may. `RemovedRecords` composes it over the
+ * shared trash read and verbs; a domain with its own removed read and restore verb
+ * composes it directly.
+ * @kind surface
+ */
+export function RemovedList<TRow extends Row = Row>({
+  rows,
+  total,
+  error,
+  label,
+  stamps,
+  canRestore,
+  restore,
+  busy = false,
+  className,
+}: RemovedListProps<TRow>): React.ReactElement | null {
+  const t = useUiT();
+  if (error) return <ErrorBanner description={t("trash.loadFailed")} />;
+  return (
+    <RemovedDisclosure count={total ?? rows.length} className={className}>
+      {rows.map((row) => {
+        const id = rowPublicId(row);
+        const stamp = stamps?.(row) ?? {
+          trashedByLabel: typeof row.trashed_by_label === "string" ? row.trashed_by_label : null,
+          trashReason: typeof row.trash_reason === "string" ? row.trash_reason : null,
+        };
+        const restorable = restore && (canRestore ? canRestore(row) : Boolean(id) && holdsPermission(row, TRASH_PERMISSION));
+        return (
+          <RemovedItem
+            key={id ?? label(row)}
+            label={label(row)}
+            trashedByLabel={stamp.trashedByLabel}
+            trashReason={stamp.trashReason}
+            busy={busy}
+            {...(restorable ? { onRestore: () => void restore(row) } : {})}
+          />
+        );
+      })}
+    </RemovedDisclosure>
+  );
+}
+
+export interface RemovedRecordsProps<TRow extends Row = Row> extends Pick<RemovedListProps<TRow>, "label" | "className"> {
+  resource: DataResourceMetadata | null | undefined;
   /** Fields the label reads, beside the identity, permissions and trash stamps. */
   fields?: readonly string[];
   /** Narrow removed records to the surface's scope, e.g. one container. */
@@ -314,7 +376,6 @@ export interface RemovedRecordsProps<TRow extends Row = Row> {
   /** Keep only rows the surface lists as removed, e.g. the roots of a removed subtree. */
   select?: (rows: readonly TRow[]) => readonly TRow[];
   pageSize?: number;
-  className?: string;
 }
 
 type RemovedRecordRow = BaseRecord & Row;
@@ -334,7 +395,6 @@ export function RemovedRecords<TRow extends Row = Row>({
   pageSize = 50,
   className,
 }: RemovedRecordsProps<TRow>): React.ReactElement | null {
-  const t = useUiT();
   const flag = trashFlagField(resource);
   const { restore, busy } = useTrashRecord(resource);
   const selection = React.useMemo(
@@ -352,22 +412,15 @@ export function RemovedRecords<TRow extends Row = Row>({
   const loaded = (list.result.data ?? []) as unknown as readonly TRow[];
   const rows = select ? select(loaded) : loaded;
   if (!flag) return null;
-  if (list.query.error) return <ErrorBanner description={t("trash.loadFailed")} />;
   return (
-    <RemovedDisclosure count={select ? rows.length : list.result.total ?? rows.length} className={className}>
-      {rows.map((row) => {
-        const id = rowPublicId(row);
-        return (
-          <RemovedItem
-            key={id ?? label(row)}
-            label={label(row)}
-            trashedByLabel={typeof row.trashed_by_label === "string" ? row.trashed_by_label : null}
-            trashReason={typeof row.trash_reason === "string" ? row.trash_reason : null}
-            busy={busy}
-            {...(id && holdsPermission(row, TRASH_PERMISSION) ? { onRestore: () => void restore(id) } : {})}
-          />
-        );
-      })}
-    </RemovedDisclosure>
+    <RemovedList
+      rows={rows}
+      total={select ? rows.length : list.result.total ?? rows.length}
+      error={list.query.error}
+      label={label}
+      busy={busy}
+      restore={(row) => { const id = rowPublicId(row); if (id) void restore(id); }}
+      className={className}
+    />
   );
 }

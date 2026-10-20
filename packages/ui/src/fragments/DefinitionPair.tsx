@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { EMPTY_VALUE } from "../lib/empty-value";
+
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { sectionEyebrowVariants } from "../ui/section-eyebrow";
@@ -161,7 +163,7 @@ export const DefinitionPair = React.forwardRef<
     className,
     density = "compact",
     detail,
-    emptyValue = "-",
+    emptyValue = EMPTY_VALUE,
     label,
     layout = "grid",
     orientation = "inline",

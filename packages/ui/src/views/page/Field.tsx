@@ -3,6 +3,7 @@ import type { CrudFilter } from "@refinedev/core";
 import type { Row } from "@angee/metadata";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
+import type { LabelKey } from "../../lib/labels";
 import type { FieldPresentation } from "../../widgets/types";
 
 export type PageFieldKind =
@@ -84,8 +85,14 @@ export interface FieldDescriptor extends FieldPresentation {
   description?: ReactNode;
 }
 
-/** JSX declaration shape and resolved descriptor share one lifecycle contract. */
-export interface FieldProps extends FieldDescriptor {}
+/**
+ * JSX declaration shape and resolved descriptor share one lifecycle contract. A
+ * declared label may be an addon message key; the form surface resolves it to
+ * text before any descriptor renders.
+ */
+export interface FieldProps extends Omit<FieldDescriptor, "label"> {
+  label?: ReactNode | LabelKey;
+}
 
 /**
  * The widget id a field descriptor resolves to: its explicit `widget`, else its

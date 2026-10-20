@@ -180,4 +180,11 @@ describe("MetricStrip", () => {
     fireEvent.click(link);
     expect(onNavigate).toHaveBeenCalledWith("/fields?model=Note");
   });
+
+  test("a loading strip renders skeleton tiles under one status", () => {
+    render(<MetricStrip loading loadingCount={3} loadingMessage="Loading metrics" />);
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getByText("Loading metrics")).toBeTruthy();
+    expect(document.querySelectorAll("[data-slot='metric-skeleton']")).toHaveLength(3);
+  });
 });

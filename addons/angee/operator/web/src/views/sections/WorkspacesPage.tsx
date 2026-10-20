@@ -115,8 +115,7 @@ export function WorkspaceSources({ sources, title, emptyContent }: WorkspaceSour
 
   const columns = useMemo<readonly ListColumn<WorkspaceSourceRowData>[]>(
     () => [
-      // `sublineColumn` directly: RowsListView does not resolve `subline` for local rows (a ui gap).
-      { field: "slot", header: t("workspaceSources.column.slot"), sublineColumn: { field: "source" } },
+      { field: "slot", header: t("workspaceSources.column.slot"), subline: "source" },
       {
         field: "state", header: t("workspaceSources.column.state"),
         render: (source) => source.error

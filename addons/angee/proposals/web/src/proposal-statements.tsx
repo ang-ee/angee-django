@@ -1,7 +1,7 @@
 import { holdsPermission } from "@angee/metadata";
 import {
-  Avatar, Button, Card, CardContent, CardHeader, EmptyState, FieldDescriptorControl, FormView, Glyph, InlineEmpty, LoadingPanel,
-  avatarInitials, textRoleVariants, useRuntimeAuth, useRuntimeViewAs,
+  Avatar, Button, Card, CardContent, CardHeader, EmptyState, FieldDescriptorControl, FormView, Glyph, InlineEmpty, InlineTextAction, LoadingPanel,
+  avatarInitials, errorMessage, textRoleVariants, useRuntimeAuth, useRuntimeViewAs,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -9,7 +9,6 @@ import type { ComparisonProposal } from "./comparison-data";
 import { useComparisonStatementWrite } from "./comparison-writes";
 import { isEmptyComparisonValue, proposalColumnLabel, proposalIsOwn } from "./comparison-model";
 import { useProposalsT } from "./i18n";
-import { InlineBodyEditor } from "./inline-body-editor";
 
 export interface ProposalStatementsProps {
   proposals: readonly ComparisonProposal[];
@@ -65,6 +64,7 @@ function EditableStatement({ proposal }: { proposal: ComparisonProposal }): Reac
   const writer = useComparisonStatementWrite();
   const empty = isEmptyComparisonValue(proposal.statement);
   const [editing, setEditing] = React.useState(empty);
+  const [failure, setFailure] = React.useState<string | null>(null);
   if (!editing) return <div className="flex items-start justify-between gap-2">
     <FieldDescriptorControl field={{ name: "statement", widget: "markdown.preview" }}
       value={proposal.statement} row={proposal} readOnly />
@@ -74,9 +74,18 @@ function EditableStatement({ proposal }: { proposal: ComparisonProposal }): Reac
       <Glyph decorative name="pencil" />
     </Button>
   </div>;
-  return <InlineBodyEditor value={String(proposal.statement ?? "")} label={t("comparison.statementPrompt")} rows={4}
-    pending={writer.pending} submitLabel={t("comparison.statementSave")} cancel={!empty}
-    fallback={t("comparison.statementError")}
-    onSave={async (body) => { await writer.save(proposal, body); setEditing(false); }}
-    onCancel={() => setEditing(false)} />;
+  return <InlineTextAction multiline open value={String(proposal.statement ?? "")} inputLabel={t("comparison.statementPrompt")}
+    placeholder={t("comparison.statementPrompt")} rows={4} busy={writer.pending} submitLabel={t("comparison.statementSave")}
+    submitVariant="primary" submitUnchanged error={failure}
+    onSubmit={async (body) => {
+      try {
+        await writer.save(proposal, body);
+        setFailure(null);
+        setEditing(false);
+      } catch (error) {
+        setFailure(errorMessage(error, t("comparison.statementError")));
+        return false;
+      }
+    }}
+    onCancel={() => { if (!empty) setEditing(false); }} />;
 }

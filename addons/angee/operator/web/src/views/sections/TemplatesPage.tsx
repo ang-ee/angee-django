@@ -1,4 +1,4 @@
-import { Chip, Code, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
+import { Code, OverflowChipList, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 import { ResourceQuery } from "@angee/metadata";
 import { useMemo, type ReactNode } from "react";
 
@@ -18,19 +18,17 @@ export function TemplatesPage(): ReactNode {
 
   const columns = useMemo<readonly ListColumn<TemplateRow>[]>(
     () => [
-      { field: "title", header: t("templates.column.name"), sublineColumn: { field: "ref" } },
+      { field: "title", header: t("templates.column.name"), subline: "ref" },
       { field: "kind", header: t("templates.column.kind") },
       { field: "path", header: t("templates.column.path"), render: (template) => <Code truncate>{template.path}</Code> },
       {
         field: "inputs", header: t("templates.inputs"), sortable: false,
         // Required inputs carry the warning tone; the rest are neutral.
-        render: (template) => template.inputs.length ? (
-          <span className="flex flex-wrap items-center gap-1">
-            {template.inputs.map((input) => (
-              <Chip key={input.name} tone={input.required ? "warning" : "neutral"}>{input.name}</Chip>
-            ))}
-          </span>
-        ) : null,
+        render: (template) => (
+          <OverflowChipList tone="neutral" items={template.inputs.map((input) => ({
+            id: input.name, label: input.name, ...(input.required ? { tone: "warning" as const } : {}),
+          }))} />
+        ),
       },
     ],
     [t],

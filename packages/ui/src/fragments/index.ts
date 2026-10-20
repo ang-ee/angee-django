@@ -100,3 +100,4 @@ export {
   type OverflowChipListItem,
   type OverflowChipListProps,
 } from "./OverflowChipList";
+export { AbsoluteTime, type AbsoluteTimeProps } from "./AbsoluteTime";

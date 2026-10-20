@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-import { RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
+import { MIME_KINDS, RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
 import { FILTER_OPERATORS } from "@angee/metadata";
 
 import {
@@ -171,6 +171,12 @@ const UI_DYNAMIC_I18N_KEY_FAMILIES: readonly DynamicI18nKeyFamily[] = [
     owner: "@angee/ui FilterClauseOperator",
     prefix: "search.operator.",
     values: [...FILTER_OPERATORS, "isNotNull"],
+  },
+  {
+    namespace: "ui",
+    owner: "@angee/ui MimeKind",
+    prefix: "mime.",
+    values: [...MIME_KINDS],
   },
   {
     namespace: "ui",

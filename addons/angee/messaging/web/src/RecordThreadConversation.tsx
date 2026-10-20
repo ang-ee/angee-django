@@ -3,7 +3,7 @@ import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import {
-  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, FormRoot, Glyph, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, RelativeTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, Textarea, avatarInitials, cn, createClientKey, errorMessage, reactionsFromGroups, textRoleVariants, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, createClientKey, errorMessage, textRoleVariants, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
 } from "@angee/ui";
 import {
   StorageUploadTasks,
@@ -18,7 +18,6 @@ import { senderDisplayName } from "@angee/parties";
 
 import { useMessagingT, type MessagingT } from "./i18n";
 import { StarButton } from "./StarButton";
-import { messagingReactionCopy } from "./reaction-copy";
 import { StreamComposer } from "./StreamComposer";
 import {
   DeleteRecordMessageDocument,
@@ -847,10 +846,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   const subtypeDescription = message.subtype?.description || message.subtype?.name || "";
   const directionTag = directionLabel(message.direction, t);
   const edited = Boolean(message.edited_at || message.status === "EDITED");
-  const reactions = reactionsFromGroups(
-    message.reaction_groups,
-    messagingReactionCopy(t),
-  );
+  const reactions = useReactionGroups(message.reaction_groups);
   const activeReactions = message.reaction_groups
     .filter((group) => group.self_reacted)
     .map((group) => group.reaction);
@@ -864,11 +860,17 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
         author={author}
         className={streamMode && message.is_reply ? "ml-3 border-l-2 border-border-subtle pl-3" : undefined}
       >
-        <MessageEditor
-          initialBody={editableBody}
-          t={t}
+        <InlineTextAction
+          multiline
+          open
+          value={editableBody}
+          inputLabel={t("message.editLabel")}
+          submitLabel={t("message.save")}
+          cancelLabel={t("message.cancel")}
+          submitVariant="primary"
+          submitUnchanged
+          onSubmit={(body) => onSaveEdit(message.id, body)}
           onCancel={onCancelEdit}
-          onSave={(body) => onSaveEdit(message.id, body)}
         />
       </MessageRow>
     );
@@ -889,7 +891,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       meta={streamVerb || edited ? <>
         {streamVerb ? <span>{streamVerb}</span> : null}
         {edited ? <>{streamVerb ? " · " : null}{t("chatter.editedMeta")}
-          {message.edited_at ? <> <RelativeTime value={message.edited_at} /></> : null}</> : null}
+          {message.edited_at ? <> <AbsoluteTime value={message.edited_at} display="datetime" /></> : null}</> : null}
       </> : undefined}
       reactions={
         reactions.length > 0 ? (
@@ -1064,47 +1066,6 @@ function ReplyQuote({ kind, preview, onClear, className, t }: {
         </Button>
       ) : null}
     </div>
-  );
-}
-
-function MessageEditor({
-  initialBody,
-  t,
-  onCancel,
-  onSave,
-}: {
-  initialBody: string;
-  t: MessagingT;
-  onCancel: () => void;
-  onSave: (body: string) => void;
-}): React.ReactElement {
-  const [body, setBody] = React.useState(initialBody);
-  return (
-    <FormRoot
-      className="space-y-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSave(body);
-      }}
-    >
-      <Textarea
-        value={body}
-        onChange={(event) => setBody(event.currentTarget.value)}
-        rows={3}
-        resize="none"
-        aria-label={t("message.editLabel")}
-      />
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          <Glyph name="x" />
-          {t("message.cancel")}
-        </Button>
-        <Button type="submit" variant="primary" size="sm" disabled={body.trim() === ""}>
-          <Glyph name="check" />
-          {t("message.save")}
-        </Button>
-      </div>
-    </FormRoot>
   );
 }
 

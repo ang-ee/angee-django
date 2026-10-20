@@ -131,6 +131,7 @@ export const enPartiesMessages: Record<string, string> = {
   "merge.fields.description": "Only differing human-maintained fields need a choice.",
   "merge.fields.identical": "Identical fields",
   "merge.fields.empty": "Empty",
+  "merge.fields.choose": "Keep which {field}",
   "merge.field.display_name": "Display name",
   "merge.field.notes": "Notes",
   "merge.field.first_met_note": "First met note",

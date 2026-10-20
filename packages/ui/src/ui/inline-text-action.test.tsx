@@ -145,4 +145,22 @@ describe("InlineTextAction", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  test("a multiline editor submits on modifier+Enter, cancels from its button and keeps a rejected draft", async () => {
+    const onSubmit = vi.fn(async (value: string) => value !== "keep");
+    const onCancel = vi.fn();
+    render(<InlineTextAction multiline open value="" inputLabel="Body" onSubmit={onSubmit} onCancel={onCancel} error={null} />);
+    const body = screen.getByRole("textbox", { name: "Body" });
+    expect(body.tagName).toBe("TEXTAREA");
+    fireEvent.change(body, { target: { value: "keep" } });
+    fireEvent.keyDown(body, { key: "Enter" });
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.keyDown(body, { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenCalledWith("keep");
+    await screen.findByRole("textbox", { name: "Body" });
+    fireEvent.blur(body);
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
 });

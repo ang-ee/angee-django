@@ -122,8 +122,12 @@ export function Facts() {
     <dl className="grid gap-4">{U.recipeAxes(U.definitionPairVariants).density.map(density => <U.DefinitionPair key={density} density={density}
       label="Owner" value="Alex Morgan" detail={density} action={<U.Button size="sm">Edit</U.Button>} />)}</dl>
     <U.MetaGrid rows={[["Owner", "Alex Morgan"], ["State", <U.Chip key="state" tone="success">Active</U.Chip>]]} />
-    <U.ComparisonRows beforeLabel="Before" afterLabel="After" rows={[{ key: "title", label: "Title", before: "Draft", after: "Published", changed: true }]} />
+    <U.ComparisonRows columns={[{ key: "before", label: "Before" }, { key: "after", label: "After" }]} rows={[{ key: "title", label: "Title", cells: { before: "Draft", after: "Published" }, changed: true }]} />
     <U.RelativeTime value="2026-10-19T12:00:00Z" />
+    <U.AbsoluteTime value="2026-10-19T12:00:00Z" display="datetime" />
+    <U.ComparisonRows columns={[{ key: "left", label: "Ada" }, { key: "right", label: "Grace" }]}
+      rows={[{ key: "notes", label: "Notes", cells: { left: "Met in 2024", right: "Met in 2025" } }]}
+      choice={{ value: { notes: "left" }, onChange: noop, label: (row) => `Keep ${String(row.label)}` }} />
     <U.RecordReference model="notes.Note" id="sample" label="Project handbook" />
     <U.RecordReferenceRow model="notes.Note" id="sample" references={[]} detail="Retained reference" />
     <U.RecordPager navigation={{ current: 2, total: 8, onPrev: noop, onNext: noop }} />

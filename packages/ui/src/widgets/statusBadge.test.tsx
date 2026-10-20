@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { statusBadgeWidget } from "./statusBadge";
+import { StatusBadge, statusBadgeWidget } from "./statusBadge";
 import { AppRuntimeProvider } from "../runtime/runtime";
 
 describe("statusBadge widget tone", () => {
@@ -180,5 +180,10 @@ describe("statusBadge widget tone", () => {
 
     expect(screen.getByRole("combobox", { name: "Status" })).toBeTruthy();
     expect(screen.getByText("Draft")).toBeTruthy();
+  });
+
+  test("a hint behind the pill is its native tooltip", () => {
+    render(<AppRuntimeProvider runtime={{}}><StatusBadge value="protected" title="Cannot be deleted">Required</StatusBadge></AppRuntimeProvider>);
+    expect(screen.getByText("Required").closest("[title]")?.getAttribute("title")).toBe("Cannot be deleted");
   });
 });

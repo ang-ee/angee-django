@@ -20,6 +20,8 @@ export interface StatusBadgeProps {
   display?: StatusDisplay;
   /** Overrides the label the value resolves to. */
   children?: ReactNode;
+  /** A hint behind the pill (a native tooltip), e.g. why the value is what it is. */
+  title?: string;
   className?: string;
 }
 
@@ -31,7 +33,7 @@ export interface StatusBadgeProps {
  * of keeping a tone map of their own.
  * @kind fragment
  */
-export function StatusBadge({ value, options, tone: override, display = "pill", children, className }: StatusBadgeProps): ReactElement {
+export function StatusBadge({ value, options, tone: override, display = "pill", children, title, className }: StatusBadgeProps): ReactElement {
   const statusTone = useStatusTone();
   const label = children ?? (display === "dot"
     ? optionLabel(options, value)
@@ -43,6 +45,7 @@ export function StatusBadge({ value, options, tone: override, display = "pill", 
   return (
     <Chip
       className={className}
+      title={title}
       tone={tone}
       mark={display === "pill" ? "icon" : display === "dot" ? "dot" : "none"}
       shape={display === "pill" ? "pill" : "rounded"}

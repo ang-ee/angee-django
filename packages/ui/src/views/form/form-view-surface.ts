@@ -45,6 +45,7 @@ import {
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
+import { resolveFieldLabels, resolveGroupLabels } from "./field-labels";
 import {
   addFieldSelection,
   EDITABLE_LINES_SECTION,
@@ -434,16 +435,17 @@ export function useFormViewSurface({
     () => (overrideNode != null ? parsePageActions(overrideNode) : null),
     [overrideNode],
   );
+  const { containers = EMPTY_CONTAINERS, i18n } = useAppRuntime();
+  // A declared label may be an addon message key; it reads as text from here on.
   const declaredFields = React.useMemo(
-    () => overrideFields ?? fields ?? childFields,
-    [childFields, fields, overrideFields],
+    () => resolveFieldLabels(overrideFields ?? fields ?? childFields, i18n),
+    [childFields, fields, i18n, overrideFields],
   );
   const baseGroups = overrideGroups ?? groups ?? childGroups;
   const declaredGroups = React.useMemo(
-    () => [...baseGroups, ...contributedGroups],
-    [baseGroups, contributedGroups],
+    () => resolveGroupLabels([...baseGroups, ...contributedGroups], i18n),
+    [baseGroups, contributedGroups, i18n],
   );
-  const { containers = EMPTY_CONTAINERS } = useAppRuntime();
   // A form whose page or layers declare a `lines` group shows its lines only there, so
   // narrowing that section away hides them; with no declaration they trail the form.
   const linesDeclared = React.useMemo(
@@ -483,9 +485,9 @@ export function useFormViewSurface({
     ...group,
     fields: (group.fields ?? []).map((row) => ({
       ...row,
-      field: withModeLockedFields(fieldsWithMetadataDefaults([row.field], modelMetadata), false)[0]!,
+      field: withModeLockedFields(fieldsWithMetadataDefaults(resolveFieldLabels([row.field], i18n), modelMetadata), false)[0]!,
     })),
-  })), [isCreate, modelMetadata, railEntries]);
+  })), [i18n, isCreate, modelMetadata, railEntries]);
   const regularFormFields = React.useMemo(
     () => flattenedFormFields(resolvedFields, resolvedGroups),
     [resolvedFields, resolvedGroups],

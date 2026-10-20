@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import {
-  Avatar, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Chip, Collapsible, CountBadge, EmptyState, ErrorBanner,
+  Avatar, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Chip, Collapsible, ComparisonRows, CountBadge, EmptyState, ErrorBanner,
   LoadingPanel, MetaGrid, Page, PageBody, PageFooter, PageHeader, RadioGroup, RailPanel, avatarInitials, optionLabel, useConfirm,
   useEnumOptions, useRouteHref, useRouteParam, type WidgetOption,
 } from "@angee/ui";
@@ -341,32 +341,23 @@ export function MergePage(): React.ReactElement {
               <CardTitle>{t("merge.fields.title")}</CardTitle>
               <CardDescription>{t("merge.fields.description")}</CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-3">
-              {differing.map((field) => (
-                <div key={field.name} className="grid gap-2 border-b border-border-subtle pb-3 last:border-0">
-                  <span className="text-13 font-medium text-fg">{t(`merge.field.${field.name}`)}</span>
-                  <RadioGroup
-                    aria-label={t(`merge.field.${field.name}`)}
-                    value={fieldChoices[field.name] ?? survivor}
-                    onValueChange={(value) =>
-                      setFieldChoices((current) => ({ ...current, [field.name]: value as MergeSide }))
-                    }
-                    variant="card"
-                    className="grid gap-2 md:grid-cols-2"
-                  >
-                    <RadioGroup.Item
-                      value="left"
-                      variant="card"
-                      label={formatScalar(field.left, t("merge.fields.empty"))}
-                    />
-                    <RadioGroup.Item
-                      value="right"
-                      variant="card"
-                      label={formatScalar(field.right, t("merge.fields.empty"))}
-                    />
-                  </RadioGroup>
-                </div>
-              ))}
+            <CardContent>
+              <ComparisonRows
+                columns={[{ key: "left", label: left.display_name }, { key: "right", label: right.display_name }]}
+                rows={differing.map((field) => ({
+                  key: field.name,
+                  label: t(`merge.field.${field.name}`),
+                  cells: {
+                    left: formatScalar(field.left, t("merge.fields.empty")),
+                    right: formatScalar(field.right, t("merge.fields.empty")),
+                  },
+                }))}
+                choice={{
+                  value: Object.fromEntries(differing.map((field) => [field.name, fieldChoices[field.name] ?? survivor])),
+                  onChange: (name, side) => setFieldChoices((current) => ({ ...current, [name]: side as MergeSide })),
+                  label: (row) => t("merge.fields.choose", { field: String(row.label) }),
+                }}
+              />
             </CardContent>
             {identical.length > 0 ? (
               <CardContent>

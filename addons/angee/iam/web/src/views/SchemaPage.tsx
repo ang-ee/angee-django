@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { ChipList, Code, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, PaneLabel, PaneRow, PaneRows, PaneToolbar, PaneToolbarHost, PrimaryPanePublisher, RecordHeader, SearchInput, TreeView, routeSearchParam, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Code, ErrorBanner, GraphView, InlineEmpty, LoadingPanel, OverflowChipList, PaneLabel, PaneRow, PaneRows, PaneToolbar, PaneToolbarHost, PrimaryPanePublisher, RecordHeader, SearchInput, TreeView, routeSearchParam, titleCase, updateRouteSearch, useChatterContent, useRouteSearch, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -274,7 +274,7 @@ function SchemaInspector({ resource }: { resource: IAMResourceSchema }): ReactEl
 
 function SchemaChips({ values, empty }: { values: readonly string[]; empty: string }): ReactElement {
   if (values.length === 0) return <>{empty}</>;
-  return <ChipList items={values.map((value) => ({ id: value, label: value }))} />;
+  return <OverflowChipList items={values.map((value) => ({ id: value, label: value }))} />;
 }
 
 function buildSchemaGraph(
