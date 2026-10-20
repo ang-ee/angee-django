@@ -236,6 +236,18 @@ def test_explicit_target_withdrawal_differs_from_omitted_target(replica: Any, op
     assert (link.target_content_type_id, link.target_object_id, link.status) == (None, None, LinkStatus.WITHDRAWN)
 
 
+def test_release_target_keeps_the_identity_current_until_its_row_is_rebuilt(replica: Any) -> None:
+    link = RecordLink.objects.observe(replica, "person:1", target=replica)
+    RecordLink.objects.promote(link, source_payload={}, source_hash="remote", mapped_payload={})
+    released = RecordLink.objects.release_target(link)
+    link.refresh_from_db()
+    assert (released.pk, link.target_content_type_id, link.target_object_id) == (link.pk, None, None)
+    assert link.status == LinkStatus.CURRENT
+    RecordLink.objects.observe(replica, link.external_key, target=replica)
+    link.refresh_from_db()
+    assert (link.target_object_id, link.status) == (str(replica.pk), LinkStatus.CURRENT)
+
+
 def test_child_absence_requires_parent_absence_evidence(replica: Any) -> None:
     parent = RecordLink.objects.observe(replica, "aggregate:1")
     child = RecordLink.objects.observe(replica, "member:1", parent=parent)

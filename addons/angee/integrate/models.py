@@ -4063,6 +4063,22 @@ class RecordLinkManager(AngeeManager.from_queryset(RecordLinkQuerySet)):  # type
             )
             return link
 
+    def release_target(self, link: Any) -> Any:
+        """Let the bound row go while its domain owner rebuilds it under the same identity.
+
+        A retained reference blocks the row's deletion (declared edge teardown), so an
+        adapter whose owner deletes and recreates rows releases the pointer first and
+        binds the rebuilt row through ``observe``. Status, evidence and history stay:
+        this is not a withdrawal, the identity is still current.
+        """
+
+        with system_context(reason="integrate.record.release_target"), transaction.atomic():
+            locked = self.filter(pk=link.pk).lock_if_supported().get()
+            self._set_target(locked, None)
+            locked.save(update_fields=["target_content_type_id", "target_object_id", "updated_at"])
+            link.target_content_type_id = link.target_object_id = None
+            return locked
+
     def promote(
         self,
         link: Any,
@@ -4239,6 +4255,9 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     ``outbox_last_error`` retains the same evidence shape for the latest refused
     or failed write; a null outbox state means no write is pending.
     """
+
+    # A link's history is sync evidence read through its target: no timeline of its own.
+    timeline_subject = False
 
     merge_policy = MergePolicy.MOVE
     accepts_any_record_target = True
