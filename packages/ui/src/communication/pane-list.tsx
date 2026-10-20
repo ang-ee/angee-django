@@ -128,11 +128,12 @@ export function PaneLabel({ children, count, folded, onToggle, action, className
     </>
   );
   return (
-    <li className={cn("flex items-center gap-1 px-1 pb-1 pt-4 text-12 font-medium text-fg-muted first:pt-1", className)}>
+    <li className={cn("group flex items-center gap-1 px-1 pb-1 pt-4 text-12 font-medium text-fg-muted first:pt-1", className)}>
       {onToggle ? (
         <button type="button" aria-expanded={!folded} onClick={onToggle} className="flex min-w-0 items-center gap-1 rounded-4 hover:text-fg">{text}</button>
       ) : text}
-      {action ? <span className="ml-auto flex shrink-0 items-center text-link">{action}</span> : null}
+      {/* The verb shows on hover or focus, so a list of labels reads as labels, not as a column of links. */}
+      {action ? <span className="ml-auto flex shrink-0 items-center text-link opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{action}</span> : null}
     </li>
   );
 }

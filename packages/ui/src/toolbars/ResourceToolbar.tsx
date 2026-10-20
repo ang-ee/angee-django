@@ -6,7 +6,7 @@ import { useSearchShortcuts, type ListSearchDeclaration } from "../views/resourc
 import type { ReactElement, ReactNode } from "react";
 import type { SortingState } from "@tanstack/react-table";
 import { ScopeChip } from "../communication/pane-list";
-import { PaneToolbar, PaneToolbarMenu, type PaneToolbarProps } from "../layouts/PaneToolbar";
+import { PaneToolbar, PaneToolbarMenu, type PaneToolbarMenuRadioGroup, type PaneToolbarProps } from "../layouts/PaneToolbar";
 import { SearchActiveLabel } from "../views/resource/search/SearchBox";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
@@ -42,7 +42,8 @@ export interface ResourceToolbarChrome {
 
 export interface ResourceToolbarProps {
   /** Pane chrome presents the same resource state in the host's shared band. */
-  pane?: Pick<PaneToolbarProps, "selector" | "scope">;
+  /** Pane presentation: the pane's selector and scope chips, plus radio groups the pane adds to the overflow menu. */
+  pane?: Pick<PaneToolbarProps, "selector" | "scope"> & { overflowGroups?: readonly PaneToolbarMenuRadioGroup[] };
   sortOptions?: readonly { value: string; label: string }[];
   sorting?: SortingState;
   onSortingChange?: (sorting: SortingState) => void;
@@ -142,6 +143,7 @@ function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, s
   const order = sorting?.[0];
   const firstGroup = search.groupStack[0];
   const groups = [
+    ...(pane?.overflowGroups ?? []),
     ...(sortOptions.length && onSortingChange ? [{
       label: t("resourceToolbar.order"),
       value: order ? `${order.id}:${order.desc ? "desc" : "asc"}` : "",
