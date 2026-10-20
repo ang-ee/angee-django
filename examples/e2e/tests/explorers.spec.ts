@@ -41,7 +41,8 @@ test("explorer pane toolbars create a file folder and open a new knowledge note 
       const reader = page.getByRole("article").filter({ has: page.getByRole("heading", { name: noteTitle, exact: true }) });
       await expect(reader).toBeVisible();
       // Page verbs publish into the shell's control band above the reader.
-      await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+      // Edit is on the band and, for an empty page, inside its empty state too.
+      await expect(page.getByRole("button", { name: "Edit", exact: true }).first()).toBeVisible();
     });
   } finally {
     if (pageId) requireGraphQLData(await consoleApi.query(`mutation RemoveExplorerPage($id: ID!) {
