@@ -2,6 +2,7 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { enDecisionsMessages } from "./i18n";
 import { DECISION_MODEL } from "./documents.console";
+import { decisionConcernsGroup, recordDecisionsGroup } from "./related";
 
 export { DECISION_MODEL } from "./documents.console";
 export { DecisionCard, type DecisionCardProps } from "./DecisionCard";
@@ -38,6 +39,9 @@ export default defineBaseAddon({
       // An open decision waits on someone: the warning tone, as on the card and the attention pill.
       "decisions.decision": { content: { label: "Decisions", icon: "check", tone: "warning", verb: "Open decision", target: { page: true } } },
     },
+    // Related: a decision lists the records it concerns; every other record lists its decisions.
+    "related#groups": { "decisions.decisions": recordDecisionsGroup },
+    "decisions.Decision#groups": { "decisions.concerns": decisionConcernsGroup },
   },
   i18n: { decisions: enDecisionsMessages },
   statusTones: { "needs-decision": "warning" },

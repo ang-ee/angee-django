@@ -3,9 +3,11 @@ import { useInvalidate } from "@refinedev/core";
 import { useResourceInvalidates, type Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
+  NavLink,
   Skeleton,
   StatusBadge,
   useEnumOptions,
+  useResourceRecordHrefLookup,
   useResourceViewMaybe,
   type ListColumn,
   type WidgetDefinition,
@@ -34,6 +36,7 @@ function RunStatusLabel() {
 function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
   const t = useWorkflowsT();
   const statusOptions = useEnumOptions(RUN_MODEL, "status");
+  const recordHref = useResourceRecordHrefLookup();
   const resource = useResourceViewMaybe()?.resource ?? "";
   const id = typeof row?.id === "string" ? row.id : "";
   const records = React.useMemo(() => (resource && id ? [{ model: resource, id }] : []), [resource, id]);
@@ -66,7 +69,10 @@ function RunStatusCell({ row }: WidgetRenderProps<unknown, Row>) {
   if (!records.length) return null;
   if (query.isLoading) return <Skeleton shape="text" size="sm" className="w-16" />;
   if (!run) return <span aria-label={query.error ? t("run.statusUnavailable") : undefined}>—</span>;
-  return <StatusBadge value={run.status} options={statusOptions} />;
+  // The status is the run's: the pill opens the run, so a reader can follow what it is waiting on.
+  const href = recordHref(RUN_MODEL, run.id);
+  const badge = <StatusBadge value={run.status} options={statusOptions} />;
+  return href ? <NavLink href={href} variant="inline" className="no-underline">{badge}</NavLink> : badge;
 }
 
 export const runStatusWidget = {

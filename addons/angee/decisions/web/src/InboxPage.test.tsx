@@ -49,7 +49,7 @@ function fixture(initialEntry = "/decisions", authenticated = true) {
 
 test("queries the open inbox and links the loaded decision", async () => {
   const { getList } = fixture();
-  expect(await screen.findByText("River")).toBeTruthy();
+  expect(await screen.findByRole("link", { name: "Open Review" })).toBeTruthy();
   expect(getList.mock.calls[0]?.[0].meta?.gqlVariables?.where).toEqual({
     is_open: { _eq: true },
   });
@@ -59,7 +59,7 @@ test("queries the open inbox and links the loaded decision", async () => {
 
 test("the native filter box edits personal predicates and preserves unrelated search", async () => {
   const { getList, router } = fixture("/decisions?preset=decisions.waiting&keep=external&page=3");
-  await screen.findByText("River");
+  await screen.findByRole("link", { name: "Open Review" });
   fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "I can answer" }));
   fireEvent.click(await screen.findByRole("button", { name: "Requested by me" }));
@@ -76,7 +76,7 @@ test("the native filter box edits personal predicates and preserves unrelated se
 
 test("finds assigned questions through the server authority filter", async () => {
   const { getList } = fixture();
-  await screen.findByText("River");
+  await screen.findByRole("link", { name: "Open Review" });
   fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "I can answer" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
@@ -86,7 +86,7 @@ test("finds assigned questions through the server authority filter", async () =>
 
 test("Assigned to me filters assignees independently of the Waiting on me authority preset", async () => {
   const { getList } = fixture("/decisions?preset=decisions.all");
-  await screen.findByText("River");
+  await screen.findByRole("link", { name: "Open Review" });
   fireEvent.click(screen.getByRole("button", { name: "Search options" }));
   fireEvent.click(await screen.findByRole("button", { name: "Assigned to me" }));
   await waitFor(() => expect(getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where).toEqual({
@@ -100,7 +100,7 @@ test.each([
   ["decisions.all", {}],
 ])("menu preset %s drives the native query", async (preset, where) => {
   const { getList } = fixture(`/decisions?preset=${preset}`);
-  await screen.findByText("River");
+  await screen.findByRole("link", { name: "Open Review" });
   expect(getList.mock.calls[0]?.[0].meta?.gqlVariables?.where).toEqual(where);
 });
 

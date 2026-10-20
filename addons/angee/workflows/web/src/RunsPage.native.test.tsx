@@ -127,7 +127,8 @@ test("retained evidence links readable records and marks redacted records", asyn
   const records = await screen.findByRole("tabpanel", { name: "Records" });
   expect((await within(records).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
   expect(await within(records).findByText("Record unavailable")).toBeTruthy();
-  expect(requests.find(({ query }) => query.includes("steprecord("))?.variables.where)
+  // The header's related read also selects step records; the Records tab's list read pages them.
+  expect(requests.find(({ query, variables }) => query.includes("steprecord(") && variables.limit !== undefined)?.variables.where)
     .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
 });
 
@@ -193,7 +194,7 @@ test("step rows are paged in execution order without per-row detail queries", as
   await screen.findByText("step-9");
   expect(screen.queryByText("step-10")).toBeNull();
   expect(requests.some(({ query }) => query.includes("steprun_by_pk"))).toBe(false);
-  expect(requests.find(({ query }) => /\bsteprun\s*\(/.test(query))?.variables).toMatchObject({
+  expect(requests.find(({ query, variables }) => /\bsteprun\s*\(/.test(query) && variables.limit !== undefined)?.variables).toMatchObject({
     where: { _and: [{ run: { _eq: "wfr_review" } }] }, limit: 10, offset: 0, order_by: { rank: "asc", map_index: "asc" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));

@@ -179,6 +179,12 @@ class WorkflowRunType(RecordReferenceNode):
         resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
     )
 
+    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"], prefetch_related=["subject"])
+    def subject_label(self, info: strawberry.Info) -> str | None:
+        """The subject's own label (a file name, a message subject), for lists that name the run by what it ran on."""
+        subject = cast(Any, self).subject
+        return str(subject) if subject is not None else None
+
 
 @strawberry.type
 class StepNoteType:

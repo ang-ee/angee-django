@@ -93,7 +93,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     assert "draft" in schema._schema.get_type("WorkflowType").fields
     assert "layout" in schema._schema.get_type("WorkflowType").fields
     for type_name, pair, obsolete in (
-        ("WorkflowRunType", {"subject_model", "subject_id"}, set()),
+        ("WorkflowRunType", {"subject_model", "subject_id", "subject_label"}, set()),
         ("StepRecordType", {"record_model", "record_id"}, {"model_label"}),
         ("StepWatchType", {"record_model", "record_id"}, {"record_model_label", "record_public_id"}),
         ("TriggerEventType", {"record_model", "record_id"}, set()),

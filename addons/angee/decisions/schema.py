@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import Any, cast
 
 import strawberry
 import strawberry_django
@@ -18,7 +19,12 @@ from angee.graphql.data import declared_hasura_resource_fields, hasura_model_res
 from angee.graphql.data.hasura import with_filter_aliases
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
@@ -62,6 +68,18 @@ class DecisionType(AngeeNode):
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
     is_open: bool = strawberry_django.field(only=["verdict"])
     permissions = permissions_field(("act",))
+
+    @strawberry_django.field(only=["id"])
+    def concerns_label(self, info: strawberry.Info) -> str:
+        """The readable records this question concerns, by their own labels (a bill number, a supplier).
+
+        One read per decision when selected: the dashboard's attention table names the bill
+        beside the question; the inbox list links the records through ``records`` instead.
+        """
+        actor = request_from_info(info).user
+        links = DecisionRecord.objects.with_actor(actor).filter(decision_id=cast(Any, self).pk)
+        return "; ".join(str(link.record) for link in with_record_reference_access(links)
+                         if link._angee_record_readable and link.record is not None)
 
 
 _DECISIONS = hasura_model_resource(

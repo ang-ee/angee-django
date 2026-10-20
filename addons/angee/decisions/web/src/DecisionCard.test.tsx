@@ -207,3 +207,23 @@ test("a concerned record carries its evidence tab and page into the canonical li
   expect(screen.getByRole("link", { name: "Source file" }).getAttribute("href")).toBe("/storage/fil_source?recordTab=preview&previewPage=fil_source%3A2");
   expect(screen.queryByRole("button", { name: "Source file" })).toBeNull();
 });
+
+test("the decision's page shows an answered question's alternatives with the chosen one marked, its context and its records", () => {
+  const decision = decisionFixture({
+    is_open: false, verdict: ["accept"], verdict_label: "Accept and archive", answered_at: "2026-10-04T10:00:00Z",
+    answered_by: { display_name: "Reviewer" },
+    context: { reason: "The supplier sent this bill twice.", references: [], facts: [
+      { pointer: "/number", label: "Bill number", value: "SYN-9311", authority: "source", evidence: [] },
+    ] },
+  });
+  render(<Provider><DecisionCard decision={decision} detail /></Provider>);
+  expect(screen.getByText("Chose: Accept and archive")).toBeTruthy();
+  expect(screen.getByText("The supplier sent this bill twice.")).toBeTruthy();
+  const alternatives = screen.getByRole("list", { name: "Alternatives, the chosen one marked" });
+  expect(within(alternatives).getAllByRole("listitem")).toHaveLength(2);
+  expect(within(alternatives).getByText("Accept and archive")).toBeTruthy();
+  expect(within(alternatives).getByText("Proposed name")).toBeTruthy();
+  expect(screen.getByText("Bill number")).toBeTruthy();
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});

@@ -91,7 +91,7 @@ def test_record_answer_history_returns_only_answered_decisions_for_the_readable_
         schema,
         """query($model: String!, $id: ID!) {
           record_decision_answers(model: $model, id: $id) {
-            id is_open verdict_label answered_by { id display_name }
+            id is_open verdict_label concerns_label answered_by { id display_name }
           }
         }""",
         {"model": subject._meta.label, "id": subject.sqid},
@@ -102,6 +102,8 @@ def test_record_answer_history_returns_only_answered_decisions_for_the_readable_
         "id": answered.sqid,
         "is_open": False,
         "verdict_label": "Accept",
+        # The concerned record's own label, for tables that cannot follow the records relation.
+        "concerns_label": str(subject),
         "answered_by": {"id": reviewer.sqid, "display_name": reviewer.username},
     }]}
     assert open_question.is_open
