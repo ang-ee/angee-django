@@ -9,9 +9,12 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from angee.changesets import changeset as open_changeset
+from angee.integrate.states import StreamKind
+from angee.integrate.testing.models import RecordLink
+from angee.messaging.testing.models import Channel
 from angee.provenance.timeline import ChangeKind
 from angee.timeline.testing.models import Event
-from tests.conftest import create_platform_admin, vault_for
+from tests.conftest import create_platform_admin, current_stream, make_integration, vault_for
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -179,3 +182,21 @@ def test_machine_reason_never_reaches_a_user(composed_permissions) -> None:
         vault.save()
     latest = Event.objects.for_record(vault).filter(kind="provenance.change").order_by("-at", "-pk").first()
     assert latest is not None and latest.detail == "Renamed after the audit"
+
+
+def test_sync_bookkeeping_writes_no_change_event(composed_permissions) -> None:
+    """A changeset that only stamps record links (no readable history) projects nothing: the read would admit none."""
+
+    with system_context(reason="test.timeline.bookkeeping"):
+        bridge = make_integration("timeline-bookkeeping", model=Channel)
+        stream = current_stream(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
+    changeset_model = apps.get_model("provenance", "Changeset")
+    before = Event.objects.count()
+    with open_changeset(fresh=True, change_reason="integrate.stream.advance"):
+        link = RecordLink.objects.observe(stream, "person:1")
+    with system_context(reason="test.timeline.bookkeeping"):
+        touched = changeset_model.objects.touching(link).order_by("-pk").first()
+    assert touched is not None and touched.state == touched.State.CLOSED
+    assert not ChangeKind().eligible(RecordLink)
+    assert Event.objects.filter(target_model="provenance.Changeset", target_pk=touched.pk).count() == 0
+    assert Event.objects.count() == before
