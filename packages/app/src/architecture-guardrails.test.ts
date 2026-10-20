@@ -7,6 +7,10 @@ import ts from "typescript";
 import { RecordIssues, SaveDiscardActions, baseIcons, dirtyControlBandClassName } from "@angee/ui";
 import { FILTER_OPERATORS } from "@angee/metadata";
 
+import {
+  UX_GUARD_ALLOWANCES, formatUxGuardViolation, uxGuardViolations, uxGuardViolationsInFile, type UxGuardRule,
+} from "./ux-ontology-guard";
+
 const MONOREPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PACKAGES_ROOT = join(MONOREPO_ROOT, "packages");
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
@@ -34,6 +38,12 @@ const REQUIRED_ADDON_ROOTS = [
 ] as const;
 const OPTIONAL_ADDON_ROOTS = [
   resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
+] as const;
+// Consumer repositories materialized beside this slot compose the same owners; the
+// UX ontology guard covers them when present, the layering guards stay in-repo.
+const CONSUMER_ADDON_ROOTS = [
+  resolve(MONOREPO_ROOT, "../angee-arp/addons"),
+  resolve(MONOREPO_ROOT, "../angee-phrogg/addons"),
 ] as const;
 // Parsing every framework, tooling, and addon source file grows with the tree,
 // not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
@@ -566,6 +576,58 @@ describe("React architecture guardrails", () => {
       "sun",
     ]);
   });
+
+  test.each<[UxGuardRule, string, string]>([
+    ["raw-element", '<button type="button">Go</button>', "renders a raw <button>"],
+    ["raw-element", '<input value="x" />', "renders a raw <input>"],
+    ["lucide-import", 'import { Check } from "lucide-react"; const v = <Check />;', "renders the lucide icon Check directly"],
+    ["class-literal", 'const c = "bg-brand-soft text-brand-soft-text";', "spells the selected surface by hand"],
+    ["class-literal", 'const c = "px-2 text-xs";', "uses the deleted class text-xs"],
+    ["class-literal", 'const c = "w-[240px]";', "sizes with a raw pixel class"],
+    ["class-literal", 'import { Button } from "@angee/ui"; const c = "h-7 px-2";', "sizes a control with a raw h-N/size-N class"],
+    ["locale-bypass", "const s = value.toLocaleString();", "calls toLocaleString()"],
+    ["locale-bypass", "const f = new Intl.NumberFormat();", "constructs Intl.NumberFormat"],
+    ["locale-bypass", "const v = <span>{new Date(at).toISOString()}</span>;", "renders new Date(...).toISOString()"],
+    ["locale-bypass", 'import { format } from "date-fns"; const s = format(at, "yyyy-MM-dd");', 'formats with the date-fns pattern "yyyy-MM-dd"'],
+    ["deleted-owner-import", 'import { Badge } from "@angee/ui";', "imports deleted @angee/ui export Badge"],
+    ["local-recipe", 'import { Chip, tv } from "@angee/ui"; const pill = tv({ base: "x" });', "declares a local tv() recipe"],
+    ["local-tone-map", 'const TONES = { DONE: "success", FAILED: "danger" } as const;', "maps status values to tones locally"],
+  ])("UX ontology guard %s reports a seeded violation", (rule, text, detail) => {
+    const hits = uxGuardViolations("addons/fixture/web/src/View.tsx", text);
+    expect(hits.map((hit) => hit.rule)).toContain(rule);
+    expect(hits.find((hit) => hit.rule === rule)?.detail).toContain(detail);
+  });
+
+  test("UX ontology guard ignores the owners' own shapes", () => {
+    const text = [
+      'import { Button, Chip, formatDate } from "@angee/ui";',
+      'import { Tag as TagIcon } from "lucide-react";',
+      'export const icons = { icons: { tag: TagIcon } };',
+      'const STATUS_TONES = { DONE: "success", FAILED: "danger" };',
+      'export const manifest = { statusTones: STATUS_TONES };',
+      'const v = <Button size="iconSm" className="shrink-0 text-12"><Chip tone="muted">x</Chip></Button>;',
+      'const hidden = <input type="hidden" value="x" />;',
+      "const when = formatDate(at);",
+    ].join("\n");
+    expect(uxGuardViolations("addons/fixture/web/src/View.tsx", text)).toEqual([]);
+  });
+
+  test(
+    "addon web sources compose @angee/ui owners (UX component ontology)",
+    () => {
+      const allowed = new Set(UX_GUARD_ALLOWANCES.map((entry) => `${entry.rule}\0${entry.file}`));
+      const files = uxGuardPackageRoots().flatMap((pkg) =>
+        sourceFiles(pkg.root).filter((file) => !isTestFile(file) && !isStoryFile(file)));
+      const violations = files.flatMap((file) => {
+        const rel = workspaceRelative(file);
+        return uxGuardViolationsInFile(file)
+          .filter((hit) => !allowed.has(`${hit.rule}\0${rel}`))
+          .map((hit) => formatUxGuardViolation(hit, rel));
+      });
+      expect(violations).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
 });
 
 function frameworkCriticalExport(
@@ -629,6 +691,20 @@ function addonRepositoryRoots(): string[] {
     ...REQUIRED_ADDON_ROOTS,
     ...OPTIONAL_ADDON_ROOTS.filter((root) => existsSync(root) && statSync(root).isDirectory()),
   ].sort();
+}
+
+/** Framework, example and (when materialized beside this slot) consumer addon packages. */
+function uxGuardPackageRoots(): PackageRoot[] {
+  const roots: PackageRoot[] = [...addonPackageRoots()];
+  for (const addonsRoot of CONSUMER_ADDON_ROOTS) {
+    if (!existsSync(addonsRoot) || !statSync(addonsRoot).isDirectory()) continue;
+    visitDirectories(addonsRoot, (directory) => {
+      if (basename(directory) !== "web" || !existsSync(join(directory, "package.json"))) return false;
+      roots.push(packageRoot(directory));
+      return true;
+    });
+  }
+  return roots.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function importViolations(packages: readonly PackageRoot[]): string[] {

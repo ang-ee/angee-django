@@ -194,7 +194,7 @@ measurements.
 | Published package builds | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match -r --filter './packages/**' --filter '!@angee/storybook' run build` |
 | Distribution import checks | Framework source root, after builds | `node packages/scripts/check-dist-imports.mjs` |
 | UI export checks | Framework source root, after builds | `node packages/ui/scripts/check-views-exports.mjs` |
-| Package/exports architecture | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
+| Package/exports architecture and the UX component ontology guard (addons compose `@angee/ui` owners: no raw elements, lucide renders, deleted classes or owners, locale bypasses, local recipes or tone maps; covers `../angee-arp` and `../angee-phrogg` when materialized) | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter @angee/app exec vitest run src/architecture-guardrails.test.ts` |
 | Design-system catalog and token-name drift | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook run catalog:check` |
 | Composition report kinds, route instances and ordering | Stack root | `pnpm --config.verify-deps-before-run=false --filter @angee/storybook run composition:check` |
 | All composed fragment types | Stack root, after SDL/codegen | `pnpm --config.verify-deps-before-run=false --dir web run typecheck` |
