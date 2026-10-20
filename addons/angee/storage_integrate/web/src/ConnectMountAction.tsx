@@ -3,8 +3,7 @@ import {
   type TypedDocumentNode,
 } from "@angee/refine";
 import {
-  Button,
-  Glyph,
+  ActionTrigger,
   MutationDialog,
   mutationDialogValueCodecs,
   optionalTranslation,
@@ -89,10 +88,7 @@ export function ConnectMountAction({
 
   return (
     <MutationDialog
-      trigger={<Button variant="primary" size="sm">
-        <Glyph decorative name="plus" />
-        {t(`${i18nPrefix}.button`)}
-      </Button>}
+      trigger={<ActionTrigger glyph="plus">{t(`${i18nPrefix}.button`)}</ActionTrigger>}
         title={t(`${i18nPrefix}.title`)}
         description={t(`${i18nPrefix}.description`)}
         fields={fields}
@@ -119,5 +115,6 @@ function parseMountConnectValues(
 
 function mountModeValue(value: unknown): MountConnectMode {
   if (value === "COPY" || value === "REFERENCE") return value;
-  throw new TypeError("A mount mode is required.");
+  // The dialog's required select never submits another value; this guards the wire type.
+  throw new TypeError("mode");
 }

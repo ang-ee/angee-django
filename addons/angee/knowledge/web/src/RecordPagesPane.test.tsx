@@ -146,7 +146,8 @@ test("Bound-to rows use the shared reference label and route lookup", async () =
   const current: ChatterViewContext = { ...context, route: { ...context.route!, modelLabel: "knowledge.Page" }, view: { kind: "record", type: "knowledge/page", sqid: "pg_1" } };
   render(<Groups current={current} groups={{ "knowledge.bound-to": pageBoundToGroup }} />);
   const row = await screen.findByRole("link", { name: /Record rec_1/ });
-  expect(row.textContent).toContain("contract");
+  // The binding role is a declared id; the row never shows it raw.
+  expect(row.textContent).not.toContain("contract");
   expect(row.getAttribute("href")).toBe("/records/rec_1");
   fireEvent.click(row);
   expect(sdk.navigate).toHaveBeenCalledWith("/records/rec_1");
@@ -163,7 +164,7 @@ test.each([pageBacklinksGroup, pageBoundToGroup])("reverse groups load before co
 
 test("the unfiltered group removes each binding under its stored role", async () => {
   render(<Groups groups={{ pages: recordPagesGroup() }} />);
-  fireEvent.click(screen.getByRole("button", { name: "Unbind Guide (reference)" }));
+  fireEvent.click(screen.getByRole("button", { name: "Unbind Guide" }));
   await waitFor(() => expect(sdk.unbind).toHaveBeenCalledWith({ input: {
     model_label: "example.Record", record_id: "rec_1", page: "pg_1", role: "reference",
   } }));

@@ -2,11 +2,12 @@ import { useMemo, type ReactElement, type ReactNode } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import {
-  Button, buttonVariants, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
+  Button, Card, CardContent, CommandBand, ControlBandProvider, EmptyState, ErrorBanner, formatDate, formatSize,
   Glyph, LoadingPanel, RecordHeader, useConfirm, type RecordChromeContext, type RecordNavigation,
 } from "@angee/ui";
 
 import { StorageFileById } from "../data/documents";
+import { fileTypeLabel } from "../data/file-rows";
 import type { FileActions } from "../data/use-file-actions";
 import { useStorageT } from "../i18n";
 import { FileDetail } from "./FileDetail";
@@ -45,7 +46,7 @@ export function FilePreviewFrame({
     record: file as unknown as Row,
     formReadOnly: false,
   } : null, [file, metadata?.resource.schemaName]);
-  const type = file?.mime_type?.label || file?.mime_type?.mime_type || t("file.unknownType");
+  const type = file ? fileTypeLabel(file) : "";
   const facts = file
     ? t(file.created_by_label ? "file.facts" : "file.factsAnonymous", {
         type, size: formatSize(file.size_bytes), date: formatDate(file.updated_at), by: file.created_by_label ?? "",
@@ -58,10 +59,10 @@ export function FilePreviewFrame({
         // band never flickers when the pager moves to the next file.
         verbs={<>
           {file && !file.is_trashed && file.url ? (
-            <a className={buttonVariants({ variant: "primary", size: "sm" })} href={file.url} download={file.filename}>
+            <Button size="sm" variant="primary" render={<a href={file.url} download={file.filename} />}>
               <Glyph name="download" />
               {t("file.download")}
-            </a>
+            </Button>
           ) : (
             <Button type="button" size="sm" variant="primary" disabled>
               <Glyph name="download" />
@@ -124,13 +125,15 @@ export function FilePreviewFrame({
               />
             )}
           </div>
-          {/* The metadata form's own save row stays inline in its section; the band
+          {/* The metadata form's own save row stays inline in its card; the band
               keeps the file's lifecycle verbs and the pager. */}
-          <section aria-label={t("file.details")} className="mt-4 rounded-8 border border-border-subtle bg-sheet p-4">
-            <ControlBandProvider host={undefined}>
-              <FileDetail id={id} filename={file?.filename} onChanged={query.refetch} />
-            </ControlBandProvider>
-          </section>
+          <Card render={<section aria-label={t("file.details")} />} className="mt-4">
+            <CardContent>
+              <ControlBandProvider host={undefined}>
+                <FileDetail id={id} filename={file?.filename} onChanged={query.refetch} />
+              </ControlBandProvider>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </>

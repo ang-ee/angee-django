@@ -1,9 +1,7 @@
 import { type Row } from "@angee/metadata";
 import {
-  useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
-import {
-  useAuthoredMutation, } from "@angee/refine";
-import { useBusyRun, useDeleteWithPreview } from "@angee/ui";
+  useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
+import { useBusyRun, useDeleteWithPreview, useTrashRecord } from "@angee/ui";
 import {
   refineResourceName,
   useModelMetadata,
@@ -11,8 +9,6 @@ import {
 import type {
   DataResourceMetadata,
 } from "@angee/metadata";
-
-import { StorageRestoreFile } from "./documents";
 
 export interface FileActions {
   busy: boolean;
@@ -29,9 +25,10 @@ export interface FileActions {
 }
 
 /**
- * The single-file lifecycle verbs (trash, restore) over the storage soft-delete
- * mutations. Renames go through the record form's own update. Resource caches
- * invalidate here; `onChanged` lets a caller refresh a separate authored view.
+ * The single-file lifecycle verbs (trash, restore) over the shared record
+ * soft-delete verbs. Renames go through the record form's own update. Resource
+ * caches invalidate in the owners; `onChanged` lets a caller refresh a separate
+ * authored view.
  */
 export function useFileActions(
   options: { onChanged?: () => void } = {},
@@ -40,15 +37,12 @@ export function useFileActions(
   const metadata = useModelMetadata(FILE_MODEL);
   const resource = metadata?.resource ?? null;
   const deleteWithPreview = useDeleteWithPreview(resource);
-  const [restoreFile] = useAuthoredMutation(StorageRestoreFile, {
-    errorFrom: (data) => data?.restore_record.ok === false ? data.restore_record.message : null,
-  });
+  const trashRecord = useTrashRecord(resource);
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     invalidates: ["list", "many", "detail"],
   });
-  const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
 
   return {
@@ -61,8 +55,7 @@ export function useFileActions(
     restore: (id) =>
       run(async () => {
         requireFileResource(resource);
-        await restoreFile({ id });
-        await invalidateFileResource(invalidate, resource, id);
+        await trashRecord.restore(id);
       }),
     move: (id, folder) =>
       run(async () => {
@@ -79,8 +72,7 @@ export function useFileActions(
     restoreMany: (ids) =>
       run(async () => {
         requireFileResource(resource);
-        for (const id of ids) await restoreFile({ id });
-        await invalidateFileResource(invalidate, resource);
+        for (const id of ids) await trashRecord.restore(id);
       }),
   };
 }
@@ -88,19 +80,6 @@ export function useFileActions(
 const FILE_MODEL = "storage.File";
 
 type RowRecord = BaseRecord & Row;
-
-async function invalidateFileResource(
-  invalidate: ReturnType<typeof useInvalidate>,
-  resource: DataResourceMetadata,
-  id?: string,
-): Promise<void> {
-  await invalidate({
-    resource: refineResourceName(resource),
-    dataProviderName: resource.schemaName,
-    ...(id ? { id } : {}),
-    invalidates: ["list", "many", "detail"],
-  });
-}
 
 function requireFileResource(
   resource: DataResourceMetadata | null,

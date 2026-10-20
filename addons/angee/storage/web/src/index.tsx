@@ -66,6 +66,8 @@ const storage = defineBaseAddon({
     "storage.File#groups": { "storage.attached-to": fileAttachedToGroup },
   },
   i18n: { storage: enStorageMessages },
+  // Upload-task stages the framework vocabulary does not name; done and failed are framework words.
+  statusTones: { hashing: "warning", uploading: "warning", finalizing: "warning", deduped: "success" },
   icons: {
     drive: HardDrive,
     image: Image,

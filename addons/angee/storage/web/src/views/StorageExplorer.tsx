@@ -2,7 +2,7 @@ import { useAuthoredQuery, useAuthoredQueryBatch, useInvalidateAuthoredModels } 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   EmptyState, InlineTextAction, LoadingPanel, PaneToolbarMenu, ScopedExplorerPane, TreeView,
-  useConfirm, useLatestRef, type FieldDescriptor, type ScopedExplorerController,
+  useConfirm, useFilePicker, useLatestRef, type FieldDescriptor, type ScopedExplorerController,
 } from "@angee/ui";
 
 import {
@@ -24,7 +24,6 @@ const FOLDER_PAGE_LIMIT = 5000;
 // explorer's option list keeps a stable identity (the navigator is published
 // into the shell primary pane and must not churn on every render).
 const driveRootId = (drive: StorageDrive): string => drive.id;
-const driveRootLabel = (drive: StorageDrive): string => drive.name || drive.slug;
 
 export type StorageExplorerController = ScopedExplorerController<
   StorageDrive,
@@ -54,6 +53,8 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
   children: (controller: StorageExplorerController) => ReactNode;
 }): ReactElement {
   const t = useStorageT();
+  // A drive is named by its name alone; its slug is an address, never a label.
+  const driveRootLabel = useCallback((drive: StorageDrive): string => drive.name || t("drive.unnamed"), [t]);
   const catalogueVariables = useMemo(
     () => ({ offset: 0, limit: STORAGE_CATALOGUE_LIMIT }),
     [],
@@ -164,24 +165,21 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
   // cannot carry them (cf. the static `Vault` form in the knowledge manifest).
   const driveCreateFields = useMemo<readonly FieldDescriptor[]>(
     () => [
-      { name: "name", label: "Name" },
-      { name: "slug", label: "Slug", placeholder: "assets" },
+      { name: "name", label: t("drive.create.name") },
+      { name: "slug", label: t("drive.create.slug"), placeholder: t("drive.create.slugPlaceholder") },
       {
         // A bare-ID FK (DriveType.backend is `ID`, not an object), so this is a
         // plain `select` — `many2one` would make the form select `backend.id`,
         // which the scalar field has no subfield for.
         name: "backend",
-        label: "Backend",
+        label: t("drive.create.backend"),
         widget: "select",
-        options: backends.map((backend) => ({
-          value: backend.id,
-          label: backend.label || backend.slug,
-        })),
+        options: backends.map((backend) => ({ value: backend.id, label: backend.label })),
       },
-      { name: "prefix", label: "Prefix", placeholder: "optional key prefix" },
-      { name: "description", label: "Description", widget: "textarea" },
+      { name: "prefix", label: t("drive.create.prefix"), placeholder: t("drive.create.prefixPlaceholder") },
+      { name: "description", label: t("drive.create.description"), widget: "textarea" },
     ],
-    [backends],
+    [backends, t],
   );
   const folderActions = useFolderActions({
     onChanged: handleFolderMutation,
@@ -220,10 +218,19 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
   // The folder verbs happen where the user looks: New folder is typed as a row in
   // the tree under the selected folder; Rename edits the selected folder's own row.
   const [folderEdit, setFolderEdit] = useState<"create" | "rename" | null>(null);
-  const uploadInputRef = useRef<HTMLInputElement>(null);
-  // The upload owner is read live so the published navigator stays stable across renders.
+  // The upload owner and its destination are read live so the published navigator
+  // stays stable across renders; the tree render keeps the destination current.
   const uploadsRef = useLatestRef(uploads);
+  const uploadTargetRef = useRef<{ driveId: string; folderId: string | null } | null>(null);
   const canUpload = uploads !== undefined;
+  const picker = useFilePicker({
+    label: t("upload.chooseFiles"),
+    disabled: !canUpload,
+    onFiles: (files) => {
+      const target = uploadTargetRef.current;
+      if (target) uploadsRef.current?.upload(files, target);
+    },
+  });
   const renderTree = useCallback(
     (controller: StorageExplorerController) => {
       const effectiveScope = controller.selectedId ?? ALL_SCOPE;
@@ -231,6 +238,9 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
         effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
           ? controller.selectedRow
           : undefined;
+      uploadTargetRef.current = controller.rootId
+        ? { driveId: controller.rootId, folderId: selectedFolder ? effectiveScope : null }
+        : null;
       const submit = (name: string): void => {
         if (folderEdit === "rename") {
           void folderActionsRef.current.rename(effectiveScope, name);
@@ -292,29 +302,11 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
             }
             className="min-h-0 flex-1 overflow-auto"
           />
-          {canUpload ? (
-            <input
-              ref={uploadInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              aria-label={t("upload.chooseFiles")}
-              onChange={(event) => {
-                const files = event.target.files;
-                if (files && files.length > 0 && controller.rootId) {
-                  uploadsRef.current?.upload(Array.from(files), {
-                    driveId: controller.rootId,
-                    folderId: selectedFolder ? effectiveScope : null,
-                  });
-                }
-                event.target.value = "";
-              }}
-            />
-          ) : null}
+          {canUpload ? picker.input : null}
         </>
       );
     },
-    [canUpload, folderActions.busy, folderActionsRef, folderEdit, handleExpandFolder, handleFileDrop, openFileId, openFileRoute, t, uploadsRef],
+    [canUpload, folderActions.busy, folderActionsRef, folderEdit, handleExpandFolder, handleFileDrop, openFileId, openFileRoute, picker.input, t],
   );
   const explorerToolbar = useCallback(
     (controller: StorageExplorerController) => {
@@ -342,7 +334,7 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
           icon: "plus", label: t("new.menu"), text: true, disabled: busy,
           items: [
             { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
-            ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: () => uploadInputRef.current?.click() }] : []),
+            ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: picker.open }] : []),
           ],
         }],
         overflow: selectedFolder ? (
@@ -353,7 +345,7 @@ export function StorageExplorer({ openFile, openFileId, folderScope, selectScope
         ) : undefined,
       };
     },
-    [canUpload, confirm, folderActions.busy, folderActionsRef, t],
+    [canUpload, confirm, folderActions.busy, folderActionsRef, picker.open, t],
   );
   const handleRootChange = useCallback(
     (rootId: string) => {

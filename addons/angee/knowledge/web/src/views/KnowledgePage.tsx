@@ -5,7 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import {
   EmptyState, InlineTextAction, LoadingPanel, PaneToolbarMenu, RemovedDisclosure, RemovedItem, ScopedExplorerPane,
-  SearchInput, TRASH_PERMISSION, TreeView, WikilinkProvider, useBreadcrumbCollectionLink, useBreadcrumbLeafLabel,
+  SearchInput, TRASH_PERMISSION, TreeView, WikilinkProvider, errorMessage, useBreadcrumbCollectionLink, useBreadcrumbLeafLabel,
   useRouteHref, useRouteRecordId, type RecordNavigation, type ScopedExplorerController, type WikilinkResolver,
 } from "@angee/ui";
 
@@ -276,7 +276,7 @@ export function KnowledgePage(): ReactElement {
               : t("vaults.emptyTitle")
           }
           description={
-            vaultsQuery.error?.message ?? t("vaults.emptyDescription")
+            vaultsQuery.error ? errorMessage(vaultsQuery.error, t("vaults.unavailableTitle")) : t("vaults.emptyDescription")
           }
         />
       }

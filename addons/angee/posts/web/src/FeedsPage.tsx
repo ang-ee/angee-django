@@ -71,7 +71,6 @@ function FeedPostsTab({ recordId }: RecordPanelContext): React.ReactElement {
       aria-describedby={undefined}
       busy={query.isFetching}
       label={t("feed.postsLabel")}
-      className="rounded-6 border border-border-subtle bg-sheet p-4"
     >
       {messages.map((message) => (
         <FeedPostRow key={message.id} message={message} t={t} />
