@@ -1,18 +1,25 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAuthoredQuery } from "@angee/refine";
+import { useModelMetadata, type Row } from "@angee/metadata";
 import { MessageReader } from "@angee/messaging";
 import { senderDisplayName } from "@angee/parties";
 import {
+  ActionTrigger,
   Alert,
   Button,
   Collapsible,
+  CommandBand,
   EmptyState,
+  formatDateTime,
   Glyph,
   LoadingPanel,
   MetaGrid,
-  PageHeader,
+  RecordHeader,
   Tag,
+  type RecordChromeContext,
 } from "@angee/ui";
+
+const MESSAGE_MODEL = "messaging.Message";
 import { InboxMessage } from "./documents";
 import { useNexusT } from "../i18n";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
@@ -45,43 +52,57 @@ export function InboxMessageReader({
   const backLabel = navigation.thread
     ? t("inbox.backConversation")
     : t("inbox.backResults");
+  const metadata = useModelMetadata(MESSAGE_MODEL);
+  // The open message is a record: its header controls come through form#chrome like any other.
+  const chrome = useMemo<RecordChromeContext | null>(() => message ? {
+    resource: MESSAGE_MODEL,
+    dataProviderName: metadata?.resource.schemaName,
+    canonicalResource: MESSAGE_MODEL,
+    recordId: message.id,
+    record: message as unknown as Row,
+    formReadOnly: true,
+  } : null, [message, metadata?.resource.schemaName]);
+  const sender = message?.sender ? senderDisplayName(message.sender) : undefined;
+  const channel = message?.channel?.display_name || message?.platform;
   return (
     <section
       aria-label={t("inbox.message")}
       className="flex h-full min-h-0 flex-col"
     >
-      <PageHeader
-        density="compact"
-        title={message?.title || t("inbox.message")}
-        description={
-          <nav aria-label="Breadcrumb" className="flex items-center gap-1">
-            <Button size="sm" variant="ghost" onClick={navigation.results}>
-              {t("inbox.results")}
-            </Button>
-            <Glyph name="chevron-right" size={12} />
-            {message?.thread ? (
-              <>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    navigation.conversation(message.thread!.id, message.id)
-                  }
-                >
-                  {message.thread.conversation_label || t("inbox.conversation")}
-                </Button>
-                <Glyph name="chevron-right" size={12} />
-              </>
-            ) : null}
-            <span>{t("inbox.message")}</span>
-          </nav>
-        }
-        actions={
-          <Button size="sm" variant="secondary" onClick={navigation.back}>
+      <CommandBand
+        menu={message ? <>
+          <ActionTrigger glyph="link" onClick={() => void copyLink()}>{t(copied ? "inbox.copied" : "inbox.copyLink")}</ActionTrigger>
+          <ActionTrigger glyph="users" onClick={() => navigation.connect(`participants:${message.id}`, message.id)}>{t("inbox.participants")}</ActionTrigger>
+          <ActionTrigger glyph="link" onClick={() => navigation.connect(`relations:${message.id}`, message.id)}>{t("inbox.relations")}</ActionTrigger>
+          {message.sender?.party_link_confirmed && message.sender.party ? (
+            <ActionTrigger onClick={() => navigation.connect(`handles:${message.sender!.party!.id}`, message.id)}>{t("inbox.handles")}</ActionTrigger>
+          ) : null}
+          {message.sender ? (
+            <ActionTrigger onClick={() => navigation.select(
+              message.sender!.party_link_confirmed && message.sender!.party ? `party:${message.sender!.party.id}` : `handle:${message.sender!.id}`,
+            )}>{t("inbox.exploreSender")}</ActionTrigger>
+          ) : null}
+        </> : null}
+        verbs={<>
+          <Button size="sm" variant="ghost" onClick={navigation.back}>
             <Glyph name="chevron-left" />
             {backLabel}
           </Button>
-        }
+          {message?.thread ? (
+            <Button size="sm" variant="primary" onClick={() => navigation.conversation(message.thread!.id, message.id)}>
+              {t("inbox.openConversation")}
+            </Button>
+          ) : null}
+        </>}
+        chrome={chrome}
+      />
+      <RecordHeader
+        density="compact"
+        headingLevel={1}
+        crumbs={[t("inbox.message"), channel, message?.direction].filter(Boolean).join(" · ")}
+        title={message?.title || t("inbox.message")}
+        meta={message ? [sender, message.received_at ? formatDateTime(message.received_at) : undefined].filter(Boolean).join(" · ") : undefined}
+        status={message && !message.thread ? { label: t("inbox.standalone") } : undefined}
       />
       {query.isPending ? (
         <LoadingPanel />
@@ -104,12 +125,6 @@ export function InboxMessageReader({
               const file = message.parts.find((part) => part.id === partId)?.file;
               if (file) navigation.previewFile(file.id, message.id);
             }}
-            actions={
-              <Button size="sm" variant="ghost" onClick={() => void copyLink()}>
-                <Glyph name="link" />
-                {t(copied ? "inbox.copied" : "inbox.copyLink")}
-              </Button>
-            }
             renderPartActions={(part) => (
               <div className="flex flex-wrap gap-2">
                 {query.data?.inbox_message.uses
@@ -140,57 +155,6 @@ export function InboxMessageReader({
                 {t("inbox.suggested")}: {message.sender.party.display_name}
               </Alert>
             ) : null}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  navigation.connect(`participants:${message.id}`, message.id)
-                }
-              >
-                <Glyph name="users" />
-                {t("inbox.participants")}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  navigation.connect(`relations:${message.id}`, message.id)
-                }
-              >
-                <Glyph name="link" />
-                {t("inbox.relations")}
-              </Button>
-              {message.sender?.party_link_confirmed && message.sender.party ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    navigation.connect(
-                      `handles:${message.sender!.party!.id}`,
-                      message.id,
-                    )
-                  }
-                >
-                  {t("inbox.handles")}
-                </Button>
-              ) : null}
-            </div>
-            {message.thread ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="w-full"
-                onClick={() =>
-                  navigation.conversation(message.thread!.id, message.id)
-                }
-              >
-                {t("inbox.openConversation")}
-                <Glyph name="chevron-right" />
-              </Button>
-            ) : (
-              <Tag>{t("inbox.standalone")}</Tag>
-            )}
             <Collapsible.Root>
               <Collapsible.Trigger className="text-13 font-medium">
                 {t("inbox.details")}
@@ -214,23 +178,6 @@ export function InboxMessageReader({
                     </span>
                   </div>
                 ))}
-                {message.sender ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      navigation.select(
-                        message.sender!.party_link_confirmed &&
-                          message.sender!.party
-                          ? `party:${message.sender!.party.id}`
-                          : `handle:${message.sender!.id}`,
-                      )
-                    }
-                  >
-                    {t("inbox.exploreSender")}
-                    <Glyph name="chevron-right" />
-                  </Button>
-                ) : null}
               </Collapsible.Panel>
             </Collapsible.Root>
           </MessageReader>

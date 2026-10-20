@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { ThreadTranscript } from "@angee/messaging";
-import { Alert, Button, Glyph, PageHeader, Tag } from "@angee/ui";
+import { Alert, Button, CommandBand, Glyph, RecordHeader, Tag } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
 import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
 import { useNexusT } from "../i18n";
@@ -22,16 +22,15 @@ export function InboxConversation({
       className="flex h-full min-h-0 flex-col"
       aria-label={t("inbox.conversation")}
     >
-      <PageHeader
-        density="compact"
-        title={t("inbox.conversation")}
-        actions={
-          <Button size="sm" variant="secondary" onClick={navigation.results}>
+      <CommandBand
+        verbs={
+          <Button size="sm" variant="ghost" onClick={navigation.results}>
             <Glyph name="chevron-left" />
             {t("inbox.backResults")}
           </Button>
         }
       />
+      <RecordHeader density="compact" headingLevel={1} crumbs={t("inbox.conversation")} title={t("inbox.conversation")} />
       <div className="min-h-0 flex-1 overflow-auto">
         <ThreadTranscript
           threadId={navigation.thread}
